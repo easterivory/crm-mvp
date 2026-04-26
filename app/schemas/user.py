@@ -1,0 +1,35 @@
+import uuid
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, EmailStr, Field
+
+from app.schemas.common import OrmBase
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    name: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8)
+    role_id: uuid.UUID
+    project_id: Optional[uuid.UUID] = None
+
+
+class UserOut(OrmBase):
+    id: uuid.UUID
+    email: str
+    name: str
+    project_id: Optional[uuid.UUID]
+    role_id: uuid.UUID
+    created_at: datetime
+    is_deleted: bool
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
