@@ -11,9 +11,13 @@ Optional:
 """
 import asyncio
 import os
+import sys
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.database import get_db_session
 from app.models.bot import Bot, BotStep, BotVersion
