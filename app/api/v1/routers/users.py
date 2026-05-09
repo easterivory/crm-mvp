@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user
@@ -8,13 +8,14 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.user import LoginIn, TokenOut, UserCreate, UserOut
+from app.services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.post("/login", response_model=TokenOut)
 async def login(data: LoginIn, db: AsyncSession = Depends(get_db)) -> TokenOut:
-    raise NotImplementedError
+    return await UserService(db).login(data)
 
 
 @router.get("/me", response_model=UserOut)
@@ -24,14 +25,19 @@ async def me(current_user: User = Depends(get_current_user)) -> UserOut:
 
 @router.get("", response_model=PaginatedResponse[UserOut])
 async def list_users(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[UserOut]:
-    raise NotImplementedError
+    items, total = await UserService(db).list_users(
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+    )
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)) -> UserOut:
-    raise NotImplementedError
+    return await UserService(db).create_user(data)

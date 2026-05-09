@@ -7,9 +7,10 @@ Avoids magic strings scattered across the codebase.
 class SenderType:
     USER = "user"
     MANAGER = "manager"
+    BOT = "bot"
     SYSTEM = "system"
 
-    ALL: frozenset[str] = frozenset({USER, MANAGER, SYSTEM})
+    ALL: frozenset[str] = frozenset({USER, MANAGER, BOT, SYSTEM})
 
 
 class MessageType:

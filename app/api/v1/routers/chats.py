@@ -82,7 +82,7 @@ async def create_chat(
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> ChatOut:
-    raise NotImplementedError
+    return await ChatService(db).create_chat(project_id=project_id, data=data)
 
 
 @router.post("/{chat_id}/read", status_code=status.HTTP_204_NO_CONTENT)
@@ -92,4 +92,4 @@ async def mark_as_read(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Sets last_read_at = now(). Clears the computed unread flag."""
-    raise NotImplementedError
+    await ChatService(db).mark_as_read(chat_id=chat_id, project_id=project_id)

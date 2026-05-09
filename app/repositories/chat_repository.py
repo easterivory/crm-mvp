@@ -139,6 +139,17 @@ class ChatRepository(BaseRepository[Chat]):
         )
         return result.scalar_one_or_none()
 
+    async def get_any_by_external(
+        self, project_id: UUID, external_chat_id: str
+    ) -> Optional[Chat]:
+        result = await self.db.execute(
+            select(Chat).where(
+                Chat.project_id == project_id,
+                Chat.external_chat_id == external_chat_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_active(self, chat_id: UUID, project_id: UUID) -> Optional[Chat]:
         """Single non-deleted chat scoped to a project."""
         result = await self.db.execute(

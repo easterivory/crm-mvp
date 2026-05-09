@@ -16,6 +16,7 @@ from app.models.lead import Lead, LeadTag  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.alert import Alert  # noqa: F401
 from app.models.daily_stats import DailyStats  # noqa: F401
+from app.models.bot import Bot, BotVersion, BotStep, ChatBotState  # noqa: F401
 
 __all__ = [
     "Base",
@@ -31,4 +32,8 @@ __all__ = [
     "AuditLog",
     "Alert",
     "DailyStats",
+    "Bot",
+    "BotVersion",
+    "BotStep",
+    "ChatBotState",
 ]

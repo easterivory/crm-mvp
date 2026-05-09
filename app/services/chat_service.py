@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import Chat
@@ -113,7 +114,59 @@ class ChatService:
         return ChatOut.model_validate(chat).model_copy(update=flags)
 
     async def create_chat(self, project_id: UUID, data: ChatCreate) -> ChatOut:
-        raise NotImplementedError
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        external_chat_id = self._normalize_required(
+            data.external_chat_id,
+            field_name="external_chat_id",
+        )
+        external_user_id = self._normalize_required(
+            data.external_user_id,
+            field_name="external_user_id",
+        )
+        contact_name = self._normalize_optional(data.contact_name)
+
+        existing = await self.chat_repo.get_any_by_external(
+            project_id, external_chat_id
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Chat with this external_chat_id already exists in this project",
+            )
+
+        try:
+            async with self.db.begin_nested():
+                chat = await self.chat_repo.create(
+                    project_id=project_id,
+                    external_chat_id=external_chat_id,
+                    external_user_id=external_user_id,
+                    contact_name=contact_name,
+                )
+        except IntegrityError:
+            existing = await self.chat_repo.get_any_by_external(
+                project_id, external_chat_id
+            )
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Chat with this external_chat_id already exists "
+                        "in this project"
+                    ),
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not create chat",
+            )
+
+        flags = self._compute_flags(chat, project.sla_threshold_minutes)
+        return ChatOut.model_validate(chat).model_copy(update=flags)
 
     async def update_timestamps(
         self, chat_id: UUID, sender_type: str, ts: datetime
@@ -125,7 +178,13 @@ class ChatService:
         await self.chat_repo.update_timestamps(chat_id, sender_type, ts)
 
     async def mark_as_read(self, chat_id: UUID, project_id: UUID) -> None:
-        raise NotImplementedError
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found",
+            )
+        await self.chat_repo.mark_as_read(chat_id)
 
     async def count_red(self, project_id: UUID) -> int:
         project = await self.project_repo.get_active(project_id)
@@ -177,3 +236,20 @@ class ChatService:
         )
 
         return {"unread": unread, "unanswered": unanswered, "is_red": is_red}
+
+    @staticmethod
+    def _normalize_required(value: str, *, field_name: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must not be empty",
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_optional(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None

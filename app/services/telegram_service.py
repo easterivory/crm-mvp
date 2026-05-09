@@ -44,9 +44,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
-from app.schemas.message import MessageCreate
+from app.schemas.message import MessageCreate, MessageOut
 from app.schemas.telegram import TelegramMessage, TelegramUpdate
 from app.services.audit_service import AuditService
+from app.services.bot_engine_service import BotEngineService
 from app.services.message_service import MessageService
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class TelegramService:
         self.chat_repo = ChatRepository(db)
         self.lead_repo = LeadRepository(db)
         self.message_service = MessageService(db)
+        self.bot_engine = BotEngineService(db)
         self.audit = AuditService(db)
 
     # ── Parsing ────────────────────────────────────────────────────────────────
@@ -109,7 +111,8 @@ class TelegramService:
             return
 
         chat = await self._find_or_create_chat(message, project_id)
-        await self._create_message(chat.id, project_id, message)
+        msg = await self._create_message(chat.id, project_id, message)
+        await self.bot_engine.process_chat(chat.id, user_message=msg)
         await self._find_or_create_lead(chat.id, project_id, message)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
@@ -157,6 +160,7 @@ class TelegramService:
                 external_chat_id,
                 project_id,
             )
+            await self.bot_engine.initialize_chat(chat.id, project_id)
         except IntegrityError:
             # Concurrent insert won the race — re-fetch the winner's row.
             logger.debug(
@@ -179,7 +183,7 @@ class TelegramService:
         chat_id: UUID,
         project_id: UUID,
         message: TelegramMessage,
-    ) -> None:
+    ) -> MessageOut:
         """
         Persist the Telegram message via MessageService (includes idempotency,
         SAVEPOINT, and chat timestamp update).
@@ -196,7 +200,7 @@ class TelegramService:
             sender_id=None,  # Telegram users are not CRM users
             body=message.text,
         )
-        await self.message_service.create_message(
+        return await self.message_service.create_message(
             chat_id=chat_id,
             project_id=project_id,
             data=data,

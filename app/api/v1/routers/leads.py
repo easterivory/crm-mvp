@@ -20,10 +20,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
-from app.schemas.lead import LeadManagerUpdate, LeadOut, LeadStatusUpdate, LeadUpdate
+from app.schemas.lead import (
+    LeadCreate,
+    LeadManagerUpdate,
+    LeadOut,
+    LeadStatusUpdate,
+    LeadUpdate,
+)
 from app.services.lead_service import LeadService
 
 router = APIRouter(prefix="/leads", tags=["leads"])
+
+
+@router.post("", response_model=LeadOut, status_code=status.HTTP_201_CREATED)
+async def create_lead(
+    data: LeadCreate,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadOut:
+    return await LeadService(db).create_lead(
+        data=data,
+        project_id=project_id,
+        actor_id=current_user.id,
+    )
 
 
 @router.post("/{lead_id}/status", response_model=LeadOut)
@@ -66,7 +86,14 @@ async def list_leads(
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[LeadOut]:
-    raise NotImplementedError
+    items, total = await LeadService(db).list_leads(
+        project_id=project_id,
+        status_id=status_id,
+        manager_id=manager_id,
+        limit=limit,
+        offset=offset,
+    )
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{lead_id}", response_model=LeadOut)
@@ -75,7 +102,7 @@ async def get_lead(
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
-    raise NotImplementedError
+    return await LeadService(db).get_lead(lead_id=lead_id, project_id=project_id)
 
 
 @router.patch("/{lead_id}", response_model=LeadOut)
@@ -83,6 +110,12 @@ async def update_lead(
     lead_id: UUID,
     data: LeadUpdate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
-    raise NotImplementedError
+    return await LeadService(db).update_contact(
+        lead_id=lead_id,
+        project_id=project_id,
+        data=data,
+        actor_id=current_user.id,
+    )

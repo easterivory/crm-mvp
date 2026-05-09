@@ -29,11 +29,13 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AuditAction, EntityType
+from app.core.constants import AuditAction, EntityType, LeadStatusCode
 
 logger = logging.getLogger(__name__)
+from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
 from app.schemas.lead import LeadCreate, LeadOut, LeadUpdate
 from app.services.audit_service import AuditService
@@ -43,6 +45,7 @@ class LeadService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.lead_repo = LeadRepository(db)
+        self.chat_repo = ChatRepository(db)
         self.audit = AuditService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
@@ -141,13 +144,79 @@ class LeadService:
 
         return LeadOut.model_validate(updated)
 
-    # ── Stubs (Phase 3) ────────────────────────────────────────────────────────
+    # ── CRUD ──────────────────────────────────────────────────────────────────
 
-    async def create_lead(self, data: LeadCreate, actor_id: Optional[UUID]) -> LeadOut:
-        raise NotImplementedError
+    async def create_lead(
+        self,
+        data: LeadCreate,
+        project_id: UUID,
+        actor_id: Optional[UUID],
+    ) -> LeadOut:
+        if data.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="project_id in body must match authenticated project",
+            )
+
+        chat = await self.chat_repo.get_active(data.chat_id, project_id)
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found",
+            )
+
+        existing = await self.lead_repo.get_any_by_chat(data.chat_id, project_id)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Chat already has a lead",
+            )
+
+        new_status = await self.lead_repo.get_status_by_code(LeadStatusCode.NEW)
+        if new_status is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Default lead status is missing from reference table",
+            )
+
+        try:
+            async with self.db.begin_nested():
+                lead = await self.lead_repo.create(
+                    project_id=project_id,
+                    chat_id=data.chat_id,
+                    status_id=new_status.id,
+                )
+        except IntegrityError:
+            existing = await self.lead_repo.get_any_by_chat(data.chat_id, project_id)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Chat already has a lead",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not create lead",
+            )
+
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.LEAD_CREATED,
+            entity_type=EntityType.LEAD,
+            entity_id=lead.id,
+            actor_id=actor_id,
+            meta={"source": "manual"},
+        )
+
+        return LeadOut.model_validate(lead)
 
     async def get_lead(self, lead_id: UUID, project_id: UUID) -> LeadOut:
-        raise NotImplementedError
+        lead = await self.lead_repo.get_active(lead_id, project_id)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+        return LeadOut.model_validate(lead)
 
     async def list_leads(
         self,
@@ -156,8 +225,20 @@ class LeadService:
         manager_id: Optional[UUID],
         limit: int,
         offset: int,
-    ) -> list[LeadOut]:
-        raise NotImplementedError
+    ) -> tuple[list[LeadOut], int]:
+        leads = await self.lead_repo.list_by_project(
+            project_id=project_id,
+            status_id=status_id,
+            manager_id=manager_id,
+            limit=limit,
+            offset=offset,
+        )
+        total = await self.lead_repo.count_by_project(
+            project_id=project_id,
+            status_id=status_id,
+            manager_id=manager_id,
+        )
+        return [LeadOut.model_validate(lead) for lead in leads], total
 
     async def update_contact(
         self,
@@ -166,4 +247,26 @@ class LeadService:
         data: LeadUpdate,
         actor_id: UUID,
     ) -> LeadOut:
-        raise NotImplementedError
+        values = data.model_dump(exclude_unset=True)
+        if "phone" in values:
+            values["phone"] = self._normalize_optional(values["phone"])
+        if "username" in values:
+            values["username"] = self._normalize_optional(values["username"])
+
+        if not values:
+            return await self.get_lead(lead_id, project_id)
+
+        lead = await self.lead_repo.update_contact(lead_id, project_id, **values)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+        return LeadOut.model_validate(lead)
+
+    @staticmethod
+    def _normalize_optional(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None

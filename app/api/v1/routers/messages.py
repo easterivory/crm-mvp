@@ -63,4 +63,10 @@ async def list_messages(
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[MessageOut]:
-    raise NotImplementedError
+    items, total = await MessageService(db).list_messages(
+        chat_id=chat_id,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+    )
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)

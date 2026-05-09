@@ -28,10 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 from app.core.constants import MessageType, SenderType
+from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
 from app.schemas.message import MessageCreate, MessageOut
 from app.services.chat_service import ChatService
+from app.services.telegram_sender import TelegramSenderService
 
 
 class MessageService:
@@ -39,7 +41,9 @@ class MessageService:
         self.db = db
         self.message_repo = MessageRepository(db)
         self.chat_repo = ChatRepository(db)
+        self.bot_repo = BotRepository(db)
         self.chat_service = ChatService(db)
+        self.telegram_sender = TelegramSenderService(db)
 
     async def create_message(
         self,
@@ -87,6 +91,8 @@ class MessageService:
                 chat_id, data.external_message_id
             )
             if existing is not None:
+                if data.sender_type == SenderType.MANAGER:
+                    await self.bot_repo.disable_bot_for_chat(chat_id)
                 return MessageOut.model_validate(existing)
 
         # ── 1.2 Insert inside SAVEPOINT — race-condition safe idempotency ─────
@@ -118,6 +124,8 @@ class MessageService:
                     chat_id, data.external_message_id
                 )
                 if existing is not None:
+                    if data.sender_type == SenderType.MANAGER:
+                        await self.bot_repo.disable_bot_for_chat(chat_id)
                     return MessageOut.model_validate(existing)
             # If we cannot find the conflicting row (should not happen), re-raise.
             raise
@@ -129,20 +137,57 @@ class MessageService:
             chat_id, data.sender_type, message.created_at
         )
 
+        if data.sender_type == SenderType.MANAGER:
+            await self.bot_repo.disable_bot_for_chat(chat_id)
+
+        await self._send_to_telegram_if_needed(
+            project_id=project_id,
+            external_chat_id=chat.external_chat_id,
+            data=data,
+        )
+
         return MessageOut.model_validate(message)
+
+    async def _send_to_telegram_if_needed(
+        self,
+        *,
+        project_id: UUID,
+        external_chat_id: str,
+        data: MessageCreate,
+    ) -> None:
+        if data.sender_type not in {SenderType.MANAGER, SenderType.BOT}:
+            return
+        if data.message_type != MessageType.TEXT:
+            return
+        if data.body is None:
+            return
+
+        await self.telegram_sender.send_message(
+            project_id=project_id,
+            external_chat_id=external_chat_id,
+            text=data.body,
+        )
 
     async def list_messages(
         self,
         chat_id: UUID,
+        project_id: UUID,
         limit: int,
         offset: int,
-    ) -> list[MessageOut]:
+    ) -> tuple[list[MessageOut], int]:
         """
         Returns messages for a chat in chronological order (oldest first).
-        Caller is responsible for verifying that chat_id belongs to the
-        current project before calling this method.
+        Verifies that chat_id belongs to the current project before reading.
         """
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found in this project",
+            )
+
         messages = await self.message_repo.list_by_chat(
             chat_id, limit=limit, offset=offset
         )
-        return [MessageOut.model_validate(m) for m in messages]
+        total = await self.message_repo.count_by_chat(chat_id)
+        return [MessageOut.model_validate(m) for m in messages], total

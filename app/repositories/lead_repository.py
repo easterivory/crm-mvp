@@ -27,6 +27,7 @@ TODO (do not implement now):
     would eliminate the vast majority of these reads.
   - Consider a dedicated LeadStatusRepository if status management grows.
 """
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -60,6 +61,16 @@ class LeadRepository(BaseRepository[Lead]):
                 Lead.chat_id == chat_id,
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_any_by_chat(self, chat_id: UUID, project_id: UUID) -> Optional[Lead]:
+        """Fetch a lead by chat, including soft-deleted rows."""
+        result = await self.db.execute(
+            select(Lead).where(
+                Lead.chat_id == chat_id,
+                Lead.project_id == project_id,
             )
         )
         return result.scalar_one_or_none()
@@ -104,6 +115,27 @@ class LeadRepository(BaseRepository[Lead]):
 
         result = await self.db.execute(stmt)
         return result.scalar_one()
+
+    async def aggregate_leads_by_status_for_date(
+        self,
+        project_id: UUID,
+        target_date: date,
+    ) -> dict[str, int]:
+        start_at = datetime.combine(target_date, time.min, tzinfo=timezone.utc)
+        end_at = start_at + timedelta(days=1)
+
+        result = await self.db.execute(
+            select(LeadStatus.code, func.count(Lead.id))
+            .join(LeadStatus, Lead.status_id == LeadStatus.id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                Lead.created_at >= start_at,
+                Lead.created_at < end_at,
+            )
+            .group_by(LeadStatus.code)
+        )
+        return {code: count for code, count in result.all()}
 
     # ── Optimistic-locking updates ─────────────────────────────────────────────
 
@@ -168,6 +200,25 @@ class LeadRepository(BaseRepository[Lead]):
         if result.rowcount == 0:
             return None
         return await self.get_by_id(lead_id)
+
+    async def update_contact(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        **values,
+    ) -> Optional[Lead]:
+        result = await self.db.execute(
+            update(Lead)
+            .where(
+                Lead.id == lead_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+            )
+            .values(**values, updated_at=func.now())
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_active(lead_id, project_id)
 
     # ── LeadStatus lookups (same domain, no separate repository needed) ────────
 

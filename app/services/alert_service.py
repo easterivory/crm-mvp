@@ -30,8 +30,38 @@ class AlertService:
 
     async def _check_long_response(self, project_id: UUID) -> None:
         """Creates a long_response alert if red chats exist and no unread alert for this type."""
-        raise NotImplementedError
+        red_count = await self.chat_service.count_red(project_id)
+        if red_count <= 0:
+            return
+
+        has_unread = await self.alert_repo.has_unread(
+            project_id=project_id,
+            alert_type=AlertType.LONG_RESPONSE,
+        )
+        if has_unread:
+            return
+
+        await self.alert_repo.create(
+            project_id=project_id,
+            type=AlertType.LONG_RESPONSE,
+            payload={"red_count": red_count},
+        )
 
     async def _check_many_unanswered(self, project_id: UUID) -> None:
         """Creates a many_unanswered alert based on a threshold."""
-        raise NotImplementedError
+        unanswered_count = await self.chat_service.count_unanswered(project_id)
+        if unanswered_count <= 10:
+            return
+
+        has_unread = await self.alert_repo.has_unread(
+            project_id=project_id,
+            alert_type=AlertType.MANY_UNANSWERED,
+        )
+        if has_unread:
+            return
+
+        await self.alert_repo.create(
+            project_id=project_id,
+            type=AlertType.MANY_UNANSWERED,
+            payload={"unanswered_count": unanswered_count},
+        )
