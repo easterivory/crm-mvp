@@ -1,4 +1,4 @@
-"""add bot engine tables
+"""baseline schema with bot engine tables
 
 Revision ID: 20260509_0001
 Revises:
@@ -8,7 +8,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20260509_0001"
@@ -18,114 +17,53 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "bots",
-        sa.Column("project_id", sa.UUID(), nullable=False),
-        sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("telegram_token", sa.String(length=255), nullable=True),
-        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("is_deleted", sa.Boolean(), server_default="false", nullable=False),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_bots_project_id", "bots", ["project_id"])
-    op.create_index("ix_bots_is_deleted", "bots", ["is_deleted"])
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
-    op.create_table(
-        "bot_versions",
-        sa.Column("bot_id", sa.UUID(), nullable=False),
-        sa.Column("version_name", sa.String(length=100), nullable=False),
-        sa.Column("is_active", sa.Boolean(), server_default="false", nullable=False),
-        sa.Column("start_step_id", sa.UUID(), nullable=True),
-        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(["bot_id"], ["bots.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_bot_versions_bot_id", "bot_versions", ["bot_id"])
-    op.create_index("ix_bot_versions_is_active", "bot_versions", ["is_active"])
-    op.create_index("ix_bot_versions_start_step_id", "bot_versions", ["start_step_id"])
+    from app.models import Base  # noqa: WPS433 - baseline migration owns schema.
+
+    bind = op.get_bind()
+    Base.metadata.create_all(bind=bind)
+
     op.create_index(
-        "uq_bot_versions_one_active_per_bot",
-        "bot_versions",
-        ["bot_id"],
+        "uq_messages_chat_external_message_id",
+        "messages",
+        ["chat_id", "external_message_id"],
         unique=True,
-        postgresql_where=sa.text("is_active IS TRUE"),
+        postgresql_where=sa.text("external_message_id IS NOT NULL"),
     )
 
-    op.create_table(
-        "bot_steps",
-        sa.Column("bot_version_id", sa.UUID(), nullable=False),
-        sa.Column("step_type", sa.String(length=50), nullable=False),
-        sa.Column("config", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("next_step_id", sa.UUID(), nullable=True),
-        sa.Column("fallback_step_id", sa.UUID(), nullable=True),
-        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(["bot_version_id"], ["bot_versions.id"]),
-        sa.ForeignKeyConstraint(["fallback_step_id"], ["bot_steps.id"]),
-        sa.ForeignKeyConstraint(["next_step_id"], ["bot_steps.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_bot_steps_bot_version_id", "bot_steps", ["bot_version_id"])
-    op.create_index("ix_bot_steps_next_step_id", "bot_steps", ["next_step_id"])
-    op.create_index("ix_bot_steps_fallback_step_id", "bot_steps", ["fallback_step_id"])
-
-    op.create_foreign_key(
-        "fk_bot_versions_start_step_id_bot_steps",
-        "bot_versions",
-        "bot_steps",
-        ["start_step_id"],
-        ["id"],
+    op.execute(
+        """
+        INSERT INTO roles (name)
+        VALUES ('super_admin'), ('admin'), ('manager')
+        ON CONFLICT (name) DO NOTHING
+        """
     )
 
-    op.create_table(
-        "chat_bot_states",
-        sa.Column("chat_id", sa.UUID(), nullable=False),
-        sa.Column("bot_version_id", sa.UUID(), nullable=False),
-        sa.Column("current_step_id", sa.UUID(), nullable=True),
-        sa.Column("variables", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("is_active", sa.Boolean(), server_default="true", nullable=False),
-        sa.Column("last_interaction_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(["bot_version_id"], ["bot_versions.id"]),
-        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"]),
-        sa.ForeignKeyConstraint(["current_step_id"], ["bot_steps.id"]),
-        sa.PrimaryKeyConstraint("chat_id"),
+    op.execute(
+        """
+        INSERT INTO lead_statuses (code, name, sort_order, is_final)
+        VALUES
+            ('new', 'New', 10, false),
+            ('in_progress', 'In progress', 20, false),
+            ('qualified', 'Qualified', 30, true),
+            ('lost', 'Lost', 40, true)
+        ON CONFLICT (code) DO UPDATE SET
+            name = EXCLUDED.name,
+            sort_order = EXCLUDED.sort_order,
+            is_final = EXCLUDED.is_final
+        """
     )
-    op.create_index("ix_chat_bot_states_chat_id", "chat_bot_states", ["chat_id"])
-    op.create_index("ix_chat_bot_states_bot_version_id", "chat_bot_states", ["bot_version_id"])
-    op.create_index("ix_chat_bot_states_current_step_id", "chat_bot_states", ["current_step_id"])
-    op.create_index("ix_chat_bot_states_is_active", "chat_bot_states", ["is_active"])
 
 
 def downgrade() -> None:
-    op.drop_index("ix_chat_bot_states_is_active", table_name="chat_bot_states")
-    op.drop_index("ix_chat_bot_states_current_step_id", table_name="chat_bot_states")
-    op.drop_index("ix_chat_bot_states_bot_version_id", table_name="chat_bot_states")
-    op.drop_index("ix_chat_bot_states_chat_id", table_name="chat_bot_states")
-    op.drop_table("chat_bot_states")
-
-    op.drop_constraint(
-        "fk_bot_versions_start_step_id_bot_steps",
-        "bot_versions",
-        type_="foreignkey",
+    op.drop_index(
+        "uq_messages_chat_external_message_id",
+        table_name="messages",
+        postgresql_where=sa.text("external_message_id IS NOT NULL"),
     )
-    op.drop_index("ix_bot_steps_fallback_step_id", table_name="bot_steps")
-    op.drop_index("ix_bot_steps_next_step_id", table_name="bot_steps")
-    op.drop_index("ix_bot_steps_bot_version_id", table_name="bot_steps")
-    op.drop_table("bot_steps")
 
-    op.drop_index("uq_bot_versions_one_active_per_bot", table_name="bot_versions")
-    op.drop_index("ix_bot_versions_start_step_id", table_name="bot_versions")
-    op.drop_index("ix_bot_versions_is_active", table_name="bot_versions")
-    op.drop_index("ix_bot_versions_bot_id", table_name="bot_versions")
-    op.drop_table("bot_versions")
+    from app.models import Base  # noqa: WPS433 - baseline migration owns schema.
 
-    op.drop_index("ix_bots_is_deleted", table_name="bots")
-    op.drop_index("ix_bots_project_id", table_name="bots")
-    op.drop_table("bots")
+    bind = op.get_bind()
+    Base.metadata.drop_all(bind=bind)
