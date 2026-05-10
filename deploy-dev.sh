@@ -10,6 +10,10 @@ echo "=== Reset local dev to origin/dev ==="
 git checkout dev
 git reset --hard origin/dev
 
+echo "=== Cleanup stale runtime containers ==="
+docker rm -f crm_mvp_dev-frontend-1 2>/dev/null || true
+docker compose rm -sf api worker
+
 echo "=== Build and restart DEV containers ==="
 docker compose up -d --build postgres redis api worker
 
