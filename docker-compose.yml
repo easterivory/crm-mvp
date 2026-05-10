@@ -58,7 +58,7 @@ services:
     working_dir: /workspace/frontend
     command: sh -c "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"
     ports:
-      - "${FRONTEND_PORT:-5173}:5173"
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/v1}
     volumes:
