@@ -242,3 +242,28 @@ class LeadRepository(BaseRepository[Lead]):
             select(LeadStatus).order_by(LeadStatus.sort_order.asc())
         )
         return list(result.scalars().all())
+
+    async def next_status_sort_order(self) -> int:
+        result = await self.db.execute(
+            select(func.coalesce(func.max(LeadStatus.sort_order), 0) + 1)
+        )
+        return result.scalar_one()
+
+    async def create_status(
+        self,
+        *,
+        code: str,
+        name: str,
+        sort_order: int,
+        is_final: bool,
+    ) -> LeadStatus:
+        status = LeadStatus(
+            code=code,
+            name=name,
+            sort_order=sort_order,
+            is_final=is_final,
+        )
+        self.db.add(status)
+        await self.db.flush()
+        await self.db.refresh(status)
+        return status

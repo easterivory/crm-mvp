@@ -7,7 +7,7 @@ from app.api.v1.dependencies import get_current_project_id, get_current_user
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
-from app.schemas.user import LoginIn, TokenOut, UserCreate, UserOut
+from app.schemas.user import LoginIn, RoleOut, TokenOut, UserCreate, UserOut
 from app.services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -21,6 +21,14 @@ async def login(data: LoginIn, db: AsyncSession = Depends(get_db)) -> TokenOut:
 @router.get("/me", response_model=UserOut)
 async def me(current_user: User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(current_user)
+
+
+@router.get("/roles", response_model=list[RoleOut])
+async def list_roles(
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[RoleOut]:
+    return await UserService(db).list_roles()
 
 
 @router.get("", response_model=PaginatedResponse[UserOut])

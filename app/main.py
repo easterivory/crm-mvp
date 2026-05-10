@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routers import (
     assignments,
+    bots,
     chats,
     health,
     leads,
@@ -12,6 +13,7 @@ from app.api.v1.routers import (
     projects,
     tags,
     telegram,
+    tracking,
     users,
 )
 from app.core.config import settings
@@ -54,4 +56,6 @@ app.include_router(messages.router, prefix=_v1_prefix)
 app.include_router(leads.router, prefix=_v1_prefix)
 app.include_router(assignments.router, prefix=_v1_prefix)
 app.include_router(tags.router, prefix=_v1_prefix)
+app.include_router(bots.router, prefix=_v1_prefix)
+app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)

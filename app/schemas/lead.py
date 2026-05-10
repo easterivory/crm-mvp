@@ -17,12 +17,27 @@ class LeadUpdate(BaseModel):
     username: Optional[str] = Field(None, max_length=255)
 
 
+class LeadStatusCreate(BaseModel):
+    code: str = Field(..., max_length=50)
+    name: str = Field(..., max_length=100)
+    is_final: bool = False
+
+
 class LeadStatusUpdate(BaseModel):
     status_id: uuid.UUID
 
 
 class LeadManagerUpdate(BaseModel):
     manager_id: Optional[uuid.UUID]
+
+
+class LeadStatusOut(OrmBase):
+    id: uuid.UUID
+    code: str
+    name: str
+    sort_order: int
+    is_final: bool
+    created_at: datetime
 
 
 class LeadOut(OrmBase):

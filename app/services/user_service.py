@@ -15,7 +15,7 @@ from app.core.constants import RoleName
 from app.core.security import create_access_token, hash_password, verify_password
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.user import LoginIn, TokenOut, UserCreate, UserOut
+from app.schemas.user import LoginIn, RoleOut, TokenOut, UserCreate, UserOut
 
 
 class UserService:
@@ -50,6 +50,10 @@ class UserService:
         )
         total = await self.user_repo.count_by_project(project_id)
         return [UserOut.model_validate(user) for user in users], total
+
+    async def list_roles(self) -> list[RoleOut]:
+        roles = await self.user_repo.list_roles()
+        return [RoleOut.model_validate(role) for role in roles]
 
     async def create_user(self, data: UserCreate) -> UserOut:
         email = self._normalize_email(str(data.email))

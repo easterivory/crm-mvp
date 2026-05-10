@@ -37,7 +37,7 @@ from app.core.constants import AuditAction, EntityType, LeadStatusCode
 logger = logging.getLogger(__name__)
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
-from app.schemas.lead import LeadCreate, LeadOut, LeadUpdate
+from app.schemas.lead import LeadCreate, LeadOut, LeadStatusCreate, LeadStatusOut, LeadUpdate
 from app.services.audit_service import AuditService
 
 
@@ -218,6 +218,53 @@ class LeadService:
             )
         return LeadOut.model_validate(lead)
 
+    async def get_lead_by_chat(self, chat_id: UUID, project_id: UUID) -> LeadOut:
+        lead = await self.lead_repo.get_by_chat(chat_id, project_id)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found for this chat",
+            )
+        return LeadOut.model_validate(lead)
+
+    async def list_statuses(self) -> list[LeadStatusOut]:
+        statuses = await self.lead_repo.list_statuses()
+        return [LeadStatusOut.model_validate(item) for item in statuses]
+
+    async def create_status(self, data: LeadStatusCreate) -> LeadStatusOut:
+        code = self._normalize_status_code(data.code)
+        name = self._normalize_status_name(data.name)
+
+        existing = await self.lead_repo.get_status_by_code(code)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Lead status with this code already exists",
+            )
+
+        try:
+            async with self.db.begin_nested():
+                sort_order = await self.lead_repo.next_status_sort_order()
+                lead_status = await self.lead_repo.create_status(
+                    code=code,
+                    name=name,
+                    sort_order=sort_order,
+                    is_final=data.is_final,
+                )
+        except IntegrityError:
+            existing = await self.lead_repo.get_status_by_code(code)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Lead status with this code already exists",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not create lead status",
+            )
+
+        return LeadStatusOut.model_validate(lead_status)
+
     async def list_leads(
         self,
         project_id: UUID,
@@ -270,3 +317,23 @@ class LeadService:
             return None
         normalized = value.strip()
         return normalized or None
+
+    @staticmethod
+    def _normalize_status_code(code: str) -> str:
+        normalized = code.strip().lower()
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Status code must not be empty",
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_status_name(name: str) -> str:
+        normalized = name.strip()
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Status name must not be empty",
+            )
+        return normalized

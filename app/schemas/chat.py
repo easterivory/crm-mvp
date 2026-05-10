@@ -20,6 +20,7 @@ class ChatUpdate(BaseModel):
 class ChatOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
+    tracking_link_id: Optional[uuid.UUID]
     external_chat_id: str
     external_user_id: str
     contact_name: Optional[str]

@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import MessageType, SenderType
 from app.models.bot import BotStep, ChatBotState
 from app.repositories.bot_repository import BotRepository
+from app.repositories.chat_repository import ChatRepository
+from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.message import MessageCreate, MessageOut
 from app.services.message_service import MessageService
 
@@ -89,6 +91,8 @@ class BotEngineService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
+        self.chat_repo = ChatRepository(db)
+        self.tracking_repo = TrackingRepository(db)
         self.message_service = MessageService(db)
         self.handlers: dict[str, StepHandler] = {
             "send_message": SendMessageHandler(self.bot_repo, self.message_service),
@@ -96,9 +100,18 @@ class BotEngineService:
         }
 
     async def initialize_chat(self, chat_id: UUID, project_id: UUID) -> None:
-        active_version = await self.bot_repo.get_active_version_for_project(project_id)
+        active_version = await self._resolve_initial_bot_version(chat_id, project_id)
         if active_version is None:
             return
+
+        current_step_id = active_version.start_step_id
+        tracking_target_step_id = await self._resolve_tracking_target_step_id(
+            chat_id=chat_id,
+            project_id=project_id,
+            bot_version_id=active_version.id,
+        )
+        if tracking_target_step_id is not None:
+            current_step_id = tracking_target_step_id
 
         existing = await self.bot_repo.get_chat_state(chat_id)
         if existing is not None:
@@ -109,12 +122,52 @@ class BotEngineService:
                 await self.bot_repo.create_chat_state(
                     chat_id=chat_id,
                     bot_version_id=active_version.id,
-                    current_step_id=active_version.start_step_id,
+                    current_step_id=current_step_id,
                 )
         except IntegrityError:
             return
 
         await self.process_chat(chat_id)
+
+    async def _resolve_initial_bot_version(self, chat_id: UUID, project_id: UUID):
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is not None and chat.tracking_link_id is not None:
+            link = await self.tracking_repo.get_by_id_in_project(
+                chat.tracking_link_id,
+                project_id,
+            )
+            if link is not None:
+                version = await self.bot_repo.get_active_version_for_bot(
+                    link.bot_id,
+                    project_id,
+                )
+                if version is not None:
+                    return version
+
+        return await self.bot_repo.get_active_version_for_project(project_id)
+
+    async def _resolve_tracking_target_step_id(
+        self,
+        chat_id: UUID,
+        project_id: UUID,
+        bot_version_id: UUID,
+    ) -> Optional[UUID]:
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None or chat.tracking_link_id is None:
+            return None
+
+        link = await self.tracking_repo.get_by_id_in_project(
+            chat.tracking_link_id,
+            project_id,
+        )
+        if link is None or link.target_step_id is None:
+            return None
+
+        belongs = await self.bot_repo.step_belongs_to_version(
+            link.target_step_id,
+            bot_version_id,
+        )
+        return link.target_step_id if belongs else None
 
     async def process_chat(
         self,

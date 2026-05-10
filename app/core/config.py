@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "CRM MVP"
     DEBUG: bool = False
+    BASE_URL: str = "http://localhost:8000"
 
     # Database (postgresql+asyncpg:// required)
     DATABASE_URL: str
@@ -29,6 +30,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
 
     # Telegram webhook
+    # TELEGRAM_BOT_TOKEN is used only by local/dev seed scripts. Runtime
+    # message sending reads bot tokens from the bots table.
+    TELEGRAM_BOT_TOKEN: Optional[str] = None
     # TELEGRAM_PROJECT_ID — UUID of the project that owns this bot's conversations.
     # Must be set before the webhook is registered; the endpoint returns 200 but
     # skips processing if the value is missing (prevents silent data loss).

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.models.bot import Bot, BotStep, BotVersion, ChatBotState
 from app.repositories.base import BaseRepository
@@ -16,6 +16,73 @@ from app.repositories.base import BaseRepository
 
 class BotRepository(BaseRepository[Bot]):
     model = Bot
+
+    async def list_by_project(
+        self,
+        project_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Bot]:
+        result = await self.db.execute(
+            select(Bot)
+            .where(Bot.project_id == project_id, Bot.is_deleted.is_(False))
+            .order_by(Bot.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def count_by_project(self, project_id: UUID) -> int:
+        result = await self.db.execute(
+            select(func.count(Bot.id)).where(
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one()
+
+    async def get_by_id_in_project(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> Optional[Bot]:
+        result = await self.db.execute(
+            select(Bot).where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_in_project(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+        **values: Any,
+    ) -> Optional[Bot]:
+        await self.db.execute(
+            update(Bot)
+            .where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+            .values(**values)
+        )
+        return await self.get_by_id_in_project(bot_id, project_id)
+
+    async def soft_delete_from_project(self, bot_id: UUID, project_id: UUID) -> bool:
+        result = await self.db.execute(
+            update(Bot)
+            .where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
+        return result.rowcount > 0
 
     async def get_chat_state(self, chat_id: UUID) -> Optional[ChatBotState]:
         result = await self.db.execute(
@@ -44,6 +111,75 @@ class BotRepository(BaseRepository[Bot]):
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_active_version_for_bot(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> Optional[BotVersion]:
+        result = await self.db.execute(
+            select(BotVersion)
+            .join(Bot, Bot.id == BotVersion.bot_id)
+            .where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+                BotVersion.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_steps_for_bot(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> list[BotStep]:
+        active_version = await self.get_active_version_for_bot(bot_id, project_id)
+        if active_version is None:
+            return []
+
+        result = await self.db.execute(
+            select(BotStep)
+            .where(BotStep.bot_version_id == active_version.id)
+            .order_by(BotStep.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def step_belongs_to_bot(
+        self,
+        step_id: UUID,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> bool:
+        result = await self.db.execute(
+            select(BotStep.id)
+            .join(BotVersion, BotVersion.id == BotStep.bot_version_id)
+            .join(Bot, Bot.id == BotVersion.bot_id)
+            .where(
+                BotStep.id == step_id,
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def step_belongs_to_version(
+        self,
+        step_id: UUID,
+        bot_version_id: UUID,
+    ) -> bool:
+        result = await self.db.execute(
+            select(BotStep.id)
+            .where(
+                BotStep.id == step_id,
+                BotStep.bot_version_id == bot_version_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def get_active_bot_token(self, project_id: UUID) -> Optional[str]:
         result = await self.db.execute(

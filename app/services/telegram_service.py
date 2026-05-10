@@ -42,8 +42,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
+from app.models.chat import Chat
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.message import MessageCreate, MessageOut
 from app.schemas.telegram import TelegramMessage, TelegramUpdate
 from app.services.audit_service import AuditService
@@ -58,6 +60,7 @@ class TelegramService:
         self.db = db
         self.chat_repo = ChatRepository(db)
         self.lead_repo = LeadRepository(db)
+        self.tracking_repo = TrackingRepository(db)
         self.message_service = MessageService(db)
         self.bot_engine = BotEngineService(db)
         self.audit = AuditService(db)
@@ -110,14 +113,27 @@ class TelegramService:
             )
             return
 
-        chat = await self._find_or_create_chat(message, project_id)
+        tracking_link_id = await self._resolve_tracking_link_id(message, project_id)
+        chat, was_created = await self._find_or_create_chat(
+            message,
+            project_id,
+            tracking_link_id=tracking_link_id,
+        )
         msg = await self._create_message(chat.id, project_id, message)
-        await self.bot_engine.process_chat(chat.id, user_message=msg)
         await self._find_or_create_lead(chat.id, project_id, message)
+        if was_created:
+            await self.bot_engine.initialize_chat(chat.id, project_id)
+        else:
+            await self.bot_engine.process_chat(chat.id, user_message=msg)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    async def _find_or_create_chat(self, message: TelegramMessage, project_id: UUID):
+    async def _find_or_create_chat(
+        self,
+        message: TelegramMessage,
+        project_id: UUID,
+        tracking_link_id: Optional[UUID] = None,
+    ) -> tuple[Chat, bool]:
         """
         Return the Chat for this external_chat_id, creating it if absent.
 
@@ -131,7 +147,7 @@ class TelegramService:
         # Fast path: chat already exists
         chat = await self.chat_repo.get_by_external(project_id, external_chat_id)
         if chat is not None:
-            return chat
+            return chat, False
 
         # Build a human-readable contact name from available sender fields
         contact_name: Optional[str] = None
@@ -150,6 +166,7 @@ class TelegramService:
             async with self.db.begin_nested():
                 chat = await self.chat_repo.create(
                     project_id=project_id,
+                    tracking_link_id=tracking_link_id,
                     external_chat_id=external_chat_id,
                     external_user_id=external_user_id,
                     contact_name=contact_name,
@@ -160,7 +177,6 @@ class TelegramService:
                 external_chat_id,
                 project_id,
             )
-            await self.bot_engine.initialize_chat(chat.id, project_id)
         except IntegrityError:
             # Concurrent insert won the race — re-fetch the winner's row.
             logger.debug(
@@ -175,8 +191,46 @@ class TelegramService:
                     f"Chat row missing after IntegrityError for "
                     f"external_chat_id={external_chat_id}"
                 )
+            return chat, False
 
-        return chat
+        return chat, True
+
+    async def _resolve_tracking_link_id(
+        self,
+        message: TelegramMessage,
+        project_id: UUID,
+    ) -> Optional[UUID]:
+        ref_code = self._extract_start_ref_code(message.text)
+        if ref_code is None:
+            return None
+
+        link = await self.tracking_repo.get_by_ref_code(ref_code, project_id)
+        if link is None:
+            logger.info(
+                "Telegram /start ref_code=%s was not found for project_id=%s",
+                ref_code,
+                project_id,
+            )
+            return None
+        return link.id
+
+    @staticmethod
+    def _extract_start_ref_code(text: Optional[str]) -> Optional[str]:
+        if not text:
+            return None
+
+        parts = text.strip().split(maxsplit=1)
+        if not parts:
+            return None
+
+        command = parts[0]
+        if command != "/start" and not command.startswith("/start@"):
+            return None
+        if len(parts) == 1:
+            return None
+
+        ref_code = parts[1].strip().split(maxsplit=1)[0]
+        return ref_code or None
 
     async def _create_message(
         self,

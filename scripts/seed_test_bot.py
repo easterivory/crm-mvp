@@ -19,20 +19,25 @@ from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.config import settings
 from app.core.database import get_db_session
 from app.models.bot import Bot, BotStep, BotVersion
 from app.models.project import Project
 
 
-DEFAULT_PROJECT_NAME = "Test Telegram Project"
+DEFAULT_PROJECT_NAME = "Test CRM Project"
 DEFAULT_BOT_NAME = "CRM Test Bot"
 DEFAULT_VERSION_NAME = "v1.0"
 DEFAULT_WELCOME_TEXT = "Привет! Я тестовый бот CRM. Напишите сообщение, и я сохраню ответ."
 
 
 async def _get_or_create_project(db) -> Project:
-    project_id = os.getenv("TELEGRAM_PROJECT_ID")
-    project_name = os.getenv("TEST_BOT_PROJECT_NAME", DEFAULT_PROJECT_NAME)
+    project_id = os.getenv("TELEGRAM_PROJECT_ID") or settings.TELEGRAM_PROJECT_ID
+    project_name = (
+        os.getenv("TEST_BOT_PROJECT_NAME")
+        or os.getenv("TEST_PROJECT_NAME")
+        or DEFAULT_PROJECT_NAME
+    )
     if project_id:
         project = await db.get(Project, UUID(project_id))
         if project is not None and project.is_deleted:
@@ -126,7 +131,7 @@ async def _ensure_welcome_step(db, version: BotVersion) -> BotStep:
 
 
 async def main() -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or settings.TELEGRAM_BOT_TOKEN
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 

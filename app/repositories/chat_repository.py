@@ -37,6 +37,7 @@ from uuid import UUID
 
 from sqlalchemy import ColumnElement, func, select, update
 
+from app.core.constants import SenderType
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.repositories.base import BaseRepository
@@ -64,13 +65,13 @@ class ChatRepository(BaseRepository[Chat]):
         True when the chat is unanswered AND the last user message is older
         than the project SLA threshold.
 
-        Uses func.make_interval(mins=N) instead of a raw SQL text() so the
+        Uses func.make_interval(..., mins, ...) instead of a raw SQL text() so the
         threshold value is always a bound parameter — no SQL injection risk,
         no string formatting.
         """
         return ChatRepository._unanswered_expr() & (
             (func.now() - Chat.last_user_message_at)
-            > func.make_interval(mins=sla_threshold_minutes)
+            > func.make_interval(0, 0, 0, 0, 0, sla_threshold_minutes, 0)
         )
 
     @staticmethod
@@ -105,15 +106,12 @@ class ChatRepository(BaseRepository[Chat]):
     ):
         if manager_id is not None:
             # INNER JOIN: only chats that have a lead assigned to this manager.
-            # DISTINCT prevents duplicate rows in the edge case where the JOIN
-            # produces multiple matching rows (defensive, lead.chat_id is unique).
             stmt = (
                 stmt.join(
                     Lead,
                     (Lead.chat_id == Chat.id) & Lead.is_deleted.is_(False),
                 )
                 .where(Lead.manager_id == manager_id)
-                .distinct()
             )
 
         if only_red:
@@ -249,9 +247,9 @@ class ChatRepository(BaseRepository[Chat]):
         the chat exists before calling this method.
         """
         values: dict = {"last_message_at": ts, "updated_at": ts}
-        if sender_type == "user":
+        if sender_type == SenderType.USER:
             values["last_user_message_at"] = ts
-        elif sender_type == "manager":
+        elif sender_type in {SenderType.MANAGER, SenderType.BOT}:
             values["last_manager_reply_at"] = ts
 
         result = await self.db.execute(

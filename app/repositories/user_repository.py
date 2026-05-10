@@ -39,6 +39,10 @@ class UserRepository(BaseRepository[User]):
         result = await self.db.execute(select(Role).where(Role.id == role_id))
         return result.scalar_one_or_none()
 
+    async def list_roles(self) -> list[Role]:
+        result = await self.db.execute(select(Role).order_by(Role.name.asc()))
+        return list(result.scalars().all())
+
     async def get_active_in_project(
         self, user_id: UUID, project_id: UUID
     ) -> Optional[User]:

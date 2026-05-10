@@ -31,6 +31,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     __table_args__ = (
         UniqueConstraint("project_id", "external_chat_id", name="uq_chats_project_external"),
         Index("ix_chats_project_id", "project_id"),
+        Index("ix_chats_tracking_link_id", "tracking_link_id"),
         Index("ix_chats_external_chat_id", "external_chat_id"),
         Index("ix_chats_external_user_id", "external_user_id"),
         Index("ix_chats_last_user_message_at", "last_user_message_at"),
@@ -44,6 +45,9 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
+    )
+    tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tracking_links.id"), nullable=True
     )
     external_chat_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -59,6 +63,10 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
 
     # Relationships
     project: Mapped[Project] = relationship("Project", back_populates="chats")
+    tracking_link: Mapped[Optional[TrackingLink]] = relationship(
+        "TrackingLink",
+        back_populates="chats",
+    )
     messages: Mapped[list[Message]] = relationship(
         "Message", back_populates="chat", order_by="Message.created_at"
     )

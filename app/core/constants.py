@@ -2,6 +2,7 @@
 Shared string constants used across models, services and schemas.
 Avoids magic strings scattered across the codebase.
 """
+from enum import StrEnum
 
 
 class SenderType:
@@ -61,3 +62,9 @@ class EntityType:
 class AlertType:
     LONG_RESPONSE = "long_response"
     MANY_UNANSWERED = "many_unanswered"
+
+
+class TrackingCostModel(StrEnum):
+    FIX_PDP = "fix_pdp"
+    CPM = "cpm"
+    CPA = "cpa"

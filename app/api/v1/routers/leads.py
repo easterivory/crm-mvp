@@ -24,6 +24,8 @@ from app.schemas.lead import (
     LeadCreate,
     LeadManagerUpdate,
     LeadOut,
+    LeadStatusCreate,
+    LeadStatusOut,
     LeadStatusUpdate,
     LeadUpdate,
 )
@@ -94,6 +96,35 @@ async def list_leads(
         offset=offset,
     )
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/statuses", response_model=list[LeadStatusOut])
+async def list_statuses(
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[LeadStatusOut]:
+    return await LeadService(db).list_statuses()
+
+
+@router.post("/statuses", response_model=LeadStatusOut, status_code=status.HTTP_201_CREATED)
+async def create_status(
+    data: LeadStatusCreate,
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadStatusOut:
+    return await LeadService(db).create_status(data)
+
+
+@router.get("/by-chat/{chat_id}", response_model=LeadOut)
+async def get_lead_by_chat(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> LeadOut:
+    return await LeadService(db).get_lead_by_chat(
+        chat_id=chat_id,
+        project_id=project_id,
+    )
 
 
 @router.get("/{lead_id}", response_model=LeadOut)

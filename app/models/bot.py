@@ -23,6 +23,7 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     __tablename__ = "bots"
     __table_args__ = (
         Index("ix_bots_project_id", "project_id"),
+        Index("ix_bots_bot_username", "bot_username"),
         Index("ix_bots_is_deleted", "is_deleted"),
     )
 
@@ -31,6 +32,7 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     telegram_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bot_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     project: Mapped[Project] = relationship("Project")
     versions: Mapped[list[BotVersion]] = relationship(
@@ -38,6 +40,14 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
         back_populates="bot",
         cascade="all, delete-orphan",
     )
+    tracking_links: Mapped[list[TrackingLink]] = relationship(
+        "TrackingLink",
+        back_populates="bot",
+    )
+
+    @property
+    def has_telegram_token(self) -> bool:
+        return bool(self.telegram_token)
 
 
 class BotVersion(Base, UUIDPrimaryKey, TimestampMixin):

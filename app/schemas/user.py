@@ -25,6 +25,11 @@ class UserOut(OrmBase):
     is_deleted: bool
 
 
+class RoleOut(OrmBase):
+    id: uuid.UUID
+    name: str
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
