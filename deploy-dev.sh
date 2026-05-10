@@ -11,7 +11,7 @@ git checkout dev
 git reset --hard origin/dev
 
 echo "=== Build and restart DEV containers ==="
-docker compose --profile dev up -d --build
+docker compose up -d --build postgres redis api worker
 
 echo "=== Run migrations ==="
 docker compose exec -T api alembic upgrade head
