@@ -231,7 +231,7 @@ export default function LeadSidebar({ activeChatId, currentUserId }: LeadSidebar
   }
 
   return (
-    <aside className="flex min-w-0 flex-col border-l border-zinc-800 bg-zinc-950">
+    <aside className="flex min-h-[420px] min-w-0 flex-col border-t border-zinc-800 bg-zinc-950 xl:min-h-0 xl:border-l xl:border-t-0">
       <div className="flex min-h-[73px] items-center justify-between gap-3 border-b border-zinc-800 px-5">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">

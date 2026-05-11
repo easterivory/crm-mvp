@@ -277,8 +277,8 @@ export default function BotsPage() {
   }
 
   return (
-    <section className="flex h-[calc(100vh-112px)] min-h-[620px] flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
+      <header className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-500/15 text-cyan-300">
             <BotIcon size={18} />
@@ -315,8 +315,8 @@ export default function BotsPage() {
           Loading bots
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-zinc-800 lg:grid-cols-[minmax(360px,38%)_1fr] lg:divide-x lg:divide-y-0">
-          <div className="min-h-0 overflow-y-auto p-5">
+        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-zinc-800 overflow-y-auto lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)] lg:divide-x lg:divide-y-0 lg:overflow-hidden">
+          <div className="min-h-0 p-5 lg:overflow-y-auto">
             <div className="mb-5 flex items-center gap-2">
               <BotIcon size={18} className="text-cyan-300" />
               <h2 className="text-base font-semibold text-zinc-100">Bots</h2>
@@ -334,6 +334,7 @@ export default function BotsPage() {
                 value={botToken}
                 onChange={(event) => setBotToken(event.target.value)}
                 placeholder="Telegram token"
+                type="password"
                 required
                 maxLength={255}
                 className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-cyan-500 transition placeholder:text-zinc-600 focus:ring-2"
@@ -422,7 +423,7 @@ export default function BotsPage() {
             </div>
           </div>
 
-          <div className="min-h-0 overflow-y-auto p-5">
+          <div className="min-h-0 p-5 lg:overflow-y-auto">
             <div className="mb-5 flex items-center gap-2">
               <LinkIcon size={18} className="text-cyan-300" />
               <h2 className="text-base font-semibold text-zinc-100">
@@ -431,7 +432,7 @@ export default function BotsPage() {
             </div>
 
             <form
-              className="mb-5 grid gap-3 lg:grid-cols-[minmax(180px,0.9fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]"
+              className="mb-5 grid gap-3 xl:grid-cols-[minmax(180px,0.9fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]"
               onSubmit={handleCreateLink}
             >
               <select
@@ -483,8 +484,8 @@ export default function BotsPage() {
               </button>
             </form>
 
-            <div className="overflow-hidden rounded-lg border border-zinc-800">
-              <table className="w-full table-fixed text-left text-sm">
+            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+              <table className="min-w-[860px] w-full table-fixed text-left text-sm">
                 <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
                     <th className="w-[22%] px-4 py-3">Name</th>
@@ -514,7 +515,7 @@ export default function BotsPage() {
                       <td className="truncate px-4 py-3 font-mono text-xs text-cyan-200">
                         {link.ref_code}
                       </td>
-                      <td className="truncate px-4 py-3 text-zinc-400">
+                      <td className="truncate px-4 py-3 text-zinc-400" title={link.tracking_url}>
                         {link.tracking_url}
                       </td>
                       <td className="px-4 py-3">

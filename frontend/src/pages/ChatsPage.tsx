@@ -6,7 +6,15 @@ import {
   MessageSquareText,
   Send,
 } from 'lucide-react'
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  FormEvent,
+  KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
@@ -177,9 +185,7 @@ export default function ChatsPage() {
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [messages])
 
-  const handleSend = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-
+  const sendMessage = async () => {
     const text = draft.trim()
     if (!selectedChatId || !text || isSending) {
       return
@@ -205,8 +211,22 @@ export default function ChatsPage() {
     }
   }
 
+  const handleSend = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    await sendMessage()
+  }
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return
+    }
+
+    event.preventDefault()
+    void sendMessage()
+  }
+
   return (
-    <section className="grid h-[calc(100vh-112px)] min-h-[560px] grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)] overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
+    <section className="grid h-full min-h-0 grid-cols-1 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)] xl:overflow-hidden">
       <ChatList
         activeFilter={activeFilter}
         chats={chats}
@@ -219,8 +239,8 @@ export default function ChatsPage() {
         onSelectChat={setSelectedChatId}
       />
 
-      <div className="flex min-w-0 flex-col bg-zinc-950">
-        <header className="flex min-h-[73px] items-center justify-between gap-4 border-b border-zinc-800 px-5">
+      <div className="flex min-h-[520px] min-w-0 flex-col bg-zinc-950 xl:min-h-0">
+        <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-zinc-800 px-5">
           {selectedChat ? (
             <>
               <div className="min-w-0">
@@ -234,9 +254,9 @@ export default function ChatsPage() {
                   Telegram ID {selectedChat.external_chat_id}
                 </p>
               </div>
-              <div className="flex items-center gap-2 text-sm text-zinc-500">
+              <div className="flex shrink-0 items-center gap-2 text-sm text-zinc-500">
                 <CheckCheck size={16} />
-                {selectedChat.last_read_at ? 'Read' : 'Unread'}
+                <span>{selectedChat.last_read_at ? 'Read' : 'Unread'}</span>
               </div>
             </>
           ) : (
@@ -311,12 +331,13 @@ export default function ChatsPage() {
           ) : null}
         </div>
 
-        <form className="border-t border-zinc-800 bg-zinc-950 p-4" onSubmit={handleSend}>
-          <div className="flex gap-3">
+        <form className="shrink-0 border-t border-zinc-800 bg-zinc-950 p-4" onSubmit={handleSend}>
+          <div className="flex items-end gap-3">
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              className="min-h-[44px] flex-1 resize-none rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-500 focus:ring-2 disabled:bg-zinc-900/60"
+              onKeyDown={handleComposerKeyDown}
+              className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm leading-6 text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-500 focus:ring-2 disabled:bg-zinc-900/60"
               placeholder="Reply in Telegram"
               disabled={!selectedChat || isSending}
               rows={2}

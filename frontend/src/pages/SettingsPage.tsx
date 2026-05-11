@@ -312,8 +312,8 @@ export default function SettingsPage() {
   }
 
   return (
-    <section className="flex h-[calc(100vh-112px)] min-h-[560px] overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
-      <aside className="w-60 border-r border-zinc-800 p-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl md:flex-row">
+      <aside className="flex shrink-0 flex-col border-b border-zinc-800 p-4 md:w-60 md:border-b-0 md:border-r">
         <div className="mb-5 flex items-center gap-3 px-2">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-300">
             <Settings size={18} />
@@ -323,13 +323,13 @@ export default function SettingsPage() {
             <p className="text-xs text-zinc-500">Workspace controls</p>
           </div>
         </div>
-        <nav className="space-y-2">
+        <nav className="flex min-h-0 gap-2 overflow-x-auto md:flex-1 md:flex-col md:space-y-2 md:overflow-x-visible md:overflow-y-auto">
           {tabs.map((tab) => (
             <button
               key={tab.key}
               type="button"
               onClick={() => setActiveTab(tab.key)}
-              className={`w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition ${
+              className={`shrink-0 rounded-lg px-3 py-2 text-left text-sm font-medium transition md:w-full ${
                 activeTab === tab.key
                   ? 'bg-zinc-900 text-emerald-300'
                   : 'text-zinc-300 hover:bg-zinc-900'
@@ -413,8 +413,8 @@ export default function SettingsPage() {
               </p>
             </div>
 
-            <div className="overflow-hidden rounded-lg border border-zinc-800">
-              <table className="w-full text-left text-sm">
+            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+              <table className="min-w-[680px] w-full text-left text-sm">
                 <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
                     <th className="px-4 py-3">Name</th>
@@ -440,7 +440,7 @@ export default function SettingsPage() {
             </div>
 
             <form
-              className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-5"
+              className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_180px_140px]"
               onSubmit={handleAddUser}
             >
               <input
@@ -482,7 +482,7 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={isAddingUser}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isAddingUser ? <LoaderCircle size={16} className="animate-spin" /> : <UserPlus size={16} />}
                 Add User
@@ -518,7 +518,7 @@ export default function SettingsPage() {
               ))}
             </div>
             <form
-              className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-[1fr_1fr_auto_auto]"
+              className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
               onSubmit={handleAddStatus}
             >
               <input
@@ -549,7 +549,7 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={isAddingStatus}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isAddingStatus ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
                 Add
@@ -593,7 +593,7 @@ export default function SettingsPage() {
               ))}
             </div>
             <form
-              className="flex gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4"
+              className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 sm:flex-row"
               onSubmit={handleAddTag}
             >
               <input
@@ -607,7 +607,7 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={isAddingTag}
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isAddingTag ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
                 Add Tag
