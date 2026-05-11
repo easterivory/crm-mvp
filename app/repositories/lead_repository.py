@@ -31,7 +31,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
@@ -267,3 +267,29 @@ class LeadRepository(BaseRepository[Lead]):
         await self.db.flush()
         await self.db.refresh(status)
         return status
+
+    async def update_status(
+        self,
+        status_id: UUID,
+        **values,
+    ) -> Optional[LeadStatus]:
+        result = await self.db.execute(
+            update(LeadStatus)
+            .where(LeadStatus.id == status_id)
+            .values(**values)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_status(status_id)
+
+    async def count_leads_by_status(self, status_id: UUID) -> int:
+        result = await self.db.execute(
+            select(func.count(Lead.id)).where(Lead.status_id == status_id)
+        )
+        return result.scalar_one()
+
+    async def delete_status(self, status_id: UUID) -> bool:
+        result = await self.db.execute(
+            delete(LeadStatus).where(LeadStatus.id == status_id)
+        )
+        return result.rowcount > 0

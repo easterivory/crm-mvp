@@ -29,8 +29,14 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     """
     __tablename__ = "chats"
     __table_args__ = (
-        UniqueConstraint("project_id", "external_chat_id", name="uq_chats_project_external"),
+        UniqueConstraint(
+            "project_id",
+            "bot_id",
+            "external_chat_id",
+            name="uq_chats_project_bot_external",
+        ),
         Index("ix_chats_project_id", "project_id"),
+        Index("ix_chats_bot_id", "bot_id"),
         Index("ix_chats_tracking_link_id", "tracking_link_id"),
         Index("ix_chats_external_chat_id", "external_chat_id"),
         Index("ix_chats_external_user_id", "external_user_id"),
@@ -45,6 +51,9 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
+    )
+    bot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("bots.id"), nullable=True
     )
     tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tracking_links.id"), nullable=True
@@ -63,6 +72,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
 
     # Relationships
     project: Mapped[Project] = relationship("Project", back_populates="chats")
+    bot: Mapped[Optional[Bot]] = relationship("Bot", back_populates="chats")
     tracking_link: Mapped[Optional[TrackingLink]] = relationship(
         "TrackingLink",
         back_populates="chats",

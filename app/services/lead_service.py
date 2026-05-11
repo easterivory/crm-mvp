@@ -37,7 +37,14 @@ from app.core.constants import AuditAction, EntityType, LeadStatusCode
 logger = logging.getLogger(__name__)
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
-from app.schemas.lead import LeadCreate, LeadOut, LeadStatusCreate, LeadStatusOut, LeadUpdate
+from app.schemas.lead import (
+    LeadCreate,
+    LeadOut,
+    LeadStatusAdminUpdate,
+    LeadStatusCreate,
+    LeadStatusOut,
+    LeadUpdate,
+)
 from app.services.audit_service import AuditService
 
 
@@ -264,6 +271,75 @@ class LeadService:
             )
 
         return LeadStatusOut.model_validate(lead_status)
+
+    async def update_status(
+        self,
+        status_id: UUID,
+        data: LeadStatusAdminUpdate,
+    ) -> LeadStatusOut:
+        lead_status = await self.lead_repo.get_status(status_id)
+        if lead_status is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead status not found",
+            )
+
+        values = {
+            key: value
+            for key, value in data.model_dump(exclude_unset=True).items()
+            if value is not None
+        }
+        if "name" in values and values["name"] is not None:
+            values["name"] = self._normalize_status_name(values["name"])
+
+        if not values:
+            return LeadStatusOut.model_validate(lead_status)
+
+        try:
+            updated = await self.lead_repo.update_status(status_id, **values)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Could not update lead status",
+            )
+
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead status not found",
+            )
+        return LeadStatusOut.model_validate(updated)
+
+    async def delete_status(self, status_id: UUID) -> None:
+        lead_status = await self.lead_repo.get_status(status_id)
+        if lead_status is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead status not found",
+            )
+
+        if lead_status.code in {LeadStatusCode.NEW, LeadStatusCode.LOST}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Base status '{lead_status.code}' cannot be deleted",
+            )
+
+        linked_leads = await self.lead_repo.count_leads_by_status(status_id)
+        if linked_leads > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Cannot delete lead status while leads are attached to it. "
+                    "Move those leads to another status first."
+                ),
+            )
+
+        deleted = await self.lead_repo.delete_status(status_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead status not found",
+            )
 
     async def list_leads(
         self,

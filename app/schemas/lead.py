@@ -27,6 +27,11 @@ class LeadStatusUpdate(BaseModel):
     status_id: uuid.UUID
 
 
+class LeadStatusAdminUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    is_final: Optional[bool] = None
+
+
 class LeadManagerUpdate(BaseModel):
     manager_id: Optional[uuid.UUID]
 

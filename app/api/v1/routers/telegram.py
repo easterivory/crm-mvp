@@ -1,9 +1,10 @@
 """
-POST /api/v1/telegram/webhook — receives Telegram Bot API updates.
+POST /api/v1/telegram/webhook/{bot_id} — receives Telegram Bot API updates.
 
 Security model:
-  - project_id is ALWAYS taken from TELEGRAM_PROJECT_ID env var.
-    It is never accepted from the request body, query string, or path.
+  - bot_id is taken from the webhook path generated during bot registration.
+    project_id is resolved from that bot row; it is never accepted from the
+    request body or query string.
   - Optional secret-token validation via X-Telegram-Bot-Api-Secret-Token header.
     If TELEGRAM_WEBHOOK_SECRET is set, requests without the matching header
     are rejected with 403. If the setting is absent, the header is ignored.
@@ -33,8 +34,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 
-@router.post("/webhook", status_code=status.HTTP_200_OK)
+@router.post("/webhook/{bot_id}", status_code=status.HTTP_200_OK)
 async def telegram_webhook(
+    bot_id: UUID,
     request: Request,
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
 ) -> dict:
@@ -58,26 +60,6 @@ async def telegram_webhook(
                 detail="Invalid webhook secret token",
             )
 
-    # ── Resolve project_id from ENV ────────────────────────────────────────────
-    # SECURITY: project_id is NEVER taken from the request.
-    if not settings.TELEGRAM_PROJECT_ID:
-        logger.error(
-            "TELEGRAM_PROJECT_ID is not configured. "
-            "Set it in .env before registering the webhook. "
-            "Discarding update silently to avoid Telegram retries."
-        )
-        return {"ok": True}
-
-    try:
-        project_id = UUID(settings.TELEGRAM_PROJECT_ID)
-    except ValueError:
-        logger.error(
-            "TELEGRAM_PROJECT_ID='%s' is not a valid UUID. "
-            "Fix the .env value and restart the application.",
-            settings.TELEGRAM_PROJECT_ID,
-        )
-        return {"ok": True}
-
     # ── Parse payload ──────────────────────────────────────────────────────────
     try:
         payload = await request.json()
@@ -99,11 +81,25 @@ async def telegram_webhook(
     # We open the session manually (not via Depends) because we must catch
     # exceptions from the service layer and still return 200 to Telegram.
     from app.core.database import get_db_session  # local import — avoids circular
+    from app.repositories.bot_repository import BotRepository
 
     try:
         async with get_db_session() as db:
             try:
-                await TelegramService(db).handle_update(update, project_id)
+                bot = await BotRepository(db).get_active(bot_id)
+                if bot is None:
+                    logger.warning(
+                        "Telegram webhook: unknown bot_id=%s update_id=%s",
+                        bot_id,
+                        update.update_id,
+                    )
+                    return {"ok": True}
+
+                await TelegramService(db).handle_update(
+                    update=update,
+                    project_id=bot.project_id,
+                    bot_id=bot.id,
+                )
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -112,9 +108,9 @@ async def telegram_webhook(
         # Log the full traceback but do NOT propagate — returning 200 prevents
         # Telegram from queuing the same update for repeated delivery.
         logger.exception(
-            "Unexpected error processing Telegram update_id=%s project_id=%s",
+            "Unexpected error processing Telegram update_id=%s bot_id=%s",
             update.update_id,
-            project_id,
+            bot_id,
         )
 
     return {"ok": True}

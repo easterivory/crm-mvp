@@ -44,6 +44,7 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
         "TrackingLink",
         back_populates="bot",
     )
+    chats: Mapped[list[Chat]] = relationship("Chat", back_populates="bot")
 
     @property
     def has_telegram_token(self) -> bool:

@@ -8,6 +8,7 @@ from app.schemas.common import OrmBase
 
 
 class ChatCreate(BaseModel):
+    bot_id: Optional[uuid.UUID] = None
     external_chat_id: str = Field(..., max_length=255)
     external_user_id: str = Field(..., max_length=255)
     contact_name: Optional[str] = Field(None, max_length=255)
@@ -20,6 +21,7 @@ class ChatUpdate(BaseModel):
 class ChatOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
+    bot_id: Optional[uuid.UUID]
     tracking_link_id: Optional[uuid.UUID]
     external_chat_id: str
     external_user_id: str
@@ -41,6 +43,7 @@ class ChatOut(OrmBase):
 
 
 class ChatFilters(BaseModel):
+    bot_id: Optional[uuid.UUID] = None
     unread: Optional[bool] = None
     unanswered: Optional[bool] = None
     is_red: Optional[bool] = None

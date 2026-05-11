@@ -54,6 +54,8 @@ type PaginatedResponse<T> = {
 }
 
 type LeadSidebarProps = {
+  activeBotId: string | null
+  activeBotName: string | null
   activeChatId: string | null
   currentUserId: string | null
 }
@@ -89,7 +91,12 @@ function getErrorMessage(err: unknown) {
   return 'Could not load lead.'
 }
 
-export default function LeadSidebar({ activeChatId, currentUserId }: LeadSidebarProps) {
+export default function LeadSidebar({
+  activeBotId,
+  activeBotName,
+  activeChatId,
+  currentUserId,
+}: LeadSidebarProps) {
   const [lead, setLead] = useState<Lead | null>(null)
   const [statuses, setStatuses] = useState<LeadStatus[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -238,7 +245,7 @@ export default function LeadSidebar({ activeChatId, currentUserId }: LeadSidebar
             Lead Card
           </h2>
           <p className="text-xs text-zinc-500">
-            {currentStatus?.name ?? 'No status'}
+            {currentStatus?.name ?? activeBotName ?? 'No status'}
           </p>
         </div>
         <button
@@ -255,7 +262,9 @@ export default function LeadSidebar({ activeChatId, currentUserId }: LeadSidebar
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {!activeChatId ? (
           <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
-            Select a chat to view lead details.
+            {activeBotId
+              ? 'Select a chat to view lead details.'
+              : 'Select a bot to load its chats.'}
           </div>
         ) : null}
 

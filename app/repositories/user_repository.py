@@ -4,7 +4,7 @@ User repository.
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.models.role import Role
 from app.models.user import User
@@ -80,3 +80,15 @@ class UserRepository(BaseRepository[User]):
             )
         )
         return result.scalar_one()
+
+    async def soft_delete_from_project(self, user_id: UUID, project_id: UUID) -> bool:
+        result = await self.db.execute(
+            update(User)
+            .where(
+                User.id == user_id,
+                User.project_id == project_id,
+                User.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
+        return result.rowcount > 0

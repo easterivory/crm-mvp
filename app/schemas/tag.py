@@ -10,6 +10,10 @@ class TagCreate(BaseModel):
     name: str = Field(..., max_length=100)
 
 
+class TagUpdate(BaseModel):
+    name: str = Field(..., max_length=100)
+
+
 class TagOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID

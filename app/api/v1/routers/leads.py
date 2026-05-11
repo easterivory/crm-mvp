@@ -22,6 +22,7 @@ from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.lead import (
     LeadCreate,
+    LeadStatusAdminUpdate,
     LeadManagerUpdate,
     LeadOut,
     LeadStatusCreate,
@@ -113,6 +114,25 @@ async def create_status(
     db: AsyncSession = Depends(get_db),
 ) -> LeadStatusOut:
     return await LeadService(db).create_status(data)
+
+
+@router.patch("/statuses/{status_id}", response_model=LeadStatusOut)
+async def update_status(
+    status_id: UUID,
+    data: LeadStatusAdminUpdate,
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadStatusOut:
+    return await LeadService(db).update_status(status_id, data)
+
+
+@router.delete("/statuses/{status_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_status(
+    status_id: UUID,
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await LeadService(db).delete_status(status_id)
 
 
 @router.get("/by-chat/{chat_id}", response_model=LeadOut)

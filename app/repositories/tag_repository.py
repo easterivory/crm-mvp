@@ -8,7 +8,7 @@ before calling junction-table mutations.
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from app.models.lead import LeadTag
 from app.models.tag import Tag
@@ -63,6 +63,21 @@ class TagRepository(BaseRepository[Tag]):
         await self.db.execute(delete(LeadTag).where(LeadTag.tag_id == tag_id))
         await self.db.execute(delete(Tag).where(Tag.id == tag_id))
         return True
+
+    async def update_name_in_project(
+        self,
+        tag_id: UUID,
+        project_id: UUID,
+        name: str,
+    ) -> Optional[Tag]:
+        result = await self.db.execute(
+            update(Tag)
+            .where(Tag.id == tag_id, Tag.project_id == project_id)
+            .values(name=name)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_by_id_in_project(tag_id, project_id)
 
     async def get_lead_tag(self, lead_id: UUID, tag_id: UUID) -> Optional[LeadTag]:
         result = await self.db.execute(

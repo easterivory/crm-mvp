@@ -115,6 +115,25 @@ class UserService:
 
         return UserOut.model_validate(user)
 
+    async def delete_user(
+        self,
+        user_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> None:
+        if user_id == actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot delete your own user",
+            )
+
+        deleted = await self.user_repo.soft_delete_from_project(user_id, project_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
     @staticmethod
     def _normalize_email(email: str) -> str:
         return email.strip().lower()

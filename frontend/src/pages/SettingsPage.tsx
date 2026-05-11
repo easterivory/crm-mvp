@@ -1,11 +1,14 @@
 import {
+  Check,
   LoaderCircle,
+  Pencil,
   Plus,
   Save,
   Settings,
   Tag,
   Trash2,
   UserPlus,
+  X,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
@@ -105,7 +108,15 @@ export default function SettingsPage() {
   const [isAddingUser, setIsAddingUser] = useState(false)
   const [isAddingStatus, setIsAddingStatus] = useState(false)
   const [isAddingTag, setIsAddingTag] = useState(false)
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
+  const [deletingStatusId, setDeletingStatusId] = useState<string | null>(null)
   const [deletingTagId, setDeletingTagId] = useState<string | null>(null)
+  const [editingStatusId, setEditingStatusId] = useState<string | null>(null)
+  const [editingStatusName, setEditingStatusName] = useState('')
+  const [savingStatusId, setSavingStatusId] = useState<string | null>(null)
+  const [editingTagId, setEditingTagId] = useState<string | null>(null)
+  const [editingTagName, setEditingTagName] = useState('')
+  const [savingTagId, setSavingTagId] = useState<string | null>(null)
 
   const [projectName, setProjectName] = useState('')
   const [slaMinutes, setSlaMinutes] = useState('30')
@@ -245,6 +256,30 @@ export default function SettingsPage() {
     }
   }
 
+  const handleDeleteUser = async (userId: string) => {
+    if (userId === currentUser?.id) {
+      setError('You cannot delete your own user.')
+      return
+    }
+    if (!window.confirm('Delete this user?')) {
+      return
+    }
+
+    setDeletingUserId(userId)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.delete(`/users/${userId}`)
+      await loadUsers()
+      setNotice('User deleted.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not delete user.'))
+    } finally {
+      setDeletingUserId(null)
+    }
+  }
+
   const handleAddStatus = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (isAddingStatus) {
@@ -273,6 +308,62 @@ export default function SettingsPage() {
     }
   }
 
+  const startEditStatus = (status: LeadStatus) => {
+    setEditingStatusId(status.id)
+    setEditingStatusName(status.name)
+  }
+
+  const cancelEditStatus = () => {
+    setEditingStatusId(null)
+    setEditingStatusName('')
+  }
+
+  const handleSaveStatus = async (statusId: string) => {
+    const name = editingStatusName.trim()
+    if (!name || savingStatusId) {
+      return
+    }
+
+    setSavingStatusId(statusId)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.patch<LeadStatus>(`/leads/statuses/${statusId}`, { name })
+      cancelEditStatus()
+      await loadStatuses()
+      setNotice('Lead status updated.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not update status.'))
+    } finally {
+      setSavingStatusId(null)
+    }
+  }
+
+  const handleDeleteStatus = async (statusItem: LeadStatus) => {
+    if (statusItem.code === 'new' || statusItem.code === 'lost') {
+      setError(`Base status '${statusItem.code}' cannot be deleted.`)
+      return
+    }
+    if (!window.confirm(`Delete status "${statusItem.name}"?`)) {
+      return
+    }
+
+    setDeletingStatusId(statusItem.id)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.delete(`/leads/statuses/${statusItem.id}`)
+      await loadStatuses()
+      setNotice('Lead status deleted.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not delete status.'))
+    } finally {
+      setDeletingStatusId(null)
+    }
+  }
+
   const handleAddTag = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (isAddingTag) {
@@ -295,7 +386,43 @@ export default function SettingsPage() {
     }
   }
 
+  const startEditTag = (tag: ProjectTag) => {
+    setEditingTagId(tag.id)
+    setEditingTagName(tag.name)
+  }
+
+  const cancelEditTag = () => {
+    setEditingTagId(null)
+    setEditingTagName('')
+  }
+
+  const handleSaveTag = async (tagId: string) => {
+    const name = editingTagName.trim()
+    if (!name || savingTagId) {
+      return
+    }
+
+    setSavingTagId(tagId)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.patch<ProjectTag>(`/tags/${tagId}`, { name })
+      cancelEditTag()
+      await loadTags()
+      setNotice('Tag updated.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not update tag.'))
+    } finally {
+      setSavingTagId(null)
+    }
+  }
+
   const handleDeleteTag = async (tagId: string) => {
+    if (!window.confirm('Delete this tag?')) {
+      return
+    }
+
     setDeletingTagId(tagId)
     setError('')
     setNotice('')
@@ -420,6 +547,7 @@ export default function SettingsPage() {
                     <th className="px-4 py-3">Name</th>
                     <th className="px-4 py-3">Email</th>
                     <th className="px-4 py-3">Role</th>
+                    <th className="w-[88px] px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800">
@@ -431,6 +559,27 @@ export default function SettingsPage() {
                         <td className="px-4 py-3 text-zinc-400">{user.email}</td>
                         <td className="px-4 py-3 text-zinc-400">
                           {role ? roleLabel(role.name) : user.role_id.slice(0, 8)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              title={
+                                user.id === currentUser?.id
+                                  ? 'You cannot delete yourself'
+                                  : 'Delete user'
+                              }
+                              onClick={() => void handleDeleteUser(user.id)}
+                              disabled={user.id === currentUser?.id || deletingUserId === user.id}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {deletingUserId === user.id ? (
+                                <LoaderCircle size={15} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={15} />
+                              )}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )
@@ -499,23 +648,110 @@ export default function SettingsPage() {
                 Lead pipeline statuses.
               </p>
             </div>
-            <div className="space-y-2">
-              {statuses.map((status) => (
-                <div
-                  key={status.id}
-                  className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-zinc-100">{status.name}</p>
-                    <p className="text-xs text-zinc-500">{status.code}</p>
-                  </div>
-                  {status.is_final ? (
-                    <span className="rounded bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
-                      Final
-                    </span>
-                  ) : null}
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+              <table className="min-w-[640px] w-full text-left text-sm">
+                <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">Code</th>
+                    <th className="px-4 py-3">Type</th>
+                    <th className="w-[112px] px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800">
+                  {statuses.map((statusItem) => {
+                    const isEditing = editingStatusId === statusItem.id
+                    const isBase = statusItem.code === 'new' || statusItem.code === 'lost'
+
+                    return (
+                      <tr key={statusItem.id} className="bg-zinc-950">
+                        <td className="px-4 py-3">
+                          {isEditing ? (
+                            <input
+                              value={editingStatusName}
+                              onChange={(event) => setEditingStatusName(event.target.value)}
+                              maxLength={100}
+                              autoFocus
+                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+                            />
+                          ) : (
+                            <span className="font-medium text-zinc-100">
+                              {statusItem.name}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                          {statusItem.code}
+                        </td>
+                        <td className="px-4 py-3">
+                          {statusItem.is_final ? (
+                            <span className="rounded bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
+                              Final
+                            </span>
+                          ) : (
+                            <span className="rounded bg-zinc-800 px-2 py-1 text-xs font-semibold text-zinc-400">
+                              Active
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Save status"
+                                  onClick={() => void handleSaveStatus(statusItem.id)}
+                                  disabled={savingStatusId === statusItem.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-emerald-300 transition hover:border-emerald-500/60 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {savingStatusId === statusItem.id ? (
+                                    <LoaderCircle size={15} className="animate-spin" />
+                                  ) : (
+                                    <Check size={15} />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Cancel"
+                                  onClick={cancelEditStatus}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
+                                >
+                                  <X size={15} />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Edit status"
+                                  onClick={() => startEditStatus(statusItem)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
+                                >
+                                  <Pencil size={15} />
+                                </button>
+                                <button
+                                  type="button"
+                                  title={isBase ? 'Base statuses cannot be deleted' : 'Delete status'}
+                                  onClick={() => void handleDeleteStatus(statusItem)}
+                                  disabled={isBase || deletingStatusId === statusItem.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {deletingStatusId === statusItem.id ? (
+                                    <LoaderCircle size={15} className="animate-spin" />
+                                  ) : (
+                                    <Trash2 size={15} />
+                                  )}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
             <form
               className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
@@ -566,31 +802,94 @@ export default function SettingsPage() {
                 Project labels for leads.
               </p>
             </div>
-            <div className="space-y-2">
-              {tags.map((tag) => (
-                <div
-                  key={tag.id}
-                  className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3"
-                >
-                  <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
-                    <Tag size={16} className="text-zinc-500" />
-                    {tag.name}
-                  </div>
-                  <button
-                    type="button"
-                    title="Delete tag"
-                    onClick={() => void handleDeleteTag(tag.id)}
-                    disabled={deletingTagId === tag.id}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {deletingTagId === tag.id ? (
-                      <LoaderCircle size={16} className="animate-spin" />
-                    ) : (
-                      <Trash2 size={16} />
-                    )}
-                  </button>
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+              <table className="min-w-[520px] w-full text-left text-sm">
+                <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="px-4 py-3">Name</th>
+                    <th className="w-[112px] px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800">
+                  {tags.map((tagItem) => {
+                    const isEditing = editingTagId === tagItem.id
+
+                    return (
+                      <tr key={tagItem.id} className="bg-zinc-950">
+                        <td className="px-4 py-3">
+                          {isEditing ? (
+                            <input
+                              value={editingTagName}
+                              onChange={(event) => setEditingTagName(event.target.value)}
+                              maxLength={100}
+                              autoFocus
+                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+                            />
+                          ) : (
+                            <div className="flex items-center gap-2 font-medium text-zinc-100">
+                              <Tag size={16} className="text-zinc-500" />
+                              {tagItem.name}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Save tag"
+                                  onClick={() => void handleSaveTag(tagItem.id)}
+                                  disabled={savingTagId === tagItem.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-emerald-300 transition hover:border-emerald-500/60 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {savingTagId === tagItem.id ? (
+                                    <LoaderCircle size={15} className="animate-spin" />
+                                  ) : (
+                                    <Check size={15} />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Cancel"
+                                  onClick={cancelEditTag}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
+                                >
+                                  <X size={15} />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Edit tag"
+                                  onClick={() => startEditTag(tagItem)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
+                                >
+                                  <Pencil size={15} />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Delete tag"
+                                  onClick={() => void handleDeleteTag(tagItem.id)}
+                                  disabled={deletingTagId === tagItem.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {deletingTagId === tagItem.id ? (
+                                    <LoaderCircle size={15} className="animate-spin" />
+                                  ) : (
+                                    <Trash2 size={15} />
+                                  )}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
             <form
               className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 sm:flex-row"

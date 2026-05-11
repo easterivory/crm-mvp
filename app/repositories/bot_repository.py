@@ -55,6 +55,15 @@ class BotRepository(BaseRepository[Bot]):
         )
         return result.scalar_one_or_none()
 
+    async def get_active(self, bot_id: UUID) -> Optional[Bot]:
+        result = await self.db.execute(
+            select(Bot).where(
+                Bot.id == bot_id,
+                Bot.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def update_in_project(
         self,
         bot_id: UUID,
@@ -192,6 +201,22 @@ class BotRepository(BaseRepository[Bot]):
                 BotVersion.is_active.is_(True),
             )
             .limit(1)
+        )
+        token = result.scalar_one_or_none()
+        return token.strip() if token else None
+
+    async def get_bot_token_by_id(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> Optional[str]:
+        result = await self.db.execute(
+            select(Bot.telegram_token).where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+                Bot.telegram_token.is_not(None),
+            )
         )
         token = result.scalar_one_or_none()
         return token.strip() if token else None

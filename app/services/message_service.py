@@ -142,6 +142,7 @@ class MessageService:
 
         await self._send_to_telegram_if_needed(
             project_id=project_id,
+            bot_id=chat.bot_id,
             external_chat_id=chat.external_chat_id,
             data=data,
         )
@@ -152,6 +153,7 @@ class MessageService:
         self,
         *,
         project_id: UUID,
+        bot_id: UUID | None,
         external_chat_id: str,
         data: MessageCreate,
     ) -> None:
@@ -164,6 +166,7 @@ class MessageService:
 
         await self.telegram_sender.send_message(
             project_id=project_id,
+            bot_id=bot_id,
             external_chat_id=external_chat_id,
             text=data.body,
         )

@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import Chat
+from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
@@ -38,6 +39,7 @@ from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
 class ChatService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
         self.project_repo = ProjectRepository(db)
 
@@ -80,6 +82,7 @@ class ChatService:
             only_red=filters.is_red is True,
             sla_threshold_minutes=sla,
             manager_id=filters.manager_id,
+            bot_id=filters.bot_id,
         )
 
         # Sequential — AsyncSession does not support concurrent operations.
@@ -130,9 +133,22 @@ class ChatService:
             field_name="external_user_id",
         )
         contact_name = self._normalize_optional(data.contact_name)
+        if data.bot_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="bot_id is required for new chats",
+            )
+        bot = await self.bot_repo.get_by_id_in_project(data.bot_id, project_id)
+        if bot is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Bot does not exist in this project",
+            )
 
         existing = await self.chat_repo.get_any_by_external(
-            project_id, external_chat_id
+            project_id,
+            external_chat_id,
+            bot_id=data.bot_id,
         )
         if existing is not None:
             raise HTTPException(
@@ -144,13 +160,16 @@ class ChatService:
             async with self.db.begin_nested():
                 chat = await self.chat_repo.create(
                     project_id=project_id,
+                    bot_id=data.bot_id,
                     external_chat_id=external_chat_id,
                     external_user_id=external_user_id,
                     contact_name=contact_name,
                 )
         except IntegrityError:
             existing = await self.chat_repo.get_any_by_external(
-                project_id, external_chat_id
+                project_id,
+                external_chat_id,
+                bot_id=data.bot_id,
             )
             if existing is not None:
                 raise HTTPException(

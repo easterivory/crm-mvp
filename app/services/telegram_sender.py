@@ -22,10 +22,15 @@ class TelegramSenderService:
     async def send_message(
         self,
         project_id: UUID,
+        bot_id: UUID | None,
         external_chat_id: str,
         text: str,
     ) -> None:
-        token = await self.bot_repo.get_active_bot_token(project_id)
+        token = (
+            await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
+            if bot_id is not None
+            else await self.bot_repo.get_active_bot_token(project_id)
+        )
         if not token:
             return
 
@@ -63,3 +68,25 @@ class TelegramSenderService:
                 project_id,
                 external_chat_id,
             )
+
+    async def set_webhook(
+        self,
+        token: str,
+        webhook_url: str,
+        secret_token: str | None = None,
+    ) -> dict:
+        params: dict[str, str] = {"url": webhook_url}
+        if secret_token:
+            params["secret_token"] = secret_token
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"https://api.telegram.org/bot{token}/setWebhook",
+                params=params,
+            )
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(payload.get("description") or "Telegram rejected setWebhook")
+
+        return payload

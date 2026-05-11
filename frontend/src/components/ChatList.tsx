@@ -3,6 +3,7 @@ import { LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
 export type Chat = {
   id: string
   project_id: string
+  bot_id: string | null
   external_chat_id: string
   external_user_id: string
   contact_name: string | null
@@ -22,11 +23,15 @@ export type ChatFilter = 'all' | 'mine' | 'unanswered' | 'red'
 
 type ChatListProps = {
   activeFilter: ChatFilter
+  bots: Array<{ id: string; name: string; bot_username: string | null }>
   chats: Chat[]
   currentUserId: string | null
+  isBotsLoading: boolean
   isLoading: boolean
+  selectedBotId: string
   selectedChatId: string | null
   total: number
+  onBotChange: (botId: string) => void
   onFilterChange: (filter: ChatFilter) => void
   onRefresh: () => void
   onSelectChat: (chatId: string) => void
@@ -67,11 +72,15 @@ function getInitials(label: string) {
 
 export default function ChatList({
   activeFilter,
+  bots,
   chats,
   currentUserId,
+  isBotsLoading,
   isLoading,
+  selectedBotId,
   selectedChatId,
   total,
+  onBotChange,
   onFilterChange,
   onRefresh,
   onSelectChat,
@@ -98,6 +107,28 @@ export default function ChatList({
             )}
           </button>
         </div>
+
+        <label className="mb-4 block">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Выберите бота
+          </span>
+          <select
+            value={selectedBotId}
+            onChange={(event) => onBotChange(event.target.value)}
+            disabled={isBotsLoading || bots.length === 0}
+            className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <option value="" disabled>
+              {isBotsLoading ? 'Loading bots...' : 'Select bot'}
+            </option>
+            {bots.map((bot) => (
+              <option key={bot.id} value={bot.id}>
+                {bot.name}
+                {bot.bot_username ? ` (@${bot.bot_username})` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <div className="grid grid-cols-2 gap-2">
           {FILTERS.map((filter) => {

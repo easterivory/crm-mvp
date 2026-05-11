@@ -131,6 +131,14 @@ class BotEngineService:
 
     async def _resolve_initial_bot_version(self, chat_id: UUID, project_id: UUID):
         chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is not None and chat.bot_id is not None:
+            version = await self.bot_repo.get_active_version_for_bot(
+                chat.bot_id,
+                project_id,
+            )
+            if version is not None:
+                return version
+
         if chat is not None and chat.tracking_link_id is not None:
             link = await self.tracking_repo.get_by_id_in_project(
                 chat.tracking_link_id,

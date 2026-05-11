@@ -34,6 +34,7 @@ async def list_chats(
     unanswered: Optional[bool] = Query(default=None),
     is_red: Optional[bool] = Query(default=None),
     manager_id: Optional[UUID] = Query(default=None),
+    bot_id: Optional[UUID] = Query(default=None),
     # SECURITY: project_id is never accepted from request
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
@@ -54,6 +55,7 @@ async def list_chats(
         unanswered=unanswered,
         is_red=is_red,
         manager_id=manager_id,
+        bot_id=bot_id,
     )
     items, total = await ChatService(db).get_chat_list(
         project_id=project_id,

@@ -88,11 +88,14 @@ class ChatRepository(BaseRepository[Chat]):
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    def _base_select(self, project_id: UUID):
-        return select(Chat).where(
+    def _base_select(self, project_id: UUID, bot_id: Optional[UUID] = None):
+        stmt = select(Chat).where(
             Chat.project_id == project_id,
             Chat.is_deleted.is_(False),
         )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        return stmt
 
     def _apply_filters(
         self,
@@ -126,26 +129,34 @@ class ChatRepository(BaseRepository[Chat]):
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def get_by_external(
-        self, project_id: UUID, external_chat_id: str
+        self,
+        project_id: UUID,
+        external_chat_id: str,
+        bot_id: Optional[UUID] = None,
     ) -> Optional[Chat]:
-        result = await self.db.execute(
-            select(Chat).where(
-                Chat.project_id == project_id,
-                Chat.external_chat_id == external_chat_id,
-                Chat.is_deleted.is_(False),
-            )
+        stmt = select(Chat).where(
+            Chat.project_id == project_id,
+            Chat.external_chat_id == external_chat_id,
+            Chat.is_deleted.is_(False),
         )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_any_by_external(
-        self, project_id: UUID, external_chat_id: str
+        self,
+        project_id: UUID,
+        external_chat_id: str,
+        bot_id: Optional[UUID] = None,
     ) -> Optional[Chat]:
-        result = await self.db.execute(
-            select(Chat).where(
-                Chat.project_id == project_id,
-                Chat.external_chat_id == external_chat_id,
-            )
+        stmt = select(Chat).where(
+            Chat.project_id == project_id,
+            Chat.external_chat_id == external_chat_id,
         )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_active(self, chat_id: UUID, project_id: UUID) -> Optional[Chat]:
@@ -169,6 +180,7 @@ class ChatRepository(BaseRepository[Chat]):
         only_red: bool = False,
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
+        bot_id: Optional[UUID] = None,
     ) -> list[Chat]:
         """
         Returns chats matching the given filters, ordered by priority:
@@ -177,7 +189,7 @@ class ChatRepository(BaseRepository[Chat]):
           3. last_message_at DESC NULLS LAST
         """
         stmt = self._apply_filters(
-            self._base_select(project_id),
+            self._base_select(project_id, bot_id=bot_id),
             only_unread=only_unread,
             only_unanswered=only_unanswered,
             only_red=only_red,
@@ -204,6 +216,7 @@ class ChatRepository(BaseRepository[Chat]):
         only_red: bool = False,
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
+        bot_id: Optional[UUID] = None,
     ) -> int:
         """
         Mirror of list() without LIMIT/OFFSET — used for pagination totals.
@@ -217,11 +230,15 @@ class ChatRepository(BaseRepository[Chat]):
             if manager_id is not None
             else func.count(Chat.id)
         )
+        stmt = select(count_col).where(
+            Chat.project_id == project_id,
+            Chat.is_deleted.is_(False),
+        )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+
         stmt = self._apply_filters(
-            select(count_col).where(
-                Chat.project_id == project_id,
-                Chat.is_deleted.is_(False),
-            ),
+            stmt,
             only_unread=only_unread,
             only_unanswered=only_unanswered,
             only_red=only_red,

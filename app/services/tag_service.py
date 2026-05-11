@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.tag_repository import TagRepository
-from app.schemas.tag import TagCreate, TagOut
+from app.schemas.tag import TagCreate, TagOut, TagUpdate
 
 
 class TagService:
@@ -66,6 +66,35 @@ class TagService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Tag not found",
             )
+
+    async def update_tag(
+        self,
+        tag_id: UUID,
+        project_id: UUID,
+        data: TagUpdate,
+    ) -> TagOut:
+        name = self._normalize_name(data.name)
+        existing = await self.tag_repo.get_by_name(project_id, name)
+        if existing is not None and existing.id != tag_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Tag with this name already exists in this project",
+            )
+
+        try:
+            tag = await self.tag_repo.update_name_in_project(tag_id, project_id, name)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Tag with this name already exists in this project",
+            )
+
+        if tag is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tag not found",
+            )
+        return TagOut.model_validate(tag)
 
     async def add_tag_to_lead(
         self,

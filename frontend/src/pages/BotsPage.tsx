@@ -1,12 +1,15 @@
 import {
   Bot as BotIcon,
+  Check,
   Copy,
   Link as LinkIcon,
   LoaderCircle,
+  Pencil,
   PlugZap,
   Plus,
   RefreshCw,
   Trash2,
+  X,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
@@ -94,6 +97,11 @@ export default function BotsPage() {
   const [webhookBotId, setWebhookBotId] = useState<string | null>(null)
   const [deletingBotId, setDeletingBotId] = useState<string | null>(null)
   const [deletingLinkId, setDeletingLinkId] = useState<string | null>(null)
+  const [editingBotId, setEditingBotId] = useState<string | null>(null)
+  const [editingBotName, setEditingBotName] = useState('')
+  const [editingBotUsername, setEditingBotUsername] = useState('')
+  const [editingBotToken, setEditingBotToken] = useState('')
+  const [savingBotId, setSavingBotId] = useState<string | null>(null)
 
   const [botName, setBotName] = useState('')
   const [botToken, setBotToken] = useState('')
@@ -212,7 +220,58 @@ export default function BotsPage() {
     }
   }
 
+  const startEditBot = (bot: BotRecord) => {
+    setEditingBotId(bot.id)
+    setEditingBotName(bot.name)
+    setEditingBotUsername(bot.bot_username ? `@${bot.bot_username}` : '')
+    setEditingBotToken('')
+  }
+
+  const cancelEditBot = () => {
+    setEditingBotId(null)
+    setEditingBotName('')
+    setEditingBotUsername('')
+    setEditingBotToken('')
+  }
+
+  const handleSaveBot = async (botId: string) => {
+    if (savingBotId) {
+      return
+    }
+
+    const payload: {
+      name: string
+      bot_username: string | null
+      telegram_token?: string
+    } = {
+      name: editingBotName.trim(),
+      bot_username: editingBotUsername.trim() || null,
+    }
+    if (editingBotToken.trim()) {
+      payload.telegram_token = editingBotToken.trim()
+    }
+
+    setSavingBotId(botId)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.patch<BotRecord>(`/bots/${botId}`, payload)
+      cancelEditBot()
+      await loadBots()
+      setNotice('Bot updated.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not update bot.'))
+    } finally {
+      setSavingBotId(null)
+    }
+  }
+
   const handleDeleteBot = async (botId: string) => {
+    if (!window.confirm('Delete this bot?')) {
+      return
+    }
+
     setDeletingBotId(botId)
     setError('')
     setNotice('')
@@ -369,57 +428,124 @@ export default function BotsPage() {
                 </div>
               ) : null}
 
-              {bots.map((bot) => (
-                <div
-                  key={bot.id}
-                  className={`rounded-lg border px-4 py-3 transition ${
-                    selectedBotId === bot.id
-                      ? 'border-cyan-500/60 bg-cyan-500/10'
-                      : 'border-zinc-800 bg-zinc-900/40'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBotId(bot.id)}
-                    className="mb-3 block w-full min-w-0 text-left"
+              {bots.map((bot) => {
+                const isEditing = editingBotId === bot.id
+
+                return (
+                  <div
+                    key={bot.id}
+                    className={`rounded-lg border px-4 py-3 transition ${
+                      selectedBotId === bot.id
+                        ? 'border-cyan-500/60 bg-cyan-500/10'
+                        : 'border-zinc-800 bg-zinc-900/40'
+                    }`}
                   >
-                    <p className="truncate text-sm font-semibold text-zinc-100">
-                      {bot.name}
-                    </p>
-                    <p className="truncate text-xs text-zinc-500">
-                      {bot.bot_username ? `@${bot.bot_username}` : 'username missing'}
-                    </p>
-                  </button>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      title="Set webhook"
-                      onClick={() => void handleSetWebhook(bot.id)}
-                      disabled={webhookBotId === bot.id}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 transition hover:border-cyan-500/60 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {webhookBotId === bot.id ? (
-                        <LoaderCircle size={16} className="animate-spin" />
+                    {isEditing ? (
+                      <div className="mb-3 grid gap-2">
+                        <input
+                          value={editingBotName}
+                          onChange={(event) => setEditingBotName(event.target.value)}
+                          maxLength={255}
+                          autoFocus
+                          className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-cyan-500 transition focus:ring-2"
+                        />
+                        <input
+                          value={editingBotUsername}
+                          onChange={(event) => setEditingBotUsername(event.target.value)}
+                          maxLength={255}
+                          placeholder="@username"
+                          className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-cyan-500 transition placeholder:text-zinc-600 focus:ring-2"
+                        />
+                        <input
+                          value={editingBotToken}
+                          onChange={(event) => setEditingBotToken(event.target.value)}
+                          maxLength={255}
+                          type="password"
+                          placeholder="New token (optional)"
+                          className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-cyan-500 transition placeholder:text-zinc-600 focus:ring-2"
+                        />
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBotId(bot.id)}
+                        className="mb-3 block w-full min-w-0 text-left"
+                      >
+                        <p className="truncate text-sm font-semibold text-zinc-100">
+                          {bot.name}
+                        </p>
+                        <p className="truncate text-xs text-zinc-500">
+                          {bot.bot_username ? `@${bot.bot_username}` : 'username missing'}
+                        </p>
+                      </button>
+                    )}
+                    <div className="flex items-center gap-2">
+                      {isEditing ? (
+                        <>
+                          <button
+                            type="button"
+                            title="Save bot"
+                            onClick={() => void handleSaveBot(bot.id)}
+                            disabled={savingBotId === bot.id || !editingBotName.trim()}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-cyan-200 transition hover:border-cyan-500/60 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {savingBotId === bot.id ? (
+                              <LoaderCircle size={16} className="animate-spin" />
+                            ) : (
+                              <Check size={16} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            title="Cancel"
+                            onClick={cancelEditBot}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+                          >
+                            <X size={16} />
+                          </button>
+                        </>
                       ) : (
-                        <PlugZap size={16} />
+                        <>
+                          <button
+                            type="button"
+                            title="Set webhook"
+                            onClick={() => void handleSetWebhook(bot.id)}
+                            disabled={webhookBotId === bot.id}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 transition hover:border-cyan-500/60 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {webhookBotId === bot.id ? (
+                              <LoaderCircle size={16} className="animate-spin" />
+                            ) : (
+                              <PlugZap size={16} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            title="Edit bot"
+                            onClick={() => startEditBot(bot)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 transition hover:border-cyan-500/60 hover:text-cyan-200"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Delete bot"
+                            onClick={() => void handleDeleteBot(bot.id)}
+                            disabled={deletingBotId === bot.id}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {deletingBotId === bot.id ? (
+                              <LoaderCircle size={16} className="animate-spin" />
+                            ) : (
+                              <Trash2 size={16} />
+                            )}
+                          </button>
+                        </>
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      title="Delete bot"
-                      onClick={() => void handleDeleteBot(bot.id)}
-                      disabled={deletingBotId === bot.id}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {deletingBotId === bot.id ? (
-                        <LoaderCircle size={16} className="animate-spin" />
-                      ) : (
-                        <Trash2 size={16} />
-                      )}
-                    </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import get_current_project_id
 from app.core.database import get_db
 from app.schemas.common import PaginatedResponse
-from app.schemas.tag import TagCreate, TagOut
+from app.schemas.tag import TagCreate, TagOut, TagUpdate
 from app.services.tag_service import TagService
 
 router = APIRouter(prefix="/tags", tags=["tags"])
@@ -34,6 +34,16 @@ async def create_tag(
     db: AsyncSession = Depends(get_db),
 ) -> TagOut:
     return await TagService(db).create_tag(project_id, data)
+
+
+@router.patch("/{tag_id}", response_model=TagOut)
+async def update_tag(
+    tag_id: UUID,
+    data: TagUpdate,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> TagOut:
+    return await TagService(db).update_tag(tag_id, project_id, data)
 
 
 @router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)

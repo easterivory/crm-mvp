@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.repositories.bot_repository import BotRepository
 from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
+from app.services.telegram_sender import TelegramSenderService
 
 
 class BotService:
@@ -129,18 +130,14 @@ class BotService:
                 detail="BASE_URL is not configured",
             )
 
-        webhook_url = f"{base_url.rstrip('/')}/api/v1/telegram/webhook"
-        params: dict[str, str] = {"url": webhook_url}
-        if settings.TELEGRAM_WEBHOOK_SECRET:
-            params["secret_token"] = settings.TELEGRAM_WEBHOOK_SECRET
+        webhook_url = f"{base_url.rstrip('/')}/api/v1/telegram/webhook/{bot.id}"
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(
-                    f"https://api.telegram.org/bot{token}/setWebhook",
-                    params=params,
-                )
-                payload = response.json()
+            payload = await TelegramSenderService(self.db).set_webhook(
+                token=token,
+                webhook_url=webhook_url,
+                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
+            )
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -151,12 +148,11 @@ class BotService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Telegram returned a non-JSON response",
             ) from exc
-
-        if response.status_code >= 400 or payload.get("ok") is not True:
+        except RuntimeError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=payload.get("description") or "Telegram rejected setWebhook",
-            )
+                detail=str(exc),
+            ) from exc
 
         await self.ensure_bot_username(bot_id=bot.id, project_id=project_id)
         return BotWebhookOut(

@@ -11,8 +11,8 @@ Design constraints (enforced throughout):
   - No GPT / AI processing.
   - No bulk sends / broadcasts.
   - No alert / stats business logic.
-  - project_id is ALWAYS taken from TELEGRAM_PROJECT_ID env var, never from
-    the incoming payload.
+  - project_id is resolved from the webhook bot_id, never from the incoming
+    payload.
 
 Idempotency / race-condition safety:
   - Chat find-or-create uses a SAVEPOINT (begin_nested). If two concurrent
@@ -26,10 +26,6 @@ Idempotency / race-condition safety:
     already contains its own SAVEPOINT + idempotency logic.
 
 Error handling:
-  - If TELEGRAM_PROJECT_ID is not set, the update is logged and silently
-    discarded. Returning without raising ensures the webhook endpoint can
-    still return 200 to Telegram (preventing retries for a misconfiguration
-    that affects every request equally).
   - All unexpected exceptions propagate to the caller (the router), which
     logs them and returns 200 to Telegram anyway (Telegram must not retry).
 """
@@ -92,7 +88,12 @@ class TelegramService:
 
     # ── Orchestration ──────────────────────────────────────────────────────────
 
-    async def handle_update(self, update: TelegramUpdate, project_id: UUID) -> None:
+    async def handle_update(
+        self,
+        update: TelegramUpdate,
+        project_id: UUID,
+        bot_id: UUID,
+    ) -> None:
         """
         Entry point for processing a single Telegram update.
 
@@ -113,10 +114,15 @@ class TelegramService:
             )
             return
 
-        tracking_link_id = await self._resolve_tracking_link_id(message, project_id)
+        tracking_link_id = await self._resolve_tracking_link_id(
+            message,
+            project_id,
+            bot_id,
+        )
         chat, was_created = await self._find_or_create_chat(
             message,
             project_id,
+            bot_id=bot_id,
             tracking_link_id=tracking_link_id,
         )
         msg = await self._create_message(chat.id, project_id, message)
@@ -132,6 +138,7 @@ class TelegramService:
         self,
         message: TelegramMessage,
         project_id: UUID,
+        bot_id: UUID,
         tracking_link_id: Optional[UUID] = None,
     ) -> tuple[Chat, bool]:
         """
@@ -145,7 +152,11 @@ class TelegramService:
         external_user_id = str(message.from_user.id) if message.from_user else external_chat_id
 
         # Fast path: chat already exists
-        chat = await self.chat_repo.get_by_external(project_id, external_chat_id)
+        chat = await self.chat_repo.get_by_external(
+            project_id,
+            external_chat_id,
+            bot_id=bot_id,
+        )
         if chat is not None:
             return chat, False
 
@@ -166,16 +177,18 @@ class TelegramService:
             async with self.db.begin_nested():
                 chat = await self.chat_repo.create(
                     project_id=project_id,
+                    bot_id=bot_id,
                     tracking_link_id=tracking_link_id,
                     external_chat_id=external_chat_id,
                     external_user_id=external_user_id,
                     contact_name=contact_name,
                 )
             logger.info(
-                "Created chat id=%s external_chat_id=%s project_id=%s",
+                "Created chat id=%s external_chat_id=%s project_id=%s bot_id=%s",
                 chat.id,
                 external_chat_id,
                 project_id,
+                bot_id,
             )
         except IntegrityError:
             # Concurrent insert won the race — re-fetch the winner's row.
@@ -184,7 +197,11 @@ class TelegramService:
                 external_chat_id,
                 project_id,
             )
-            chat = await self.chat_repo.get_by_external(project_id, external_chat_id)
+            chat = await self.chat_repo.get_by_external(
+                project_id,
+                external_chat_id,
+                bot_id=bot_id,
+            )
             if chat is None:
                 # Should never happen: IntegrityError means the row exists.
                 raise RuntimeError(
@@ -199,6 +216,7 @@ class TelegramService:
         self,
         message: TelegramMessage,
         project_id: UUID,
+        bot_id: UUID,
     ) -> Optional[UUID]:
         ref_code = self._extract_start_ref_code(message.text)
         if ref_code is None:
@@ -210,6 +228,15 @@ class TelegramService:
                 "Telegram /start ref_code=%s was not found for project_id=%s",
                 ref_code,
                 project_id,
+            )
+            return None
+        if link.bot_id != bot_id:
+            logger.info(
+                "Telegram /start ref_code=%s belongs to bot_id=%s, "
+                "but update arrived for bot_id=%s",
+                ref_code,
+                link.bot_id,
+                bot_id,
             )
             return None
         return link.id
