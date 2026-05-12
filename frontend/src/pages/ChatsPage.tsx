@@ -280,7 +280,7 @@ export default function ChatsPage() {
   }
 
   return (
-    <section className="grid h-full min-h-0 grid-cols-1 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)] xl:overflow-hidden">
+    <section className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-y-auto text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)] xl:overflow-hidden">
       <ChatList
         activeFilter={activeFilter}
         bots={bots}
@@ -297,28 +297,28 @@ export default function ChatsPage() {
         onSelectChat={setSelectedChatId}
       />
 
-      <div className="flex min-h-[520px] min-w-0 flex-col bg-zinc-950 xl:min-h-0">
-        <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-zinc-800 px-5">
+      <div className="flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card xl:min-h-0">
+        <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-5">
           {selectedChat ? (
             <>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 className="truncate text-base font-semibold text-zinc-100">
+                  <h2 className="truncate text-base font-semibold text-white">
                     {getChatTitle(selectedChat)}
                   </h2>
-                  {selectedChat.is_red ? <AlertCircle size={16} className="text-red-400" /> : null}
+                  {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
                 </div>
-                <p className="truncate text-sm text-zinc-500">
+                <p className="truncate text-sm text-gray-500">
                   Telegram ID {selectedChat.external_chat_id}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-2 text-sm text-zinc-500">
+              <div className="flex shrink-0 items-center gap-2 text-sm text-gray-500">
                 <CheckCheck size={16} />
                 <span>{selectedChat.last_read_at ? 'Read' : 'Unread'}</span>
               </div>
             </>
           ) : (
-            <div className="flex items-center gap-2 text-sm text-zinc-500">
+            <div className="flex items-center gap-2 text-sm text-gray-500">
               <MessageSquareText size={18} />
               Select a chat
             </div>
@@ -326,27 +326,27 @@ export default function ChatsPage() {
         </header>
 
         {error ? (
-          <div className="border-b border-red-900/70 bg-red-950/40 px-5 py-3 text-sm text-red-200">
+          <div className="border-b border-red-400/20 bg-red-500/10 px-5 py-3 text-sm text-red-200">
             {error}
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-950 px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background/45 px-5 py-4">
           {isMessagesLoading ? (
-            <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+            <div className="flex h-full items-center justify-center text-sm text-gray-500">
               <LoaderCircle size={18} className="mr-2 animate-spin" />
               Loading messages
             </div>
           ) : null}
 
           {!selectedChat && !isMessagesLoading ? (
-            <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+            <div className="flex h-full items-center justify-center text-sm text-gray-500">
               No chat selected.
             </div>
           ) : null}
 
           {selectedChat && !isMessagesLoading && messages.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+            <div className="flex h-full items-center justify-center text-sm text-gray-500">
               No messages yet.
             </div>
           ) : null}
@@ -364,12 +364,12 @@ export default function ChatsPage() {
                     className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[72%] rounded-lg border px-3 py-2 shadow-sm ${
+                      className={`max-w-[72%] rounded-2xl border px-3 py-2 shadow-sm ${
                         isOutgoing
                           ? isBot
-                            ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-100'
-                            : 'border-emerald-500 bg-emerald-500 text-zinc-950'
-                          : 'border-zinc-800 bg-zinc-900 text-zinc-100'
+                            ? 'border-accent-300/25 bg-accent-400/10 text-accent-50 shadow-glow-accent'
+                            : 'border-primary-300/25 bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary'
+                          : 'border-white/10 bg-white/[0.055] text-gray-100'
                       }`}
                     >
                       <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
@@ -389,13 +389,13 @@ export default function ChatsPage() {
           ) : null}
         </div>
 
-        <form className="shrink-0 border-t border-zinc-800 bg-zinc-950 p-4" onSubmit={handleSend}>
+        <form className="shrink-0 border-t border-white/5 bg-surface/80 p-4" onSubmit={handleSend}>
           <div className="flex items-end gap-3">
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm leading-6 text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-500 focus:ring-2 disabled:bg-zinc-900/60"
+              className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 disabled:bg-background/40"
               placeholder="Reply in Telegram"
               disabled={!selectedChat || isSending}
               rows={2}
@@ -404,7 +404,7 @@ export default function ChatsPage() {
               type="submit"
               title="Send message"
               disabled={!selectedChat || !draft.trim() || isSending}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-emerald-500 text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
             </button>

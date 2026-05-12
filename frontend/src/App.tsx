@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import MainLayout from './components/MainLayout'
 import ProtectedRoute from './components/ProtectedRoute'
 import BotsPage from './pages/BotsPage'
+import DashboardPage from './pages/DashboardPage'
 import LoginPage from './pages/LoginPage'
 import ChatsPage from './pages/ChatsPage'
 import SettingsPage from './pages/SettingsPage'
@@ -32,7 +33,8 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route path="/" element={<Navigate to="/chats" replace />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/chats" element={<ChatsPage />} />
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/settings" element={<SettingsPage />} />

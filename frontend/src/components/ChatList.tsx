@@ -86,18 +86,18 @@ export default function ChatList({
   onSelectChat,
 }: ChatListProps) {
   return (
-    <aside className="flex min-h-[360px] min-w-0 flex-col border-b border-zinc-800 bg-zinc-950 xl:min-h-0 xl:border-b-0 xl:border-r">
-      <div className="shrink-0 border-b border-zinc-800 p-4">
+    <aside className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card xl:min-h-0">
+      <div className="shrink-0 border-b border-white/5 p-4">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-zinc-100">Chats</h1>
-            <p className="text-sm text-zinc-500">{total} total</p>
+            <h1 className="text-lg font-semibold text-white">Chats</h1>
+            <p className="text-sm text-gray-500">{total} total</p>
           </div>
           <button
             type="button"
             title="Refresh chats"
             onClick={onRefresh}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300 transition hover:bg-zinc-900 disabled:opacity-60"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-accent-200 hover:shadow-glow-accent disabled:opacity-60"
             disabled={isLoading}
           >
             {isLoading ? (
@@ -109,14 +109,14 @@ export default function ChatList({
         </div>
 
         <label className="mb-4 block">
-          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
             Выберите бота
           </span>
           <select
             value={selectedBotId}
             onChange={(event) => onBotChange(event.target.value)}
             disabled={isBotsLoading || bots.length === 0}
-            className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="" disabled>
               {isBotsLoading ? 'Loading bots...' : 'Select bot'}
@@ -143,8 +143,8 @@ export default function ChatList({
                 disabled={isMineDisabled}
                 className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                   isActive
-                    ? 'border-emerald-500 bg-emerald-500 text-zinc-950'
-                    : 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                    ? 'border-primary-300/40 bg-gradient-to-r from-primary-500 to-accent-500 text-white shadow-glow-primary'
+                    : 'border-white/10 bg-white/[0.02] text-gray-400 hover:border-accent-300/35 hover:text-gray-100'
                 }`}
               >
                 {filter.label}
@@ -156,7 +156,7 @@ export default function ChatList({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && !isLoading ? (
-          <div className="p-6 text-sm text-zinc-500">No chats yet.</div>
+          <div className="p-6 text-sm text-gray-500">No chats yet.</div>
         ) : null}
 
         {chats.map((chat) => {
@@ -168,40 +168,42 @@ export default function ChatList({
               key={chat.id}
               type="button"
               onClick={() => onSelectChat(chat.id)}
-              className={`flex w-full gap-3 border-b border-zinc-900 p-4 text-left transition ${
-                isSelected ? 'bg-zinc-900' : 'hover:bg-zinc-900/70'
+              className={`flex w-full gap-3 border-b border-white/5 p-4 text-left transition ${
+                isSelected
+                  ? 'bg-gradient-to-r from-primary-500/18 to-transparent shadow-[inset_2px_0_0_rgba(34,211,238,0.9)]'
+                  : 'hover:bg-white/[0.035]'
               }`}
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-sm font-semibold text-emerald-300">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-sm font-semibold text-accent-200 shadow-glow-accent">
                 {getInitials(title) || <UserRound size={18} />}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm font-semibold text-zinc-100">
+                  <p className="min-w-0 truncate text-sm font-semibold text-white">
                     {title}
                   </p>
-                  <span className="shrink-0 text-xs text-zinc-500">
+                  <span className="shrink-0 text-xs text-gray-500">
                     {formatDateTime(chat.last_message_at)}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {chat.unread ? (
-                    <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                    <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-xs font-medium text-emerald-300">
                       New
                     </span>
                   ) : null}
                   {chat.unanswered ? (
-                    <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-300">
+                    <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-300">
                       Open
                     </span>
                   ) : null}
                   {chat.is_red ? (
-                    <span className="rounded bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-300">
+                    <span className="rounded-full bg-red-400/10 px-2 py-0.5 text-xs font-medium text-red-300">
                       SLA
                     </span>
                   ) : null}
                   {!chat.unread && !chat.unanswered && !chat.is_red ? (
-                    <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-400">
+                    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs font-medium text-gray-500">
                       Done
                     </span>
                   ) : null}

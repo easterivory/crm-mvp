@@ -238,13 +238,13 @@ export default function LeadSidebar({
   }
 
   return (
-    <aside className="flex min-h-[420px] min-w-0 flex-col border-t border-zinc-800 bg-zinc-950 xl:min-h-0 xl:border-l xl:border-t-0">
-      <div className="flex min-h-[73px] items-center justify-between gap-3 border-b border-zinc-800 px-5">
+    <aside className="flex min-h-[420px] min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card xl:min-h-0">
+      <div className="flex min-h-[73px] items-center justify-between gap-3 border-b border-white/5 px-5">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-300">
             Lead Card
           </h2>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-gray-500">
             {currentStatus?.name ?? activeBotName ?? 'No status'}
           </p>
         </div>
@@ -253,7 +253,7 @@ export default function LeadSidebar({
           title="Refresh lead"
           onClick={() => void loadLead()}
           disabled={!activeChatId || isLoading}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300 transition hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-accent-200 hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isLoading ? <LoaderCircle size={16} className="animate-spin" /> : <RefreshCw size={16} />}
         </button>
@@ -261,7 +261,7 @@ export default function LeadSidebar({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {!activeChatId ? (
-          <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
+          <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm text-gray-500">
             {activeBotId
               ? 'Select a chat to view lead details.'
               : 'Select a bot to load its chats.'}
@@ -269,35 +269,35 @@ export default function LeadSidebar({
         ) : null}
 
         {activeChatId && isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-zinc-500">
+          <div className="flex items-center gap-2 text-sm text-gray-500">
             <LoaderCircle size={16} className="animate-spin" />
             Loading lead
           </div>
         ) : null}
 
         {activeChatId && !isLoading && error ? (
-          <div className="rounded-lg border border-red-900/70 bg-red-950/40 p-4 text-sm text-red-200">
+          <div className="rounded-xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">
             {error}
           </div>
         ) : null}
 
         {lead && !isLoading ? (
           <div className="space-y-5">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+            <div className="rounded-xl border border-white/5 bg-white/[0.035] p-4">
               <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-300">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-accent-200 shadow-glow-accent">
                   <UserRound size={20} />
                 </div>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-zinc-100">
+                  <p className="truncate text-sm font-semibold text-white">
                     {lead.username ? `@${lead.username}` : 'Telegram lead'}
                   </p>
-                  <p className="text-xs text-zinc-500">Lead ID {lead.id.slice(0, 8)}</p>
+                  <p className="text-xs text-gray-500">Lead ID {lead.id.slice(0, 8)}</p>
                 </div>
               </div>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Status
                 </span>
                 <div className="relative">
@@ -305,7 +305,7 @@ export default function LeadSidebar({
                     value={lead.status_id}
                     onChange={(event) => void handleStatusChange(event.target.value)}
                     disabled={isUpdatingStatus || currentStatus?.is_final}
-                    className="w-full appearance-none rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full appearance-none rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {statuses.map((status) => (
                       <option key={status.id} value={status.id}>
@@ -316,7 +316,7 @@ export default function LeadSidebar({
                   {isUpdatingStatus ? (
                     <LoaderCircle
                       size={16}
-                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-zinc-400"
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400"
                     />
                   ) : null}
                 </div>
@@ -329,11 +329,11 @@ export default function LeadSidebar({
               ) : null}
             </div>
 
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-zinc-100">Менеджер</p>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-sm font-medium text-white">Менеджер</p>
+                  <p className="text-xs text-gray-500">
                     {assignedManager?.name ?? 'Не назначен'}
                   </p>
                 </div>
@@ -341,7 +341,7 @@ export default function LeadSidebar({
                   type="button"
                   onClick={() => void handleManagerChange(currentUserId)}
                   disabled={!currentUserId || isAssigning || lead.manager_id === currentUserId}
-                  className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 py-2 text-xs font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Взять себе
                 </button>
@@ -354,7 +354,7 @@ export default function LeadSidebar({
                     void handleManagerChange(nextValue || null)
                   }}
                   disabled={isAssigning}
-                  className="w-full appearance-none rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full appearance-none rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <option value="">Без менеджера</option>
                   {users.map((user) => (
@@ -366,21 +366,21 @@ export default function LeadSidebar({
                 {isAssigning ? (
                   <LoaderCircle
                     size={16}
-                    className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-zinc-400"
+                    className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400"
                   />
                 ) : null}
               </div>
             </div>
 
             <div className="space-y-3">
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+              <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-zinc-100">Контакты</p>
+                  <p className="text-sm font-medium text-white">Контакты</p>
                   <button
                     type="button"
                     onClick={() => void handleContactSave()}
                     disabled={!isContactDirty || isSavingContact}
-                    className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-semibold text-gray-100 transition hover:border-accent-300/45 hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isSavingContact ? (
                       <LoaderCircle size={14} className="animate-spin" />
@@ -392,7 +392,7 @@ export default function LeadSidebar({
                 </div>
                 <div className="space-y-3">
                   <label className="block">
-                    <span className="mb-1 flex items-center gap-2 text-xs text-zinc-500">
+                    <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
                       <AtSign size={14} />
                       Username
                     </span>
@@ -401,12 +401,12 @@ export default function LeadSidebar({
                       onChange={(event) => setUsernameDraft(event.target.value)}
                       maxLength={255}
                       placeholder="username"
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                      className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                     />
                   </label>
 
                   <label className="block">
-                    <span className="mb-1 flex items-center gap-2 text-xs text-zinc-500">
+                    <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
                       <Phone size={14} />
                       Phone
                     </span>
@@ -415,26 +415,26 @@ export default function LeadSidebar({
                       onChange={(event) => setPhoneDraft(event.target.value)}
                       maxLength={50}
                       placeholder="+1 555 0100"
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                      className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                     />
                   </label>
                 </div>
               </div>
 
-              <div className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                <CalendarDays size={16} className="mt-0.5 text-zinc-500" />
+              <div className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+                <CalendarDays size={16} className="mt-0.5 text-gray-500" />
                 <div className="min-w-0">
-                  <p className="text-xs text-zinc-500">Created</p>
-                  <p className="truncate text-sm text-zinc-100">
+                  <p className="text-xs text-gray-500">Created</p>
+                  <p className="truncate text-sm text-white">
                     {formatDateTime(lead.created_at)}
                   </p>
                 </div>
               </div>
             </div>
 
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
-              <div className="mb-3 flex items-center gap-2 text-sm font-medium text-zinc-100">
-                <Tag size={16} className="text-zinc-500" />
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
+                <Tag size={16} className="text-gray-500" />
                 Tags
               </div>
               {lead.tags && lead.tags.length > 0 ? (
@@ -442,14 +442,14 @@ export default function LeadSidebar({
                   {lead.tags.map((tag) => (
                     <span
                       key={tag.id}
-                      className="rounded bg-zinc-800 px-2 py-1 text-xs font-medium text-zinc-200"
+                      className="rounded-full bg-primary-500/12 px-2 py-1 text-xs font-medium text-primary-100"
                     >
                       {tag.name}
                     </span>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-zinc-500">No tags yet.</p>
+                <p className="text-sm text-gray-500">No tags yet.</p>
               )}
             </div>
           </div>
