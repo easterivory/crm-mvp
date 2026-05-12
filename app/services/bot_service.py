@@ -56,7 +56,8 @@ class BotService:
             telegram_token=token,
             bot_username=username,
         )
-        return BotOut.model_validate(bot)
+        await self.set_webhook(bot_id=bot.id, project_id=project_id)
+        return await self.get_bot(bot_id=bot.id, project_id=project_id)
 
     async def update_bot(
         self,
@@ -92,12 +93,21 @@ class BotService:
                 if first_name and bot.name == "Telegram bot":
                     values["name"] = first_name
 
+        should_refresh_webhook = "telegram_token" in values and bool(
+            values["telegram_token"]
+        )
+
         if not values:
             return BotOut.model_validate(bot)
 
         updated = await self.bot_repo.update_in_project(bot_id, project_id, **values)
         if updated is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+
+        if should_refresh_webhook:
+            await self.set_webhook(bot_id=bot_id, project_id=project_id)
+            return await self.get_bot(bot_id=bot_id, project_id=project_id)
+
         return BotOut.model_validate(updated)
 
     async def delete_bot(self, bot_id: UUID, project_id: UUID) -> None:

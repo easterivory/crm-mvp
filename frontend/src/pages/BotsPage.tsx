@@ -196,7 +196,7 @@ export default function BotsPage() {
       setBotUsername('')
       await loadBots()
       setSelectedBotId(data.id)
-      setNotice('Bot added.')
+      setNotice('Bot added and webhook registered.')
     } catch (err) {
       setError(getErrorMessage(err, 'Could not add bot.'))
     } finally {
@@ -259,7 +259,11 @@ export default function BotsPage() {
       await api.patch<BotRecord>(`/bots/${botId}`, payload)
       cancelEditBot()
       await loadBots()
-      setNotice('Bot updated.')
+      setNotice(
+        payload.telegram_token
+          ? 'Bot updated and webhook registered.'
+          : 'Bot updated.',
+      )
     } catch (err) {
       setError(getErrorMessage(err, 'Could not update bot.'))
     } finally {
