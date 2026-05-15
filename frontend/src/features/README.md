@@ -9,3 +9,11 @@ Feature-модули — основной формат для новых кру�
 - Общие API-клиенты находятся в `frontend/src/shared/api`.
 - Общие типы находятся в `frontend/src/shared/types`.
 - Бизнес-логика не должна жить внутри больших page-компонентов.
+
+## Project/Bot Frontend Scope
+
+- `selectedProjectId` обязателен для новых экранов, которые работают с project-scoped данными.
+- `selectedBotIds = []` означает "все боты выбранного проекта".
+- Старые страницы пока могут не использовать Project/Bot scope, чтобы не менять текущее поведение.
+- Новые features должны читать scope через `ProjectBotSelectionProvider` / `useProjectBotSelection`.
+- ProjectSelector и BotSelector живут в общем layout, а не внутри отдельных страниц.

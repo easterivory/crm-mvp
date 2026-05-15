@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage'
 import ChatsPage from './pages/ChatsPage'
 import SettingsPage from './pages/SettingsPage'
 import NotFoundPage from './pages/NotFoundPage'
+import { ProjectBotSelectionProvider } from './shared/lib'
 import { useAuthStore } from './store/authStore'
 
 export default function App() {
@@ -29,7 +30,9 @@ export default function App() {
         <Route
           element={
             <ProtectedRoute>
-              <MainLayout />
+              <ProjectBotSelectionProvider>
+                <MainLayout />
+              </ProjectBotSelectionProvider>
             </ProtectedRoute>
           }
         >

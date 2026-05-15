@@ -10,6 +10,8 @@ import clsx from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
+import { BotSelector } from '../features/bots'
+import { ProjectSelector } from '../features/projects'
 import { useAuthStore } from '../store/authStore'
 
 const navItems = [
@@ -91,7 +93,7 @@ export default function MainLayout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/5 bg-background/65 px-4 py-3 backdrop-blur-xl md:px-6 md:py-4">
+        <header className="flex shrink-0 flex-col gap-3 border-b border-white/5 bg-background/65 px-4 py-3 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-white">
               {user?.name ?? user?.email ?? 'User'}
@@ -99,14 +101,19 @@ export default function MainLayout() {
             <p className="text-xs text-gray-500">Neon operations console</p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent"
-          >
-            <LogOut size={16} />
-            Logout
-          </button>
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end lg:justify-end">
+            <ProjectSelector />
+            <BotSelector />
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent"
+            >
+              <LogOut size={16} />
+              Logout
+            </button>
+          </div>
         </header>
 
         <main className="min-h-0 flex-1 overflow-hidden p-3 md:p-5">
