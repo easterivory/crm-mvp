@@ -73,6 +73,21 @@ python scripts/check_backend_layers.py
 - Alert
 - Daily Stats
 
+## Projects Domain
+
+Project is the top-level CRM scope for current and future product areas:
+Bots, Tracking Links, Chats, Funnels, and Analytics.
+
+This step defines the Project CRUD surface and archive semantics. It does not
+change existing bot, chat, lead, or tracking behavior. In the current codebase
+`Bot` already has a `project_id`; this step leaves that relationship untouched.
+
+Manual smoke check:
+
+```bash
+python scripts/check_backend_layers.py
+```
+
 ## Non-Goals for MVP
 
 The following are intentionally excluded from this phase:

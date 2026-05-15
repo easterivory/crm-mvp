@@ -12,7 +12,9 @@ Optional env vars:
 """
 import asyncio
 import os
+import re
 import sys
+import unicodedata
 from pathlib import Path
 from uuid import UUID
 
@@ -44,6 +46,16 @@ DEFAULT_MANAGER_NAME = "Project Manager"
 DEFAULT_MANAGER_PASSWORD = "ManagerPass123!"
 
 
+def _slugify_project_name(value: str) -> str:
+    ascii_value = (
+        unicodedata.normalize("NFKD", value)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_value.lower()).strip("-")
+    return slug or "project"
+
+
 async def _get_or_create_project(db) -> Project:
     project_id = os.getenv("TELEGRAM_PROJECT_ID") or settings.TELEGRAM_PROJECT_ID
     project_name = os.getenv("TEST_PROJECT_NAME", DEFAULT_PROJECT_NAME)
@@ -57,6 +69,7 @@ async def _get_or_create_project(db) -> Project:
         project = Project(
             id=UUID(project_id),
             name=project_name,
+            slug=_slugify_project_name(project_name),
             sla_threshold_minutes=30,
         )
         db.add(project)
@@ -71,7 +84,11 @@ async def _get_or_create_project(db) -> Project:
     if project is not None:
         return project
 
-    project = Project(name=project_name, sla_threshold_minutes=30)
+    project = Project(
+        name=project_name,
+        slug=_slugify_project_name(project_name),
+        sla_threshold_minutes=30,
+    )
     db.add(project)
     await db.flush()
     await db.refresh(project)

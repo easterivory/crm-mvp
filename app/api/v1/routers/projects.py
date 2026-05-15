@@ -44,3 +44,11 @@ async def update_project(
     db: AsyncSession = Depends(get_db),
 ) -> ProjectOut:
     return await ProjectService(db).update_project(project_id, data)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def archive_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await ProjectService(db).archive_project(project_id)
