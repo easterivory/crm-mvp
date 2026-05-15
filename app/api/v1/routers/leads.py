@@ -11,14 +11,13 @@ Endpoints stubbed (Phase 3):
   GET   /leads/{lead_id}
   PATCH /leads/{lead_id}
 """
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
-from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.lead import (
     LeadCreate,
@@ -39,7 +38,7 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 async def create_lead(
     data: LeadCreate,
     project_id: UUID = Depends(get_current_project_id),
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
     return await LeadService(db).create_lead(
@@ -55,7 +54,7 @@ async def change_status(
     data: LeadStatusUpdate,
     # SECURITY: project_id is never accepted from request
     project_id: UUID = Depends(get_current_project_id),
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
     """
@@ -101,7 +100,7 @@ async def list_leads(
 
 @router.get("/statuses", response_model=list[LeadStatusOut])
 async def list_statuses(
-    _current_user: User = Depends(get_current_user),
+    _current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[LeadStatusOut]:
     return await LeadService(db).list_statuses()
@@ -110,7 +109,7 @@ async def list_statuses(
 @router.post("/statuses", response_model=LeadStatusOut, status_code=status.HTTP_201_CREATED)
 async def create_status(
     data: LeadStatusCreate,
-    _current_user: User = Depends(get_current_user),
+    _current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadStatusOut:
     return await LeadService(db).create_status(data)
@@ -120,7 +119,7 @@ async def create_status(
 async def update_status(
     status_id: UUID,
     data: LeadStatusAdminUpdate,
-    _current_user: User = Depends(get_current_user),
+    _current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadStatusOut:
     return await LeadService(db).update_status(status_id, data)
@@ -129,7 +128,7 @@ async def update_status(
 @router.delete("/statuses/{status_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_status(
     status_id: UUID,
-    _current_user: User = Depends(get_current_user),
+    _current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     await LeadService(db).delete_status(status_id)
@@ -161,7 +160,7 @@ async def update_lead(
     lead_id: UUID,
     data: LeadUpdate,
     project_id: UUID = Depends(get_current_project_id),
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
     return await LeadService(db).update_contact(

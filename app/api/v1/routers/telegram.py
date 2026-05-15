@@ -81,24 +81,13 @@ async def telegram_webhook(
     # We open the session manually (not via Depends) because we must catch
     # exceptions from the service layer and still return 200 to Telegram.
     from app.core.database import get_db_session  # local import — avoids circular
-    from app.repositories.bot_repository import BotRepository
 
     try:
         async with get_db_session() as db:
             try:
-                bot = await BotRepository(db).get_active(bot_id)
-                if bot is None:
-                    logger.warning(
-                        "Telegram webhook: unknown bot_id=%s update_id=%s",
-                        bot_id,
-                        update.update_id,
-                    )
-                    return {"ok": True}
-
-                await TelegramService(db).handle_update(
+                await TelegramService(db).handle_webhook_update(
                     update=update,
-                    project_id=bot.project_id,
-                    bot_id=bot.id,
+                    bot_id=bot_id,
                 )
                 await db.commit()
             except Exception:

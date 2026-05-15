@@ -48,6 +48,20 @@
 - Workers вызывают Services (не Repository напрямую).
 - Circular imports запрещены — граф зависимостей между сервисами должен быть ациклическим.
 
+## Backend layering rules
+
+- Router handles HTTP only: request parsing, dependency wiring, service call, and response shaping.
+- Service contains business logic and orchestration.
+- Repository contains database access.
+- Model defines persistence structure.
+- Schema defines request/response DTOs.
+- Router must not import Repository directly.
+- Router must not perform SQLAlchemy queries directly.
+- Service may coordinate multiple repositories.
+- Repository must not import Router or Service.
+- Cross-domain interaction should go through Services, not Repositories.
+- Quick check: `python scripts/check_backend_layers.py`.
+
 ---
 
 ## 2. Структура проекта

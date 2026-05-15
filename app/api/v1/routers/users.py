@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -5,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user
 from app.core.database import get_db
-from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.user import LoginIn, RoleOut, TokenOut, UserCreate, UserOut
 from app.services.user_service import UserService
@@ -19,13 +19,13 @@ async def login(data: LoginIn, db: AsyncSession = Depends(get_db)) -> TokenOut:
 
 
 @router.get("/me", response_model=UserOut)
-async def me(current_user: User = Depends(get_current_user)) -> UserOut:
+async def me(current_user: Any = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(current_user)
 
 
 @router.get("/roles", response_model=list[RoleOut])
 async def list_roles(
-    _current_user: User = Depends(get_current_user),
+    _current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[RoleOut]:
     return await UserService(db).list_roles()
@@ -55,7 +55,7 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)) -> U
 async def delete_user(
     user_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     await UserService(db).delete_user(

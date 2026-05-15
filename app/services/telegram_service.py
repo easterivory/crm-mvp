@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
 from app.models.chat import Chat
+from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.tracking_repository import TrackingRepository
@@ -54,6 +55,7 @@ logger = logging.getLogger(__name__)
 class TelegramService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
         self.lead_repo = LeadRepository(db)
         self.tracking_repo = TrackingRepository(db)
@@ -87,6 +89,32 @@ class TelegramService:
         return update.message
 
     # ── Orchestration ──────────────────────────────────────────────────────────
+
+    async def handle_webhook_update(
+        self,
+        update: TelegramUpdate,
+        bot_id: UUID,
+    ) -> None:
+        """
+        Resolve webhook bot context and process the Telegram update.
+
+        Unknown or deleted bots are ignored so Telegram receives 200 and does
+        not retry an update for a webhook that points at stale state.
+        """
+        bot = await self.bot_repo.get_active(bot_id)
+        if bot is None:
+            logger.warning(
+                "Telegram webhook: unknown bot_id=%s update_id=%s",
+                bot_id,
+                update.update_id,
+            )
+            return
+
+        await self.handle_update(
+            update=update,
+            project_id=bot.project_id,
+            bot_id=bot.id,
+        )
 
     async def handle_update(
         self,

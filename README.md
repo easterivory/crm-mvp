@@ -52,6 +52,12 @@ The MVP should be organized into clear layers:
 - background tasks / workers
 - configuration/core utilities
 
+Layering sanity check:
+
+```bash
+python scripts/check_backend_layers.py
+```
+
 ## Core Entities
 
 - Project
@@ -107,4 +113,3 @@ The MVP is successful if:
 
 Do not overbuild the first version.
 The priority is a stable core, not a feature-rich system.
-

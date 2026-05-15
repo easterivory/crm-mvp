@@ -8,13 +8,13 @@ carries the target manager_id (or null to unassign).
 Endpoint implemented:
   POST /leads/{lead_id}/assign — assign_manager
 """
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
-from app.models.user import User
 from app.schemas.lead import LeadManagerUpdate, LeadOut
 from app.services.assignment_service import AssignmentService
 
@@ -27,7 +27,7 @@ async def assign_manager(
     data: LeadManagerUpdate,
     # SECURITY: project_id is never accepted from request
     project_id: UUID = Depends(get_current_project_id),
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
     """
