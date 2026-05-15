@@ -418,3 +418,18 @@ StatsWorker (раз в сутки)
 | **Kubernetes** | Только Docker Compose |
 | **Сложный фронт** | Проектируется только backend |
 | **Всё, что не влияет на обработку чатов** | Все модули проверены по этому правилу |
+
+---
+
+## Frontend modularity rules
+
+Backend rule: `router -> service -> repository -> model`.
+
+Frontend rule: `page -> feature public API -> feature internals -> shared`.
+
+- Router не импортирует Repository напрямую. HTTP-слой работает через Service.
+- Новую бизнес-логику нельзя добавлять внутрь крупных React page-компонентов.
+- Новые крупные домены добавляются как отдельные feature-модули в `frontend/src/features`.
+- Feature-модуль экспортирует публичный контракт через `index.ts`, `api.ts`, `types.ts` и `hooks.ts`.
+- Feature не импортирует внутренние файлы другого feature напрямую.
+- Общие UI-компоненты, API-клиенты, утилиты и типы живут в `frontend/src/shared`.
