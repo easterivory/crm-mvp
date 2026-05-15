@@ -1,3 +1,4 @@
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -15,11 +16,12 @@ router = APIRouter(tags=["bots"])
 async def list_bots(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    project_id: UUID = Depends(get_current_project_id),
+    project_id: Optional[UUID] = Query(default=None),
+    current_project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[BotOut]:
     items, total = await BotService(db).list_bots(
-        project_id=project_id,
+        project_id=project_id or current_project_id,
         limit=limit,
         offset=offset,
     )
@@ -29,10 +31,10 @@ async def list_bots(
 @router.post("/bots", response_model=BotOut, status_code=status.HTTP_201_CREATED)
 async def create_bot(
     data: BotCreate,
-    project_id: UUID = Depends(get_current_project_id),
+    current_project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
-    return await BotService(db).create_bot(project_id=project_id, data=data)
+    return await BotService(db).create_bot(project_id=current_project_id, data=data)
 
 
 @router.get("/bot_steps", response_model=list[BotStepOut])

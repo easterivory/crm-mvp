@@ -10,21 +10,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.repositories.bot_repository import BotRepository
+from app.repositories.project_repository import ProjectRepository
 from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
 from app.services.telegram_sender import TelegramSenderService
+
+
+DEFAULT_PROJECT_NAME = "Default Project"
+DEFAULT_PROJECT_SLUG = "default-project"
 
 
 class BotService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
+        self.project_repo = ProjectRepository(db)
 
     async def list_bots(
         self,
-        project_id: UUID,
+        project_id: Optional[UUID],
         limit: int,
         offset: int,
     ) -> tuple[list[BotOut], int]:
+        if project_id is None:
+            bots = await self.bot_repo.list_active(limit=limit, offset=offset)
+            total = await self.bot_repo.count_active()
+            return [BotOut.model_validate(bot) for bot in bots], total
+
+        await self._get_active_project_or_404(project_id)
         bots = await self.bot_repo.list_by_project(
             project_id=project_id,
             limit=limit,
@@ -37,7 +49,12 @@ class BotService:
         bot = await self._get_bot_or_404(bot_id, project_id)
         return BotOut.model_validate(bot)
 
-    async def create_bot(self, project_id: UUID, data: BotCreate) -> BotOut:
+    async def create_bot(
+        self,
+        project_id: Optional[UUID],
+        data: BotCreate,
+    ) -> BotOut:
+        project = await self._resolve_project_for_create(data.project_id or project_id)
         token = self._normalize_required(data.telegram_token, "telegram_token")
         username = self._normalize_username(data.bot_username)
         telegram_info = await self._fetch_telegram_bot_info(token) if not username else None
@@ -51,13 +68,13 @@ class BotService:
         name = name or (f"@{username}" if username else "Telegram bot")
 
         bot = await self.bot_repo.create(
-            project_id=project_id,
+            project_id=project.id,
             name=name,
             telegram_token=token,
             bot_username=username,
         )
-        await self.set_webhook(bot_id=bot.id, project_id=project_id)
-        return await self.get_bot(bot_id=bot.id, project_id=project_id)
+        await self.set_webhook(bot_id=bot.id, project_id=project.id)
+        return await self.get_bot(bot_id=bot.id, project_id=project.id)
 
     async def update_bot(
         self,
@@ -203,10 +220,49 @@ class BotService:
         return bot
 
     async def _get_bot_or_404(self, bot_id: UUID, project_id: UUID):
-        bot = await self.bot_repo.get_by_id_in_project(bot_id, project_id)
+        bot = await self.bot_repo.get_by_id_and_project(bot_id, project_id)
         if bot is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
         return bot
+
+    async def _resolve_project_for_create(self, project_id: Optional[UUID]):
+        if project_id is None:
+            # Temporary backwards compatibility for legacy callers that create
+            # bots without a project_id. New API clients should pass or select
+            # an explicit project.
+            return await self._get_or_create_default_project()
+        return await self._get_active_project_or_404(project_id)
+
+    async def _get_active_project_or_404(self, project_id: UUID):
+        project = await self.project_repo.get_any_by_id(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        if project.is_deleted or project.status == "archived":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Project is archived",
+            )
+        return project
+
+    async def _get_or_create_default_project(self):
+        project = await self.project_repo.get_any_by_slug(DEFAULT_PROJECT_SLUG)
+        if project is not None:
+            if project.is_deleted or project.status == "archived":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Default project is archived",
+                )
+            return project
+
+        return await self.project_repo.create(
+            name=DEFAULT_PROJECT_NAME,
+            slug=DEFAULT_PROJECT_SLUG,
+            status="active",
+            sla_threshold_minutes=30,
+        )
 
     @staticmethod
     async def _fetch_telegram_bot_info(token: str) -> Optional[dict[str, Any]]:

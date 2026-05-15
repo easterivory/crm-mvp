@@ -17,6 +17,26 @@ from app.repositories.base import BaseRepository
 class BotRepository(BaseRepository[Bot]):
     model = Bot
 
+    async def list_active(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Bot]:
+        result = await self.db.execute(
+            select(Bot)
+            .where(Bot.is_deleted.is_(False))
+            .order_by(Bot.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def count_active(self) -> int:
+        result = await self.db.execute(
+            select(func.count(Bot.id)).where(Bot.is_deleted.is_(False))
+        )
+        return result.scalar_one()
+
     async def list_by_project(
         self,
         project_id: UUID,
@@ -54,6 +74,13 @@ class BotRepository(BaseRepository[Bot]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_by_id_and_project(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> Optional[Bot]:
+        return await self.get_by_id_in_project(bot_id, project_id)
 
     async def get_active(self, bot_id: UUID) -> Optional[Bot]:
         result = await self.db.execute(

@@ -43,6 +43,7 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
     )
 
     # Relationships
+    bots: Mapped[list[Bot]] = relationship("Bot", back_populates="project")
     users: Mapped[list[User]] = relationship("User", back_populates="project")
     chats: Mapped[list[Chat]] = relationship("Chat", back_populates="project")
     leads: Mapped[list[Lead]] = relationship("Lead", back_populates="project")

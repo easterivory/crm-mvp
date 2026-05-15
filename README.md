@@ -88,6 +88,17 @@ Manual smoke check:
 python scripts/check_backend_layers.py
 ```
 
+## Bot Project Scope
+
+Every bot belongs to a project via `bots.project_id`. New project-scoped API
+surfaces should accept an explicit `project_id` where the caller is selecting
+project data. Existing bot endpoints keep backwards compatibility: `GET /bots`
+without a query parameter still resolves the authenticated user's project,
+while `GET /bots?project_id=<id>` filters by the selected project.
+
+The frontend will later move this selection into a global ProjectSelector and
+BotSelector.
+
 ## Non-Goals for MVP
 
 The following are intentionally excluded from this phase:

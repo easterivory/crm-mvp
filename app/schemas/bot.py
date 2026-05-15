@@ -8,6 +8,9 @@ from app.schemas.common import OrmBase
 
 
 class BotCreate(BaseModel):
+    # Temporary backwards compatibility: existing frontend omits project_id,
+    # so BotService falls back to the authenticated project for now.
+    project_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(None, max_length=255)
     telegram_token: str = Field(..., max_length=255)
     bot_username: Optional[str] = Field(None, max_length=255)

@@ -22,6 +22,10 @@ class ProjectRepository(BaseRepository[Project]):
         )
         return result.scalar_one_or_none()
 
+    async def get_any_by_slug(self, slug: str) -> Optional[Project]:
+        result = await self.db.execute(select(Project).where(Project.slug == slug))
+        return result.scalar_one_or_none()
+
     async def get_any_by_id(self, id: UUID) -> Optional[Project]:
         result = await self.db.execute(select(Project).where(Project.id == id))
         return result.scalar_one_or_none()

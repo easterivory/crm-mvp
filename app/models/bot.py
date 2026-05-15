@@ -34,7 +34,7 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     telegram_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     bot_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    project: Mapped[Project] = relationship("Project")
+    project: Mapped[Project] = relationship("Project", back_populates="bots")
     versions: Mapped[list[BotVersion]] = relationship(
         "BotVersion",
         back_populates="bot",
