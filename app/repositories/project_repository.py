@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any, Optional
 from uuid import UUID
 
@@ -37,6 +39,16 @@ class ProjectRepository(BaseRepository[Project]):
             .order_by(Project.created_at.desc())
             .limit(limit)
             .offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def list_by_ids(self, ids: list[UUID]) -> list[Project]:
+        if not ids:
+            return []
+        result = await self.db.execute(
+            select(Project)
+            .where(Project.id.in_(ids), Project.is_deleted.is_(False))
+            .order_by(Project.created_at.desc())
         )
         return list(result.scalars().all())
 

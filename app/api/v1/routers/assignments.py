@@ -1,7 +1,8 @@
 """
 /api/v1/leads/{lead_id}/assign — manager assignment.
 
-project_id is always taken from the authenticated user's JWT context.
+Project-bound users receive project_id from their authenticated context.
+super_admin users pass project_id as a query parameter for scoped requests.
 actor_id is taken from the authenticated user — the request body only
 carries the target manager_id (or null to unassign).
 
@@ -25,7 +26,6 @@ router = APIRouter(prefix="/leads", tags=["assignments"])
 async def assign_manager(
     lead_id: UUID,
     data: LeadManagerUpdate,
-    # SECURITY: project_id is never accepted from request
     project_id: UUID = Depends(get_current_project_id),
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

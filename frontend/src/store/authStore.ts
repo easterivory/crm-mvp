@@ -8,6 +8,7 @@ type User = {
   name: string
   project_id: string | null
   role_id: string
+  role_name?: string | null
   created_at: string
   is_deleted: boolean
 }

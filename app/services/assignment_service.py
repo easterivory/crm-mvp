@@ -36,8 +36,9 @@ from app.core.constants import AuditAction, EntityType
 
 logger = logging.getLogger(__name__)
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.tag_repository import TagRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.lead import LeadOut
+from app.schemas.lead import LeadOut, LeadTagOut
 from app.services.audit_service import AuditService
 
 
@@ -45,6 +46,7 @@ class AssignmentService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.lead_repo = LeadRepository(db)
+        self.tag_repo = TagRepository(db)
         self.user_repo = UserRepository(db)
         self.audit = AuditService(db)
 
@@ -79,7 +81,7 @@ class AssignmentService:
 
         # ── Idempotency ───────────────────────────────────────────────────────
         if manager_id == old_manager_id:
-            return LeadOut.model_validate(lead)
+            return await self._lead_out(lead)
 
         # ── Validate target manager ───────────────────────────────────────────
         if manager_id is not None:
@@ -135,4 +137,12 @@ class AssignmentService:
             },
         )
 
-        return LeadOut.model_validate(updated)
+        return await self._lead_out(updated)
+
+    async def _lead_out(self, lead) -> LeadOut:
+        tags = await self.tag_repo.list_for_lead(lead.id)
+        return LeadOut.model_validate(lead).model_copy(
+            update={
+                "tags": [LeadTagOut(id=tag.id, name=tag.name) for tag in tags],
+            }
+        )

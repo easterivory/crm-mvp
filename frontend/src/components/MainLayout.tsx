@@ -93,7 +93,7 @@ export default function MainLayout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 flex-col gap-3 border-b border-white/5 bg-background/65 px-4 py-3 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
+        <header className="relative z-40 flex shrink-0 flex-col gap-3 border-b border-white/5 bg-background/65 px-4 py-3 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-white">
               {user?.name ?? user?.email ?? 'User'}

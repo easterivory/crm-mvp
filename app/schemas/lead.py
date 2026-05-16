@@ -45,6 +45,11 @@ class LeadStatusOut(OrmBase):
     created_at: datetime
 
 
+class LeadTagOut(OrmBase):
+    id: uuid.UUID
+    name: str
+
+
 class LeadOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
@@ -56,3 +61,4 @@ class LeadOut(OrmBase):
     updated_at: datetime
     created_at: datetime
     is_deleted: bool
+    tags: list[LeadTagOut] = Field(default_factory=list)

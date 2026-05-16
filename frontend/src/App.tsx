@@ -18,7 +18,7 @@ export default function App() {
   const fetchMe = useAuthStore((state) => state.fetchMe)
 
   useEffect(() => {
-    if (token && !user) {
+    if (token && (!user || !user.role_name)) {
       fetchMe().catch(() => undefined)
     }
   }, [fetchMe, token, user])

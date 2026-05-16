@@ -1,7 +1,8 @@
 """
 /api/v1/leads — lead retrieval and status transitions.
 
-project_id is always taken from the authenticated user's JWT context.
+Project-bound users receive project_id from their authenticated context.
+super_admin users pass project_id as a query parameter for scoped requests.
 
 Endpoints implemented:
   POST  /leads/{lead_id}/status — change_status
@@ -52,7 +53,6 @@ async def create_lead(
 async def change_status(
     lead_id: UUID,
     data: LeadStatusUpdate,
-    # SECURITY: project_id is never accepted from request
     project_id: UUID = Depends(get_current_project_id),
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

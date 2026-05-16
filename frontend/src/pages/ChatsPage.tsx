@@ -20,6 +20,7 @@ import axios from 'axios'
 import api from '../api/client'
 import ChatList, { Chat, ChatFilter } from '../components/ChatList'
 import LeadSidebar from '../components/LeadSidebar'
+import { useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
 type PaginatedResponse<T> = {
@@ -38,17 +39,6 @@ type Message = {
   sender_id: string | null
   body: string | null
   created_at: string
-}
-
-type BotRecord = {
-  id: string
-  project_id: string
-  name: string
-  has_telegram_token: boolean
-  bot_username: string | null
-  created_at: string
-  updated_at: string
-  is_deleted: boolean
 }
 
 const CHAT_LIMIT = 50
@@ -87,18 +77,16 @@ function getErrorMessage(err: unknown) {
 
 export default function ChatsPage() {
   const user = useAuthStore((state) => state.user)
+  const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
 
   const [chats, setChats] = useState<Chat[]>([])
-  const [bots, setBots] = useState<BotRecord[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [total, setTotal] = useState(0)
-  const [selectedBotId, setSelectedBotId] = useState('')
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ChatFilter>('all')
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
-  const [isBotsLoading, setIsBotsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
@@ -108,35 +96,21 @@ export default function ChatsPage() {
     [chats, selectedChatId],
   )
 
-  const selectedBot = useMemo(
-    () => bots.find((bot) => bot.id === selectedBotId) ?? null,
-    [bots, selectedBotId],
-  )
-
-  const loadBots = useCallback(async () => {
-    setIsBotsLoading(true)
-    setError('')
-
-    try {
-      const { data } = await api.get<PaginatedResponse<BotRecord>>('/bots', {
-        params: { limit: 100, offset: 0 },
-      })
-      setBots(data.items)
-      setSelectedBotId((current) => {
-        if (current && data.items.some((bot) => bot.id === current)) {
-          return current
-        }
-        return data.items[0]?.id ?? ''
-      })
-    } catch (err) {
-      setError(getErrorMessage(err))
-    } finally {
-      setIsBotsLoading(false)
+  const botScopeLabel = useMemo(() => {
+    if (!selectedProjectId) {
+      return 'Select a project in the header'
     }
-  }, [])
+    if (selectedBotIds.length === 0) {
+      return 'All bots in selected project'
+    }
+    if (selectedBotIds.length === 1) {
+      return '1 selected bot'
+    }
+    return `${selectedBotIds.length} selected bots`
+  }, [selectedBotIds.length, selectedProjectId])
 
   const loadChats = useCallback(async () => {
-    if (!selectedBotId) {
+    if (!selectedProjectId) {
       setChats([])
       setTotal(0)
       setSelectedChatId(null)
@@ -151,7 +125,13 @@ export default function ChatsPage() {
       const params: Record<string, boolean | number | string> = {
         limit: CHAT_LIMIT,
         offset: 0,
-        bot_id: selectedBotId,
+        project_id: selectedProjectId,
+      }
+
+      if (selectedBotIds.length === 1) {
+        params.bot_id = selectedBotIds[0]
+      } else if (selectedBotIds.length > 1) {
+        params.bot_ids = selectedBotIds.join(',')
       }
 
       if (activeFilter === 'mine' && user?.id) {
@@ -178,7 +158,7 @@ export default function ChatsPage() {
     } finally {
       setIsChatsLoading(false)
     }
-  }, [activeFilter, selectedBotId, user?.id])
+  }, [activeFilter, selectedBotIds, selectedProjectId, user?.id])
 
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
     if (showLoader) {
@@ -189,10 +169,18 @@ export default function ChatsPage() {
     try {
       const { data } = await api.get<PaginatedResponse<Message>>(
         `/chats/${chatId}/messages`,
-        { params: { limit: MESSAGE_LIMIT, offset: 0 } },
+        {
+          params: {
+            limit: MESSAGE_LIMIT,
+            offset: 0,
+            ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+          },
+        },
       )
       setMessages(data.items)
-      await api.post(`/chats/${chatId}/read`)
+      await api.post(`/chats/${chatId}/read`, null, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+      })
       setChats((current) =>
         current.map((chat) =>
           chat.id === chatId ? { ...chat, unread: false } : chat,
@@ -205,11 +193,7 @@ export default function ChatsPage() {
         setIsMessagesLoading(false)
       }
     }
-  }, [])
-
-  useEffect(() => {
-    void loadBots()
-  }, [loadBots])
+  }, [selectedProjectId])
 
   useEffect(() => {
     void loadChats()
@@ -254,6 +238,8 @@ export default function ChatsPage() {
         message_type: 'text',
         sender_id: user?.id ?? null,
         sender_type: 'manager',
+      }, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setMessages((current) => [...current, data])
       setDraft('')
@@ -283,15 +269,12 @@ export default function ChatsPage() {
     <section className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-y-auto text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)] xl:overflow-hidden">
       <ChatList
         activeFilter={activeFilter}
-        bots={bots}
         chats={chats}
         currentUserId={user?.id ?? null}
-        isBotsLoading={isBotsLoading}
         isLoading={isChatsLoading}
-        selectedBotId={selectedBotId}
+        scopeLabel={botScopeLabel}
         selectedChatId={selectedChatId}
         total={total}
-        onBotChange={setSelectedBotId}
         onFilterChange={setActiveFilter}
         onRefresh={() => void loadChats()}
         onSelectChat={setSelectedChatId}
@@ -413,9 +396,10 @@ export default function ChatsPage() {
       </div>
 
       <LeadSidebar
-        activeBotId={selectedBotId || null}
-        activeBotName={selectedBot?.name ?? null}
+        activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
+        activeBotName={botScopeLabel}
         activeChatId={selectedChatId}
+        hasActiveScope={Boolean(selectedProjectId)}
         currentUserId={user?.id ?? null}
       />
     </section>

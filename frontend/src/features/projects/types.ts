@@ -11,3 +11,9 @@ export type Project = {
   updated_at: string
   is_deleted?: boolean
 }
+
+export type ProjectCreatePayload = {
+  name: string
+  slug?: string
+  description?: string | null
+}

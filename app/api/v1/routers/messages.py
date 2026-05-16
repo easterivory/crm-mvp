@@ -1,7 +1,8 @@
 """
 /api/v1/chats/{chat_id}/messages — message creation and listing.
 
-project_id is always taken from the authenticated user's JWT context.
+Project-bound users receive project_id from their authenticated context.
+super_admin users pass project_id as a query parameter for scoped requests.
 MessageService.create_message() validates that chat_id belongs to project_id —
 the router does not repeat that check.
 
@@ -29,7 +30,6 @@ router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 async def create_message(
     chat_id: UUID,
     data: MessageCreate,
-    # SECURITY: project_id is never accepted from request
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> MessageOut:

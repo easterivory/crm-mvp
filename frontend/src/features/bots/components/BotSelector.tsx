@@ -119,7 +119,7 @@ export default function BotSelector() {
       </button>
 
       {isOpen ? (
-        <div className="absolute right-0 z-30 mt-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-card backdrop-blur-xl">
+        <div className="absolute right-0 z-50 mt-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-card backdrop-blur-xl">
           <button
             type="button"
             disabled={isDisabled}

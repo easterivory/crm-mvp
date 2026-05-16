@@ -3,15 +3,18 @@ import {
   CalendarDays,
   LoaderCircle,
   Phone,
+  Plus,
   RefreshCw,
   Save,
   Tag,
   UserRound,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import { useProjectBotSelection } from '../shared/lib'
 
 type Lead = {
   id: string
@@ -46,6 +49,13 @@ type User = {
   is_deleted: boolean
 }
 
+type ProjectTag = {
+  id: string
+  project_id: string
+  name: string
+  created_at: string
+}
+
 type PaginatedResponse<T> = {
   items: T[]
   total: number
@@ -57,6 +67,7 @@ type LeadSidebarProps = {
   activeBotId: string | null
   activeBotName: string | null
   activeChatId: string | null
+  hasActiveScope: boolean
   currentUserId: string | null
 }
 
@@ -95,11 +106,15 @@ export default function LeadSidebar({
   activeBotId,
   activeBotName,
   activeChatId,
+  hasActiveScope,
   currentUserId,
 }: LeadSidebarProps) {
+  const { selectedProjectId } = useProjectBotSelection()
   const [lead, setLead] = useState<Lead | null>(null)
   const [statuses, setStatuses] = useState<LeadStatus[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [tags, setTags] = useState<ProjectTag[]>([])
+  const [selectedTagId, setSelectedTagId] = useState('')
   const [usernameDraft, setUsernameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
   const [error, setError] = useState('')
@@ -107,6 +122,8 @@ export default function LeadSidebar({
   const [isSavingContact, setIsSavingContact] = useState(false)
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
   const [isAssigning, setIsAssigning] = useState(false)
+  const [isTagsLoading, setIsTagsLoading] = useState(false)
+  const [isTagMutating, setIsTagMutating] = useState(false)
 
   const currentStatus = useMemo(
     () => statuses.find((status) => status.id === lead?.status_id) ?? null,
@@ -124,6 +141,11 @@ export default function LeadSidebar({
         phoneDraft.trim() !== (lead.phone ?? '')),
   )
 
+  const availableTags = useMemo(() => {
+    const attachedTagIds = new Set((lead?.tags ?? []).map((tag) => tag.id))
+    return tags.filter((tag) => !attachedTagIds.has(tag.id))
+  }, [lead?.tags, tags])
+
   const loadStatuses = useCallback(async () => {
     const { data } = await api.get<LeadStatus[]>('/leads/statuses')
     setStatuses(data)
@@ -131,10 +153,41 @@ export default function LeadSidebar({
 
   const loadUsers = useCallback(async () => {
     const { data } = await api.get<PaginatedResponse<User>>('/users', {
-      params: { limit: 100, offset: 0 },
+      params: {
+        limit: 100,
+        offset: 0,
+        ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+      },
     })
     setUsers(data.items)
-  }, [])
+  }, [selectedProjectId])
+
+  const loadTags = useCallback(async () => {
+    if (!selectedProjectId) {
+      setTags([])
+      setSelectedTagId('')
+      return
+    }
+
+    setIsTagsLoading(true)
+    try {
+      const { data } = await api.get<PaginatedResponse<ProjectTag>>('/tags', {
+        params: {
+          limit: 100,
+          offset: 0,
+          project_id: selectedProjectId,
+        },
+      })
+      setTags(data.items)
+      setSelectedTagId((current) =>
+        current && data.items.some((tag) => tag.id === current) ? current : '',
+      )
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsTagsLoading(false)
+    }
+  }, [selectedProjectId])
 
   const loadLead = useCallback(async () => {
     if (!activeChatId) {
@@ -149,7 +202,9 @@ export default function LeadSidebar({
     setError('')
 
     try {
-      const { data } = await api.get<Lead>(`/leads/by-chat/${activeChatId}`)
+      const { data } = await api.get<Lead>(`/leads/by-chat/${activeChatId}`, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+      })
       setLead(data)
       setUsernameDraft(data.username ?? '')
       setPhoneDraft(data.phone ?? '')
@@ -161,12 +216,13 @@ export default function LeadSidebar({
     } finally {
       setIsLoading(false)
     }
-  }, [activeChatId])
+  }, [activeChatId, selectedProjectId])
 
   useEffect(() => {
     loadStatuses().catch(() => undefined)
     loadUsers().catch(() => undefined)
-  }, [loadStatuses, loadUsers])
+    loadTags().catch(() => undefined)
+  }, [loadStatuses, loadTags, loadUsers])
 
   useEffect(() => {
     void loadLead()
@@ -183,6 +239,8 @@ export default function LeadSidebar({
     try {
       const { data } = await api.post<Lead>(`/leads/${lead.id}/status`, {
         status_id: nextStatusId,
+      }, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
     } catch (err) {
@@ -206,6 +264,8 @@ export default function LeadSidebar({
       const { data } = await api.patch<Lead>(`/leads/${lead.id}`, {
         username: username || null,
         phone: phone || null,
+      }, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
       setUsernameDraft(data.username ?? '')
@@ -228,12 +288,55 @@ export default function LeadSidebar({
     try {
       const { data } = await api.post<Lead>(`/leads/${lead.id}/assign`, {
         manager_id: managerId,
+      }, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
       setIsAssigning(false)
+    }
+  }
+
+  const handleAddTag = async () => {
+    if (!lead || !selectedTagId || isTagMutating) {
+      return
+    }
+
+    setIsTagMutating(true)
+    setError('')
+
+    try {
+      await api.post(`/tags/leads/${lead.id}/tags/${selectedTagId}`, null, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+      })
+      setSelectedTagId('')
+      await loadLead()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsTagMutating(false)
+    }
+  }
+
+  const handleRemoveTag = async (tagId: string) => {
+    if (!lead || isTagMutating) {
+      return
+    }
+
+    setIsTagMutating(true)
+    setError('')
+
+    try {
+      await api.delete(`/tags/leads/${lead.id}/tags/${tagId}`, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+      })
+      await loadLead()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsTagMutating(false)
     }
   }
 
@@ -262,9 +365,9 @@ export default function LeadSidebar({
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {!activeChatId ? (
           <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm text-gray-500">
-            {activeBotId
+            {hasActiveScope || activeBotId
               ? 'Select a chat to view lead details.'
-              : 'Select a bot to load its chats.'}
+              : 'Select a project to load chats.'}
           </div>
         ) : null}
 
@@ -442,15 +545,59 @@ export default function LeadSidebar({
                   {lead.tags.map((tag) => (
                     <span
                       key={tag.id}
-                      className="rounded-full bg-primary-500/12 px-2 py-1 text-xs font-medium text-primary-100"
+                      className="inline-flex items-center gap-1 rounded-full bg-primary-500/12 px-2 py-1 text-xs font-medium text-primary-100"
                     >
                       {tag.name}
+                      <button
+                        type="button"
+                        title="Remove tag"
+                        onClick={() => void handleRemoveTag(tag.id)}
+                        disabled={isTagMutating}
+                        className="rounded-full text-primary-100/70 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <X size={12} />
+                      </button>
                     </span>
                   ))}
                 </div>
               ) : (
                 <p className="text-sm text-gray-500">No tags yet.</p>
               )}
+
+              <div className="mt-3 flex gap-2">
+                <select
+                  value={selectedTagId}
+                  onChange={(event) => setSelectedTagId(event.target.value)}
+                  disabled={isTagsLoading || isTagMutating || availableTags.length === 0}
+                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">
+                    {isTagsLoading
+                      ? 'Loading tags...'
+                      : availableTags.length === 0
+                        ? 'No tags available'
+                        : 'Select tag'}
+                  </option>
+                  {availableTags.map((tag) => (
+                    <option key={tag.id} value={tag.id}>
+                      {tag.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void handleAddTag()}
+                  disabled={!selectedTagId || isTagMutating}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-gray-100 transition hover:border-accent-300/45 hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Add tag"
+                >
+                  {isTagMutating ? (
+                    <LoaderCircle size={15} className="animate-spin" />
+                  ) : (
+                    <Plus size={15} />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         ) : null}

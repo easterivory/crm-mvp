@@ -37,9 +37,11 @@ from app.core.constants import AuditAction, EntityType, LeadStatusCode
 logger = logging.getLogger(__name__)
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.tag_repository import TagRepository
 from app.schemas.lead import (
     LeadCreate,
     LeadOut,
+    LeadTagOut,
     LeadStatusAdminUpdate,
     LeadStatusCreate,
     LeadStatusOut,
@@ -53,6 +55,7 @@ class LeadService:
         self.db = db
         self.lead_repo = LeadRepository(db)
         self.chat_repo = ChatRepository(db)
+        self.tag_repo = TagRepository(db)
         self.audit = AuditService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
@@ -83,7 +86,7 @@ class LeadService:
 
         # ── Idempotency: no-op if status is unchanged ─────────────────────────
         if lead.status_id == new_status_id:
-            return LeadOut.model_validate(lead)
+            return await self._lead_out(lead)
 
         # ── Fetch current status ──────────────────────────────────────────────
         current_status = await self.lead_repo.get_status(lead.status_id)
@@ -149,7 +152,7 @@ class LeadService:
             },
         )
 
-        return LeadOut.model_validate(updated)
+        return await self._lead_out(updated)
 
     # ── CRUD ──────────────────────────────────────────────────────────────────
 
@@ -214,7 +217,7 @@ class LeadService:
             meta={"source": "manual"},
         )
 
-        return LeadOut.model_validate(lead)
+        return await self._lead_out(lead)
 
     async def get_lead(self, lead_id: UUID, project_id: UUID) -> LeadOut:
         lead = await self.lead_repo.get_active(lead_id, project_id)
@@ -223,7 +226,7 @@ class LeadService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Lead not found",
             )
-        return LeadOut.model_validate(lead)
+        return await self._lead_out(lead)
 
     async def get_lead_by_chat(self, chat_id: UUID, project_id: UUID) -> LeadOut:
         lead = await self.lead_repo.get_by_chat(chat_id, project_id)
@@ -232,7 +235,7 @@ class LeadService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Lead not found for this chat",
             )
-        return LeadOut.model_validate(lead)
+        return await self._lead_out(lead)
 
     async def list_statuses(self) -> list[LeadStatusOut]:
         statuses = await self.lead_repo.list_statuses()
@@ -361,7 +364,7 @@ class LeadService:
             status_id=status_id,
             manager_id=manager_id,
         )
-        return [LeadOut.model_validate(lead) for lead in leads], total
+        return [await self._lead_out(lead) for lead in leads], total
 
     async def update_contact(
         self,
@@ -385,7 +388,18 @@ class LeadService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Lead not found",
             )
-        return LeadOut.model_validate(lead)
+        return await self._lead_out(lead)
+
+    async def _lead_out(self, lead) -> LeadOut:
+        tags = await self.tag_repo.list_for_lead(lead.id)
+        return LeadOut.model_validate(lead).model_copy(
+            update={
+                "tags": [
+                    LeadTagOut(id=tag.id, name=tag.name)
+                    for tag in tags
+                ]
+            }
+        )
 
     @staticmethod
     def _normalize_optional(value: Optional[str]) -> Optional[str]:

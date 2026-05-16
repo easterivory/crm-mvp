@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, select, update
+from sqlalchemy.orm import selectinload
 
 from app.models.role import Role
 from app.models.user import User
@@ -14,9 +15,19 @@ from app.repositories.base import BaseRepository
 class UserRepository(BaseRepository[User]):
     model = User
 
+    def _with_role(self):
+        return selectinload(User.role)
+
+    async def get_by_id(self, id: UUID) -> Optional[User]:
+        result = await self.db.execute(
+            select(User).options(self._with_role()).where(User.id == id)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_email(self, email: str) -> Optional[User]:
         result = await self.db.execute(
             select(User)
+            .options(self._with_role())
             .where(
                 func.lower(User.email) == email.lower(),
                 User.is_deleted.is_(False),
@@ -29,6 +40,7 @@ class UserRepository(BaseRepository[User]):
     async def get_any_by_email(self, email: str) -> Optional[User]:
         result = await self.db.execute(
             select(User)
+            .options(self._with_role())
             .where(func.lower(User.email) == email.lower())
             .order_by(User.created_at.desc())
             .limit(1)
@@ -52,7 +64,7 @@ class UserRepository(BaseRepository[User]):
         member of the same project.
         """
         result = await self.db.execute(
-            select(User).where(
+            select(User).options(self._with_role()).where(
                 User.id == user_id,
                 User.project_id == project_id,
                 User.is_deleted.is_(False),
@@ -65,6 +77,7 @@ class UserRepository(BaseRepository[User]):
     ) -> list[User]:
         result = await self.db.execute(
             select(User)
+            .options(self._with_role())
             .where(User.project_id == project_id, User.is_deleted.is_(False))
             .order_by(User.created_at.desc())
             .limit(limit)
@@ -80,6 +93,41 @@ class UserRepository(BaseRepository[User]):
             )
         )
         return result.scalar_one()
+
+    async def list_active(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        project_id: Optional[UUID] = None,
+    ) -> list[User]:
+        stmt = (
+            select(User)
+            .options(self._with_role())
+            .where(User.is_deleted.is_(False))
+        )
+        if project_id is not None:
+            stmt = stmt.where(User.project_id == project_id)
+        stmt = stmt.order_by(User.created_at.desc()).limit(limit).offset(offset)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_active(self, project_id: Optional[UUID] = None) -> int:
+        stmt = select(func.count(User.id)).where(User.is_deleted.is_(False))
+        if project_id is not None:
+            stmt = stmt.where(User.project_id == project_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one()
+
+    async def soft_delete_by_id(self, user_id: UUID) -> bool:
+        result = await self.db.execute(
+            update(User)
+            .where(
+                User.id == user_id,
+                User.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
+        return result.rowcount > 0
 
     async def soft_delete_from_project(self, user_id: UUID, project_id: UUID) -> bool:
         result = await self.db.execute(

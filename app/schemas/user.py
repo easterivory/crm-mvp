@@ -21,6 +21,7 @@ class UserOut(OrmBase):
     name: str
     project_id: Optional[uuid.UUID]
     role_id: uuid.UUID
+    role_name: Optional[str] = None
     created_at: datetime
     is_deleted: bool
 

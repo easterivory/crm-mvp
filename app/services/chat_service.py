@@ -83,6 +83,7 @@ class ChatService:
             sla_threshold_minutes=sla,
             manager_id=filters.manager_id,
             bot_id=filters.bot_id,
+            bot_ids=filters.bot_ids,
         )
 
         # Sequential — AsyncSession does not support concurrent operations.

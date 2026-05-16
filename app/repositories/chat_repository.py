@@ -32,7 +32,7 @@ TODO (do not implement now):
     unfiltered case, or caching the total in daily_stats.
 """
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, func, select, update
@@ -88,13 +88,20 @@ class ChatRepository(BaseRepository[Chat]):
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    def _base_select(self, project_id: UUID, bot_id: Optional[UUID] = None):
+    def _base_select(
+        self,
+        project_id: UUID,
+        bot_id: Optional[UUID] = None,
+        bot_ids: Sequence[UUID] | None = None,
+    ):
         stmt = select(Chat).where(
             Chat.project_id == project_id,
             Chat.is_deleted.is_(False),
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
+        if bot_ids:
+            stmt = stmt.where(Chat.bot_id.in_(bot_ids))
         return stmt
 
     def _apply_filters(
@@ -181,6 +188,7 @@ class ChatRepository(BaseRepository[Chat]):
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
         bot_id: Optional[UUID] = None,
+        bot_ids: Sequence[UUID] | None = None,
     ) -> list[Chat]:
         """
         Returns chats matching the given filters, ordered by priority:
@@ -189,7 +197,7 @@ class ChatRepository(BaseRepository[Chat]):
           3. last_message_at DESC NULLS LAST
         """
         stmt = self._apply_filters(
-            self._base_select(project_id, bot_id=bot_id),
+            self._base_select(project_id, bot_id=bot_id, bot_ids=bot_ids),
             only_unread=only_unread,
             only_unanswered=only_unanswered,
             only_red=only_red,
@@ -217,6 +225,7 @@ class ChatRepository(BaseRepository[Chat]):
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
         bot_id: Optional[UUID] = None,
+        bot_ids: Sequence[UUID] | None = None,
     ) -> int:
         """
         Mirror of list() without LIMIT/OFFSET — used for pagination totals.
@@ -236,6 +245,8 @@ class ChatRepository(BaseRepository[Chat]):
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
+        if bot_ids:
+            stmt = stmt.where(Chat.bot_id.in_(bot_ids))
 
         stmt = self._apply_filters(
             stmt,

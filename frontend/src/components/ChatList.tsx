@@ -23,15 +23,12 @@ export type ChatFilter = 'all' | 'mine' | 'unanswered' | 'red'
 
 type ChatListProps = {
   activeFilter: ChatFilter
-  bots: Array<{ id: string; name: string; bot_username: string | null }>
   chats: Chat[]
   currentUserId: string | null
-  isBotsLoading: boolean
   isLoading: boolean
-  selectedBotId: string
+  scopeLabel: string
   selectedChatId: string | null
   total: number
-  onBotChange: (botId: string) => void
   onFilterChange: (filter: ChatFilter) => void
   onRefresh: () => void
   onSelectChat: (chatId: string) => void
@@ -72,15 +69,12 @@ function getInitials(label: string) {
 
 export default function ChatList({
   activeFilter,
-  bots,
   chats,
   currentUserId,
-  isBotsLoading,
   isLoading,
-  selectedBotId,
+  scopeLabel,
   selectedChatId,
   total,
-  onBotChange,
   onFilterChange,
   onRefresh,
   onSelectChat,
@@ -108,27 +102,12 @@ export default function ChatList({
           </button>
         </div>
 
-        <label className="mb-4 block">
+        <div className="mb-4 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2">
           <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-            Выберите бота
+            Bot scope
           </span>
-          <select
-            value={selectedBotId}
-            onChange={(event) => onBotChange(event.target.value)}
-            disabled={isBotsLoading || bots.length === 0}
-            className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <option value="" disabled>
-              {isBotsLoading ? 'Loading bots...' : 'Select bot'}
-            </option>
-            {bots.map((bot) => (
-              <option key={bot.id} value={bot.id}>
-                {bot.name}
-                {bot.bot_username ? ` (@${bot.bot_username})` : ''}
-              </option>
-            ))}
-          </select>
-        </label>
+          <p className="truncate text-sm font-medium text-gray-200">{scopeLabel}</p>
+        </div>
 
         <div className="grid grid-cols-2 gap-2">
           {FILTERS.map((filter) => {

@@ -15,6 +15,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import { useProjectBotSelection } from '../shared/lib'
+import { useAuthStore } from '../store/authStore'
 
 type PaginatedResponse<T> = {
   items: T[]
@@ -85,6 +87,10 @@ function getStepLabel(step: BotStep) {
 }
 
 export default function BotsPage() {
+  const currentUser = useAuthStore((state) => state.user)
+  const { selectedProjectId } = useProjectBotSelection()
+  const activeProjectId = selectedProjectId ?? currentUser?.project_id ?? null
+
   const [bots, setBots] = useState<BotRecord[]>([])
   const [trackingLinks, setTrackingLinks] = useState<TrackingLink[]>([])
   const [steps, setSteps] = useState<BotStep[]>([])
@@ -119,8 +125,14 @@ export default function BotsPage() {
   }, [bots])
 
   const loadBots = useCallback(async () => {
+    if (!activeProjectId) {
+      setBots([])
+      setSelectedBotId('')
+      return
+    }
+
     const { data } = await api.get<PaginatedResponse<BotRecord>>('/bots', {
-      params: { limit: 100, offset: 0 },
+      params: { limit: 100, offset: 0, project_id: activeProjectId },
     })
     setBots(data.items)
     setSelectedBotId((current) => {
@@ -129,27 +141,32 @@ export default function BotsPage() {
       }
       return data.items[0]?.id ?? ''
     })
-  }, [])
+  }, [activeProjectId])
 
   const loadTrackingLinks = useCallback(async () => {
+    if (!activeProjectId) {
+      setTrackingLinks([])
+      return
+    }
+
     const { data } = await api.get<PaginatedResponse<TrackingLink>>(
       '/tracking-links',
-      { params: { limit: 100, offset: 0 } },
+      { params: { limit: 100, offset: 0, project_id: activeProjectId } },
     )
     setTrackingLinks(data.items)
-  }, [])
+  }, [activeProjectId])
 
   const loadSteps = useCallback(async (botId: string) => {
-    if (!botId) {
+    if (!botId || !activeProjectId) {
       setSteps([])
       return
     }
 
     const { data } = await api.get<BotStep[]>('/bot_steps', {
-      params: { bot_id: botId },
+      params: { bot_id: botId, project_id: activeProjectId },
     })
     setSteps(data)
-  }, [])
+  }, [activeProjectId])
 
   const loadAll = useCallback(async () => {
     setIsLoading(true)
@@ -177,6 +194,10 @@ export default function BotsPage() {
 
   const handleAddBot = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (!activeProjectId) {
+      setError('Select a project before adding a bot.')
+      return
+    }
     if (isAddingBot) {
       return
     }
@@ -190,6 +211,8 @@ export default function BotsPage() {
         name: botName.trim() || undefined,
         telegram_token: botToken.trim(),
         bot_username: botUsername.trim() || undefined,
+      }, {
+        params: { project_id: activeProjectId },
       })
       setBotName('')
       setBotToken('')
@@ -210,7 +233,9 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await api.post(`/bots/${botId}/webhook`)
+      await api.post(`/bots/${botId}/webhook`, null, {
+        params: activeProjectId ? { project_id: activeProjectId } : undefined,
+      })
       await loadBots()
       setNotice('Webhook registered.')
     } catch (err) {
@@ -256,7 +281,9 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await api.patch<BotRecord>(`/bots/${botId}`, payload)
+      await api.patch<BotRecord>(`/bots/${botId}`, payload, {
+        params: activeProjectId ? { project_id: activeProjectId } : undefined,
+      })
       cancelEditBot()
       await loadBots()
       setNotice(
@@ -281,7 +308,9 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await api.delete(`/bots/${botId}`)
+      await api.delete(`/bots/${botId}`, {
+        params: activeProjectId ? { project_id: activeProjectId } : undefined,
+      })
       await Promise.all([loadBots(), loadTrackingLinks()])
       setNotice('Bot deleted.')
     } catch (err) {
@@ -293,6 +322,10 @@ export default function BotsPage() {
 
   const handleCreateLink = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (!activeProjectId) {
+      setError('Select a project before generating a tracking link.')
+      return
+    }
     if (!selectedBotId || isCreatingLink) {
       return
     }
@@ -306,6 +339,8 @@ export default function BotsPage() {
         bot_id: selectedBotId,
         name: linkName.trim(),
         target_step_id: targetStepId || null,
+      }, {
+        params: { project_id: activeProjectId },
       })
       setLinkName('')
       setTargetStepId('')
@@ -329,7 +364,9 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await api.delete(`/tracking-links/${linkId}`)
+      await api.delete(`/tracking-links/${linkId}`, {
+        params: activeProjectId ? { project_id: activeProjectId } : undefined,
+      })
       await loadTrackingLinks()
       setNotice('Tracking link deleted.')
     } catch (err) {

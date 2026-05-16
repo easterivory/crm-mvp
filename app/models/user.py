@@ -36,3 +36,7 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
         "Message", back_populates="sender", foreign_keys="Message.sender_id"
     )
     audit_actions: Mapped[list[AuditLog]] = relationship("AuditLog", back_populates="actor")
+
+    @property
+    def role_name(self) -> str | None:
+        return self.role.name if self.role is not None else None

@@ -44,6 +44,7 @@ class ChatOut(OrmBase):
 
 class ChatFilters(BaseModel):
     bot_id: Optional[uuid.UUID] = None
+    bot_ids: list[uuid.UUID] = Field(default_factory=list)
     unread: Optional[bool] = None
     unanswered: Optional[bool] = None
     is_red: Optional[bool] = None

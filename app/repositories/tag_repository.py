@@ -55,6 +55,15 @@ class TagRepository(BaseRepository[Tag]):
         )
         return result.scalar_one()
 
+    async def list_for_lead(self, lead_id: UUID) -> list[Tag]:
+        result = await self.db.execute(
+            select(Tag)
+            .join(LeadTag, LeadTag.tag_id == Tag.id)
+            .where(LeadTag.lead_id == lead_id)
+            .order_by(Tag.name.asc(), Tag.created_at.desc())
+        )
+        return list(result.scalars().all())
+
     async def delete_from_project(self, tag_id: UUID, project_id: UUID) -> bool:
         tag = await self.get_by_id_in_project(tag_id, project_id)
         if tag is None:

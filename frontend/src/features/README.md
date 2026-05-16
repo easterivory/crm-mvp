@@ -16,4 +16,7 @@ Feature-модули — основной формат для новых кру�
 - `selectedBotIds = []` означает "все боты выбранного проекта".
 - Старые страницы пока могут не использовать Project/Bot scope, чтобы не менять текущее поведение.
 - Новые features должны читать scope через `ProjectBotSelectionProvider` / `useProjectBotSelection`.
-- ProjectSelector и BotSelector живут в общем layout, а не внутри отдельных страниц.
+- ProjectSelector и BotSelector живут в общем layout/header, а не внутри отдельных страниц.
+- Локальные bot selectors запрещены, если они не являются дополнительным фильтром и явно не синхронизированы с global scope.
+- `super_admin` видит все проекты; `admin`, `manager` и `operator` работают в рамках доступного проекта.
+- `manager` и `operator` не должны видеть actions управления сотрудниками или проектами.

@@ -176,6 +176,19 @@ Links, Chats, Funnels и Analytics. Проект имеет стабильный
 выбирает проект. Позже frontend будет использовать общий `ProjectSelector` и
 `BotSelector`.
 
+### Project/Bot/User scope rules
+
+- `ProjectSelector` в общем header является единственным глобальным выбором проекта.
+- `BotSelector` в общем header является единственным глобальным выбором ботов.
+- `selectedBotIds = []` означает all bots in selected project.
+- Локальные bot selectors на страницах запрещены, если это не дополнительный фильтр,
+  явно синхронизированный с global scope.
+- `super_admin` имеет global access, не обязан иметь `project_id` и может видеть все проекты.
+- `admin` работает в project-scoped режиме: управляет staff только внутри доступного проекта.
+- `manager` и `operator` не управляют сотрудниками и проектами.
+- Новые frontend-экраны читают project/bot scope через `useProjectBotSelection`.
+- Backend остаётся источником прав доступа; frontend только скрывает недоступные действия.
+
 ### API Layer — `api/v1/routers/`
 
 Принимает HTTP-запрос, валидирует через Pydantic-схему, извлекает `current_user` и `project_id` из DI-контейнера, вызывает один сервис, возвращает ответ. Никакой бизнес-логики. Авторизация проверяется на уровне `dependencies.py`.

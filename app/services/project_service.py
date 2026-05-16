@@ -9,6 +9,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import RoleName
+from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectStatus, ProjectUpdate
 
@@ -24,12 +26,23 @@ class ProjectService:
         self,
         limit: int,
         offset: int,
+        actor: User,
     ) -> tuple[list[ProjectOut], int]:
-        projects = await self.project_repo.list(limit=limit, offset=offset)
-        total = await self.project_repo.count()
+        if actor.role_name == RoleName.SUPER_ADMIN:
+            projects = await self.project_repo.list(limit=limit, offset=offset)
+            total = await self.project_repo.count()
+            return [ProjectOut.model_validate(project) for project in projects], total
+
+        if actor.project_id is None:
+            return [], 0
+
+        project = await self.project_repo.get_active(actor.project_id)
+        projects = [project] if project is not None else []
+        total = len(projects)
         return [ProjectOut.model_validate(project) for project in projects], total
 
-    async def create_project(self, data: ProjectCreate) -> ProjectOut:
+    async def create_project(self, data: ProjectCreate, actor: User) -> ProjectOut:
+        self._ensure_can_create_project(actor)
         name = self._validate_name(data.name)
         status_value = self._validate_status(data.status)
         sla_threshold_minutes = self._validate_sla(data.sla_threshold_minutes)
@@ -55,7 +68,8 @@ class ProjectService:
             ) from exc
         return ProjectOut.model_validate(project)
 
-    async def get_project(self, project_id: UUID) -> ProjectOut:
+    async def get_project(self, project_id: UUID, actor: User) -> ProjectOut:
+        self._ensure_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:
             raise HTTPException(
@@ -68,7 +82,9 @@ class ProjectService:
         self,
         project_id: UUID,
         data: ProjectUpdate,
+        actor: User,
     ) -> ProjectOut:
+        self._ensure_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:
             raise HTTPException(
@@ -111,7 +127,12 @@ class ProjectService:
             )
         return ProjectOut.model_validate(project)
 
-    async def archive_project(self, project_id: UUID) -> None:
+    async def archive_project(self, project_id: UUID, actor: User) -> None:
+        if actor.role_name != RoleName.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super_admin can archive projects",
+            )
         archived = await self.project_repo.archive(project_id)
         if not archived:
             raise HTTPException(
@@ -140,6 +161,24 @@ class ProjectService:
                 detail="Project slug already exists",
             )
         return normalized
+
+    @staticmethod
+    def _ensure_can_create_project(actor: User) -> None:
+        if actor.role_name != RoleName.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super_admin can create projects",
+            )
+
+    @staticmethod
+    def _ensure_project_access(actor: User, project_id: UUID) -> None:
+        if actor.role_name == RoleName.SUPER_ADMIN:
+            return
+        if actor.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Project is not accessible for current user",
+            )
 
     @staticmethod
     def _validate_name(name: str) -> str:

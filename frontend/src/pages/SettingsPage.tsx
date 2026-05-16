@@ -14,6 +14,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import { useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
 type TabKey = 'project' | 'team' | 'statuses' | 'tags'
@@ -39,13 +40,14 @@ type User = {
   name: string
   project_id: string | null
   role_id: string
+  role_name?: string | null
   created_at: string
   is_deleted: boolean
 }
 
 type Role = {
   id: string
-  name: 'super_admin' | 'admin' | 'manager'
+  name: 'super_admin' | 'admin' | 'manager' | 'operator'
 }
 
 type LeadStatus = {
@@ -94,6 +96,7 @@ function roleLabel(roleName: string) {
 
 export default function SettingsPage() {
   const currentUser = useAuthStore((state) => state.user)
+  const { selectedProjectId } = useProjectBotSelection()
 
   const [activeTab, setActiveTab] = useState<TabKey>('project')
   const [project, setProject] = useState<Project | null>(null)
@@ -129,39 +132,129 @@ export default function SettingsPage() {
   const [newStatusFinal, setNewStatusFinal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
 
+  const activeProjectId = selectedProjectId ?? currentUser?.project_id ?? null
+  const currentRoleName = currentUser?.role_name
+  const canManageStaff =
+    currentRoleName === 'super_admin' || currentRoleName === 'admin'
+  const canManageProject =
+    currentRoleName === 'super_admin' || currentRoleName === 'admin'
+  const visibleTabs = useMemo(
+    () =>
+      tabs.filter((tab) => {
+        if (tab.key === 'team') {
+          return canManageStaff
+        }
+        if (tab.key === 'project') {
+          return canManageProject
+        }
+        return true
+      }),
+    [canManageProject, canManageStaff],
+  )
+
   const selectedRole = useMemo(
     () => roles.find((role) => role.id === newUserRoleId) ?? null,
     [newUserRoleId, roles],
   )
 
+  const staffRoles = useMemo(
+    () =>
+      roles.filter((role) => {
+        if (currentRoleName === 'super_admin') {
+          return role.name !== 'super_admin'
+        }
+        if (currentRoleName === 'admin') {
+          return role.name === 'manager' || role.name === 'operator'
+        }
+        return false
+      }),
+    [currentRoleName, roles],
+  )
+
+  const getUserRoleName = useCallback(
+    (user: User) =>
+      roles.find((role) => role.id === user.role_id)?.name ??
+      user.role_name ??
+      null,
+    [roles],
+  )
+
+  const canDeleteUser = useCallback(
+    (user: User) => {
+      if (!canManageStaff || user.id === currentUser?.id) {
+        return false
+      }
+
+      const targetRoleName = getUserRoleName(user)
+      if (targetRoleName === 'super_admin') {
+        return false
+      }
+
+      if (currentRoleName === 'super_admin') {
+        return true
+      }
+
+      return (
+        currentRoleName === 'admin' &&
+        (targetRoleName === 'manager' || targetRoleName === 'operator') &&
+        user.project_id === activeProjectId
+      )
+    },
+    [
+      activeProjectId,
+      canManageStaff,
+      currentRoleName,
+      currentUser?.id,
+      getUserRoleName,
+    ],
+  )
+
+  useEffect(() => {
+    if (!visibleTabs.some((tab) => tab.key === activeTab)) {
+      setActiveTab(visibleTabs[0]?.key ?? 'tags')
+    }
+  }, [activeTab, visibleTabs])
+
+  useEffect(() => {
+    if (!canManageStaff || staffRoles.length === 0) {
+      setNewUserRoleId('')
+      return
+    }
+
+    setNewUserRoleId((current) => {
+      if (staffRoles.some((role) => role.id === current)) {
+        return current
+      }
+      return staffRoles[0].id
+    })
+  }, [canManageStaff, staffRoles])
+
   const loadProject = useCallback(async () => {
-    if (!currentUser?.project_id) {
+    if (!activeProjectId) {
       setProject(null)
       return
     }
 
-    const { data } = await api.get<Project>(`/projects/${currentUser.project_id}`)
+    const { data } = await api.get<Project>(`/projects/${activeProjectId}`)
     setProject(data)
     setProjectName(data.name)
     setSlaMinutes(String(data.sla_threshold_minutes))
-  }, [currentUser?.project_id])
+  }, [activeProjectId])
 
   const loadUsers = useCallback(async () => {
     const { data } = await api.get<PaginatedResponse<User>>('/users', {
-      params: { limit: 100, offset: 0 },
+      params: {
+        limit: 100,
+        offset: 0,
+        ...(activeProjectId ? { project_id: activeProjectId } : {}),
+      },
     })
     setUsers(data.items)
-  }, [])
+  }, [activeProjectId])
 
   const loadRoles = useCallback(async () => {
     const { data } = await api.get<Role[]>('/users/roles')
     setRoles(data)
-    setNewUserRoleId((current) => {
-      if (current && data.some((role) => role.id === current)) {
-        return current
-      }
-      return data.find((role) => role.name === 'manager')?.id ?? data[0]?.id ?? ''
-    })
   }, [])
 
   const loadStatuses = useCallback(async () => {
@@ -170,11 +263,20 @@ export default function SettingsPage() {
   }, [])
 
   const loadTags = useCallback(async () => {
+    if (!activeProjectId) {
+      setTags([])
+      return
+    }
+
     const { data } = await api.get<PaginatedResponse<ProjectTag>>('/tags', {
-      params: { limit: 100, offset: 0 },
+      params: {
+        limit: 100,
+        offset: 0,
+        project_id: activeProjectId,
+      },
     })
     setTags(data.items)
-  }, [])
+  }, [activeProjectId])
 
   const loadAll = useCallback(async () => {
     setIsLoading(true)
@@ -227,7 +329,13 @@ export default function SettingsPage() {
 
   const handleAddUser = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!newUserRoleId || isAddingUser) {
+    if (
+      !newUserRoleId ||
+      !activeProjectId ||
+      !canManageStaff ||
+      !staffRoles.some((role) => role.id === newUserRoleId) ||
+      isAddingUser
+    ) {
       return
     }
 
@@ -241,8 +349,7 @@ export default function SettingsPage() {
         name: newUserName.trim(),
         password: newUserPassword,
         role_id: newUserRoleId,
-        project_id:
-          selectedRole?.name === 'super_admin' ? null : currentUser?.project_id ?? null,
+        project_id: selectedRole?.name === 'super_admin' ? null : activeProjectId,
       })
       setNewUserEmail('')
       setNewUserName('')
@@ -257,10 +364,12 @@ export default function SettingsPage() {
   }
 
   const handleDeleteUser = async (userId: string) => {
-    if (userId === currentUser?.id) {
-      setError('You cannot delete your own user.')
+    const targetUser = users.find((user) => user.id === userId)
+    if (!targetUser || !canDeleteUser(targetUser)) {
+      setError('You do not have permission to delete this user.')
       return
     }
+
     if (!window.confirm('Delete this user?')) {
       return
     }
@@ -366,6 +475,10 @@ export default function SettingsPage() {
 
   const handleAddTag = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (!activeProjectId) {
+      setError('Select a project before editing tags.')
+      return
+    }
     if (isAddingTag) {
       return
     }
@@ -375,7 +488,11 @@ export default function SettingsPage() {
     setNotice('')
 
     try {
-      await api.post<ProjectTag>('/tags', { name: newTagName.trim() })
+      await api.post<ProjectTag>(
+        '/tags',
+        { name: newTagName.trim() },
+        { params: activeProjectId ? { project_id: activeProjectId } : undefined },
+      )
       setNewTagName('')
       await loadTags()
       setNotice('Tag added.')
@@ -398,6 +515,10 @@ export default function SettingsPage() {
 
   const handleSaveTag = async (tagId: string) => {
     const name = editingTagName.trim()
+    if (!activeProjectId) {
+      setError('Select a project before editing tags.')
+      return
+    }
     if (!name || savingTagId) {
       return
     }
@@ -407,7 +528,11 @@ export default function SettingsPage() {
     setNotice('')
 
     try {
-      await api.patch<ProjectTag>(`/tags/${tagId}`, { name })
+      await api.patch<ProjectTag>(
+        `/tags/${tagId}`,
+        { name },
+        { params: activeProjectId ? { project_id: activeProjectId } : undefined },
+      )
       cancelEditTag()
       await loadTags()
       setNotice('Tag updated.')
@@ -419,6 +544,10 @@ export default function SettingsPage() {
   }
 
   const handleDeleteTag = async (tagId: string) => {
+    if (!activeProjectId) {
+      setError('Select a project before editing tags.')
+      return
+    }
     if (!window.confirm('Delete this tag?')) {
       return
     }
@@ -428,7 +557,9 @@ export default function SettingsPage() {
     setNotice('')
 
     try {
-      await api.delete(`/tags/${tagId}`)
+      await api.delete(`/tags/${tagId}`, {
+        params: activeProjectId ? { project_id: activeProjectId } : undefined,
+      })
       await loadTags()
       setNotice('Tag deleted.')
     } catch (err) {
@@ -451,7 +582,7 @@ export default function SettingsPage() {
           </div>
         </div>
         <nav className="flex min-h-0 gap-2 overflow-x-auto md:flex-1 md:flex-col md:space-y-2 md:overflow-x-visible md:overflow-y-auto">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.key}
               type="button"
@@ -553,6 +684,7 @@ export default function SettingsPage() {
                 <tbody className="divide-y divide-zinc-800">
                   {users.map((user) => {
                     const role = roles.find((item) => item.id === user.role_id)
+                    const canRemove = canDeleteUser(user)
                     return (
                       <tr key={user.id} className="bg-zinc-950">
                         <td className="px-4 py-3 text-zinc-100">{user.name}</td>
@@ -562,23 +694,23 @@ export default function SettingsPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end">
-                            <button
-                              type="button"
-                              title={
-                                user.id === currentUser?.id
-                                  ? 'You cannot delete yourself'
-                                  : 'Delete user'
-                              }
-                              onClick={() => void handleDeleteUser(user.id)}
-                              disabled={user.id === currentUser?.id || deletingUserId === user.id}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {deletingUserId === user.id ? (
-                                <LoaderCircle size={15} className="animate-spin" />
-                              ) : (
-                                <Trash2 size={15} />
-                              )}
-                            </button>
+                            {canRemove ? (
+                              <button
+                                type="button"
+                                title="Delete user"
+                                onClick={() => void handleDeleteUser(user.id)}
+                                disabled={deletingUserId === user.id}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {deletingUserId === user.id ? (
+                                  <LoaderCircle size={15} className="animate-spin" />
+                                ) : (
+                                  <Trash2 size={15} />
+                                )}
+                              </button>
+                            ) : (
+                              <span className="text-xs text-zinc-600">Locked</span>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -588,55 +720,57 @@ export default function SettingsPage() {
               </table>
             </div>
 
-            <form
-              className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_180px_140px]"
-              onSubmit={handleAddUser}
-            >
-              <input
-                type="email"
-                value={newUserEmail}
-                onChange={(event) => setNewUserEmail(event.target.value)}
-                placeholder="Email"
-                required
-                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
-              />
-              <input
-                value={newUserName}
-                onChange={(event) => setNewUserName(event.target.value)}
-                placeholder="Name"
-                required
-                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
-              />
-              <input
-                type="password"
-                value={newUserPassword}
-                onChange={(event) => setNewUserPassword(event.target.value)}
-                placeholder="Password"
-                required
-                minLength={8}
-                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
-              />
-              <select
-                value={newUserRoleId}
-                onChange={(event) => setNewUserRoleId(event.target.value)}
-                required
-                className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+            {canManageStaff ? (
+              <form
+                className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_180px_140px]"
+                onSubmit={handleAddUser}
               >
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>
-                    {roleLabel(role.name)}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="submit"
-                disabled={isAddingUser}
-                className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isAddingUser ? <LoaderCircle size={16} className="animate-spin" /> : <UserPlus size={16} />}
-                Add User
-              </button>
-            </form>
+                <input
+                  type="email"
+                  value={newUserEmail}
+                  onChange={(event) => setNewUserEmail(event.target.value)}
+                  placeholder="Email"
+                  required
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+                <input
+                  value={newUserName}
+                  onChange={(event) => setNewUserName(event.target.value)}
+                  placeholder="Name"
+                  required
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+                <input
+                  type="password"
+                  value={newUserPassword}
+                  onChange={(event) => setNewUserPassword(event.target.value)}
+                  placeholder="Password"
+                  required
+                  minLength={8}
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+                <select
+                  value={newUserRoleId}
+                  onChange={(event) => setNewUserRoleId(event.target.value)}
+                  required
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+                >
+                  {staffRoles.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {roleLabel(role.name)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={isAddingUser || staffRoles.length === 0}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isAddingUser ? <LoaderCircle size={16} className="animate-spin" /> : <UserPlus size={16} />}
+                  Add User
+                </button>
+              </form>
+            ) : null}
           </div>
         ) : null}
 

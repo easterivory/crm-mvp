@@ -1,10 +1,10 @@
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_project_id, get_db
+from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
 from app.schemas.common import PaginatedResponse
 from app.services.bot_service import BotService
@@ -17,13 +17,14 @@ async def list_bots(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     project_id: Optional[UUID] = Query(default=None),
-    current_project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[BotOut]:
     items, total = await BotService(db).list_bots(
-        project_id=project_id or current_project_id,
+        project_id=project_id,
         limit=limit,
         offset=offset,
+        actor=current_user,
     )
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 

@@ -7,9 +7,9 @@ bearer_scheme
     └── get_current_user(db, token) → User
             └── get_current_project_id(user) → UUID
 
-All endpoints receive project_id from the authenticated user's context —
-it is never accepted as a query/path/body parameter. This ensures one user
-cannot access another project's data by supplying an arbitrary UUID.
+Project-bound users receive project_id from their authenticated user context.
+super_admin users are global and must pass explicit project_id on scoped
+endpoints, while project-bound users cannot override their own project.
 
 get_db is imported from app.core.database and re-exported here so routers
 have a single import source for all dependencies.
@@ -17,12 +17,13 @@ have a single import source for all dependencies.
 from typing import Optional
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db  # re-export — routers import from here
+from app.core.constants import RoleName
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
@@ -60,22 +61,37 @@ async def get_current_user(
     return user
 
 
-# SECURITY: project_id is never accepted from request (query / path / body).
-# It is always derived from the authenticated user's JWT via this dependency.
-# This prevents cross-project data access by supplying an arbitrary UUID.
 async def get_current_project_id(
     current_user: User = Depends(get_current_user),
+    project_id: Optional[UUID] = Query(default=None),
 ) -> UUID:
     """
     Returns the project_id scoped to the authenticated user.
 
-    Raises 403 if the user has no project (super_admin case — not handled
-    in Phase 2; super_admin endpoints will require their own dependency that
-    accepts an explicit project_id once multi-tenancy support is added).
+    super_admin users are global and may access an explicit project_id from
+    the request. Project-bound users may only access their own project; an
+    explicit different project_id is rejected.
     """
+    role_name = current_user.role_name
+
+    if role_name == RoleName.SUPER_ADMIN:
+        if project_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="project_id is required for super_admin scoped requests",
+            )
+        return project_id
+
     if current_user.project_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not associated with a project",
         )
+
+    if project_id is not None and project_id != current_user.project_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Project is not accessible for current user",
+        )
+
     return current_user.project_id

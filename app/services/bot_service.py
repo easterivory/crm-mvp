@@ -8,7 +8,9 @@ import httpx
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import RoleName
 from app.core.config import settings
+from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
@@ -30,7 +32,10 @@ class BotService:
         project_id: Optional[UUID],
         limit: int,
         offset: int,
+        actor: User | None = None,
     ) -> tuple[list[BotOut], int]:
+        project_id = self._resolve_project_scope(actor, project_id)
+
         if project_id is None:
             bots = await self.bot_repo.list_active(limit=limit, offset=offset)
             total = await self.bot_repo.count_active()
@@ -232,6 +237,31 @@ class BotService:
             # an explicit project.
             return await self._get_or_create_default_project()
         return await self._get_active_project_or_404(project_id)
+
+    @staticmethod
+    def _resolve_project_scope(
+        actor: User | None,
+        requested_project_id: UUID | None,
+    ) -> UUID | None:
+        if actor is None:
+            return requested_project_id
+
+        if actor.role_name == RoleName.SUPER_ADMIN:
+            return requested_project_id
+
+        if actor.project_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User is not associated with a project",
+            )
+
+        if requested_project_id is not None and requested_project_id != actor.project_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Project is not accessible for current user",
+            )
+
+        return actor.project_id
 
     async def _get_active_project_or_404(self, project_id: UUID):
         project = await self.project_repo.get_any_by_id(project_id)
