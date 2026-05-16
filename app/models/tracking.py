@@ -1,26 +1,32 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy import Boolean, CheckConstraint, Date, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import TrackingCostModel
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.core.constants import TrackingSpendSource
+from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
 
 
-class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin):
+class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     """Telegram deep-link attribution source scoped to a project and bot."""
 
     __tablename__ = "tracking_links"
     __table_args__ = (
         UniqueConstraint("ref_code", name="uq_tracking_links_ref_code"),
+        UniqueConstraint("code", name="uq_tracking_links_code"),
         Index("ix_tracking_links_project_id", "project_id"),
         Index("ix_tracking_links_bot_id", "bot_id"),
+        Index("ix_tracking_links_code", "code"),
+        Index("ix_tracking_links_is_active", "is_active"),
         Index("ix_tracking_links_target_step_id", "target_step_id"),
     )
 
@@ -30,8 +36,26 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin):
     bot_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("bots.id"), nullable=False
     )
+    # name/ref_code are the legacy API fields used by current Telegram /start
+    # attribution. code/title are the v1 canonical names and stay synchronized
+    # in TrackingService.
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     ref_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ad_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    payment_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    invite_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
     cost_model: Mapped[TrackingCostModel] = mapped_column(
         SAEnum(
             TrackingCostModel,
@@ -65,12 +89,72 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin):
         "BotStep",
         foreign_keys=[target_step_id],
     )
+    created_by_user: Mapped[Optional[User]] = relationship("User")
     chats: Mapped[list[Chat]] = relationship("Chat", back_populates="tracking_link")
     events: Mapped[list[TrackingEvent]] = relationship(
         "TrackingEvent",
         back_populates="tracking_link",
         cascade="all, delete-orphan",
     )
+    spends: Mapped[list[TrackingSpend]] = relationship(
+        "TrackingSpend",
+        back_populates="tracking_link",
+        cascade="all, delete-orphan",
+    )
+
+
+class TrackingSpend(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
+    """Manual or imported traffic spend for a tracking link."""
+
+    __tablename__ = "tracking_spends"
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="ck_tracking_spends_amount_nonnegative"),
+        CheckConstraint(
+            "source IN ('crm_manual', 'buyer_bot')",
+            name="ck_tracking_spends_source",
+        ),
+        Index("ix_tracking_spends_tracking_link_id", "tracking_link_id"),
+        Index("ix_tracking_spends_spend_date", "spend_date"),
+        Index("ix_tracking_spends_source", "source"),
+    )
+
+    tracking_link_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tracking_links.id"), nullable=False
+    )
+    spend_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3),
+        nullable=False,
+        default="USD",
+        server_default="USD",
+    )
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source: Mapped[TrackingSpendSource] = mapped_column(
+        SAEnum(
+            TrackingSpendSource,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+            native_enum=False,
+            length=32,
+        ),
+        nullable=False,
+        default=TrackingSpendSource.CRM_MANUAL,
+        server_default=TrackingSpendSource.CRM_MANUAL.value,
+    )
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+
+    tracking_link: Mapped[TrackingLink] = relationship(
+        "TrackingLink",
+        back_populates="spends",
+    )
+    created_by_user: Mapped[Optional[User]] = relationship("User")
 
 
 class TrackingEvent(Base, UUIDPrimaryKey, TimestampMixin):

@@ -483,3 +483,21 @@ Frontend rule: `page -> feature public API -> feature internals -> shared`.
 - Feature-модуль экспортирует публичный контракт через `index.ts`, `api.ts`, `types.ts` и `hooks.ts`.
 - Feature не импортирует внутренние файлы другого feature напрямую.
 - Общие UI-компоненты, API-клиенты, утилиты и типы живут в `frontend/src/shared`.
+
+## Tracking backend v1
+
+- Tracking link принадлежит одновременно `project` и конкретному `bot`; `bot_id`
+  должен относиться к тому же `project_id`.
+- Старые поля `name/ref_code` сохранены для текущего `/tracking-links` API и
+  Telegram `/start` attribution. Новые поля `title/code` являются v1-каноном и
+  синхронизируются сервисом с legacy-полями.
+- `code` глобально уникален, как и старый `ref_code`, чтобы inbound lookup из
+  Telegram webhook оставался простым и не требовал угадывать project.
+- Spend вводится вручную в CRM через `tracking_spends` с `source=crm_manual`.
+- `source=buyer_bot` зарезервирован для будущей интеграции Telegram-бота баеров.
+- Tracking metrics service будет отдельным следующим шагом; текущий v1 API
+  подготавливает CRUD ссылок и ручной spend без графиков и dashboard-метрик.
+- Permissions: `super_admin` видит и меняет tracking всех проектов; `admin`,
+  `manager` и `operator` работают только внутри своего доступного project.
+- Router вызывает только `TrackingService`; permission logic, проверка project,
+  проверка bot->project и code generation живут в service layer.

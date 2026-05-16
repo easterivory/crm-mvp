@@ -71,3 +71,8 @@ class TrackingCostModel(StrEnum):
     FIX_PDP = "fix_pdp"
     CPM = "cpm"
     CPA = "cpa"
+
+
+class TrackingSpendSource(StrEnum):
+    CRM_MANUAL = "crm_manual"
+    BUYER_BOT = "buyer_bot"
