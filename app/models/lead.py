@@ -33,6 +33,7 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_leads_updated_at", "updated_at"),
         Index("ix_leads_project_status", "project_id", "status_id"),
         Index("ix_leads_project_manager", "project_id", "manager_id"),
+        Index("ix_leads_project_created_at", "project_id", "created_at"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

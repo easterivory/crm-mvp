@@ -25,6 +25,7 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         UniqueConstraint("code", name="uq_tracking_links_code"),
         Index("ix_tracking_links_project_id", "project_id"),
         Index("ix_tracking_links_bot_id", "bot_id"),
+        Index("ix_tracking_links_project_bot", "project_id", "bot_id"),
         Index("ix_tracking_links_code", "code"),
         Index("ix_tracking_links_is_active", "is_active"),
         Index("ix_tracking_links_target_step_id", "target_step_id"),
@@ -115,6 +116,7 @@ class TrackingSpend(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         ),
         Index("ix_tracking_spends_tracking_link_id", "tracking_link_id"),
         Index("ix_tracking_spends_spend_date", "spend_date"),
+        Index("ix_tracking_spends_link_date", "tracking_link_id", "spend_date"),
         Index("ix_tracking_spends_source", "source"),
     )
 
@@ -164,6 +166,7 @@ class TrackingEvent(Base, UUIDPrimaryKey, TimestampMixin):
     __table_args__ = (
         Index("ix_tracking_events_project_id", "project_id"),
         Index("ix_tracking_events_tracking_link_id", "tracking_link_id"),
+        Index("ix_tracking_events_link_created_at", "tracking_link_id", "created_at"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

@@ -501,3 +501,29 @@ Frontend rule: `page -> feature public API -> feature internals -> shared`.
   `manager` и `operator` работают только внутри своего доступного project.
 - Router вызывает только `TrackingService`; permission logic, проверка project,
   проверка bot->project и code generation живут в service layer.
+
+## Tracking Metrics Service
+
+- `clicks`: сумма `tracking_events.clicks` по `tracking_link_id` и дате
+  `tracking_events.created_at`. Если events не пишутся, clicks остаются `0` и
+  не подменяются starts.
+- `starts`: количество уникальных `chats`, где заполнен `tracking_link_id`;
+  дата берётся из `chats.created_at`.
+- `leads`: количество `leads`, связанных через `Lead -> Chat -> tracking_link_id`;
+  дата берётся из `leads.created_at`.
+- `submitted_leads`: текущие лиды со статусами `submitted`, `applied` или
+  `qualified`. Явного `submitted_at` или истории статусов пока нет, поэтому
+  период фильтруется по `leads.created_at`.
+- `deposits`: возвращаются `0`, потому что deposit-сущности или deposit-поля
+  в текущей схеме нет.
+- `spend`: сумма `tracking_spends.amount` по `tracking_spends.spend_date`.
+- `age_breakdown` и `country_breakdown`: возвращаются пустыми массивами, потому
+  что возраст и гражданство не хранятся в `chats`/`leads`.
+- `funnel_steps`: текущий snapshot `chat_bot_states.current_step_id` для чатов
+  ссылки. Это не историческая воронка прохождения шагов.
+- Division by zero policy: все rates и costs возвращают `0.00`, если
+  denominator равен нулю.
+- Default date range: последние 7 дней, `date_to=today`, `date_from=today-6`.
+- Permissions: `super_admin` может читать метрики любого project; остальные
+  роли читают только свой `project_id`. `bot_id` и `link_id` дополнительно
+  проверяются на принадлежность доступному project.

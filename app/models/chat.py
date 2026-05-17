@@ -47,6 +47,8 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_updated_at", "updated_at"),
         Index("ix_chats_project_last_user_msg", "project_id", "last_user_message_at"),
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
+        Index("ix_chats_tracking_created_at", "tracking_link_id", "created_at"),
+        Index("ix_chats_project_bot_created_at", "project_id", "bot_id", "created_at"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

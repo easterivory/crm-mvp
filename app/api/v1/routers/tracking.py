@@ -17,6 +17,12 @@ from app.schemas.tracking import (
     TrackingSpendRead,
     TrackingSpendUpdate,
 )
+from app.schemas.tracking_metrics import (
+    TrackingLinkMetricsResponse,
+    TrackingMetricSummary,
+    TrackingProjectMetricsResponse,
+)
+from app.services.tracking_metrics_service import TrackingMetricsService
 from app.services.tracking_service import TrackingService
 
 router = APIRouter(prefix="/tracking-links", tags=["tracking"])
@@ -227,4 +233,57 @@ async def delete_tracking_spend_v1(
     await TrackingService(db).delete_spend(
         spend_id=spend_id,
         actor=current_user,
+    )
+
+
+@v1_router.get("/metrics/project", response_model=TrackingProjectMetricsResponse)
+async def get_project_tracking_metrics_v1(
+    project_id: UUID = Query(...),
+    bot_id: Optional[UUID] = Query(default=None),
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TrackingProjectMetricsResponse:
+    return await TrackingMetricsService(db).get_project_metrics(
+        current_user=current_user,
+        project_id=project_id,
+        bot_id=bot_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@v1_router.get("/metrics/header", response_model=TrackingMetricSummary)
+async def get_tracking_metrics_header_v1(
+    project_id: UUID = Query(...),
+    bot_id: Optional[UUID] = Query(default=None),
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TrackingMetricSummary:
+    metrics = await TrackingMetricsService(db).get_project_metrics(
+        current_user=current_user,
+        project_id=project_id,
+        bot_id=bot_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return metrics.summary
+
+
+@v1_router.get("/metrics/links/{link_id}", response_model=TrackingLinkMetricsResponse)
+async def get_link_tracking_metrics_v1(
+    link_id: UUID,
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TrackingLinkMetricsResponse:
+    return await TrackingMetricsService(db).get_link_metrics(
+        current_user=current_user,
+        link_id=link_id,
+        date_from=date_from,
+        date_to=date_to,
     )
