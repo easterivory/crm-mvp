@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import { ChevronDown, LoaderCircle, Plus, X } from 'lucide-react'
 
-import { useProjectBotSelection } from '../../../shared/lib'
+import { isSuperAdminRole, useProjectBotSelection } from '../../../shared/lib'
 import { useAuthStore } from '../../../store/authStore'
 import { createProject, fetchProjects } from '../api'
 import type { Project } from '../types'
@@ -13,11 +13,29 @@ function getProjectError(err: unknown) {
     if (typeof detail === 'string' && detail.length > 0) {
       return detail
     }
+    if (Array.isArray(detail) && detail.length > 0) {
+      const messages = detail
+        .map((item) => {
+          if (typeof item?.msg === 'string') {
+            return item.msg
+          }
+
+          return null
+        })
+        .filter(Boolean)
+
+      if (messages.length > 0) {
+        return messages.join(' ')
+      }
+    }
     if (err.response?.status === 409) {
       return 'Project slug already exists.'
     }
     if (err.response?.status === 422) {
       return 'Check project fields and try again.'
+    }
+    if (err.code === 'ERR_NETWORK') {
+      return 'Network error. Check backend connection and try again.'
     }
   }
 
@@ -25,7 +43,8 @@ function getProjectError(err: unknown) {
 }
 
 export default function ProjectSelector() {
-  const { selectedProjectId, setSelectedProjectId } = useProjectBotSelection()
+  const { resetBotSelection, selectedProjectId, setSelectedProjectId } =
+    useProjectBotSelection()
   const currentUser = useAuthStore((state) => state.user)
   const [projects, setProjects] = useState<Project[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -37,7 +56,7 @@ export default function ProjectSelector() {
   const [createError, setCreateError] = useState('')
   const [isCreating, setIsCreating] = useState(false)
 
-  const canCreateProject = currentUser?.role_name === 'super_admin'
+  const canCreateProject = isSuperAdminRole(currentUser?.role_name)
 
   const activeProjects = useMemo(
     () => projects.filter((project) => project.status === 'active'),
@@ -116,6 +135,7 @@ export default function ProjectSelector() {
         description: projectDescription.trim() || null,
       })
       setProjects((current) => [created, ...current.filter((item) => item.id !== created.id)])
+      resetBotSelection()
       setSelectedProjectId(created.id)
       setIsCreateOpen(false)
       setProjectName('')
@@ -170,10 +190,12 @@ export default function ProjectSelector() {
         <button
           type="button"
           title="Create project"
+          aria-label="Create project"
           onClick={() => setIsCreateOpen(true)}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent"
+          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent"
         >
           <Plus size={17} />
+          <span className="hidden text-sm font-medium xl:inline">New</span>
         </button>
       ) : null}
 

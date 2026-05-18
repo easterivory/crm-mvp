@@ -17,6 +17,19 @@ docker compose rm -sf api worker
 echo "=== Build and restart DEV containers ==="
 docker compose up -d --build postgres redis api worker
 
+echo "=== Build frontend ==="
+if command -v npm >/dev/null 2>&1; then
+  (
+    cd frontend
+    if [ ! -d node_modules ]; then
+      npm ci
+    fi
+    npm run build
+  )
+else
+  echo "npm is not installed; skipping frontend build"
+fi
+
 echo "=== Run migrations ==="
 docker compose exec -T api alembic upgrade head
 

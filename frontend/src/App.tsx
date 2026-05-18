@@ -9,7 +9,7 @@ import LoginPage from './pages/LoginPage'
 import ChatsPage from './pages/ChatsPage'
 import SettingsPage from './pages/SettingsPage'
 import NotFoundPage from './pages/NotFoundPage'
-import { ProjectBotSelectionProvider } from './shared/lib'
+import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
 import { useAuthStore } from './store/authStore'
 
 export default function App() {
@@ -18,7 +18,7 @@ export default function App() {
   const fetchMe = useAuthStore((state) => state.fetchMe)
 
   useEffect(() => {
-    if (token && (!user || !user.role_name)) {
+    if (token && (!user || !isKnownRole(user.role_name))) {
       fetchMe().catch(() => undefined)
     }
   }, [fetchMe, token, user])
