@@ -1,5 +1,6 @@
 import {
   Bot,
+  BarChart3,
   LayoutDashboard,
   LogOut,
   MessageSquareText,
@@ -18,6 +19,7 @@ const navItems = [
   { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { label: 'Chats', path: '/chats', icon: MessageSquareText },
   { label: 'Bots', path: '/bots', icon: Bot },
+  { label: 'Traffic', path: '/tracking', icon: BarChart3 },
   { label: 'Settings', path: '/settings', icon: Settings },
 ]
 

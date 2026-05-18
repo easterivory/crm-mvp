@@ -8,6 +8,7 @@ import DashboardPage from './pages/DashboardPage'
 import LoginPage from './pages/LoginPage'
 import ChatsPage from './pages/ChatsPage'
 import SettingsPage from './pages/SettingsPage'
+import TrackingPage from './pages/TrackingPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
 import { useAuthStore } from './store/authStore'
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/chats" element={<ChatsPage />} />
           <Route path="/bots" element={<BotsPage />} />
+          <Route path="/tracking" element={<TrackingPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />

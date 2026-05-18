@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
-import { ChevronDown, LoaderCircle, Plus, X } from 'lucide-react'
+import { ChevronDown, LoaderCircle, Plus } from 'lucide-react'
 
 import { isSuperAdminRole, useProjectBotSelection } from '../../../shared/lib'
+import { Modal } from '../../../shared/ui'
 import { useAuthStore } from '../../../store/authStore'
 import { createProject, fetchProjects } from '../api'
 import type { Project } from '../types'
@@ -200,25 +201,15 @@ export default function ProjectSelector() {
       ) : null}
 
       {isCreateOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <Modal
+          title="Create project"
+          description="Add a new project scope."
+          onClose={closeCreate}
+        >
           <form
             onSubmit={handleCreateProject}
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0B0F19] p-5 shadow-card"
+            className="w-full"
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Create project</h2>
-                <p className="text-sm text-gray-500">Add a new project scope.</p>
-              </div>
-              <button
-                type="button"
-                onClick={closeCreate}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
             {createError ? (
               <div className="mb-4 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-200">
                 {createError}
@@ -283,7 +274,7 @@ export default function ProjectSelector() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       ) : null}
     </div>
   )

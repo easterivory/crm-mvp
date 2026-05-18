@@ -21,3 +21,13 @@ Feature-модули — основной формат для новых кру�
 - `super_admin` видит все проекты; `admin`, `manager` и `operator` работают в рамках доступного проекта.
 - `manager` и `operator` не должны видеть actions управления сотрудниками или проектами.
 - Create Project в header доступен только пользователю с ролью `super_admin`; после создания новый проект становится `selectedProjectId`, а `selectedBotIds` сбрасывается в `[]`.
+- Create Project modal рендерится как viewport-level dialog через shared `Modal`, а не как header-bound dropdown.
+
+## Tracking Frontend
+
+- Tracking page читает `selectedProjectId` из global Project/Bot selection context.
+- `selectedBotIds = []` означает все боты выбранного проекта.
+- Несколько выбранных ботов пока показывают project-level metrics без индивидуальной агрегации.
+- Project summary берется из `/api/v1/tracking/metrics/project`.
+- Link detail берется из `/api/v1/tracking/metrics/links/{link_id}`.
+- Manual spend создается и редактируется через tracking spends API.
