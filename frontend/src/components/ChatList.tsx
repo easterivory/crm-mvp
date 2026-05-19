@@ -29,6 +29,7 @@ type ChatListProps = {
   scopeLabel: string
   selectedChatId: string | null
   total: number
+  getBotLabel?: (chat: Chat) => string
   onFilterChange: (filter: ChatFilter) => void
   onRefresh: () => void
   onSelectChat: (chatId: string) => void
@@ -43,7 +44,7 @@ const FILTERS: Array<{ label: string; value: ChatFilter }> = [
 
 function formatDateTime(value: string | null) {
   if (!value) {
-    return 'No activity'
+    return 'Нет активности'
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -75,6 +76,7 @@ export default function ChatList({
   scopeLabel,
   selectedChatId,
   total,
+  getBotLabel,
   onFilterChange,
   onRefresh,
   onSelectChat,
@@ -84,12 +86,12 @@ export default function ChatList({
       <div className="shrink-0 border-b border-white/5 p-4">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-white">Chats</h1>
-            <p className="text-sm text-gray-500">{total} total</p>
+            <h1 className="text-lg font-semibold text-white">Чаты</h1>
+            <p className="text-sm text-gray-500">{total} всего</p>
           </div>
           <button
             type="button"
-            title="Refresh chats"
+            title="Обновить чаты"
             onClick={onRefresh}
             className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-accent-200 hover:shadow-glow-accent disabled:opacity-60"
             disabled={isLoading}
@@ -104,7 +106,7 @@ export default function ChatList({
 
         <div className="mb-4 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2">
           <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-            Bot scope
+            Боты
           </span>
           <p className="truncate text-sm font-medium text-gray-200">{scopeLabel}</p>
         </div>
@@ -135,7 +137,7 @@ export default function ChatList({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && !isLoading ? (
-          <div className="p-6 text-sm text-gray-500">No chats yet.</div>
+          <div className="p-6 text-sm text-gray-500">Чатов пока нет.</div>
         ) : null}
 
         {chats.map((chat) => {
@@ -165,15 +167,20 @@ export default function ChatList({
                     {formatDateTime(chat.last_message_at)}
                   </span>
                 </div>
+                {getBotLabel ? (
+                  <p className="mt-1 truncate text-xs text-gray-500">
+                    {getBotLabel(chat)}
+                  </p>
+                ) : null}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {chat.unread ? (
                     <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-xs font-medium text-emerald-300">
-                      New
+                      Новое
                     </span>
                   ) : null}
                   {chat.unanswered ? (
                     <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-300">
-                      Open
+                      Без ответа
                     </span>
                   ) : null}
                   {chat.is_red ? (
@@ -183,7 +190,7 @@ export default function ChatList({
                   ) : null}
                   {!chat.unread && !chat.unanswered && !chat.is_red ? (
                     <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs font-medium text-gray-500">
-                      Done
+                      Готово
                     </span>
                   ) : null}
                 </div>

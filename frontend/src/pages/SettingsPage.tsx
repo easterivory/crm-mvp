@@ -1,5 +1,6 @@
 import {
   Check,
+  KeyRound,
   LoaderCircle,
   Pencil,
   Plus,
@@ -15,6 +16,7 @@ import axios from 'axios'
 
 import api from '../api/client'
 import { useProjectBotSelection } from '../shared/lib'
+import { Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
 type TabKey = 'project' | 'team' | 'statuses' | 'tags'
@@ -67,10 +69,10 @@ type ProjectTag = {
 }
 
 const tabs: Array<{ key: TabKey; label: string }> = [
-  { key: 'project', label: 'Project' },
-  { key: 'team', label: 'Team' },
-  { key: 'statuses', label: 'Statuses' },
-  { key: 'tags', label: 'Tags' },
+  { key: 'project', label: 'Проект' },
+  { key: 'team', label: 'Команда' },
+  { key: 'statuses', label: 'Статусы' },
+  { key: 'tags', label: 'Теги' },
 ]
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
@@ -80,7 +82,7 @@ function getErrorMessage(err: unknown, fallback = 'Request failed.') {
       return detail
     }
     if (err.code === 'ERR_NETWORK') {
-      return 'Cannot reach API.'
+      return 'API недоступен.'
     }
   }
 
@@ -88,10 +90,13 @@ function getErrorMessage(err: unknown, fallback = 'Request failed.') {
 }
 
 function roleLabel(roleName: string) {
-  return roleName
-    .split('_')
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(' ')
+  const labels: Record<string, string> = {
+    super_admin: 'Суперадмин',
+    admin: 'Админ',
+    manager: 'Менеджер',
+    operator: 'Оператор',
+  }
+  return labels[roleName] ?? roleName
 }
 
 export default function SettingsPage() {
@@ -120,6 +125,10 @@ export default function SettingsPage() {
   const [editingTagId, setEditingTagId] = useState<string | null>(null)
   const [editingTagName, setEditingTagName] = useState('')
   const [savingTagId, setSavingTagId] = useState<string | null>(null)
+  const [passwordUser, setPasswordUser] = useState<User | null>(null)
+  const [newPassword, setNewPassword] = useState('')
+  const [isChangingPassword, setIsChangingPassword] = useState(false)
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null)
 
   const [projectName, setProjectName] = useState('')
   const [slaMinutes, setSlaMinutes] = useState('30')
@@ -161,7 +170,7 @@ export default function SettingsPage() {
     () =>
       roles.filter((role) => {
         if (currentRoleName === 'super_admin') {
-          return role.name !== 'super_admin'
+          return true
         }
         if (currentRoleName === 'admin') {
           return role.name === 'manager' || role.name === 'operator'
@@ -186,10 +195,6 @@ export default function SettingsPage() {
       }
 
       const targetRoleName = getUserRoleName(user)
-      if (targetRoleName === 'super_admin') {
-        return false
-      }
-
       if (currentRoleName === 'super_admin') {
         return true
       }
@@ -207,6 +212,22 @@ export default function SettingsPage() {
       currentUser?.id,
       getUserRoleName,
     ],
+  )
+
+  const editableRolesForUser = useCallback(
+    (user: User) => {
+      if (!canDeleteUser(user)) {
+        return []
+      }
+      if (currentRoleName === 'super_admin') {
+        return roles
+      }
+      if (currentRoleName === 'admin') {
+        return roles.filter((role) => role.name === 'manager' || role.name === 'operator')
+      }
+      return []
+    },
+    [canDeleteUser, currentRoleName, roles],
   )
 
   useEffect(() => {
@@ -291,7 +312,7 @@ export default function SettingsPage() {
         loadTags(),
       ])
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not load settings.'))
+      setError(getErrorMessage(err, 'Не удалось загрузить настройки.'))
     } finally {
       setIsLoading(false)
     }
@@ -319,9 +340,9 @@ export default function SettingsPage() {
       setProject(data)
       setProjectName(data.name)
       setSlaMinutes(String(data.sla_threshold_minutes))
-      setNotice('Project settings saved.')
+      setNotice('Настройки проекта сохранены.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not save project.'))
+      setError(getErrorMessage(err, 'Не удалось сохранить проект.'))
     } finally {
       setIsSavingProject(false)
     }
@@ -331,9 +352,9 @@ export default function SettingsPage() {
     event.preventDefault()
     if (
       !newUserRoleId ||
-      !activeProjectId ||
       !canManageStaff ||
       !staffRoles.some((role) => role.id === newUserRoleId) ||
+      (selectedRole?.name !== 'super_admin' && !activeProjectId) ||
       isAddingUser
     ) {
       return
@@ -355,9 +376,9 @@ export default function SettingsPage() {
       setNewUserName('')
       setNewUserPassword('')
       await loadUsers()
-      setNotice('User added.')
+      setNotice('Пользователь добавлен.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not add user.'))
+      setError(getErrorMessage(err, 'Не удалось добавить пользователя.'))
     } finally {
       setIsAddingUser(false)
     }
@@ -366,11 +387,11 @@ export default function SettingsPage() {
   const handleDeleteUser = async (userId: string) => {
     const targetUser = users.find((user) => user.id === userId)
     if (!targetUser || !canDeleteUser(targetUser)) {
-      setError('You do not have permission to delete this user.')
+      setError('Недостаточно прав для архивирования пользователя.')
       return
     }
 
-    if (!window.confirm('Delete this user?')) {
+    if (!window.confirm('Архивировать этого пользователя?')) {
       return
     }
 
@@ -381,11 +402,64 @@ export default function SettingsPage() {
     try {
       await api.delete(`/users/${userId}`)
       await loadUsers()
-      setNotice('User deleted.')
+      setNotice('Пользователь архивирован.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not delete user.'))
+      setError(getErrorMessage(err, 'Не удалось архивировать пользователя.'))
     } finally {
       setDeletingUserId(null)
+    }
+  }
+
+  const handleUserRoleChange = async (user: User, roleId: string) => {
+    const role = roles.find((item) => item.id === roleId)
+    if (!role || !canDeleteUser(user)) {
+      setError('Недостаточно прав для изменения роли.')
+      return
+    }
+    if (role.name !== 'super_admin' && !activeProjectId) {
+      setError('Выберите проект перед назначением проектной роли.')
+      return
+    }
+
+    setUpdatingUserId(user.id)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.patch<User>(`/users/${user.id}`, {
+        role_id: roleId,
+        project_id: role.name === 'super_admin' ? null : activeProjectId,
+      })
+      await loadUsers()
+      setNotice('Роль пользователя обновлена.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось изменить роль.'))
+    } finally {
+      setUpdatingUserId(null)
+    }
+  }
+
+  const handleChangePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!passwordUser || isChangingPassword) {
+      return
+    }
+
+    setIsChangingPassword(true)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.post(`/users/${passwordUser.id}/change-password`, {
+        new_password: newPassword,
+      })
+      setPasswordUser(null)
+      setNewPassword('')
+      setNotice('Пароль пользователя изменён.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось изменить пароль.'))
+    } finally {
+      setIsChangingPassword(false)
     }
   }
 
@@ -409,9 +483,9 @@ export default function SettingsPage() {
       setNewStatusName('')
       setNewStatusFinal(false)
       await loadStatuses()
-      setNotice('Lead status added.')
+      setNotice('Статус лида добавлен.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not add status.'))
+      setError(getErrorMessage(err, 'Не удалось добавить статус.'))
     } finally {
       setIsAddingStatus(false)
     }
@@ -441,9 +515,9 @@ export default function SettingsPage() {
       await api.patch<LeadStatus>(`/leads/statuses/${statusId}`, { name })
       cancelEditStatus()
       await loadStatuses()
-      setNotice('Lead status updated.')
+      setNotice('Статус лида обновлён.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not update status.'))
+      setError(getErrorMessage(err, 'Не удалось обновить статус.'))
     } finally {
       setSavingStatusId(null)
     }
@@ -451,10 +525,10 @@ export default function SettingsPage() {
 
   const handleDeleteStatus = async (statusItem: LeadStatus) => {
     if (statusItem.code === 'new' || statusItem.code === 'lost') {
-      setError(`Base status '${statusItem.code}' cannot be deleted.`)
+      setError(`Базовый статус "${statusItem.code}" нельзя удалить.`)
       return
     }
-    if (!window.confirm(`Delete status "${statusItem.name}"?`)) {
+    if (!window.confirm(`Удалить статус "${statusItem.name}"?`)) {
       return
     }
 
@@ -465,9 +539,9 @@ export default function SettingsPage() {
     try {
       await api.delete(`/leads/statuses/${statusItem.id}`)
       await loadStatuses()
-      setNotice('Lead status deleted.')
+      setNotice('Статус лида удалён.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not delete status.'))
+      setError(getErrorMessage(err, 'Не удалось удалить статус.'))
     } finally {
       setDeletingStatusId(null)
     }
@@ -476,7 +550,7 @@ export default function SettingsPage() {
   const handleAddTag = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!activeProjectId) {
-      setError('Select a project before editing tags.')
+      setError('Выберите проект перед редактированием тегов.')
       return
     }
     if (isAddingTag) {
@@ -495,9 +569,9 @@ export default function SettingsPage() {
       )
       setNewTagName('')
       await loadTags()
-      setNotice('Tag added.')
+      setNotice('Тег добавлен.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not add tag.'))
+      setError(getErrorMessage(err, 'Не удалось добавить тег.'))
     } finally {
       setIsAddingTag(false)
     }
@@ -516,7 +590,7 @@ export default function SettingsPage() {
   const handleSaveTag = async (tagId: string) => {
     const name = editingTagName.trim()
     if (!activeProjectId) {
-      setError('Select a project before editing tags.')
+      setError('Выберите проект перед редактированием тегов.')
       return
     }
     if (!name || savingTagId) {
@@ -535,9 +609,9 @@ export default function SettingsPage() {
       )
       cancelEditTag()
       await loadTags()
-      setNotice('Tag updated.')
+      setNotice('Тег обновлён.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not update tag.'))
+      setError(getErrorMessage(err, 'Не удалось обновить тег.'))
     } finally {
       setSavingTagId(null)
     }
@@ -545,10 +619,10 @@ export default function SettingsPage() {
 
   const handleDeleteTag = async (tagId: string) => {
     if (!activeProjectId) {
-      setError('Select a project before editing tags.')
+      setError('Выберите проект перед редактированием тегов.')
       return
     }
-    if (!window.confirm('Delete this tag?')) {
+    if (!window.confirm('Удалить этот тег?')) {
       return
     }
 
@@ -561,9 +635,9 @@ export default function SettingsPage() {
         params: activeProjectId ? { project_id: activeProjectId } : undefined,
       })
       await loadTags()
-      setNotice('Tag deleted.')
+      setNotice('Тег удалён.')
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not delete tag.'))
+      setError(getErrorMessage(err, 'Не удалось удалить тег.'))
     } finally {
       setDeletingTagId(null)
     }
@@ -577,8 +651,8 @@ export default function SettingsPage() {
             <Settings size={18} />
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
-            <p className="text-xs text-zinc-500">Workspace controls</p>
+            <h1 className="text-lg font-semibold text-zinc-100">Настройки</h1>
+            <p className="text-xs text-zinc-500">Управление рабочей областью</p>
           </div>
         </div>
         <nav className="flex min-h-0 gap-2 overflow-x-auto md:flex-1 md:flex-col md:space-y-2 md:overflow-x-visible md:overflow-y-auto">
@@ -614,16 +688,16 @@ export default function SettingsPage() {
         {isLoading ? (
           <div className="flex h-full items-center justify-center text-sm text-zinc-500">
             <LoaderCircle size={18} className="mr-2 animate-spin" />
-            Loading settings
+            Загрузка настроек
           </div>
         ) : null}
 
         {!isLoading && activeTab === 'project' ? (
           <form className="max-w-xl space-y-4" onSubmit={handleProjectSave}>
             <div>
-              <h2 className="text-xl font-semibold text-zinc-100">Project</h2>
+              <h2 className="text-xl font-semibold text-zinc-100">Проект</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Basic CRM project settings.
+                Базовые настройки CRM-проекта.
               </p>
             </div>
             <label className="block">
@@ -657,7 +731,7 @@ export default function SettingsPage() {
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSavingProject ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
-              Save project
+              Сохранить проект
             </button>
           </form>
         ) : null}
@@ -665,9 +739,9 @@ export default function SettingsPage() {
         {!isLoading && activeTab === 'team' ? (
           <div className="space-y-6">
             <div>
-              <h2 className="text-xl font-semibold text-zinc-100">Team</h2>
+              <h2 className="text-xl font-semibold text-zinc-100">Команда</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Users in the current project.
+                Пользователи текущего проекта.
               </p>
             </div>
 
@@ -675,41 +749,67 @@ export default function SettingsPage() {
               <table className="min-w-[680px] w-full text-left text-sm">
                 <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
-                    <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">Имя</th>
                     <th className="px-4 py-3">Email</th>
-                    <th className="px-4 py-3">Role</th>
-                    <th className="w-[88px] px-4 py-3 text-right">Actions</th>
+                    <th className="px-4 py-3">Роль</th>
+                    <th className="w-[132px] px-4 py-3 text-right">Действия</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800">
                   {users.map((user) => {
                     const role = roles.find((item) => item.id === user.role_id)
                     const canRemove = canDeleteUser(user)
+                    const editableRoles = editableRolesForUser(user)
                     return (
                       <tr key={user.id} className="bg-zinc-950">
                         <td className="px-4 py-3 text-zinc-100">{user.name}</td>
                         <td className="px-4 py-3 text-zinc-400">{user.email}</td>
                         <td className="px-4 py-3 text-zinc-400">
-                          {role ? roleLabel(role.name) : user.role_id.slice(0, 8)}
+                          {editableRoles.length > 0 ? (
+                            <select
+                              value={user.role_id}
+                              onChange={(event) => void handleUserRoleChange(user, event.target.value)}
+                              disabled={updatingUserId === user.id}
+                              className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:opacity-50"
+                            >
+                              {editableRoles.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {roleLabel(item.name)}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            role ? roleLabel(role.name) : user.role_id.slice(0, 8)
+                          )}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex justify-end">
+                          <div className="flex justify-end gap-2">
                             {canRemove ? (
-                              <button
-                                type="button"
-                                title="Delete user"
-                                onClick={() => void handleDeleteUser(user.id)}
-                                disabled={deletingUserId === user.id}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {deletingUserId === user.id ? (
-                                  <LoaderCircle size={15} className="animate-spin" />
-                                ) : (
-                                  <Trash2 size={15} />
-                                )}
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  title="Изменить пароль"
+                                  onClick={() => setPasswordUser(user)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
+                                >
+                                  <KeyRound size={15} />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Архивировать пользователя"
+                                  onClick={() => void handleDeleteUser(user.id)}
+                                  disabled={deletingUserId === user.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {deletingUserId === user.id ? (
+                                    <LoaderCircle size={15} className="animate-spin" />
+                                  ) : (
+                                    <Trash2 size={15} />
+                                  )}
+                                </button>
+                              </>
                             ) : (
-                              <span className="text-xs text-zinc-600">Locked</span>
+                              <span className="text-xs text-zinc-600">Недоступно</span>
                             )}
                           </div>
                         </td>
@@ -736,7 +836,7 @@ export default function SettingsPage() {
                 <input
                   value={newUserName}
                   onChange={(event) => setNewUserName(event.target.value)}
-                  placeholder="Name"
+                  placeholder="Имя"
                   required
                   className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
                 />
@@ -744,7 +844,7 @@ export default function SettingsPage() {
                   type="password"
                   value={newUserPassword}
                   onChange={(event) => setNewUserPassword(event.target.value)}
-                  placeholder="Password"
+                  placeholder="Пароль"
                   required
                   minLength={8}
                   className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
@@ -763,11 +863,15 @@ export default function SettingsPage() {
                 </select>
                 <button
                   type="submit"
-                  disabled={isAddingUser || staffRoles.length === 0}
+                  disabled={
+                    isAddingUser ||
+                    staffRoles.length === 0 ||
+                    (selectedRole?.name !== 'super_admin' && !activeProjectId)
+                  }
                   className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isAddingUser ? <LoaderCircle size={16} className="animate-spin" /> : <UserPlus size={16} />}
-                  Add User
+                  Добавить
                 </button>
               </form>
             ) : null}
@@ -777,19 +881,19 @@ export default function SettingsPage() {
         {!isLoading && activeTab === 'statuses' ? (
           <div className="max-w-3xl space-y-6">
             <div>
-              <h2 className="text-xl font-semibold text-zinc-100">Statuses</h2>
+              <h2 className="text-xl font-semibold text-zinc-100">Статусы</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Lead pipeline statuses.
+                Статусы, по которым движутся лиды.
               </p>
             </div>
             <div className="overflow-x-auto rounded-lg border border-zinc-800">
               <table className="min-w-[640px] w-full text-left text-sm">
                 <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
-                    <th className="px-4 py-3">Name</th>
-                    <th className="px-4 py-3">Code</th>
-                    <th className="px-4 py-3">Type</th>
-                    <th className="w-[112px] px-4 py-3 text-right">Actions</th>
+                    <th className="px-4 py-3">Название</th>
+                    <th className="px-4 py-3">Код</th>
+                    <th className="px-4 py-3">Тип</th>
+                    <th className="w-[112px] px-4 py-3 text-right">Действия</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800">
@@ -820,11 +924,11 @@ export default function SettingsPage() {
                         <td className="px-4 py-3">
                           {statusItem.is_final ? (
                             <span className="rounded bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
-                              Final
+                              Финальный
                             </span>
                           ) : (
                             <span className="rounded bg-zinc-800 px-2 py-1 text-xs font-semibold text-zinc-400">
-                              Active
+                              Активный
                             </span>
                           )}
                         </td>
@@ -834,7 +938,7 @@ export default function SettingsPage() {
                               <>
                                 <button
                                   type="button"
-                                  title="Save status"
+                                  title="Сохранить статус"
                                   onClick={() => void handleSaveStatus(statusItem.id)}
                                   disabled={savingStatusId === statusItem.id}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-emerald-300 transition hover:border-emerald-500/60 disabled:cursor-not-allowed disabled:opacity-50"
@@ -847,7 +951,7 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  title="Cancel"
+                                  title="Отмена"
                                   onClick={cancelEditStatus}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
                                 >
@@ -858,7 +962,7 @@ export default function SettingsPage() {
                               <>
                                 <button
                                   type="button"
-                                  title="Edit status"
+                                  title="Редактировать статус"
                                   onClick={() => startEditStatus(statusItem)}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
                                 >
@@ -866,7 +970,7 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  title={isBase ? 'Base statuses cannot be deleted' : 'Delete status'}
+                                  title={isBase ? 'Базовые статусы нельзя удалить' : 'Удалить статус'}
                                   onClick={() => void handleDeleteStatus(statusItem)}
                                   disabled={isBase || deletingStatusId === statusItem.id}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -894,7 +998,7 @@ export default function SettingsPage() {
               <input
                 value={newStatusName}
                 onChange={(event) => setNewStatusName(event.target.value)}
-                placeholder="Status name"
+                placeholder="Название статуса"
                 required
                 maxLength={100}
                 className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
@@ -914,7 +1018,7 @@ export default function SettingsPage() {
                   onChange={(event) => setNewStatusFinal(event.target.checked)}
                   className="h-4 w-4 accent-emerald-500"
                 />
-                Final
+                Финальный
               </label>
               <button
                 type="submit"
@@ -922,7 +1026,7 @@ export default function SettingsPage() {
                 className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isAddingStatus ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
-                Add
+                Добавить
               </button>
             </form>
           </div>
@@ -931,17 +1035,17 @@ export default function SettingsPage() {
         {!isLoading && activeTab === 'tags' ? (
           <div className="max-w-3xl space-y-6">
             <div>
-              <h2 className="text-xl font-semibold text-zinc-100">Tags</h2>
+              <h2 className="text-xl font-semibold text-zinc-100">Теги</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Project labels for leads.
+                Метки проекта для лидов и чатов.
               </p>
             </div>
             <div className="overflow-x-auto rounded-lg border border-zinc-800">
               <table className="min-w-[520px] w-full text-left text-sm">
                 <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                   <tr>
-                    <th className="px-4 py-3">Name</th>
-                    <th className="w-[112px] px-4 py-3 text-right">Actions</th>
+                    <th className="px-4 py-3">Название</th>
+                    <th className="w-[112px] px-4 py-3 text-right">Действия</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800">
@@ -972,7 +1076,7 @@ export default function SettingsPage() {
                               <>
                                 <button
                                   type="button"
-                                  title="Save tag"
+                                  title="Сохранить тег"
                                   onClick={() => void handleSaveTag(tagItem.id)}
                                   disabled={savingTagId === tagItem.id}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-emerald-300 transition hover:border-emerald-500/60 disabled:cursor-not-allowed disabled:opacity-50"
@@ -985,7 +1089,7 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  title="Cancel"
+                                  title="Отмена"
                                   onClick={cancelEditTag}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
                                 >
@@ -996,7 +1100,7 @@ export default function SettingsPage() {
                               <>
                                 <button
                                   type="button"
-                                  title="Edit tag"
+                                  title="Редактировать тег"
                                   onClick={() => startEditTag(tagItem)}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
                                 >
@@ -1004,7 +1108,7 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                   type="button"
-                                  title="Delete tag"
+                                  title="Удалить тег"
                                   onClick={() => void handleDeleteTag(tagItem.id)}
                                   disabled={deletingTagId === tagItem.id}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1032,7 +1136,7 @@ export default function SettingsPage() {
               <input
                 value={newTagName}
                 onChange={(event) => setNewTagName(event.target.value)}
-                placeholder="New tag"
+                placeholder="Новый тег"
                 required
                 maxLength={100}
                 className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
@@ -1043,12 +1147,62 @@ export default function SettingsPage() {
                 className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isAddingTag ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
-                Add Tag
+                Добавить тег
               </button>
             </form>
           </div>
         ) : null}
       </div>
+
+      {passwordUser ? (
+        <Modal
+          title="Изменить пароль"
+          description={`${passwordUser.name} · ${passwordUser.email}`}
+          onClose={() => {
+            if (!isChangingPassword) {
+              setPasswordUser(null)
+              setNewPassword('')
+            }
+          }}
+        >
+          <form className="space-y-4" onSubmit={handleChangePassword}>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-zinc-300">
+                Новый пароль
+              </span>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                minLength={8}
+                required
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPasswordUser(null)
+                  setNewPassword('')
+                }}
+                disabled={isChangingPassword}
+                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={isChangingPassword || newPassword.length < 8}
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isChangingPassword ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
+                Сохранить
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </section>
   )
 }

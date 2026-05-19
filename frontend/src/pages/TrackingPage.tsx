@@ -114,13 +114,13 @@ function toNumber(value: string | number | null | undefined) {
 }
 
 function formatNumber(value: string | number | null | undefined) {
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(
     toNumber(value),
   )
 }
 
 function formatMoney(value: string | number | null | undefined, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('ru-RU', {
     style: 'currency',
     currency,
     maximumFractionDigits: 2,
@@ -132,7 +132,7 @@ function formatPercent(value: string | number | null | undefined) {
 }
 
 function formatShortDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
+  return new Intl.DateTimeFormat('ru-RU', {
     month: 'short',
     day: 'numeric',
   }).format(new Date(`${value}T00:00:00`))
@@ -192,7 +192,7 @@ function funnelList(items: FunnelStepMetric[]) {
   if (items.length === 0) {
     return (
       <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-5 text-sm text-gray-500">
-        No funnel step data yet.
+        Данных по шагам воронки пока нет.
       </div>
     )
   }
@@ -433,7 +433,7 @@ export default function TrackingPage() {
         invite_link: createInviteLink.trim() || null,
       })
       setIsCreateOpen(false)
-      setNotice('Tracking link created.')
+      setNotice('Tracking link создан.')
       await loadPageData()
     } catch (err) {
       setCreateError(getErrorMessage(err, 'Could not create tracking link.'))
@@ -444,7 +444,7 @@ export default function TrackingPage() {
 
   const handleCopy = async (link: TrackingLink) => {
     await navigator.clipboard.writeText(link.invite_link || link.code)
-    setNotice(link.invite_link ? 'Invite link copied.' : 'Code copied.')
+      setNotice(link.invite_link ? 'Invite link скопирован.' : 'Код скопирован.')
   }
 
   const handleArchiveToggle = async (link: TrackingLink) => {
@@ -509,7 +509,7 @@ export default function TrackingPage() {
 
     const amount = Number(spendAmount)
     if (!Number.isFinite(amount) || amount < 0) {
-      setSpendError('Amount must be zero or greater.')
+      setSpendError('Сумма должна быть нулём или больше.')
       return
     }
 
@@ -533,7 +533,7 @@ export default function TrackingPage() {
         })
       }
 
-      setNotice(spendMode === 'edit' ? 'Spend updated.' : 'Spend added.')
+      setNotice(spendMode === 'edit' ? 'Расход обновлён.' : 'Расход добавлен.')
       if (detailLink?.id === spendLink.id) {
         await loadDetail(spendLink)
       }
@@ -547,7 +547,7 @@ export default function TrackingPage() {
   }
 
   const handleDeleteSpend = async (spend: TrackingSpend) => {
-    if (!detailLink || !window.confirm('Delete this spend entry?')) {
+    if (!detailLink || !window.confirm('Удалить эту запись расхода?')) {
       return
     }
 
@@ -556,7 +556,7 @@ export default function TrackingPage() {
 
     try {
       await deleteTrackingSpend(spend.id)
-      setNotice('Spend deleted.')
+      setNotice('Расход удалён.')
       await loadDetail(detailLink)
       await loadPageData()
     } catch (err) {
@@ -573,7 +573,7 @@ export default function TrackingPage() {
           <BarChart3 className="mx-auto text-accent-300" size={32} />
           <h1 className="mt-4 text-xl font-semibold text-white">Выберите проект</h1>
           <p className="mt-2 max-w-md text-sm text-gray-500">
-            Tracking metrics and traffic links are scoped by the global project selector.
+            Метрики и ссылки трекинга показываются для выбранного проекта.
           </p>
         </div>
       </section>
@@ -588,20 +588,20 @@ export default function TrackingPage() {
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.25em] text-accent-300/70">
-              Traffic
+              Трафик
             </p>
             <h1 className="mt-1 text-2xl font-semibold text-white">
-              Tracking links
+              Трекинг
             </h1>
             <p className="mt-1 text-sm text-gray-500">
-              Spend, conversion and link-level analytics for the selected scope.
+              Расходы, конверсии и аналитика ссылок для выбранного скоупа.
             </p>
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
             <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
-                From
+                С
               </span>
               <input
                 type="date"
@@ -612,7 +612,7 @@ export default function TrackingPage() {
             </label>
             <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
-                To
+                По
               </span>
               <input
                 type="date"
@@ -640,14 +640,14 @@ export default function TrackingPage() {
               className="inline-flex h-10 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus size={17} />
-              Create link
+              Создать ссылку
             </button>
           </div>
         </div>
 
         {isMultiBotFallback ? (
           <div className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-100">
-            Multiple bot filter will be refined later. Showing project-level metrics for all bots.
+            Фильтр по нескольким ботам будет уточнён позже. Сейчас показаны метрики проекта по всем ботам.
           </div>
         ) : null}
       </header>
@@ -665,10 +665,10 @@ export default function TrackingPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          {metricCard('Starts', formatNumber(summary.starts))}
-          {metricCard('Leads', formatNumber(summary.leads), `CR ${formatPercent(summary.cr_to_lead)}`)}
-          {metricCard('Submitted', formatNumber(summary.submitted_leads), `CR ${formatPercent(summary.cr_to_submit)}`)}
-          {metricCard('Spend', formatMoney(summary.spend))}
+          {metricCard('Старты', formatNumber(summary.starts))}
+          {metricCard('Лиды', formatNumber(summary.leads), `CR ${formatPercent(summary.cr_to_lead)}`)}
+          {metricCard('Отправлены', formatNumber(summary.submitted_leads), `CR ${formatPercent(summary.cr_to_submit)}`)}
+          {metricCard('Расход', formatMoney(summary.spend))}
           {metricCard('CPL', formatMoney(summary.cpl), `CPSL ${formatMoney(summary.cpsl)}`)}
         </div>
 
@@ -676,15 +676,15 @@ export default function TrackingPage() {
           <div className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="font-semibold text-white">Daily traffic</h2>
-                <p className="text-sm text-gray-500">Starts, leads and spend</p>
+                <h2 className="font-semibold text-white">Динамика трафика</h2>
+                <p className="text-sm text-gray-500">Старты, лиды и расходы</p>
               </div>
               <Activity size={18} className="text-accent-300" />
             </div>
             <div className="h-64">
               {chartData.length === 0 ? (
                 <div className="flex h-full items-center justify-center rounded-xl border border-white/5 bg-white/[0.03] text-sm text-gray-500">
-                  No daily data yet.
+                  Данных по дням пока нет.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -724,8 +724,8 @@ export default function TrackingPage() {
                 <TrendingUp size={18} />
               </div>
               <div>
-                <p className="text-sm font-semibold text-white">Conversion rate</p>
-                <p className="text-xs text-gray-500">Project-level lead CR</p>
+                <p className="text-sm font-semibold text-white">Конверсия</p>
+                <p className="text-xs text-gray-500">CR в лиды по проекту</p>
               </div>
             </div>
             <p className="mt-5 text-4xl font-semibold text-white">
@@ -733,7 +733,7 @@ export default function TrackingPage() {
             </p>
             <div className="mt-5 space-y-3 text-sm">
               <div className="flex justify-between text-gray-400">
-                <span>Deposits</span>
+                <span>Депозиты</span>
                 <span>{formatNumber(summary.deposits)}</span>
               </div>
               <div className="flex justify-between text-gray-400">
@@ -741,7 +741,7 @@ export default function TrackingPage() {
                 <span>{formatMoney(summary.cpd)}</span>
               </div>
               <div className="flex justify-between text-gray-400">
-                <span>CR to deposit</span>
+                <span>CR в депозит</span>
                 <span>{formatPercent(summary.cr_to_deposit)}</span>
               </div>
             </div>
@@ -754,7 +754,7 @@ export default function TrackingPage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by code, title, buyer"
+              placeholder="Поиск по коду, названию или buyer"
               className="h-10 w-full rounded-xl border border-white/10 bg-white/[0.04] pl-10 pr-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/60"
             />
           </div>
@@ -763,28 +763,28 @@ export default function TrackingPage() {
             onChange={(event) => setActiveFilter(event.target.value as ActiveFilter)}
             className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
           >
-            <option value="active">Active links</option>
-            <option value="inactive">Inactive links</option>
-            <option value="all">All links</option>
+            <option value="active">Активные ссылки</option>
+            <option value="inactive">Архивные ссылки</option>
+            <option value="all">Все ссылки</option>
           </select>
         </div>
 
         {isLoading ? (
           <div className="mt-5 flex items-center justify-center rounded-xl border border-white/5 bg-surface px-4 py-16 text-sm text-gray-500">
             <LoaderCircle size={18} className="mr-2 animate-spin" />
-            Loading tracking data
+            Загрузка трекинга
           </div>
         ) : null}
 
         {!isLoading && bots.length === 0 ? (
           <div className="mt-5 rounded-xl border border-white/5 bg-surface px-4 py-12 text-center text-sm text-gray-500">
-            No bots in this project yet. Create a bot before generating tracking links.
+            В проекте пока нет ботов. Создайте бота перед генерацией ссылок.
           </div>
         ) : null}
 
         {!isLoading && bots.length > 0 && filteredLinks.length === 0 ? (
           <div className="mt-5 rounded-xl border border-white/5 bg-surface px-4 py-12 text-center text-sm text-gray-500">
-            No tracking links match the current filters.
+            Нет tracking links под текущие фильтры.
           </div>
         ) : null}
 
@@ -810,20 +810,20 @@ export default function TrackingPage() {
                           ? 'bg-emerald-500/10 text-emerald-200'
                           : 'bg-gray-500/10 text-gray-400'
                       }`}>
-                        {link.is_active ? 'Active' : 'Archived'}
+                        {link.is_active ? 'Активна' : 'Архив'}
                       </span>
                     </div>
                     <h3 className="mt-3 truncate text-lg font-semibold text-white">
                       {link.title}
                     </h3>
                     <p className="mt-1 truncate text-sm text-gray-500">
-                      {botLabel} · {link.buyer_name || 'No buyer'} · {link.ad_type || 'No ad type'} · {link.payment_type || 'No payment'}
+                      {botLabel} · {link.buyer_name || 'buyer не указан'} · {link.ad_type || 'тип рекламы не указан'} · {link.payment_type || 'оплата не указана'}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => void handleCopy(link)}
-                    title="Copy"
+                    title="Копировать"
                     className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
                   >
                     <Copy size={15} />
@@ -831,16 +831,16 @@ export default function TrackingPage() {
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 md:grid-cols-4">
-                  {miniMetric('Starts', formatNumber(linkSummary.starts))}
-                  {miniMetric('Leads', formatNumber(linkSummary.leads))}
-                  {miniMetric('Spend', formatMoney(linkSummary.spend))}
+                  {miniMetric('Старты', formatNumber(linkSummary.starts))}
+                  {miniMetric('Лиды', formatNumber(linkSummary.leads))}
+                  {miniMetric('Расход', formatMoney(linkSummary.spend))}
                   {miniMetric('CPL', formatMoney(linkSummary.cpl))}
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-gray-500">
-                    Lead CR <span className="text-gray-100">{formatPercent(linkSummary.cr_to_lead)}</span>
-                    {' '}· Submitted <span className="text-gray-100">{formatNumber(linkSummary.submitted_leads)}</span>
+                    CR в лид <span className="text-gray-100">{formatPercent(linkSummary.cr_to_lead)}</span>
+                    {' '}· Отправлены <span className="text-gray-100">{formatNumber(linkSummary.submitted_leads)}</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -849,7 +849,7 @@ export default function TrackingPage() {
                       className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 hover:text-white"
                     >
                       <DollarSign size={15} />
-                      Add spend
+                      Добавить расход
                     </button>
                     <button
                       type="button"
@@ -857,7 +857,7 @@ export default function TrackingPage() {
                       className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 hover:text-white"
                     >
                       <BarChart3 size={15} />
-                      Details
+                      Детали
                     </button>
                     <button
                       type="button"
@@ -872,7 +872,7 @@ export default function TrackingPage() {
                       ) : (
                         <RotateCcw size={15} />
                       )}
-                      {link.is_active ? 'Archive' : 'Restore'}
+                      {link.is_active ? 'Архивировать' : 'Восстановить'}
                     </button>
                   </div>
                 </div>
@@ -884,8 +884,8 @@ export default function TrackingPage() {
 
       {isCreateOpen ? (
         <Modal
-          title="Create tracking link"
-          description="Generate a source link for the selected project."
+          title="Создать tracking link"
+          description="Сгенерируйте source-ссылку для выбранного проекта."
           onClose={closeCreateLink}
           maxWidthClassName="max-w-lg"
         >
@@ -897,7 +897,7 @@ export default function TrackingPage() {
             ) : null}
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Title
+                Название
               </span>
               <input
                 value={createTitle}
@@ -905,12 +905,12 @@ export default function TrackingPage() {
                 required
                 maxLength={255}
                 className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                placeholder="Target Insta"
+                placeholder="Таргет Инста"
               />
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Bot
+                Бот
               </span>
               <select
                 value={createBotId}
@@ -919,7 +919,7 @@ export default function TrackingPage() {
                 className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
               >
                 <option value="" disabled>
-                  Select bot
+                  Выберите бота
                 </option>
                 {bots.map((bot) => (
                   <option key={bot.id} value={bot.id}>
@@ -931,7 +931,7 @@ export default function TrackingPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Code
+                  Код
                 </span>
                 <input
                   value={createCode}
@@ -950,14 +950,14 @@ export default function TrackingPage() {
                   onChange={(event) => setCreateBuyerName(event.target.value)}
                   maxLength={255}
                   className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                  placeholder="Buyer name"
+                  placeholder="Имя buyer"
                 />
               </label>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Ad type
+                  Тип рекламы
                 </span>
                 <input
                   value={createAdType}
@@ -969,7 +969,7 @@ export default function TrackingPage() {
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Payment type
+                  Тип оплаты
                 </span>
                 <input
                   value={createPaymentType}
@@ -988,7 +988,7 @@ export default function TrackingPage() {
                 value={createInviteLink}
                 onChange={(event) => setCreateInviteLink(event.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                placeholder="Optional ready URL"
+                placeholder="Готовый URL, необязательно"
               />
             </label>
             <div className="flex justify-end gap-2 pt-2">
@@ -997,7 +997,7 @@ export default function TrackingPage() {
                 onClick={closeCreateLink}
                 className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-gray-200 transition hover:border-white/20 hover:text-white"
               >
-                Cancel
+                Отмена
               </button>
               <button
                 type="submit"
@@ -1005,7 +1005,7 @@ export default function TrackingPage() {
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isCreatingLink ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
-                Create
+                Создать
               </button>
             </div>
           </form>
@@ -1022,7 +1022,7 @@ export default function TrackingPage() {
           {isDetailLoading ? (
             <div className="flex items-center justify-center py-16 text-sm text-gray-500">
               <LoaderCircle size={18} className="mr-2 animate-spin" />
-              Loading link analytics
+              Загрузка аналитики ссылки
             </div>
           ) : null}
 
@@ -1035,23 +1035,23 @@ export default function TrackingPage() {
           {detailMetrics ? (
             <div className="space-y-5">
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                {metricCard('Starts', formatNumber(detailMetrics.summary.starts))}
-                {metricCard('Leads', formatNumber(detailMetrics.summary.leads))}
-                {metricCard('Submitted', formatNumber(detailMetrics.summary.submitted_leads))}
-                {metricCard('Spend', formatMoney(detailMetrics.summary.spend))}
+                {metricCard('Старты', formatNumber(detailMetrics.summary.starts))}
+                {metricCard('Лиды', formatNumber(detailMetrics.summary.leads))}
+                {metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
+                {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
                 {metricCard('CPL', formatMoney(detailMetrics.summary.cpl))}
                 {metricCard('CPD', formatMoney(detailMetrics.summary.cpd))}
               </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="font-semibold text-white">Daily detail</h3>
+                  <h3 className="font-semibold text-white">Детализация по дням</h3>
                   <CalendarDays size={18} className="text-accent-300" />
                 </div>
                 <div className="h-64">
                   {detailChartData.length === 0 ? (
                     <div className="flex h-full items-center justify-center rounded-xl border border-white/5 bg-background/50 text-sm text-gray-500">
-                      No daily data yet.
+                      Данных по дням пока нет.
                     </div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
@@ -1077,24 +1077,24 @@ export default function TrackingPage() {
 
               <div className="grid gap-4 xl:grid-cols-3">
                 <div>
-                  <h3 className="mb-3 font-semibold text-white">Funnel steps</h3>
+                  <h3 className="mb-3 font-semibold text-white">Шаги воронки</h3>
                   {funnelList(detailMetrics.funnel_steps)}
                 </div>
                 <div>
-                  <h3 className="mb-3 font-semibold text-white">Age</h3>
-                  {breakdownList(detailMetrics.age_breakdown, 'No age data yet.')}
+                  <h3 className="mb-3 font-semibold text-white">Возраст</h3>
+                  {breakdownList(detailMetrics.age_breakdown, 'Данных по возрасту пока нет.')}
                 </div>
                 <div>
-                  <h3 className="mb-3 font-semibold text-white">Country</h3>
-                  {breakdownList(detailMetrics.country_breakdown, 'No country data yet.')}
+                  <h3 className="mb-3 font-semibold text-white">Страна</h3>
+                  {breakdownList(detailMetrics.country_breakdown, 'Данных по странам пока нет.')}
                 </div>
               </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
-                    <h3 className="font-semibold text-white">Spend entries</h3>
-                    <p className="text-sm text-gray-500">Manual CRM spend for this link</p>
+                    <h3 className="font-semibold text-white">Расходы</h3>
+                    <p className="text-sm text-gray-500">Ручные расходы CRM по этой ссылке</p>
                   </div>
                   <button
                     type="button"
@@ -1102,24 +1102,24 @@ export default function TrackingPage() {
                     className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 hover:text-white"
                   >
                     <WalletCards size={15} />
-                    Add spend
+                    Добавить расход
                   </button>
                 </div>
 
                 {spends.length === 0 ? (
                   <div className="rounded-xl border border-white/5 bg-background/50 px-4 py-5 text-sm text-gray-500">
-                    Spend list is empty.
+                    Расходов пока нет.
                   </div>
                 ) : (
                   <div className="overflow-x-auto rounded-xl border border-white/5">
                     <table className="min-w-[720px] w-full text-left text-sm">
                       <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-gray-500">
                         <tr>
-                          <th className="px-4 py-3">Date</th>
-                          <th className="px-4 py-3">Amount</th>
-                          <th className="px-4 py-3">Source</th>
-                          <th className="px-4 py-3">Comment</th>
-                          <th className="px-4 py-3 text-right">Actions</th>
+                          <th className="px-4 py-3">Дата</th>
+                          <th className="px-4 py-3">Сумма</th>
+                          <th className="px-4 py-3">Источник</th>
+                          <th className="px-4 py-3">Комментарий</th>
+                          <th className="px-4 py-3 text-right">Действия</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -1131,7 +1131,7 @@ export default function TrackingPage() {
                             </td>
                             <td className="px-4 py-3 text-gray-400">{spend.source}</td>
                             <td className="px-4 py-3 text-gray-400">
-                              {spend.comment || 'No comment'}
+                              {spend.comment || 'Без комментария'}
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex justify-end gap-2">
@@ -1140,7 +1140,7 @@ export default function TrackingPage() {
                                   onClick={() => openSpendModal(detailLink, spend)}
                                   className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-200 transition hover:border-accent-300/50 hover:text-white"
                                 >
-                                  Edit
+                                  Изменить
                                 </button>
                                 <button
                                   type="button"
@@ -1170,7 +1170,7 @@ export default function TrackingPage() {
 
       {spendLink ? (
         <Modal
-          title={spendMode === 'edit' ? 'Edit spend' : 'Add spend'}
+          title={spendMode === 'edit' ? 'Изменить расход' : 'Добавить расход'}
           description={spendLink.title}
           onClose={closeSpendModal}
           maxWidthClassName="max-w-md"
@@ -1183,7 +1183,7 @@ export default function TrackingPage() {
             ) : null}
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Date
+                Дата
               </span>
               <input
                 type="date"
@@ -1195,7 +1195,7 @@ export default function TrackingPage() {
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Amount
+                Сумма
               </span>
               <input
                 type="number"
@@ -1210,7 +1210,7 @@ export default function TrackingPage() {
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Currency
+                Валюта
               </span>
               <input
                 value={spendCurrency}
@@ -1222,14 +1222,14 @@ export default function TrackingPage() {
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Comment
+                Комментарий
               </span>
               <textarea
                 value={spendComment}
                 onChange={(event) => setSpendComment(event.target.value)}
                 rows={3}
                 className="max-h-32 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                placeholder="Optional comment"
+                placeholder="Комментарий необязателен"
               />
             </label>
             <div className="flex justify-end gap-2 pt-2">
@@ -1238,7 +1238,7 @@ export default function TrackingPage() {
                 onClick={closeSpendModal}
                 className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-gray-200 transition hover:border-white/20 hover:text-white"
               >
-                Cancel
+                Отмена
               </button>
               <button
                 type="submit"
@@ -1246,7 +1246,7 @@ export default function TrackingPage() {
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSavingSpend ? <LoaderCircle size={16} className="animate-spin" /> : <DollarSign size={16} />}
-                Save
+                Сохранить
               </button>
             </div>
           </form>

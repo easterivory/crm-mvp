@@ -30,17 +30,17 @@ function getProjectError(err: unknown) {
       }
     }
     if (err.response?.status === 409) {
-      return 'Project slug already exists.'
+      return 'Такой slug проекта уже есть.'
     }
     if (err.response?.status === 422) {
-      return 'Check project fields and try again.'
+      return 'Проверьте поля проекта и попробуйте снова.'
     }
     if (err.code === 'ERR_NETWORK') {
-      return 'Network error. Check backend connection and try again.'
+      return 'Ошибка сети. Проверьте backend и попробуйте снова.'
     }
   }
 
-  return 'Could not create project.'
+  return 'Не удалось создать проект.'
 }
 
 export default function ProjectSelector() {
@@ -72,7 +72,7 @@ export default function ProjectSelector() {
       const items = await fetchProjects()
       setProjects(items)
     } catch {
-      setError('Projects unavailable')
+      setError('Проекты недоступны')
     } finally {
       setIsLoading(false)
     }
@@ -105,7 +105,7 @@ export default function ProjectSelector() {
 
   const selectedProjectName =
     activeProjects.find((project) => project.id === selectedProjectId)?.name ??
-    (isLoading ? 'Loading projects' : 'No project')
+    (isLoading ? 'Загрузка проектов' : 'Нет проекта')
 
   const closeCreate = () => {
     if (isCreating) {
@@ -154,21 +154,21 @@ export default function ProjectSelector() {
     <div className="relative flex min-w-0 items-end gap-2">
       <label className="group relative flex min-w-0 flex-col gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500">
-          Project
+          Проект
         </span>
         <div className="relative">
           <select
-            aria-label="Project"
+            aria-label="Проект"
             value={selectedProjectId ?? ''}
             disabled={isLoading || Boolean(error) || activeProjects.length === 0}
             onChange={(event) => setSelectedProjectId(event.target.value || null)}
             className="h-10 w-full min-w-[190px] appearance-none rounded-xl border border-white/10 bg-white/[0.04] px-3 pr-9 text-sm font-medium text-gray-100 outline-none transition hover:border-accent-300/40 focus:border-accent-300/60 focus:shadow-glow-accent disabled:cursor-not-allowed disabled:text-gray-500"
             title={error ?? selectedProjectName}
           >
-            {isLoading ? <option value="">Loading projects</option> : null}
+            {isLoading ? <option value="">Загрузка проектов</option> : null}
             {error ? <option value="">{error}</option> : null}
             {!isLoading && !error && activeProjects.length === 0 ? (
-              <option value="">No projects</option>
+              <option value="">Нет проектов</option>
             ) : null}
             {activeProjects.map((project) => (
               <option key={project.id} value={project.id}>
@@ -190,20 +190,20 @@ export default function ProjectSelector() {
       {canCreateProject ? (
         <button
           type="button"
-          title="Create project"
-          aria-label="Create project"
+          title="Создать проект"
+          aria-label="Создать проект"
           onClick={() => setIsCreateOpen(true)}
           className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent"
         >
           <Plus size={17} />
-          <span className="hidden text-sm font-medium xl:inline">New</span>
+          <span className="hidden text-sm font-medium xl:inline">Новый</span>
         </button>
       ) : null}
 
       {isCreateOpen ? (
         <Modal
-          title="Create project"
-          description="Add a new project scope."
+          title="Создать проект"
+          description="Добавьте новый проектный контур."
           onClose={closeCreate}
         >
           <form
@@ -219,7 +219,7 @@ export default function ProjectSelector() {
             <div className="space-y-3">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Name
+                  Название
                 </span>
                 <input
                   value={projectName}
@@ -227,7 +227,7 @@ export default function ProjectSelector() {
                   maxLength={255}
                   required
                   className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
-                  placeholder="Project name"
+                  placeholder="Название проекта"
                 />
               </label>
               <label className="block">
@@ -244,14 +244,14 @@ export default function ProjectSelector() {
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Description
+                  Описание
                 </span>
                 <textarea
                   value={projectDescription}
                   onChange={(event) => setProjectDescription(event.target.value)}
                   rows={3}
                   className="max-h-32 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
-                  placeholder="Optional description"
+                  placeholder="Описание необязательно"
                 />
               </label>
             </div>
@@ -262,7 +262,7 @@ export default function ProjectSelector() {
                 onClick={closeCreate}
                 className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-gray-200 transition hover:border-white/20 hover:text-white"
               >
-                Cancel
+                Отмена
               </button>
               <button
                 type="submit"
@@ -270,7 +270,7 @@ export default function ProjectSelector() {
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isCreating ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
-                Create
+                Создать
               </button>
             </div>
           </form>

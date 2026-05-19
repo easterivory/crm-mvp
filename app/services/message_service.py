@@ -190,7 +190,13 @@ class MessageService:
             )
 
         messages = await self.message_repo.list_by_chat(
-            chat_id, limit=limit, offset=offset
+            chat_id,
+            limit=limit,
+            offset=offset,
+            since=chat.current_cycle_started_at,
         )
-        total = await self.message_repo.count_by_chat(chat_id)
+        total = await self.message_repo.count_by_chat(
+            chat_id,
+            since=chat.current_cycle_started_at,
+        )
         return [MessageOut.model_validate(m) for m in messages], total

@@ -1,9 +1,10 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_project_id
+from app.api.v1.dependencies import get_current_project_id, get_current_user
+from app.core.constants import RoleName
 from app.core.database import get_db
 from app.schemas.common import PaginatedResponse
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
@@ -31,8 +32,10 @@ async def list_tags(
 async def create_tag(
     data: TagCreate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TagOut:
+    _ensure_settings_admin(current_user)
     return await TagService(db).create_tag(project_id, data)
 
 
@@ -41,8 +44,10 @@ async def update_tag(
     tag_id: UUID,
     data: TagUpdate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TagOut:
+    _ensure_settings_admin(current_user)
     return await TagService(db).update_tag(tag_id, project_id, data)
 
 
@@ -50,8 +55,10 @@ async def update_tag(
 async def delete_tag(
     tag_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_settings_admin(current_user)
     await TagService(db).delete_tag(tag_id, project_id)
 
 
@@ -81,3 +88,11 @@ async def remove_tag_from_lead(
         tag_id=tag_id,
         project_id=project_id,
     )
+
+
+def _ensure_settings_admin(current_user) -> None:
+    if current_user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super_admin/admin can manage project tags",
+        )

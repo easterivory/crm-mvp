@@ -25,6 +25,7 @@ All DB writes (UPDATE lead + INSERT audit_log) happen inside the caller's
 session. The single commit is issued by get_db() at the end of the request.
 """
 import logging
+from datetime import date
 from typing import Optional
 from uuid import UUID
 
@@ -348,23 +349,73 @@ class LeadService:
         self,
         project_id: UUID,
         status_id: Optional[UUID],
+        status_code: Optional[str],
         manager_id: Optional[UUID],
+        bot_ids: list[UUID],
+        date_from: Optional[date],
+        date_to: Optional[date],
+        tag_ids: list[UUID],
+        search: Optional[str],
         limit: int,
         offset: int,
     ) -> tuple[list[LeadOut], int]:
         leads = await self.lead_repo.list_by_project(
             project_id=project_id,
             status_id=status_id,
+            status_code=status_code,
             manager_id=manager_id,
+            bot_ids=bot_ids,
+            date_from=date_from,
+            date_to=date_to,
+            tag_ids=tag_ids,
+            search=search,
             limit=limit,
             offset=offset,
         )
         total = await self.lead_repo.count_by_project(
             project_id=project_id,
             status_id=status_id,
+            status_code=status_code,
             manager_id=manager_id,
+            bot_ids=bot_ids,
+            date_from=date_from,
+            date_to=date_to,
+            tag_ids=tag_ids,
+            search=search,
         )
         return [await self._lead_out(lead) for lead in leads], total
+
+    async def submit_lead_stub(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> LeadOut:
+        lead = await self._move_to_status_code(
+            lead_id=lead_id,
+            project_id=project_id,
+            status_code=LeadStatusCode.QUALIFIED,
+            actor_id=actor_id,
+            audit_action=AuditAction.LEAD_SUBMITTED_STUB,
+            audit_meta={"external_crm_integration": "placeholder"},
+        )
+        return await self._lead_out(lead)
+
+    async def reject_lead(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> LeadOut:
+        lead = await self._move_to_status_code(
+            lead_id=lead_id,
+            project_id=project_id,
+            status_code=LeadStatusCode.LOST,
+            actor_id=actor_id,
+            audit_action=AuditAction.LEAD_REJECTED,
+            audit_meta={"archive": True},
+        )
+        return await self._lead_out(lead)
 
     async def update_contact(
         self,
@@ -392,14 +443,91 @@ class LeadService:
 
     async def _lead_out(self, lead) -> LeadOut:
         tags = await self.tag_repo.list_for_lead(lead.id)
+        context = await self.lead_repo.get_lead_context(lead.id)
         return LeadOut.model_validate(lead).model_copy(
             update={
                 "tags": [
                     LeadTagOut(id=tag.id, name=tag.name)
                     for tag in tags
-                ]
+                ],
+                **context,
             }
         )
+
+    async def _move_to_status_code(
+        self,
+        *,
+        lead_id: UUID,
+        project_id: UUID,
+        status_code: str,
+        actor_id: UUID,
+        audit_action: str,
+        audit_meta: dict,
+    ):
+        lead = await self.lead_repo.get_active(lead_id, project_id)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+
+        current_status = await self.lead_repo.get_status(lead.status_id)
+        target_status = await self.lead_repo.get_status_by_code(status_code)
+        if target_status is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Lead status '{status_code}' is missing",
+            )
+
+        if lead.status_id == target_status.id:
+            return lead
+
+        if (
+            current_status is not None
+            and current_status.is_final
+            and target_status.code != LeadStatusCode.LOST
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Cannot change status: lead is in terminal status "
+                    f"'{current_status.code}'."
+                ),
+            )
+
+        updated = await self.lead_repo.update_status_with_check(
+            lead_id,
+            expected_status_id=lead.status_id,
+            new_status_id=target_status.id,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Lead status was changed by another request. Reload and retry.",
+            )
+
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.LEAD_STATUS_CHANGED,
+            entity_type=EntityType.LEAD,
+            entity_id=lead_id,
+            actor_id=actor_id,
+            meta={
+                "from_status_id": str(lead.status_id),
+                "from_status_code": current_status.code if current_status else None,
+                "to_status_id": str(target_status.id),
+                "to_status_code": target_status.code,
+            },
+        )
+        await self.audit.log(
+            project_id=project_id,
+            action=audit_action,
+            entity_type=EntityType.LEAD,
+            entity_id=lead_id,
+            actor_id=actor_id,
+            meta=audit_meta,
+        )
+        return updated
 
     @staticmethod
     def _normalize_optional(value: Optional[str]) -> Optional[str]:

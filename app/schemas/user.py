@@ -15,6 +15,16 @@ class UserCreate(BaseModel):
     project_id: Optional[uuid.UUID] = None
 
 
+class UserPasswordChange(BaseModel):
+    new_password: str = Field(..., min_length=8)
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    role_id: Optional[uuid.UUID] = None
+    project_id: Optional[uuid.UUID] = None
+
+
 class UserOut(OrmBase):
     id: uuid.UUID
     email: str

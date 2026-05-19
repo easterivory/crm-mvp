@@ -62,6 +62,50 @@
 - Cross-domain interaction should go through Services, not Repositories.
 - Quick check: `python scripts/check_backend_layers.py`.
 
+## Production UI/Workflow Cleanup — 2026-05-19
+
+### Navigation IA
+
+Основная навигация CRM отражает рабочий порядок: `Чаты → Воронки → Рассылки → Боты → Лиды → Трекинг → Аналитика → Настройки`.
+`Dashboard` сохранён как backward-compatible route `/dashboard`, но пользовательский вход в обзор идёт через `/analytics` и пункт `Аналитика`.
+`Воронки` и `Рассылки` пока являются placeholder-страницами; visual funnel builder и рассылочный движок в этот шаг намеренно не входят.
+
+### Tracking Canonical Creation Flow
+
+Tracking links создаются только в разделе `Трекинг` через кнопку `Создать ссылку`.
+`BotsPage` больше не содержит форму создания tracking links и служит только для управления Telegram-ботами, webhook и токенами.
+Если пользователю нужно создать source/link, UI отправляет его в `Трекинг`.
+
+### Chat Reset Semantics
+
+Reset чата не удаляет Telegram user и не удаляет старые сообщения физически.
+Текущий lifecycle хранится на `chats`: `reset_at`, `reset_count`, `current_cycle_started_at`.
+При reset CRM скрывает чат из активных списков, очищает lead tags, переводит текущий lead в `lost`, сбрасывает manager/contact поля лида и деактивирует `chat_bot_states`.
+Из-за уникального ограничения `project_id + bot_id + external_chat_id` новый lifecycle безопасно реализован на той же строке `chat`: когда Telegram user пишет снова, webhook реактивирует reset-chat, очищает bot state, берёт новый `/start` ref_code при наличии и запускает bot funnel заново.
+Messages API показывает только сообщения текущего lifecycle, если `current_cycle_started_at` задан.
+
+### Leads Workflow
+
+Страница `/leads` использует существующий leads API с фильтрами `project_id`, `bot_ids`, `status`, `date_from`, `date_to`, `tag_ids`, `search`, `limit`, `offset`.
+`Отправить` сейчас является production-заглушкой внешней CRM: endpoint переводит lead в `qualified` и пишет audit event `lead.submitted_stub`, без fake external API call.
+`Удалить` не удаляет физически: endpoint переводит lead в `lost` / rejected-archive semantics, после чего карточка уходит из активного списка при соответствующих фильтрах.
+
+### Role Permission Matrix
+
+Backend остаётся источником прав:
+- `super_admin`: видит все проекты, управляет проектами и пользователями, может менять роли и пароли staff users.
+- `admin`: управляет manager/operator только в своём project scope, не назначает admin/super_admin и не редактирует admin/super_admin.
+- `manager` / `operator`: работают с чатами и лидами, не управляют проектами, командой, ролями и системными настройками.
+- `buyer`: CRM UI не имеет; будущий buyer workflow должен идти через Telegram-бота.
+
+User management использует soft delete (`is_deleted=true`). Новый password endpoint: `POST /api/v1/users/{user_id}/change-password`.
+
+### Responsive Layout Rules
+
+Desktop использует обычный collapsible sidebar. Tablet/mobile используют drawer/offcanvas с overlay.
+Header selectors должны переноситься без horizontal body overflow. Таблицы остаются внутри локальных `overflow-x-auto` контейнеров.
+Новые страницы обязаны поддерживать mobile one-column layout; чаты на mobile работают как список → экран диалога → drawer/modal карточки лида.
+
 ---
 
 ## 2. Структура проекта

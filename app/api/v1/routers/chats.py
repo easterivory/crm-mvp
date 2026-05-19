@@ -18,7 +18,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_project_id, get_db
+from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
 from app.schemas.common import PaginatedResponse
 from app.services.chat_service import ChatService
@@ -117,3 +117,18 @@ async def mark_as_read(
 ) -> None:
     """Sets last_read_at = now(). Clears the computed unread flag."""
     await ChatService(db).mark_as_read(chat_id=chat_id, project_id=project_id)
+
+
+@router.post("/{chat_id}/reset", response_model=ChatOut)
+async def reset_chat(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatOut:
+    """Soft-clears the active dialog cycle without deleting Telegram history."""
+    return await ChatService(db).reset_chat(
+        chat_id=chat_id,
+        project_id=project_id,
+        actor_id=current_user.id,
+    )

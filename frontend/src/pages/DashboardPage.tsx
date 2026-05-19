@@ -56,7 +56,7 @@ const kpiCards: KpiCard[] = [
     })),
   },
   {
-    title: 'Spend',
+    title: 'Расход',
     value: '$12.4k',
     delta: '-4%',
     positive: false,
@@ -93,21 +93,21 @@ const growthData = [
 
 const funnels = [
   {
-    label: 'New',
+    label: 'Новые',
     value: 342,
     percent: 72,
     glow: 'shadow-glow-accent',
     color: 'from-accent-400 to-blue-500',
   },
   {
-    label: 'In Progress',
+    label: 'В работе',
     value: 186,
     percent: 48,
     glow: 'shadow-glow-primary',
     color: 'from-primary-400 to-fuchsia-500',
   },
   {
-    label: 'Qualified',
+    label: 'Квалифицированы',
     value: 91,
     percent: 24,
     glow: 'shadow-[0_0_28px_rgba(52,211,153,0.25)]',
@@ -132,10 +132,10 @@ export default function DashboardPage() {
       <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.28em] text-accent-300/70">
-            Live Revenue Console
+            Аналитика
           </p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white md:text-3xl">
-            Dashboard
+            Аналитика / Обзор
           </h1>
         </div>
         <div className="inline-flex w-fit items-center gap-2 rounded-full border border-accent-300/25 bg-accent-400/10 px-3 py-1.5 text-sm text-accent-100 shadow-glow-accent">
@@ -205,14 +205,14 @@ export default function DashboardPage() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-white">Динамика чатов и лидов</h2>
-              <p className="text-sm text-gray-500">Mock data for the current week</p>
+              <p className="text-sm text-gray-500">Обзор по текущей неделе</p>
             </div>
             <div className="flex gap-2 text-xs">
               <span className="rounded-full bg-accent-400/10 px-2 py-1 text-accent-200">
-                Chats
+                Чаты
               </span>
               <span className="rounded-full bg-orange-400/10 px-2 py-1 text-orange-200">
-                Leads
+                Лиды
               </span>
             </div>
           </div>
@@ -299,7 +299,7 @@ export default function DashboardPage() {
             <p className="text-sm text-gray-500">Статусы лидов по основному проекту</p>
           </div>
           <span className="rounded-full bg-white/[0.04] px-3 py-1 text-xs text-gray-400">
-            619 active
+            619 активных
           </span>
         </div>
         <div className="grid gap-3 md:grid-cols-3">

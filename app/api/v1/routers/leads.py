@@ -12,13 +12,15 @@ Endpoints stubbed (Phase 3):
   GET   /leads/{lead_id}
   PATCH /leads/{lead_id}
 """
+from datetime import date
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.core.constants import RoleName
 from app.schemas.common import PaginatedResponse
 from app.schemas.lead import (
     LeadCreate,
@@ -84,14 +86,26 @@ async def list_leads(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     status_id: Optional[UUID] = Query(default=None),
+    status: Optional[str] = Query(default=None),
     manager_id: Optional[UUID] = Query(default=None),
+    bot_ids: Optional[str] = Query(default=None),
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+    tag_ids: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[LeadOut]:
     items, total = await LeadService(db).list_leads(
         project_id=project_id,
         status_id=status_id,
+        status_code=status,
         manager_id=manager_id,
+        bot_ids=_parse_uuid_csv(bot_ids, "bot_ids"),
+        date_from=date_from,
+        date_to=date_to,
+        tag_ids=_parse_uuid_csv(tag_ids, "tag_ids"),
+        search=search,
         limit=limit,
         offset=offset,
     )
@@ -109,9 +123,10 @@ async def list_statuses(
 @router.post("/statuses", response_model=LeadStatusOut, status_code=status.HTTP_201_CREATED)
 async def create_status(
     data: LeadStatusCreate,
-    _current_user: Any = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadStatusOut:
+    _ensure_settings_admin(current_user)
     return await LeadService(db).create_status(data)
 
 
@@ -119,18 +134,20 @@ async def create_status(
 async def update_status(
     status_id: UUID,
     data: LeadStatusAdminUpdate,
-    _current_user: Any = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadStatusOut:
+    _ensure_settings_admin(current_user)
     return await LeadService(db).update_status(status_id, data)
 
 
 @router.delete("/statuses/{status_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_status(
     status_id: UUID,
-    _current_user: Any = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_settings_admin(current_user)
     await LeadService(db).delete_status(status_id)
 
 
@@ -169,3 +186,58 @@ async def update_lead(
         data=data,
         actor_id=current_user.id,
     )
+
+
+@router.post("/{lead_id}/submit", response_model=LeadOut)
+async def submit_lead_stub(
+    lead_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadOut:
+    return await LeadService(db).submit_lead_stub(
+        lead_id=lead_id,
+        project_id=project_id,
+        actor_id=current_user.id,
+    )
+
+
+@router.post("/{lead_id}/reject", response_model=LeadOut)
+async def reject_lead(
+    lead_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadOut:
+    return await LeadService(db).reject_lead(
+        lead_id=lead_id,
+        project_id=project_id,
+        actor_id=current_user.id,
+    )
+
+
+def _parse_uuid_csv(value: Optional[str], field_name: str) -> list[UUID]:
+    if not value:
+        return []
+
+    ids: list[UUID] = []
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        try:
+            ids.append(UUID(item))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be a comma-separated list of UUIDs",
+            ) from exc
+    return ids
+
+
+def _ensure_settings_admin(current_user: Any) -> None:
+    if current_user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super_admin/admin can manage lead settings",
+        )

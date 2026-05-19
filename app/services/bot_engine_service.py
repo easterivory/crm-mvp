@@ -115,6 +115,12 @@ class BotEngineService:
 
         existing = await self.bot_repo.get_chat_state(chat_id)
         if existing is not None:
+            await self.bot_repo.reactivate_chat_state(
+                chat_id=chat_id,
+                bot_version_id=active_version.id,
+                current_step_id=current_step_id,
+            )
+            await self.process_chat(chat_id)
             return
 
         try:

@@ -31,6 +31,9 @@ class ChatOut(OrmBase):
     last_user_message_at: Optional[datetime]
     last_manager_reply_at: Optional[datetime]
     last_read_at: Optional[datetime]
+    reset_at: Optional[datetime]
+    reset_count: int = 0
+    current_cycle_started_at: Optional[datetime]
 
     # Computed — populated by the service layer before returning
     unread: bool = False

@@ -19,20 +19,24 @@ class MessageRepository(BaseRepository[Message]):
         chat_id: UUID,
         limit: int = 50,
         offset: int = 0,
+        since: Optional[datetime] = None,
     ) -> list[Message]:
-        result = await self.db.execute(
-            select(Message)
-            .where(Message.chat_id == chat_id)
-            .order_by(Message.created_at.asc())
-            .limit(limit)
-            .offset(offset)
-        )
+        stmt = select(Message).where(Message.chat_id == chat_id)
+        if since is not None:
+            stmt = stmt.where(Message.created_at >= since)
+        stmt = stmt.order_by(Message.created_at.asc()).limit(limit).offset(offset)
+        result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def count_by_chat(self, chat_id: UUID) -> int:
-        result = await self.db.execute(
-            select(func.count(Message.id)).where(Message.chat_id == chat_id)
-        )
+    async def count_by_chat(
+        self,
+        chat_id: UUID,
+        since: Optional[datetime] = None,
+    ) -> int:
+        stmt = select(func.count(Message.id)).where(Message.chat_id == chat_id)
+        if since is not None:
+            stmt = stmt.where(Message.created_at >= since)
+        result = await self.db.execute(stmt)
         return result.scalar_one()
 
     async def get_first_user_message(self, chat_id: UUID) -> Optional[Message]:

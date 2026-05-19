@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,6 +49,8 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
         Index("ix_chats_tracking_created_at", "tracking_link_id", "created_at"),
         Index("ix_chats_project_bot_created_at", "project_id", "bot_id", "created_at"),
+        Index("ix_chats_reset_at", "reset_at"),
+        Index("ix_chats_current_cycle_started_at", "current_cycle_started_at"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -71,6 +73,21 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
 
     # Set explicitly when the manager opens the chat
     last_read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Reset lifecycle:
+    # reset_at != NULL means the current dialog cycle was intentionally cleared
+    # and must be hidden from active CRM lists until the Telegram user writes again.
+    reset_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reset_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    current_cycle_started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     # Relationships
     project: Mapped[Project] = relationship("Project", back_populates="chats")

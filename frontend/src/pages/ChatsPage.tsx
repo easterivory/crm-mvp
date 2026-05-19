@@ -1,10 +1,13 @@
 import {
   AlertCircle,
+  ArrowLeft,
   Bot,
   CheckCheck,
   LoaderCircle,
   MessageSquareText,
+  RotateCcw,
   Send,
+  UserRound,
 } from 'lucide-react'
 import {
   FormEvent,
@@ -20,7 +23,9 @@ import axios from 'axios'
 import api from '../api/client'
 import ChatList, { Chat, ChatFilter } from '../components/ChatList'
 import LeadSidebar from '../components/LeadSidebar'
+import { fetchBots, type Bot as BotRecord } from '../features/bots'
 import { useProjectBotSelection } from '../shared/lib'
+import { ConfirmDialog, Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
 type PaginatedResponse<T> = {
@@ -46,7 +51,7 @@ const MESSAGE_LIMIT = 100
 
 function formatDateTime(value: string | null) {
   if (!value) {
-    return 'No activity'
+    return 'Нет активности'
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -68,11 +73,11 @@ function getErrorMessage(err: unknown) {
       return detail
     }
     if (err.code === 'ERR_NETWORK') {
-      return 'Cannot reach API. Check backend/container status.'
+      return 'API недоступен. Проверьте backend или контейнер.'
     }
   }
 
-  return 'Request failed. Please try again.'
+  return 'Запрос не выполнен. Попробуйте снова.'
 }
 
 export default function ChatsPage() {
@@ -80,15 +85,20 @@ export default function ChatsPage() {
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
 
   const [chats, setChats] = useState<Chat[]>([])
+  const [bots, setBots] = useState<BotRecord[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [total, setTotal] = useState(0)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ChatFilter>('all')
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
+  const [isResettingChat, setIsResettingChat] = useState(false)
+  const [isLeadOpen, setIsLeadOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
   const selectedChat = useMemo(
@@ -98,16 +108,34 @@ export default function ChatsPage() {
 
   const botScopeLabel = useMemo(() => {
     if (!selectedProjectId) {
-      return 'Select a project in the header'
+      return 'Выберите проект в шапке'
     }
     if (selectedBotIds.length === 0) {
-      return 'All bots in selected project'
+      return 'Все боты выбранного проекта'
     }
     if (selectedBotIds.length === 1) {
-      return '1 selected bot'
+      return '1 выбранный бот'
     }
-    return `${selectedBotIds.length} selected bots`
+    return `${selectedBotIds.length} выбранных бота`
   }, [selectedBotIds.length, selectedProjectId])
+
+  const botById = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots])
+
+  const getBotLabel = useCallback(
+    (chat: Chat) => {
+      if (!chat.bot_id) {
+        return 'Бот не указан'
+      }
+      const bot = botById.get(chat.bot_id)
+      if (!bot) {
+        return `Бот ${chat.bot_id.slice(0, 8)}`
+      }
+      return [bot.name, bot.bot_username ? `@${bot.bot_username}` : null]
+        .filter(Boolean)
+        .join(' · ')
+    },
+    [botById],
+  )
 
   const loadChats = useCallback(async () => {
     if (!selectedProjectId) {
@@ -160,6 +188,18 @@ export default function ChatsPage() {
     }
   }, [activeFilter, selectedBotIds, selectedProjectId, user?.id])
 
+  const loadBots = useCallback(async () => {
+    if (!selectedProjectId) {
+      setBots([])
+      return
+    }
+    try {
+      setBots(await fetchBots(selectedProjectId))
+    } catch {
+      setBots([])
+    }
+  }, [selectedProjectId])
+
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
     if (showLoader) {
       setIsMessagesLoading(true)
@@ -197,12 +237,13 @@ export default function ChatsPage() {
 
   useEffect(() => {
     void loadChats()
+    void loadBots()
     const timer = window.setInterval(() => {
       void loadChats()
     }, 15000)
 
     return () => window.clearInterval(timer)
-  }, [loadChats])
+  }, [loadBots, loadChats])
 
   useEffect(() => {
     if (!selectedChatId) {
@@ -251,6 +292,34 @@ export default function ChatsPage() {
     }
   }
 
+  const handleResetChat = async () => {
+    if (!selectedChatId || isResettingChat) {
+      return
+    }
+
+    setIsResettingChat(true)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.post(`/chats/${selectedChatId}/reset`, null, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+      })
+      setChats((current) => current.filter((chat) => chat.id !== selectedChatId))
+      setSelectedChatId(null)
+      setMessages([])
+      setIsResetConfirmOpen(false)
+      setIsLeadOpen(false)
+      setNotice('Диалог сброшен. Если пользователь напишет снова, он начнёт путь заново.')
+      await loadChats()
+      setSelectedChatId(null)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsResettingChat(false)
+    }
+  }
+
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     await sendMessage()
@@ -266,25 +335,49 @@ export default function ChatsPage() {
   }
 
   return (
-    <section className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-y-auto text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)] xl:overflow-hidden">
-      <ChatList
-        activeFilter={activeFilter}
-        chats={chats}
-        currentUserId={user?.id ?? null}
-        isLoading={isChatsLoading}
-        scopeLabel={botScopeLabel}
-        selectedChatId={selectedChatId}
-        total={total}
-        onFilterChange={setActiveFilter}
-        onRefresh={() => void loadChats()}
-        onSelectChat={setSelectedChatId}
-      />
+    <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
+      {notice ? (
+        <div className="absolute right-3 top-3 z-30 max-w-[calc(100%-1.5rem)] rounded-xl border border-accent-400/30 bg-accent-950/95 px-4 py-3 text-sm text-accent-100 shadow-card sm:right-4 sm:top-4 sm:max-w-md">
+          {notice}
+        </div>
+      ) : null}
 
-      <div className="flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card xl:min-h-0">
-        <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-5">
+      {error ? (
+        <div className="absolute right-3 top-3 z-30 max-w-[calc(100%-1.5rem)] rounded-xl border border-red-400/30 bg-red-950/95 px-4 py-3 text-sm text-red-100 shadow-card sm:right-4 sm:top-4 sm:max-w-md">
+          {error}
+        </div>
+      ) : null}
+
+      <div className={`${selectedChat ? 'hidden xl:block' : 'min-h-0'} overflow-hidden`}>
+        <ChatList
+          activeFilter={activeFilter}
+          chats={chats}
+          currentUserId={user?.id ?? null}
+          getBotLabel={getBotLabel}
+          isLoading={isChatsLoading}
+          scopeLabel={botScopeLabel}
+          selectedChatId={selectedChatId}
+          total={total}
+          onFilterChange={setActiveFilter}
+          onRefresh={() => void loadChats()}
+          onSelectChat={setSelectedChatId}
+        />
+      </div>
+
+      <div className={`${selectedChat ? 'flex' : 'hidden xl:flex'} min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}>
+        <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-4 sm:px-5">
           {selectedChat ? (
             <>
-              <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedChatId(null)}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 xl:hidden"
+                  title="К списку чатов"
+                >
+                  <ArrowLeft size={16} />
+                </button>
+                <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <h2 className="truncate text-base font-semibold text-white">
                     {getChatTitle(selectedChat)}
@@ -292,45 +385,58 @@ export default function ChatsPage() {
                   {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
                 </div>
                 <p className="truncate text-sm text-gray-500">
-                  Telegram ID {selectedChat.external_chat_id}
+                  {getBotLabel(selectedChat)} · Telegram ID {selectedChat.external_chat_id}
                 </p>
+                </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2 text-sm text-gray-500">
-                <CheckCheck size={16} />
-                <span>{selectedChat.last_read_at ? 'Read' : 'Unread'}</span>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsLeadOpen(true)}
+                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 xl:hidden"
+                >
+                  <UserRound size={15} />
+                  Лид
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsResetConfirmOpen(true)}
+                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 text-sm text-red-100 transition hover:border-red-300/60"
+                >
+                  <RotateCcw size={15} />
+                  <span className="hidden sm:inline">Сбросить диалог</span>
+                </button>
+                <div className="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
+                  <CheckCheck size={16} />
+                  <span>{selectedChat.last_read_at ? 'Прочитано' : 'Не прочитано'}</span>
+                </div>
               </div>
             </>
           ) : (
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <MessageSquareText size={18} />
-              Select a chat
+              Выберите чат
             </div>
           )}
         </header>
-
-        {error ? (
-          <div className="border-b border-red-400/20 bg-red-500/10 px-5 py-3 text-sm text-red-200">
-            {error}
-          </div>
-        ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto bg-background/45 px-5 py-4">
           {isMessagesLoading ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
               <LoaderCircle size={18} className="mr-2 animate-spin" />
-              Loading messages
+              Загрузка сообщений
             </div>
           ) : null}
 
           {!selectedChat && !isMessagesLoading ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
-              No chat selected.
+              Чат не выбран.
             </div>
           ) : null}
 
           {selectedChat && !isMessagesLoading && messages.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
-              No messages yet.
+              Сообщений пока нет.
             </div>
           ) : null}
 
@@ -357,7 +463,7 @@ export default function ChatsPage() {
                     >
                       <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
                         {isBot ? <Bot size={13} /> : null}
-                        <span>{message.sender_type}</span>
+                        <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
                         <span>{formatDateTime(message.created_at)}</span>
                       </div>
                       <p className="whitespace-pre-wrap break-words text-sm leading-6">
@@ -379,13 +485,13 @@ export default function ChatsPage() {
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 disabled:bg-background/40"
-              placeholder="Reply in Telegram"
+              placeholder="Ответить в Telegram"
               disabled={!selectedChat || isSending}
               rows={2}
             />
             <button
               type="submit"
-              title="Send message"
+              title="Отправить сообщение"
               disabled={!selectedChat || !draft.trim() || isSending}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -395,13 +501,39 @@ export default function ChatsPage() {
         </form>
       </div>
 
-      <LeadSidebar
-        activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
-        activeBotName={botScopeLabel}
-        activeChatId={selectedChatId}
-        hasActiveScope={Boolean(selectedProjectId)}
-        currentUserId={user?.id ?? null}
-      />
+      <div className="hidden min-h-0 xl:block">
+        <LeadSidebar
+          activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
+          activeBotName={botScopeLabel}
+          activeChatId={selectedChatId}
+          hasActiveScope={Boolean(selectedProjectId)}
+          currentUserId={user?.id ?? null}
+        />
+      </div>
+
+      {isLeadOpen ? (
+        <Modal title="Карточка лида" onClose={() => setIsLeadOpen(false)} maxWidthClassName="max-w-lg">
+          <LeadSidebar
+            activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
+            activeBotName={botScopeLabel}
+            activeChatId={selectedChatId}
+            hasActiveScope={Boolean(selectedProjectId)}
+            currentUserId={user?.id ?? null}
+          />
+        </Modal>
+      ) : null}
+
+      {isResetConfirmOpen ? (
+        <ConfirmDialog
+          title="Сбросить диалог?"
+          description="Сообщения, теги и состояние воронки будут очищены. Если пользователь напишет снова, он начнёт путь заново."
+          confirmLabel="Сбросить"
+          tone="danger"
+          isLoading={isResettingChat}
+          onCancel={() => setIsResetConfirmOpen(false)}
+          onConfirm={() => void handleResetChat()}
+        />
+      ) : null}
     </section>
   )
 }

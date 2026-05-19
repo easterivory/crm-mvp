@@ -140,3 +140,21 @@ class UserRepository(BaseRepository[User]):
             .values(is_deleted=True)
         )
         return result.rowcount > 0
+
+    async def update_user(self, user_id: UUID, **values) -> Optional[User]:
+        result = await self.db.execute(
+            update(User)
+            .where(User.id == user_id, User.is_deleted.is_(False))
+            .values(**values)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_by_id(user_id)
+
+    async def update_password_hash(self, user_id: UUID, password_hash: str) -> bool:
+        result = await self.db.execute(
+            update(User)
+            .where(User.id == user_id, User.is_deleted.is_(False))
+            .values(password_hash=password_hash)
+        )
+        return result.rowcount > 0

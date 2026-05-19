@@ -73,7 +73,7 @@ type LeadSidebarProps = {
 
 function formatDateTime(value: string | null) {
   if (!value) {
-    return 'No activity'
+    return 'Нет активности'
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -92,14 +92,14 @@ function getErrorMessage(err: unknown) {
       return detail
     }
     if (err.response?.status === 404) {
-      return 'Lead was not created for this chat yet.'
+        return 'Лид для этого чата ещё не создан.'
     }
     if (err.code === 'ERR_NETWORK') {
-      return 'Cannot reach API.'
+      return 'API недоступен.'
     }
   }
 
-  return 'Could not load lead.'
+  return 'Не удалось загрузить лида.'
 }
 
 export default function LeadSidebar({
@@ -345,15 +345,15 @@ export default function LeadSidebar({
       <div className="flex min-h-[73px] items-center justify-between gap-3 border-b border-white/5 px-5">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-300">
-            Lead Card
+            Карточка лида
           </h2>
           <p className="text-xs text-gray-500">
-            {currentStatus?.name ?? activeBotName ?? 'No status'}
+            {currentStatus?.name ?? activeBotName ?? 'Статус не указан'}
           </p>
         </div>
         <button
           type="button"
-          title="Refresh lead"
+          title="Обновить лида"
           onClick={() => void loadLead()}
           disabled={!activeChatId || isLoading}
           className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-accent-200 hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
@@ -366,15 +366,15 @@ export default function LeadSidebar({
         {!activeChatId ? (
           <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm text-gray-500">
             {hasActiveScope || activeBotId
-              ? 'Select a chat to view lead details.'
-              : 'Select a project to load chats.'}
+              ? 'Выберите чат, чтобы увидеть карточку лида.'
+              : 'Выберите проект, чтобы загрузить чаты.'}
           </div>
         ) : null}
 
         {activeChatId && isLoading ? (
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <LoaderCircle size={16} className="animate-spin" />
-            Loading lead
+            Загрузка лида
           </div>
         ) : null}
 
@@ -393,15 +393,15 @@ export default function LeadSidebar({
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-white">
-                    {lead.username ? `@${lead.username}` : 'Telegram lead'}
+                    {lead.username ? `@${lead.username}` : 'Telegram лид'}
                   </p>
-                  <p className="text-xs text-gray-500">Lead ID {lead.id.slice(0, 8)}</p>
+                  <p className="text-xs text-gray-500">ID лида {lead.id.slice(0, 8)}</p>
                 </div>
               </div>
 
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Status
+                  Статус
                 </span>
                 <div className="relative">
                   <select
@@ -427,7 +427,7 @@ export default function LeadSidebar({
 
               {currentStatus?.is_final ? (
                 <p className="mt-3 text-xs text-amber-300">
-                  This lead is in a final status.
+                  Этот лид находится в финальном статусе.
                 </p>
               ) : null}
             </div>
@@ -511,7 +511,7 @@ export default function LeadSidebar({
                   <label className="block">
                     <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
                       <Phone size={14} />
-                      Phone
+                      Телефон
                     </span>
                     <input
                       value={phoneDraft}
@@ -527,7 +527,7 @@ export default function LeadSidebar({
               <div className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
                 <CalendarDays size={16} className="mt-0.5 text-gray-500" />
                 <div className="min-w-0">
-                  <p className="text-xs text-gray-500">Created</p>
+                  <p className="text-xs text-gray-500">Создан</p>
                   <p className="truncate text-sm text-white">
                     {formatDateTime(lead.created_at)}
                   </p>
@@ -538,7 +538,7 @@ export default function LeadSidebar({
             <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
               <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
                 <Tag size={16} className="text-gray-500" />
-                Tags
+                Теги
               </div>
               {lead.tags && lead.tags.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
@@ -550,7 +550,7 @@ export default function LeadSidebar({
                       {tag.name}
                       <button
                         type="button"
-                        title="Remove tag"
+                        title="Убрать тег"
                         onClick={() => void handleRemoveTag(tag.id)}
                         disabled={isTagMutating}
                         className="rounded-full text-primary-100/70 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
@@ -561,7 +561,7 @@ export default function LeadSidebar({
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500">No tags yet.</p>
+                <p className="text-sm text-gray-500">Тегов пока нет.</p>
               )}
 
               <div className="mt-3 flex gap-2">
@@ -573,10 +573,10 @@ export default function LeadSidebar({
                 >
                   <option value="">
                     {isTagsLoading
-                      ? 'Loading tags...'
+                      ? 'Загрузка тегов...'
                       : availableTags.length === 0
-                        ? 'No tags available'
-                        : 'Select tag'}
+                        ? 'Нет доступных тегов'
+                        : 'Выберите тег'}
                   </option>
                   {availableTags.map((tag) => (
                     <option key={tag.id} value={tag.id}>
@@ -589,7 +589,7 @@ export default function LeadSidebar({
                   onClick={() => void handleAddTag()}
                   disabled={!selectedTagId || isTagMutating}
                   className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-gray-100 transition hover:border-accent-300/45 hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  title="Add tag"
+                  title="Добавить тег"
                 >
                   {isTagMutating ? (
                     <LoaderCircle size={15} className="animate-spin" />

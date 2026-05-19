@@ -25,24 +25,24 @@ export default function BotSelector() {
 
   const label = useMemo(() => {
     if (!selectedProjectId) {
-      return 'Select project'
+      return 'Выберите проект'
     }
     if (isLoading) {
-      return 'Loading bots'
+      return 'Загрузка ботов'
     }
     if (error) {
-      return 'Bots unavailable'
+      return 'Боты недоступны'
     }
     if (bots.length === 0) {
-      return 'No bots'
+      return 'Нет ботов'
     }
     if (selectedBotIds.length === 0) {
-      return 'All bots'
+      return 'Все боты'
     }
     if (selectedBots.length === 1) {
       return selectedBots[0].name
     }
-    return `${selectedBots.length} bots`
+    return `${selectedBots.length} бота`
   }, [bots.length, error, isLoading, selectedBotIds.length, selectedBots, selectedProjectId])
 
   const loadBots = useCallback(async () => {
@@ -62,7 +62,7 @@ export default function BotSelector() {
       setBots(items)
       setLoadedProjectId(selectedProjectId)
     } catch {
-      setError('Bots unavailable')
+      setError('Боты недоступны')
       setBots([])
       setLoadedProjectId(null)
     } finally {
@@ -101,7 +101,7 @@ export default function BotSelector() {
   return (
     <div className="relative min-w-0">
       <span className="block text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500">
-        Bots
+        Боты
       </span>
       <button
         type="button"
@@ -129,7 +129,7 @@ export default function BotSelector() {
             }}
             className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-gray-200 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:text-gray-600"
           >
-            <span>All bots in project</span>
+            <span>Все боты проекта</span>
             {selectedBotIds.length === 0 ? <Check size={16} className="text-accent-300" /> : null}
           </button>
 

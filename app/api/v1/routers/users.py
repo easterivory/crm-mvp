@@ -7,7 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import get_current_user
 from app.core.database import get_db
 from app.schemas.common import PaginatedResponse
-from app.schemas.user import LoginIn, RoleOut, TokenOut, UserCreate, UserOut
+from app.schemas.user import (
+    LoginIn,
+    RoleOut,
+    TokenOut,
+    UserCreate,
+    UserOut,
+    UserPasswordChange,
+    UserUpdate,
+)
 from app.services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -55,6 +63,34 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
 ) -> UserOut:
     return await UserService(db).create_user(data, actor=current_user)
+
+
+@router.patch("/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: UUID,
+    data: UserUpdate,
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    return await UserService(db).update_user(
+        user_id=user_id,
+        data=data,
+        actor=current_user,
+    )
+
+
+@router.post("/{user_id}/change-password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    user_id: UUID,
+    data: UserPasswordChange,
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await UserService(db).change_password(
+        user_id=user_id,
+        data=data,
+        actor=current_user,
+    )
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

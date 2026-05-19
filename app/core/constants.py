@@ -54,6 +54,9 @@ class AuditAction:
     LEAD_MANAGER_REMOVED = "lead.manager_removed"
     LEAD_TAG_ADDED = "lead.tag_added"
     LEAD_TAG_REMOVED = "lead.tag_removed"
+    CHAT_RESET = "chat.reset"
+    LEAD_SUBMITTED_STUB = "lead.submitted_stub"
+    LEAD_REJECTED = "lead.rejected"
 
 
 class EntityType:

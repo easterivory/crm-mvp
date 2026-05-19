@@ -62,3 +62,15 @@ class LeadOut(OrmBase):
     created_at: datetime
     is_deleted: bool
     tags: list[LeadTagOut] = Field(default_factory=list)
+    bot_id: Optional[uuid.UUID] = None
+    bot_name: Optional[str] = None
+    bot_username: Optional[str] = None
+    tracking_link_id: Optional[uuid.UUID] = None
+    tracking_code: Optional[str] = None
+    tracking_ref_code: Optional[str] = None
+    tracking_title: Optional[str] = None
+    contact_name: Optional[str] = None
+    external_chat_id: Optional[str] = None
+    manager_name: Optional[str] = None
+    status_code: Optional[str] = None
+    status_name: Optional[str] = None

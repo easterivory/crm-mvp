@@ -29,11 +29,14 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import AuditAction, EntityType, LeadStatusCode
 from app.models.chat import Chat
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
+from app.services.audit_service import AuditService
 
 
 class ChatService:
@@ -41,7 +44,9 @@ class ChatService:
         self.db = db
         self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
+        self.lead_repo = LeadRepository(db)
         self.project_repo = ProjectRepository(db)
+        self.audit = AuditService(db)
 
     # ── Public methods ─────────────────────────────────────────────────────────
 
@@ -205,6 +210,55 @@ class ChatService:
                 detail="Chat not found",
             )
         await self.chat_repo.mark_as_read(chat_id)
+
+    async def reset_chat(
+        self,
+        chat_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> ChatOut:
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found",
+            )
+
+        lead = await self.lead_repo.get_by_chat(chat_id, project_id)
+        if lead is not None:
+            await self.lead_repo.clear_tags(lead.id)
+            await self.lead_repo.set_status_by_code(
+                lead.id,
+                project_id,
+                LeadStatusCode.LOST,
+                reset_contact=True,
+                reset_manager=True,
+            )
+
+        await self.bot_repo.reset_chat_state(chat_id)
+        updated = await self.chat_repo.reset_chat(chat_id)
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Chat was already reset or changed by another request",
+            )
+
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.CHAT_RESET,
+            entity_type=EntityType.CHAT,
+            entity_id=chat_id,
+            actor_id=actor_id,
+            meta={
+                "external_chat_id": chat.external_chat_id,
+                "bot_id": str(chat.bot_id) if chat.bot_id else None,
+                "lead_id": str(lead.id) if lead else None,
+            },
+        )
+
+        return ChatOut.model_validate(updated).model_copy(
+            update=self._compute_flags(updated, 0)
+        )
 
     async def count_red(self, project_id: UUID) -> int:
         project = await self.project_repo.get_active(project_id)

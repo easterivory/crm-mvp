@@ -97,6 +97,7 @@ class ChatRepository(BaseRepository[Chat]):
         stmt = select(Chat).where(
             Chat.project_id == project_id,
             Chat.is_deleted.is_(False),
+            Chat.reset_at.is_(None),
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
@@ -145,6 +146,24 @@ class ChatRepository(BaseRepository[Chat]):
             Chat.project_id == project_id,
             Chat.external_chat_id == external_chat_id,
             Chat.is_deleted.is_(False),
+            Chat.reset_at.is_(None),
+        )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_reset_by_external(
+        self,
+        project_id: UUID,
+        external_chat_id: str,
+        bot_id: Optional[UUID] = None,
+    ) -> Optional[Chat]:
+        stmt = select(Chat).where(
+            Chat.project_id == project_id,
+            Chat.external_chat_id == external_chat_id,
+            Chat.is_deleted.is_(False),
+            Chat.reset_at.isnot(None),
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
@@ -168,6 +187,18 @@ class ChatRepository(BaseRepository[Chat]):
 
     async def get_active(self, chat_id: UUID, project_id: UUID) -> Optional[Chat]:
         """Single non-deleted chat scoped to a project."""
+        result = await self.db.execute(
+            select(Chat).where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_any_in_project(self, chat_id: UUID, project_id: UUID) -> Optional[Chat]:
+        """Fetch a non-deleted chat scoped to a project, including reset cycles."""
         result = await self.db.execute(
             select(Chat).where(
                 Chat.id == chat_id,
@@ -242,6 +273,7 @@ class ChatRepository(BaseRepository[Chat]):
         stmt = select(count_col).where(
             Chat.project_id == project_id,
             Chat.is_deleted.is_(False),
+            Chat.reset_at.is_(None),
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
@@ -282,7 +314,11 @@ class ChatRepository(BaseRepository[Chat]):
 
         result = await self.db.execute(
             update(Chat)
-            .where(Chat.id == chat_id, Chat.is_deleted.is_(False))
+            .where(
+                Chat.id == chat_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
             .values(**values)
         )
         if result.rowcount == 0:
@@ -292,15 +328,71 @@ class ChatRepository(BaseRepository[Chat]):
         now = datetime.now(timezone.utc)
         await self.db.execute(
             update(Chat)
-            .where(Chat.id == chat_id)
+            .where(Chat.id == chat_id, Chat.reset_at.is_(None))
             .values(last_read_at=now, updated_at=now)
         )
+
+    async def reset_chat(self, chat_id: UUID) -> Optional[Chat]:
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(
+                reset_at=now,
+                reset_count=Chat.reset_count + 1,
+                current_cycle_started_at=None,
+                last_message_at=None,
+                last_user_message_at=None,
+                last_manager_reply_at=None,
+                last_read_at=None,
+                updated_at=now,
+            )
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_by_id(chat_id)
+
+    async def reactivate_reset_chat(
+        self,
+        chat_id: UUID,
+        *,
+        tracking_link_id: Optional[UUID],
+        contact_name: Optional[str],
+    ) -> Optional[Chat]:
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.isnot(None),
+            )
+            .values(
+                tracking_link_id=tracking_link_id,
+                contact_name=contact_name,
+                reset_at=None,
+                current_cycle_started_at=now,
+                last_message_at=None,
+                last_user_message_at=None,
+                last_manager_reply_at=None,
+                last_read_at=None,
+                updated_at=now,
+            )
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_by_id(chat_id)
 
     async def count_red(self, project_id: UUID, sla_threshold_minutes: int) -> int:
         result = await self.db.execute(
             select(func.count()).where(
                 Chat.project_id == project_id,
                 Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
                 self._is_red_expr(sla_threshold_minutes),
             )
         )
@@ -311,6 +403,7 @@ class ChatRepository(BaseRepository[Chat]):
             select(func.count()).where(
                 Chat.project_id == project_id,
                 Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
                 self._unanswered_expr(),
             )
         )

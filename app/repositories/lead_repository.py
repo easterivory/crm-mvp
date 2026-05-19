@@ -31,10 +31,15 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 
+from app.models.bot import Bot
+from app.models.chat import Chat
 from app.models.lead import Lead
+from app.models.lead import LeadTag
 from app.models.lead_status import LeadStatus
+from app.models.tracking import TrackingLink
+from app.models.user import User
 from app.repositories.base import BaseRepository
 
 
@@ -81,20 +86,55 @@ class LeadRepository(BaseRepository[Lead]):
         self,
         project_id: UUID,
         status_id: Optional[UUID] = None,
+        status_code: Optional[str] = None,
         manager_id: Optional[UUID] = None,
+        bot_ids: list[UUID] | None = None,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        tag_ids: list[UUID] | None = None,
+        search: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Lead]:
-        stmt = select(Lead).where(
-            Lead.project_id == project_id,
-            Lead.is_deleted.is_(False),
+        stmt = (
+            select(Lead)
+            .select_from(Lead)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
         )
         if status_id is not None:
             stmt = stmt.where(Lead.status_id == status_id)
+        if status_code is not None:
+            stmt = stmt.where(LeadStatus.code == status_code)
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
+        if bot_ids:
+            stmt = stmt.where(Chat.bot_id.in_(bot_ids))
+        if date_from is not None:
+            stmt = stmt.where(Lead.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+        if date_to is not None:
+            stmt = stmt.where(Lead.created_at < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+        if tag_ids:
+            stmt = stmt.join(LeadTag, LeadTag.lead_id == Lead.id).where(
+                LeadTag.tag_id.in_(tag_ids)
+            )
+        if search:
+            needle = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(func.coalesce(Lead.username, "")).like(needle),
+                    func.lower(func.coalesce(Lead.phone, "")).like(needle),
+                    func.lower(func.coalesce(Chat.contact_name, "")).like(needle),
+                    func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle),
+                )
+            )
 
-        stmt = stmt.order_by(Lead.created_at.desc()).limit(limit).offset(offset)
+        stmt = stmt.order_by(Lead.created_at.desc()).distinct().limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
@@ -102,19 +142,82 @@ class LeadRepository(BaseRepository[Lead]):
         self,
         project_id: UUID,
         status_id: Optional[UUID] = None,
+        status_code: Optional[str] = None,
         manager_id: Optional[UUID] = None,
+        bot_ids: list[UUID] | None = None,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        tag_ids: list[UUID] | None = None,
+        search: Optional[str] = None,
     ) -> int:
-        stmt = select(func.count(Lead.id)).where(
-            Lead.project_id == project_id,
-            Lead.is_deleted.is_(False),
+        stmt = (
+            select(func.count(Lead.id.distinct()))
+            .select_from(Lead)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
         )
         if status_id is not None:
             stmt = stmt.where(Lead.status_id == status_id)
+        if status_code is not None:
+            stmt = stmt.where(LeadStatus.code == status_code)
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
+        if bot_ids:
+            stmt = stmt.where(Chat.bot_id.in_(bot_ids))
+        if date_from is not None:
+            stmt = stmt.where(Lead.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+        if date_to is not None:
+            stmt = stmt.where(Lead.created_at < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+        if tag_ids:
+            stmt = stmt.join(LeadTag, LeadTag.lead_id == Lead.id).where(
+                LeadTag.tag_id.in_(tag_ids)
+            )
+        if search:
+            needle = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(func.coalesce(Lead.username, "")).like(needle),
+                    func.lower(func.coalesce(Lead.phone, "")).like(needle),
+                    func.lower(func.coalesce(Chat.contact_name, "")).like(needle),
+                    func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle),
+                )
+            )
 
         result = await self.db.execute(stmt)
         return result.scalar_one()
+
+    async def get_lead_context(self, lead_id: UUID) -> dict:
+        result = await self.db.execute(
+            select(
+                Chat.bot_id,
+                Chat.tracking_link_id,
+                Chat.contact_name,
+                Chat.external_chat_id,
+                Chat.current_cycle_started_at,
+                Bot.name.label("bot_name"),
+                Bot.bot_username,
+                TrackingLink.code.label("tracking_code"),
+                TrackingLink.ref_code.label("tracking_ref_code"),
+                TrackingLink.title.label("tracking_title"),
+                User.name.label("manager_name"),
+                LeadStatus.code.label("status_code"),
+                LeadStatus.name.label("status_name"),
+            )
+            .select_from(Lead)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .outerjoin(Bot, Bot.id == Chat.bot_id)
+            .outerjoin(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+            .outerjoin(User, User.id == Lead.manager_id)
+            .where(Lead.id == lead_id)
+        )
+        row = result.mappings().first()
+        return dict(row) if row is not None else {}
 
     async def aggregate_leads_by_status_for_date(
         self,
@@ -219,6 +322,72 @@ class LeadRepository(BaseRepository[Lead]):
         if result.rowcount == 0:
             return None
         return await self.get_active(lead_id, project_id)
+
+    async def set_status_by_code(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        status_code: str,
+        *,
+        reset_contact: bool = False,
+        reset_manager: bool = False,
+    ) -> Optional[Lead]:
+        lead_status = await self.get_status_by_code(status_code)
+        if lead_status is None:
+            return None
+
+        values: dict = {"status_id": lead_status.id, "updated_at": func.now()}
+        if reset_contact:
+            values.update({"phone": None, "username": None})
+        if reset_manager:
+            values["manager_id"] = None
+
+        result = await self.db.execute(
+            update(Lead)
+            .where(
+                Lead.id == lead_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+            )
+            .values(**values)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_active(lead_id, project_id)
+
+    async def reset_existing_for_new_cycle(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        *,
+        username: Optional[str],
+    ) -> Optional[Lead]:
+        new_status = await self.get_status_by_code("new")
+        if new_status is None:
+            return None
+
+        await self.clear_tags(lead_id)
+        result = await self.db.execute(
+            update(Lead)
+            .where(
+                Lead.id == lead_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+            )
+            .values(
+                status_id=new_status.id,
+                manager_id=None,
+                phone=None,
+                username=username,
+                updated_at=func.now(),
+            )
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_active(lead_id, project_id)
+
+    async def clear_tags(self, lead_id: UUID) -> None:
+        await self.db.execute(delete(LeadTag).where(LeadTag.lead_id == lead_id))
 
     # ── LeadStatus lookups (same domain, no separate repository needed) ────────
 

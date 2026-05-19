@@ -279,6 +279,27 @@ class BotRepository(BaseRepository[Bot]):
             )
         )
 
+    async def reactivate_chat_state(
+        self,
+        *,
+        chat_id: UUID,
+        bot_version_id: UUID,
+        current_step_id: Optional[UUID],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        await self.db.execute(
+            update(ChatBotState)
+            .where(ChatBotState.chat_id == chat_id)
+            .values(
+                bot_version_id=bot_version_id,
+                current_step_id=current_step_id,
+                variables={},
+                is_active=True,
+                last_interaction_at=now,
+                updated_at=now,
+            )
+        )
+
     async def create_chat_state(
         self,
         *,
@@ -303,4 +324,18 @@ class BotRepository(BaseRepository[Bot]):
             update(ChatBotState)
             .where(ChatBotState.chat_id == chat_id)
             .values(is_active=False, updated_at=now)
+        )
+
+    async def reset_chat_state(self, chat_id: UUID) -> None:
+        now = datetime.now(timezone.utc)
+        await self.db.execute(
+            update(ChatBotState)
+            .where(ChatBotState.chat_id == chat_id)
+            .values(
+                current_step_id=None,
+                variables={},
+                is_active=False,
+                last_interaction_at=now,
+                updated_at=now,
+            )
         )

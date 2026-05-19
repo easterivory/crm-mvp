@@ -31,3 +31,33 @@ Feature-модули — основной формат для новых кру�
 - Project summary берется из `/api/v1/tracking/metrics/project`.
 - Link detail берется из `/api/v1/tracking/metrics/links/{link_id}`.
 - Manual spend создается и редактируется через tracking spends API.
+
+## Navigation IA
+
+- Sidebar order: `Чаты`, `Воронки`, `Рассылки`, `Боты`, `Лиды`, `Трекинг`, `Аналитика`, `Настройки`.
+- `/dashboard` остаётся для совместимости, но основной пункт меню ведёт на `/analytics`.
+- `/funnels` и `/broadcasts` являются placeholder routes до реализации соответствующих workflows.
+
+## Leads Feature
+
+- `frontend/src/features/leads` содержит `api.ts`, `types.ts`, `hooks.ts`, `components/`.
+- Leads page читает `selectedProjectId` и `selectedBotIds` из общего scope.
+- `Отправить` вызывает backend status-заглушку без внешнего CRM API.
+- `Удалить` означает reject/archive, не physical delete.
+
+## Chat Reset UI
+
+- Reset запускается из chat detail через confirm dialog.
+- После успешного reset чат убирается из активного списка без full reload.
+- Новый входящий Telegram message запускает новый lifecycle на backend.
+
+## Tracking Creation Rule
+
+- Создание tracking links живёт только в `Трекинг`.
+- `BotsPage` управляет ботами и webhook, но не создаёт tracking links напрямую.
+
+## Responsive Rules
+
+- Sidebar collapsible на desktop и drawer/offcanvas на tablet/mobile.
+- Body-level horizontal overflow запрещён; таблицы скроллятся только внутри контейнеров.
+- Новые feature pages должны иметь одно-колоночный mobile layout и не рассчитывать на wide viewport.

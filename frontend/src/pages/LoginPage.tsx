@@ -35,12 +35,12 @@ export default function LoginPage() {
         if (typeof detail === 'string' && detail.length > 0) {
           setError(detail)
         } else if (err.code === 'ERR_NETWORK') {
-          setError('Cannot reach API. Check backend/container status.')
+          setError('API недоступен. Проверьте backend или контейнер.')
         } else {
-          setError('Login failed. Please try again.')
+          setError('Не удалось войти. Попробуйте снова.')
         }
       } else {
-        setError('Login failed. Please try again.')
+        setError('Не удалось войти. Попробуйте снова.')
       }
     } finally {
       setIsLoading(false)
@@ -51,7 +51,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-neutral-950 p-4 text-zinc-100">
       <div className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-950 p-8 shadow-2xl">
         <h1 className="mb-2 text-center text-2xl font-semibold text-zinc-100">CRM MVP</h1>
-        <p className="mb-6 text-center text-sm text-zinc-500">Sign in to continue</p>
+        <p className="mb-6 text-center text-sm text-zinc-500">Войдите, чтобы продолжить</p>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           <label className="block">
@@ -71,7 +71,7 @@ export default function LoginPage() {
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm font-medium text-zinc-300">Password</span>
+            <span className="mb-1 block text-sm font-medium text-zinc-300">Пароль</span>
             <div className="relative">
               <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
               <input
@@ -79,7 +79,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 py-2 pl-10 pr-3 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-500 focus:ring-2"
-                placeholder="Enter password"
+                placeholder="Введите пароль"
                 autoComplete="current-password"
                 required
               />
@@ -94,7 +94,7 @@ export default function LoginPage() {
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-medium text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-75"
           >
             {isLoading ? <LoaderCircle size={16} className="animate-spin" /> : null}
-            {isLoading ? 'Signing in...' : 'Sign In'}
+            {isLoading ? 'Входим...' : 'Войти'}
           </button>
         </form>
       </div>

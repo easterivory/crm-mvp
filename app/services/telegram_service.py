@@ -189,17 +189,32 @@ class TelegramService:
             return chat, False
 
         # Build a human-readable contact name from available sender fields
-        contact_name: Optional[str] = None
-        if message.from_user:
-            parts = [
-                p
-                for p in [
-                    message.from_user.first_name,
-                    f"@{message.from_user.username}" if message.from_user.username else None,
-                ]
-                if p
-            ]
-            contact_name = " ".join(parts) or None
+        contact_name = self._contact_name_from_message(message)
+
+        reset_chat = await self.chat_repo.get_reset_by_external(
+            project_id,
+            external_chat_id,
+            bot_id=bot_id,
+        )
+        if reset_chat is not None:
+            reactivated = await self.chat_repo.reactivate_reset_chat(
+                reset_chat.id,
+                tracking_link_id=tracking_link_id,
+                contact_name=contact_name,
+            )
+            if reactivated is None:
+                raise RuntimeError(
+                    f"Reset chat row missing during reactivation for "
+                    f"external_chat_id={external_chat_id}"
+                )
+            logger.info(
+                "Reactivated reset chat id=%s external_chat_id=%s project_id=%s bot_id=%s",
+                reactivated.id,
+                external_chat_id,
+                project_id,
+                bot_id,
+            )
+            return reactivated, True
 
         try:
             async with self.db.begin_nested():
@@ -239,6 +254,21 @@ class TelegramService:
             return chat, False
 
         return chat, True
+
+    @staticmethod
+    def _contact_name_from_message(message: TelegramMessage) -> Optional[str]:
+        if not message.from_user:
+            return None
+
+        parts = [
+            p
+            for p in [
+                message.from_user.first_name,
+                f"@{message.from_user.username}" if message.from_user.username else None,
+            ]
+            if p
+        ]
+        return " ".join(parts) or None
 
     async def _resolve_tracking_link_id(
         self,
@@ -330,6 +360,22 @@ class TelegramService:
         # Fast path: lead already exists for this chat
         existing = await self.lead_repo.get_by_chat(chat_id, project_id)
         if existing is not None:
+            chat = await self.chat_repo.get_active(chat_id, project_id)
+            if (
+                chat is not None
+                and chat.current_cycle_started_at is not None
+                and existing.updated_at < chat.current_cycle_started_at
+            ):
+                username = (
+                    message.from_user.username
+                    if message.from_user and message.from_user.username
+                    else None
+                )
+                await self.lead_repo.reset_existing_for_new_cycle(
+                    existing.id,
+                    project_id,
+                    username=username,
+                )
             return
 
         # Resolve the 'new' status — must exist in the reference table
