@@ -173,6 +173,7 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
                 Chat.project_id == project_id,
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
             )
             .group_by(Chat.tracking_link_id)
             .subquery()
@@ -188,6 +189,7 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
                 Lead.is_deleted.is_(False),
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
             )
             .group_by(Chat.tracking_link_id)
             .subquery()

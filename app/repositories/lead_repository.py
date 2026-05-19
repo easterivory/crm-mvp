@@ -33,6 +33,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, update
 
+from app.core.constants import LeadStatusCode
 from app.models.bot import Bot
 from app.models.chat import Chat
 from app.models.lead import Lead
@@ -41,6 +42,9 @@ from app.models.lead_status import LeadStatus
 from app.models.tracking import TrackingLink
 from app.models.user import User
 from app.repositories.base import BaseRepository
+
+
+DEFAULT_EXCLUDED_STATUS_CODES = frozenset({LeadStatusCode.LOST, "rejected"})
 
 
 class LeadRepository(BaseRepository[Lead]):
@@ -96,6 +100,7 @@ class LeadRepository(BaseRepository[Lead]):
         limit: int = 50,
         offset: int = 0,
     ) -> list[Lead]:
+        lifecycle_at = self._lead_lifecycle_at()
         stmt = (
             select(Lead)
             .select_from(Lead)
@@ -111,14 +116,26 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.where(Lead.status_id == status_id)
         if status_code is not None:
             stmt = stmt.where(LeadStatus.code == status_code)
+        if status_id is None and status_code is None:
+            stmt = stmt.where(~LeadStatus.code.in_(DEFAULT_EXCLUDED_STATUS_CODES))
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
         if bot_ids:
             stmt = stmt.where(Chat.bot_id.in_(bot_ids))
         if date_from is not None:
-            stmt = stmt.where(Lead.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+            stmt = stmt.where(
+                lifecycle_at
+                >= datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            )
         if date_to is not None:
-            stmt = stmt.where(Lead.created_at < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+            stmt = stmt.where(
+                lifecycle_at
+                < datetime.combine(
+                    date_to + timedelta(days=1),
+                    time.min,
+                    tzinfo=timezone.utc,
+                )
+            )
         if tag_ids:
             stmt = stmt.join(LeadTag, LeadTag.lead_id == Lead.id).where(
                 LeadTag.tag_id.in_(tag_ids)
@@ -134,7 +151,12 @@ class LeadRepository(BaseRepository[Lead]):
                 )
             )
 
-        stmt = stmt.order_by(Lead.created_at.desc()).distinct().limit(limit).offset(offset)
+        stmt = (
+            stmt.order_by(Lead.updated_at.desc(), Lead.created_at.desc())
+            .distinct()
+            .limit(limit)
+            .offset(offset)
+        )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
@@ -150,6 +172,7 @@ class LeadRepository(BaseRepository[Lead]):
         tag_ids: list[UUID] | None = None,
         search: Optional[str] = None,
     ) -> int:
+        lifecycle_at = self._lead_lifecycle_at()
         stmt = (
             select(func.count(Lead.id.distinct()))
             .select_from(Lead)
@@ -165,14 +188,26 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.where(Lead.status_id == status_id)
         if status_code is not None:
             stmt = stmt.where(LeadStatus.code == status_code)
+        if status_id is None and status_code is None:
+            stmt = stmt.where(~LeadStatus.code.in_(DEFAULT_EXCLUDED_STATUS_CODES))
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
         if bot_ids:
             stmt = stmt.where(Chat.bot_id.in_(bot_ids))
         if date_from is not None:
-            stmt = stmt.where(Lead.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+            stmt = stmt.where(
+                lifecycle_at
+                >= datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            )
         if date_to is not None:
-            stmt = stmt.where(Lead.created_at < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+            stmt = stmt.where(
+                lifecycle_at
+                < datetime.combine(
+                    date_to + timedelta(days=1),
+                    time.min,
+                    tzinfo=timezone.utc,
+                )
+            )
         if tag_ids:
             stmt = stmt.join(LeadTag, LeadTag.lead_id == Lead.id).where(
                 LeadTag.tag_id.in_(tag_ids)
@@ -390,6 +425,10 @@ class LeadRepository(BaseRepository[Lead]):
         await self.db.execute(delete(LeadTag).where(LeadTag.lead_id == lead_id))
 
     # ── LeadStatus lookups (same domain, no separate repository needed) ────────
+
+    @staticmethod
+    def _lead_lifecycle_at():
+        return func.coalesce(Chat.current_cycle_started_at, Lead.created_at)
 
     async def get_status(self, status_id: UUID) -> Optional[LeadStatus]:
         """Fetch a LeadStatus row by PK."""

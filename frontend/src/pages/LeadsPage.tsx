@@ -70,7 +70,9 @@ export default function LeadsPage() {
   const [mutatingLeadId, setMutatingLeadId] = useState<string | null>(null)
 
   const activeLeadCount = useMemo(
-    () => leads.filter((lead) => lead.status_code !== 'lost').length,
+    () =>
+      leads.filter((lead) => !['lost', 'rejected'].includes(lead.status_code ?? ''))
+        .length,
     [leads],
   )
 
@@ -177,7 +179,7 @@ export default function LeadsPage() {
             </p>
             <h1 className="mt-1 text-2xl font-semibold text-white">Карточки лидов</h1>
             <p className="mt-1 text-sm text-gray-500">
-              {activeLeadCount} активных из {total}
+              {statusFilter ? `${total} найдено` : `${activeLeadCount} активных`}
             </p>
           </div>
 
@@ -206,7 +208,7 @@ export default function LeadsPage() {
             onChange={(event) => setStatusFilter(event.target.value)}
             className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
           >
-            <option value="">Все статусы</option>
+            <option value="">Активные статусы</option>
             {statuses.map((status) => (
               <option key={status.id} value={status.code}>
                 {status.name}

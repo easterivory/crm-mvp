@@ -342,6 +342,7 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.reset_at.is_(None),
             )
             .values(
+                tracking_link_id=None,
                 reset_at=now,
                 reset_count=Chat.reset_count + 1,
                 current_cycle_started_at=None,

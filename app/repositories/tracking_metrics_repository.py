@@ -86,12 +86,14 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._chat_lifecycle_at()
         stmt = select(func.count(distinct(Chat.id))).where(
             Chat.project_id == project_id,
             Chat.tracking_link_id.is_not(None),
             Chat.is_deleted.is_(False),
-            Chat.created_at >= start_at,
-            Chat.created_at < end_at,
+            Chat.reset_at.is_(None),
+            lifecycle_at >= start_at,
+            lifecycle_at < end_at,
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
@@ -106,12 +108,14 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._chat_lifecycle_at()
         result = await self.db.execute(
             select(func.count(distinct(Chat.id))).where(
                 Chat.tracking_link_id == link_id,
                 Chat.is_deleted.is_(False),
-                Chat.created_at >= start_at,
-                Chat.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
         )
         return result.scalar_one()
@@ -268,6 +272,7 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> list[dict[str, Any]]:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._chat_lifecycle_at()
         result = await self.db.execute(
             select(
                 BotStep.id.label("step_id"),
@@ -281,8 +286,9 @@ class TrackingMetricsRepository:
             .where(
                 Chat.tracking_link_id == link_id,
                 Chat.is_deleted.is_(False),
-                Chat.created_at >= start_at,
-                Chat.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
             .group_by(BotStep.id)
             .order_by(BotStep.created_at.asc())
@@ -306,6 +312,7 @@ class TrackingMetricsRepository:
         submitted_only: bool,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._lead_lifecycle_at()
         stmt = (
             select(func.count(distinct(Lead.id)))
             .join(Chat, Chat.id == Lead.chat_id)
@@ -314,8 +321,9 @@ class TrackingMetricsRepository:
                 Lead.is_deleted.is_(False),
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
-                Lead.created_at >= start_at,
-                Lead.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
         )
         if bot_id is not None:
@@ -337,6 +345,7 @@ class TrackingMetricsRepository:
         submitted_only: bool,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._lead_lifecycle_at()
         stmt = (
             select(func.count(distinct(Lead.id)))
             .join(Chat, Chat.id == Lead.chat_id)
@@ -344,8 +353,9 @@ class TrackingMetricsRepository:
                 Chat.tracking_link_id == link_id,
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),
-                Lead.created_at >= start_at,
-                Lead.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
         )
         if submitted_only:
@@ -415,6 +425,7 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._chat_lifecycle_at()
         stmt = (
             select(
                 Chat.tracking_link_id.label("link_id"),
@@ -424,8 +435,9 @@ class TrackingMetricsRepository:
                 Chat.project_id == project_id,
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
-                Chat.created_at >= start_at,
-                Chat.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
             .group_by(Chat.tracking_link_id)
         )
@@ -448,6 +460,7 @@ class TrackingMetricsRepository:
         submitted_only: bool,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._lead_lifecycle_at()
         stmt = (
             select(
                 Chat.tracking_link_id.label("link_id"),
@@ -459,8 +472,9 @@ class TrackingMetricsRepository:
                 Lead.is_deleted.is_(False),
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
-                Lead.created_at >= start_at,
-                Lead.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
             .group_by(Chat.tracking_link_id)
         )
@@ -542,7 +556,8 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
-        metric_date = func.date(Chat.created_at)
+        lifecycle_at = self._chat_lifecycle_at()
+        metric_date = func.date(lifecycle_at)
         stmt = (
             select(
                 metric_date.label("metric_date"),
@@ -551,8 +566,9 @@ class TrackingMetricsRepository:
             .where(
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
-                Chat.created_at >= start_at,
-                Chat.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
             .group_by(metric_date)
         )
@@ -579,7 +595,8 @@ class TrackingMetricsRepository:
         submitted_only: bool,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
-        metric_date = func.date(Lead.created_at)
+        lifecycle_at = self._lead_lifecycle_at()
+        metric_date = func.date(lifecycle_at)
         stmt = (
             select(
                 metric_date.label("metric_date"),
@@ -590,8 +607,9 @@ class TrackingMetricsRepository:
                 Lead.is_deleted.is_(False),
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
-                Lead.created_at >= start_at,
-                Lead.created_at < end_at,
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
             )
             .group_by(metric_date)
         )
@@ -686,6 +704,14 @@ class TrackingMetricsRepository:
         start_at = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
         end_at = datetime.combine(date_to, time.min, tzinfo=timezone.utc) + timedelta(days=1)
         return start_at, end_at
+
+    @staticmethod
+    def _chat_lifecycle_at():
+        return func.coalesce(Chat.current_cycle_started_at, Chat.created_at)
+
+    @staticmethod
+    def _lead_lifecycle_at():
+        return func.coalesce(Chat.current_cycle_started_at, Lead.created_at)
 
     @staticmethod
     def _step_label(step_type: str, config: dict[str, Any] | None) -> str:

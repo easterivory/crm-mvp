@@ -80,15 +80,41 @@ Tracking links создаются только в разделе `Трекинг
 
 Reset чата не удаляет Telegram user и не удаляет старые сообщения физически.
 Текущий lifecycle хранится на `chats`: `reset_at`, `reset_count`, `current_cycle_started_at`.
-При reset CRM скрывает чат из активных списков, очищает lead tags, переводит текущий lead в `lost`, сбрасывает manager/contact поля лида и деактивирует `chat_bot_states`.
-Из-за уникального ограничения `project_id + bot_id + external_chat_id` новый lifecycle безопасно реализован на той же строке `chat`: когда Telegram user пишет снова, webhook реактивирует reset-chat, очищает bot state, берёт новый `/start` ref_code при наличии и запускает bot funnel заново.
+При reset CRM скрывает чат из активных списков, очищает lead tags, переводит текущий lead в `lost`, сбрасывает manager/contact поля лида, очищает активный `tracking_link_id` и деактивирует `chat_bot_states`.
+Из-за уникального ограничения `project_id + bot_id + external_chat_id` новый lifecycle безопасно реализован на той же строке `chat`: когда Telegram user пишет снова, webhook реактивирует reset-chat, берёт новый `/start` ref_code при наличии, записывает новый `tracking_link_id` или оставляет attribution пустой без ref_code, очищает bot state и запускает bot funnel заново.
 Messages API показывает только сообщения текущего lifecycle, если `current_cycle_started_at` задан.
+
+### Chat lifecycle and tracking attribution
+
+Фактический Telegram lifecycle:
+
+1. Telegram webhook приходит на `/api/v1/telegram/webhook/{bot_id}`; `project_id` берётся из `Bot`, не из payload.
+2. `/start ref_code` разбирается только как Telegram start payload. Tracking lookup проверяет `ref_code`, `project_id` и совпадение `bot_id`.
+3. Chat lookup всегда scoped by `project_id + bot_id + external_chat_id`; один и тот же Telegram user в разных ботах получает разные chat lifecycle.
+4. Новый chat создаётся с `tracking_link_id` из валидного `/start`, либо без attribution.
+5. Lead создаётся один-к-одному к chat со статусом `new`; tags живут в `lead_tags`, definitions в `tags` не удаляются при reset.
+6. Reset переводит текущий lead в `lost`, очищает `lead_tags`, `tracking_link_id`, timestamps active cycle и bot state, но не удаляет `messages`, `leads` или Telegram user data.
+7. Пока `reset_at` заполнен, chat не возвращается из активного `GET /api/v1/chats` и lead не виден в default active leads list.
+8. Следующее сообщение этого Telegram chat в том же bot реактивирует ту же строку `chats`, выставляет `current_cycle_started_at=now`, обновляет attribution из нового `/start ref_code` или оставляет её пустой, сбрасывает lead в `new` и стартует bot funnel сначала.
+
+Tracking metrics считаются по текущему активному lifecycle. Для chats используется `coalesce(chats.current_cycle_started_at, chats.created_at)`, для leads - `coalesce(chats.current_cycle_started_at, leads.created_at)`. Reset chats (`reset_at IS NOT NULL`) исключаются из starts/leads/submitted/funnel snapshots. `submitted_leads` включает только статусы `submitted`, `applied`, `qualified`; `lost`/`rejected` туда не попадают.
 
 ### Leads Workflow
 
 Страница `/leads` использует существующий leads API с фильтрами `project_id`, `bot_ids`, `status`, `date_from`, `date_to`, `tag_ids`, `search`, `limit`, `offset`.
 `Отправить` сейчас является production-заглушкой внешней CRM: endpoint переводит lead в `qualified` и пишет audit event `lead.submitted_stub`, без fake external API call.
-`Удалить` не удаляет физически: endpoint переводит lead в `lost` / rejected-archive semantics, после чего карточка уходит из активного списка при соответствующих фильтрах.
+`Удалить` не удаляет физически: endpoint переводит lead в `lost` / rejected-archive semantics, после чего карточка уходит из активного списка.
+Default `GET /api/v1/leads` без явного `status` показывает active view и исключает `lost`/`rejected`; явный `status=lost` или будущий `status=rejected` можно запросить отдельно.
+Date filters on leads use the active lifecycle date (`current_cycle_started_at` after reset, otherwise `leads.created_at`), so a reactivated old lead appears in the current active window.
+
+Manual smoke checklist:
+
+- Reset chat in UI; confirm it disappears from active chat list and selected chat/lead sidebar are cleared.
+- `GET /api/v1/chats?project_id=...` should not include the reset chat.
+- `GET /api/v1/leads?project_id=...` should not include `lost`/`rejected` leads by default; explicit `status=lost` can return archived leads.
+- Send `/start NEW_REF` to the same Telegram bot; confirm the chat reappears with the same `bot_id`, empty old tags, lead status `new`, and tracking identity for `NEW_REF`.
+- Send a message after reset without `/start ref_code`; confirm the chat reappears without reusing the old tracking link.
+- Repeat with the same Telegram user in another bot; reset in one bot must not affect the other bot's chat.
 
 ### Role Permission Matrix
 
@@ -551,13 +577,17 @@ Frontend rule: `page -> feature public API -> feature internals -> shared`.
 - `clicks`: сумма `tracking_events.clicks` по `tracking_link_id` и дате
   `tracking_events.created_at`. Если events не пишутся, clicks остаются `0` и
   не подменяются starts.
-- `starts`: количество уникальных `chats`, где заполнен `tracking_link_id`;
-  дата берётся из `chats.created_at`.
+- `starts`: количество уникальных active `chats`, где заполнен
+  `tracking_link_id`; reset rows (`reset_at IS NOT NULL`) исключаются. Дата
+  берётся из `coalesce(chats.current_cycle_started_at, chats.created_at)`,
+  чтобы reactivation после reset попадала в период нового lifecycle.
 - `leads`: количество `leads`, связанных через `Lead -> Chat -> tracking_link_id`;
-  дата берётся из `leads.created_at`.
+  reset rows исключаются. Дата берётся из
+  `coalesce(chats.current_cycle_started_at, leads.created_at)`.
 - `submitted_leads`: текущие лиды со статусами `submitted`, `applied` или
-  `qualified`. Явного `submitted_at` или истории статусов пока нет, поэтому
-  период фильтруется по `leads.created_at`.
+  `qualified`. `lost` и `rejected` не считаются submitted. Явного
+  `submitted_at` или истории статусов пока нет, поэтому период фильтруется по
+  текущему lifecycle date, как у `leads`.
 - `deposits`: возвращаются `0`, потому что deposit-сущности или deposit-поля
   в текущей схеме нет.
 - `spend`: сумма `tracking_spends.amount` по `tracking_spends.spend_date`.
