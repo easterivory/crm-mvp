@@ -58,7 +58,7 @@ export default function Modal({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close modal"
+            aria-label="Закрыть окно"
             className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
           >
             <X size={16} />

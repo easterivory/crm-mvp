@@ -139,3 +139,31 @@ The MVP is successful if:
 
 Do not overbuild the first version.
 The priority is a stable core, not a feature-rich system.
+
+## Dev Deploy
+
+Dev server deploy is handled by `./deploy-dev.sh` from `/opt/crm-mvp-dev`.
+The script now treats frontend build as a required deploy step:
+
+```bash
+./deploy-dev.sh
+```
+
+Frontend deploy rules:
+
+- the script resets the server checkout to `origin/dev`;
+- backend containers are rebuilt with Docker Compose;
+- frontend is built with host `node/npm` when available;
+- if host `node/npm` is absent, the script builds with `node:20-alpine`;
+- `npm ci --include=dev` and `npm run build` must pass, otherwise deploy fails;
+- `frontend/dist/index.html` and hashed JS/CSS assets are printed after build;
+- nginx is reloaded when available, otherwise fresh static files are updated in place.
+
+Fresh frontend verification:
+
+```bash
+curl -fsS http://<dev-host>/ | rg 'assets/index-.*\\.(js|css)'
+curl -fsS http://<dev-host>/api/v1/health
+```
+
+Do not accept a deploy where frontend build is skipped silently.

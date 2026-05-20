@@ -36,7 +36,7 @@ export default function FunnelCard({
               : 'border-amber-300/25 bg-amber-300/10 text-amber-100'
           }`}
         >
-          {hasPublished ? 'published' : 'draft'}
+          {hasPublished ? 'Опубликована' : 'Черновик'}
         </span>
       </div>
 

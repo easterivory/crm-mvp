@@ -332,7 +332,11 @@ export default function ChatsPage() {
 
   return (
     <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
-      <div className={`${selectedChat ? 'hidden xl:block' : 'min-h-0'} overflow-hidden`}>
+      <div
+        className={`h-full min-h-0 overflow-hidden ${
+          selectedChat ? 'hidden xl:block' : ''
+        }`}
+      >
         <ChatList
           activeFilter={activeFilter}
           chats={chats}
@@ -348,7 +352,7 @@ export default function ChatsPage() {
         />
       </div>
 
-      <div className={`${selectedChat ? 'flex' : 'hidden xl:flex'} min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}>
+      <div className={`${selectedChat ? 'flex' : 'hidden xl:flex'} h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}>
         <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-4 sm:px-5">
           {selectedChat ? (
             <>
@@ -477,7 +481,7 @@ export default function ChatsPage() {
         </form>
       </div>
 
-      <div className="hidden min-h-0 xl:block">
+      <div className="hidden h-full min-h-0 xl:block">
         <LeadSidebar
           activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
           activeBotName={botScopeLabel}
@@ -490,14 +494,16 @@ export default function ChatsPage() {
 
       {isLeadOpen ? (
         <Modal title="Карточка лида" onClose={() => setIsLeadOpen(false)} maxWidthClassName="max-w-lg">
-          <LeadSidebar
-            activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
-            activeBotName={botScopeLabel}
-            activeChatId={selectedChatId}
-            hasActiveScope={Boolean(selectedProjectId)}
-            currentUserId={user?.id ?? null}
-            onResetRequest={() => setIsResetConfirmOpen(true)}
-          />
+          <div className="h-[calc(100dvh-8rem)] min-h-[360px] min-w-0">
+            <LeadSidebar
+              activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
+              activeBotName={botScopeLabel}
+              activeChatId={selectedChatId}
+              hasActiveScope={Boolean(selectedProjectId)}
+              currentUserId={user?.id ?? null}
+              onResetRequest={() => setIsResetConfirmOpen(true)}
+            />
+          </div>
         </Modal>
       ) : null}
 

@@ -222,9 +222,9 @@ export default function FunnelBuilder({
     try {
       const saved = await saveGraph(funnelId, activeVersionId, projectId, graph)
       setGraph(graphWithDefaults(saved))
-      notify({ tone: 'success', message: 'Draft сохранён.' })
+      notify({ tone: 'success', message: 'Черновик сохранён.' })
     } catch {
-      notify({ tone: 'error', message: 'Не удалось сохранить draft.' })
+      notify({ tone: 'error', message: 'Не удалось сохранить черновик.' })
     } finally {
       setIsSaving(false)
     }
@@ -255,7 +255,12 @@ export default function FunnelBuilder({
 
   const openPublish = async () => {
     if (graph && activeVersionId) {
-      await saveGraph(funnelId, activeVersionId, projectId, graph)
+      try {
+        await saveGraph(funnelId, activeVersionId, projectId, graph)
+      } catch {
+        notify({ tone: 'error', message: 'Не удалось сохранить черновик перед публикацией.' })
+        return
+      }
     }
     setIsPublishOpen(true)
   }
@@ -276,7 +281,7 @@ export default function FunnelBuilder({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto xl:overflow-hidden">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-white/8 bg-surface/90 px-4 py-3 shadow-card">
         <div className="flex min-w-0 items-center gap-3">
           <button
@@ -290,7 +295,7 @@ export default function FunnelBuilder({
           <div className="min-w-0">
             <h1 className="truncate text-lg font-semibold text-white">{funnel.name}</h1>
             <p className="text-sm text-gray-500">
-              Draft version · {graph.steps.length} блоков · {graph.edges.length} связей
+              Черновик · {graph.steps.length} блоков · {graph.edges.length} связей
             </p>
           </div>
         </div>
@@ -319,7 +324,7 @@ export default function FunnelBuilder({
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
           >
             <Send size={15} />
-            Publish review
+            Проверка публикации
           </button>
         </div>
       </header>
@@ -328,7 +333,7 @@ export default function FunnelBuilder({
         Редактор воронок удобнее на компьютере.
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[260px_minmax(0,1fr)_330px]">
+      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[260px_minmax(0,1fr)_330px] xl:overflow-hidden">
         <AddBlockMenu onAdd={addBlock} />
         <FunnelCanvas
           steps={graph.steps}

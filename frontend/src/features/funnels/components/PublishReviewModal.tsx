@@ -2,6 +2,7 @@ import { LoaderCircle, Send, TriangleAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { Modal } from '../../../shared/ui'
+import { useNotificationStore } from '../../../shared/lib'
 import { publishFunnelVersion, validateFunnelVersion } from '../api'
 import type { FunnelValidationResult } from '../types'
 
@@ -23,6 +24,7 @@ export default function PublishReviewModal({
   const [validation, setValidation] = useState<FunnelValidationResult | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPublishing, setIsPublishing] = useState(false)
+  const notify = useNotificationStore((state) => state.notify)
 
   useEffect(() => {
     let isMounted = true
@@ -33,6 +35,11 @@ export default function PublishReviewModal({
           setValidation(data)
         }
       })
+      .catch(() => {
+        if (isMounted) {
+          notify({ tone: 'error', message: 'Не удалось выполнить проверку перед публикацией.' })
+        }
+      })
       .finally(() => {
         if (isMounted) {
           setIsLoading(false)
@@ -41,7 +48,7 @@ export default function PublishReviewModal({
     return () => {
       isMounted = false
     }
-  }, [funnelId, projectId, versionId])
+  }, [funnelId, notify, projectId, versionId])
 
   const publish = async () => {
     if (!validation?.can_publish || isPublishing) {
@@ -51,6 +58,8 @@ export default function PublishReviewModal({
     try {
       await publishFunnelVersion(funnelId, versionId, projectId)
       onPublished()
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось опубликовать воронку.' })
     } finally {
       setIsPublishing(false)
     }

@@ -18,11 +18,17 @@ import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
 function getErrorMessage(err: unknown) {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
+    if (err.response?.status === 403) {
+      return 'Недостаточно прав для действия с этой воронкой.'
+    }
+    if (err.response?.status === 409) {
+      return 'Действие конфликтует с текущим состоянием воронки.'
+    }
+    if (err.response?.status === 422 || Array.isArray(detail)) {
+      return 'Проверьте данные формы.'
+    }
     if (typeof detail === 'string' && detail) {
       return detail
-    }
-    if (Array.isArray(detail)) {
-      return 'Проверьте данные формы.'
     }
     if (err.code === 'ERR_NETWORK') {
       return 'API недоступен.'
@@ -35,7 +41,12 @@ export default function FunnelsPage() {
   const navigate = useNavigate()
   const params = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
+  const {
+    selectedProjectId,
+    selectedBotIds,
+    setSelectedBotIds,
+    setSelectedProjectId,
+  } = useProjectBotSelection()
   const notify = useNotificationStore((state) => state.notify)
 
   const [funnels, setFunnels] = useState<Funnel[]>([])
@@ -105,7 +116,7 @@ export default function FunnelsPage() {
         name: payload.name,
         description: payload.description || null,
       })
-      notify({ tone: 'success', message: 'Draft воронки создан.' })
+      notify({ tone: 'success', message: 'Черновик воронки создан.' })
       await loadData()
       navigate(`/funnels/${created.id}/builder?versionId=${created.draft_version_id ?? ''}`)
     } catch (err) {
@@ -176,8 +187,12 @@ export default function FunnelsPage() {
           projects={projects}
           bots={bots}
           onClose={() => setCopyTarget(null)}
-          onCopied={(newFunnelId, newVersionId) => {
+          onCopied={(newFunnelId, newVersionId, targetProjectId, targetBotId) => {
             setCopyTarget(null)
+            if (targetProjectId !== selectedProjectId) {
+              setSelectedProjectId(targetProjectId)
+            }
+            setSelectedBotIds([targetBotId])
             notify({
               tone: 'success',
               message: 'Воронка скопирована. Проверьте настройки перед публикацией.',

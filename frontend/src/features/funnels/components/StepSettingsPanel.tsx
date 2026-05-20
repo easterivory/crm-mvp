@@ -29,7 +29,7 @@ export default function StepSettingsPanel({
     return (
       <section className="rounded-lg border border-white/8 bg-white/[0.03] p-3">
         <h3 className="text-sm font-semibold text-white">Настройки блока</h3>
-        <p className="mt-2 text-sm text-gray-500">Выберите блок на canvas.</p>
+        <p className="mt-2 text-sm text-gray-500">Выберите блок на полотне.</p>
       </section>
     )
   }

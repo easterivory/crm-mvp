@@ -58,7 +58,7 @@ export default function NotificationViewport() {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-3 bottom-3 z-[120] flex flex-col gap-2 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[380px]">
+    <div className="pointer-events-none fixed inset-x-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-[80] flex max-h-[calc(100dvh-1.5rem)] flex-col gap-2 overflow-hidden sm:inset-x-auto sm:bottom-[calc(1rem+env(safe-area-inset-bottom))] sm:right-4 sm:w-[380px]">
       {notifications.map((item) => (
         <NotificationItem key={item.id} item={item} />
       ))}

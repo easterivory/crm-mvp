@@ -1,8 +1,9 @@
 import { Copy, LoaderCircle } from 'lucide-react'
-import { FormEvent, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 
 import type { Bot as BotRecord } from '../../bots'
 import type { Project } from '../../projects'
+import { useNotificationStore } from '../../../shared/lib'
 import { Modal } from '../../../shared/ui'
 import { copyFunnel } from '../api'
 import type { Funnel } from '../types'
@@ -12,7 +13,7 @@ type CopyFunnelModalProps = {
   projects: Project[]
   bots: BotRecord[]
   onClose: () => void
-  onCopied: (funnelId: string, versionId: string, projectId: string) => void
+  onCopied: (funnelId: string, versionId: string, projectId: string, botId: string) => void
 }
 
 export default function CopyFunnelModal({
@@ -25,26 +26,34 @@ export default function CopyFunnelModal({
   const [projectId, setProjectId] = useState(funnel.project_id)
   const [botId, setBotId] = useState('')
   const [isCopying, setIsCopying] = useState(false)
+  const notify = useNotificationStore((state) => state.notify)
 
   const projectBots = useMemo(
     () => bots.filter((bot) => bot.project_id === projectId),
     [bots, projectId],
   )
 
+  useEffect(() => {
+    if (botId && !projectBots.some((bot) => bot.id === botId)) {
+      setBotId('')
+    }
+  }, [botId, projectBots])
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const targetBotId = botId || projectBots[0]?.id
-    if (!projectId || !targetBotId || isCopying) {
+    if (!projectId || !botId || isCopying) {
       return
     }
     setIsCopying(true)
     try {
       const result = await copyFunnel(funnel, {
         target_project_id: projectId,
-        target_bot_id: targetBotId,
+        target_bot_id: botId,
         copy_from_version_id: funnel.published_version_id ?? funnel.draft_version_id,
       })
-      onCopied(result.new_funnel_id, result.new_version_id, projectId)
+      onCopied(result.new_funnel_id, result.new_version_id, projectId, botId)
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось скопировать воронку.' })
     } finally {
       setIsCopying(false)
     }
@@ -53,7 +62,7 @@ export default function CopyFunnelModal({
   return (
     <Modal
       title="Копировать воронку"
-      description="Копия всегда создаётся как draft. Проверьте настройки перед публикацией."
+      description="Копия всегда создаётся как черновик. Проверьте настройки перед публикацией."
       onClose={onClose}
     >
       <form className="space-y-3" onSubmit={submit}>
@@ -94,6 +103,11 @@ export default function CopyFunnelModal({
             ))}
           </select>
         </label>
+        {projectBots.length > 0 && !botId ? (
+          <p className="text-xs text-amber-200">
+            Выберите бота, куда нужно скопировать воронку.
+          </p>
+        ) : null}
 
         <div className="flex justify-end gap-2 pt-2">
           <button
@@ -105,7 +119,7 @@ export default function CopyFunnelModal({
           </button>
           <button
             type="submit"
-            disabled={isCopying || projectBots.length === 0}
+            disabled={isCopying || projectBots.length === 0 || !botId}
             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isCopying ? <LoaderCircle size={16} className="animate-spin" /> : <Copy size={16} />}

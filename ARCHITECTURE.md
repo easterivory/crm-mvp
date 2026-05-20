@@ -775,3 +775,42 @@ backend, frontend checks не считаются защитой.
   удобнее работать на компьютере.
 - Реальных external CRM integrations, оплат, товаров, мини-лендингов, AI-блоков
   и analytics heatmap нет; они только зарезервированы в архитектуре.
+
+## Funnel Stabilization State
+
+Stabilization pass after v1 keeps the scope intentionally narrow:
+
+- Telegram webhook and `bot_engine_service` are still not switched to the new
+  funnel runtime.
+- Runtime remains foundation-only until delivery semantics, audit and push
+  worker scheduling are enabled in a separate step.
+- Frontend builder is usable for draft graph editing, validation, publish review,
+  copy, push rules and field mappings.
+- Unsupported/future block types must render as read-only cards instead of
+  crashing the editor.
+- `/chats` layout owns independent scroll containers for chat list, messages and
+  `LeadSidebar`; body remains locked to viewport height.
+
+## Dev Frontend Deploy Flow
+
+`deploy-dev.sh` is the canonical dev deploy path. It must never skip frontend
+silently.
+
+Frontend build order:
+
+1. Reset `/opt/crm-mvp-dev` to `origin/dev`.
+2. Rebuild backend/worker containers.
+3. Build frontend with host `node/npm` if installed.
+4. Otherwise build with Docker image `node:20-alpine`.
+5. Run `npm ci --include=dev --no-audit --no-fund`.
+6. Run `npm run build` with `VITE_API_URL=/api/v1` by default.
+7. Print `frontend/dist` path and hashed JS/CSS assets.
+8. Reload nginx when available; otherwise static files are updated in place.
+
+Deploy must fail fast if frontend dependencies or build fail. Verification is:
+
+- `docker compose exec -T api alembic current`;
+- `docker compose exec -T api alembic upgrade head`;
+- `curl -fsS http://localhost:8001/health`;
+- deployed frontend HTML references the fresh hashed asset from
+  `frontend/dist/assets`.

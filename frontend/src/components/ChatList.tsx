@@ -82,7 +82,7 @@ export default function ChatList({
   onSelectChat,
 }: ChatListProps) {
   return (
-    <aside className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card xl:min-h-0">
+    <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card">
       <div className="shrink-0 border-b border-white/5 p-4">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>

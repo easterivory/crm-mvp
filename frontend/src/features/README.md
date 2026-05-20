@@ -36,7 +36,25 @@ Feature-модули — основной формат для новых кру�
 
 - Sidebar order: `Чаты`, `Воронки`, `Рассылки`, `Боты`, `Лиды`, `Трекинг`, `Аналитика`, `Настройки`.
 - `/dashboard` остаётся для совместимости, но основной пункт меню ведёт на `/analytics`.
-- `/funnels` и `/broadcasts` являются placeholder routes до реализации соответствующих workflows.
+- `/funnels` — production v1 Funnel Builder. `/broadcasts` остаётся placeholder route до реализации workflow.
+
+## Chats Layout And LeadSidebar Scroll
+
+- `MainLayout` держит viewport через `h-screen` и запрещает body scroll; страницы внутри должны сами задавать scroll-контейнеры.
+- `ChatsPage` использует `h-full min-h-0 overflow-hidden` на grid-колонках.
+- `ChatList`, message list и `LeadSidebar` скроллятся независимо через внутренние `overflow-y-auto`.
+- `LeadSidebar` всегда должен получать bounded parent height: на desktop это правая grid-колонка, на mobile — wrapper внутри shared `Modal`.
+- Для flex/grid детей, которые должны скроллиться, обязательны `min-h-0` и явный `h-full` на промежуточных контейнерах.
+- Toast viewport не должен иметь z-index выше modal/dialog layers и не должен создавать scroll на body.
+
+## Funnel Builder Frontend
+
+- `frontend/src/pages/FunnelsPage.tsx` отвечает только за route-level orchestration и global project/bot scope.
+- Feature код живёт в `frontend/src/features/funnels`: `api.ts`, `types.ts`, `hooks.ts`, `blockCatalog.ts`, `components/`.
+- Canvas, settings panels, copy modal, publish review, push rules и field mappings остаются отдельными компонентами.
+- `selectedBotIds = []` показывает все funnels проекта, но создание новой funnel требует конкретный bot.
+- Если выбран ровно один bot, форма создания preselects его автоматически.
+- Copy может переключить global project/bot scope, потому что копия может быть создана в другом проекте.
 
 ## Leads Feature
 

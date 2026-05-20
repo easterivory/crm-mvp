@@ -12,7 +12,7 @@ export default function UnsupportedBlockCard({ blockType }: UnsupportedBlockCard
         Неподдерживаемый блок
       </div>
       <p className="mt-1 break-words text-xs leading-5 text-amber-100/80">
-        {blockType} сохранён в backend registry, но редактор v1 показывает его только для чтения.
+        {blockType} сохранён в реестре блоков, но редактор v1 показывает его только для чтения.
       </p>
     </div>
   )
