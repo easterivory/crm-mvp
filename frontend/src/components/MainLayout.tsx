@@ -152,13 +152,13 @@ export default function MainLayout() {
 
         <div
           className={cn(
-            'rounded-xl border border-white/5 bg-white/[0.03] shadow-card',
-            isCollapsed ? 'md:p-2' : 'p-4',
+            'rounded-xl border border-white/5 bg-white/[0.03] shadow-card transition-all duration-200',
+            isCollapsed ? 'md:flex md:items-center md:justify-center md:p-1' : 'p-4',
           )}
           title={isCollapsed ? `${displayName} · ${roleLabel}` : undefined}
         >
           {isCollapsed ? (
-            <div className="hidden h-10 w-10 items-center justify-center rounded-xl bg-accent-400/10 text-sm font-semibold text-accent-100 md:flex">
+            <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-400/10 text-sm font-semibold text-accent-100 md:flex">
               {initials(displayName)}
             </div>
           ) : null}

@@ -9,6 +9,7 @@ type FunnelCardProps = {
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
+  onMakeActive: (funnel: Funnel) => void
 }
 
 export default function FunnelCard({
@@ -17,6 +18,7 @@ export default function FunnelCard({
   onOpen,
   onCopy,
   onArchive,
+  onMakeActive,
 }: FunnelCardProps) {
   const hasPublished = Boolean(funnel.published_version_id)
 
@@ -38,6 +40,11 @@ export default function FunnelCard({
         >
           {hasPublished ? 'Опубликована' : 'Черновик'}
         </span>
+        {funnel.is_active_for_bot ? (
+          <span className="shrink-0 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-xs text-cyan-100">
+            Активна
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-4 flex items-center gap-2 text-sm text-gray-400">
@@ -64,6 +71,16 @@ export default function FunnelCard({
           <Copy size={15} />
           Копировать
         </button>
+        {hasPublished && !funnel.is_active_for_bot ? (
+          <button
+            type="button"
+            onClick={() => onMakeActive(funnel)}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 text-sm text-emerald-50 transition hover:border-emerald-300/40"
+          >
+            <RadioTower size={15} />
+            Сделать активной
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => onArchive(funnel)}
@@ -78,7 +95,7 @@ export default function FunnelCard({
       {hasPublished ? (
         <div className="mt-3 flex items-center gap-2 text-xs text-emerald-200/80">
           <RadioTower size={13} />
-          Есть опубликованная версия
+          {funnel.is_active_for_bot ? 'Эта воронка активна на боте' : 'Есть опубликованная версия'}
         </div>
       ) : null}
     </article>

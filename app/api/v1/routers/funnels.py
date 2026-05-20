@@ -137,6 +137,25 @@ async def create_draft_version(
     )
 
 
+@router.post(
+    "/{funnel_id}/versions/{version_id}/draft",
+    response_model=FunnelVersionOut,
+)
+async def create_draft_from_version(
+    funnel_id: UUID,
+    version_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelVersionOut:
+    return await FunnelService(db).create_draft_from_version(
+        funnel_id=funnel_id,
+        source_version_id=version_id,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+
 @router.get("/{funnel_id}/versions/{version_id}", response_model=FunnelVersionOut)
 async def get_version(
     funnel_id: UUID,

@@ -24,6 +24,7 @@ export type Funnel = {
   updated_at: string
   draft_version_id: string | null
   published_version_id: string | null
+  is_active_for_bot: boolean
 }
 
 export type FunnelVersion = {
@@ -35,6 +36,7 @@ export type FunnelVersion = {
   created_at: string
   updated_at: string
   published_at: string | null
+  is_active_for_bot: boolean
 }
 
 export type FunnelStep = {
@@ -141,4 +143,10 @@ export type CopyFunnelPayload = {
 export type CopyFunnelResult = {
   new_funnel_id: string
   new_version_id: string
+}
+
+export type BotActiveFunnel = {
+  bot_id: string
+  funnel: Funnel | null
+  version: FunnelVersion | null
 }

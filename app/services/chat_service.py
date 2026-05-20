@@ -37,6 +37,7 @@ from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
 from app.services.audit_service import AuditService
+from app.services.funnel_runtime_service import FunnelRuntimeService
 
 
 class ChatService:
@@ -236,6 +237,7 @@ class ChatService:
             )
 
         await self.bot_repo.reset_chat_state(chat_id)
+        await FunnelRuntimeService(self.db).reset_chat_state(chat_id)
         updated = await self.chat_repo.reset_chat(chat_id)
         if updated is None:
             raise HTTPException(

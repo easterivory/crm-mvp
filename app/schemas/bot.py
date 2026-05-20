@@ -28,6 +28,8 @@ class BotOut(OrmBase):
     name: str
     has_telegram_token: bool
     bot_username: Optional[str]
+    active_funnel_id: Optional[uuid.UUID] = None
+    active_funnel_version_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
     is_deleted: bool

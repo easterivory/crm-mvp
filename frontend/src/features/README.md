@@ -52,9 +52,15 @@ Feature-модули — основной формат для новых кру�
 - `frontend/src/pages/FunnelsPage.tsx` отвечает только за route-level orchestration и global project/bot scope.
 - Feature код живёт в `frontend/src/features/funnels`: `api.ts`, `types.ts`, `hooks.ts`, `blockCatalog.ts`, `components/`.
 - Canvas, settings panels, copy modal, publish review, push rules и field mappings остаются отдельными компонентами.
+- Add Block menu показывает универсальные блоки, а не каждый backend `block_type`.
+- Specific/legacy `block_type` — внутренняя совместимость и настройка поведения, не primary-level действие в меню.
+- Canvas interactions: pan по пустому полю, zoom через controls, drag nodes, соединение через output/input handles.
+- Keyboard shortcuts: Delete/Backspace удаляет выбранный блок/связь; Cmd/Ctrl+S сохраняет draft; Esc снимает выбор.
+- Связи редактируются через выбранную линию; полный список связей находится в advanced/debug секции.
 - `selectedBotIds = []` показывает все funnels проекта, но создание новой funnel требует конкретный bot.
 - Если выбран ровно один bot, форма создания preselects его автоматически.
 - Copy может переключить global project/bot scope, потому что копия может быть создана в другом проекте.
+- У одного bot может быть только одна active published funnel; cards/list показывают active funnel и предупреждают о нескольких funnels на bot.
 
 ## Leads Feature
 

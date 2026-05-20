@@ -5,6 +5,7 @@ import type {
   CopyFunnelResult,
   CreateFunnelPayload,
   Funnel,
+  BotActiveFunnel,
   FunnelBlockRegistry,
   FunnelGraph,
   FunnelValidationResult,
@@ -74,6 +75,19 @@ export async function createDraftVersion(
   return data
 }
 
+export async function createDraftFromVersion(
+  funnelId: string,
+  versionId: string,
+  projectId: string,
+): Promise<FunnelVersion> {
+  const { data } = await api.post<FunnelVersion>(
+    `/funnels/${funnelId}/versions/${versionId}/draft`,
+    null,
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
 export async function fetchGraph(
   funnelId: string,
   versionId: string,
@@ -121,6 +135,29 @@ export async function publishFunnelVersion(
   const { data } = await api.post<FunnelVersion>(
     `/funnels/${funnelId}/versions/${versionId}/publish`,
     null,
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
+export async function fetchBotActiveFunnel(
+  botId: string,
+  projectId: string,
+): Promise<BotActiveFunnel> {
+  const { data } = await api.get<BotActiveFunnel>(`/bots/${botId}/active-funnel`, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function setBotActiveFunnel(
+  botId: string,
+  projectId: string,
+  payload: { funnel_id: string; version_id: string },
+): Promise<BotActiveFunnel> {
+  const { data } = await api.post<BotActiveFunnel>(
+    `/bots/${botId}/active-funnel`,
+    payload,
     { params: { project_id: projectId } },
   )
   return data

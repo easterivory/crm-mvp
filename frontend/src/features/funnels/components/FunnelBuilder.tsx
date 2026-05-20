@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   CheckCircle2,
+  CopyPlus,
   LoaderCircle,
   Save,
   Send,
@@ -11,13 +12,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNotificationStore } from '../../../shared/lib'
 import {
   createDraftVersion,
+  createDraftFromVersion,
   fetchFunnel,
   fetchGraph,
+  fetchVersions,
   saveGraph,
+  setBotActiveFunnel,
   validateFunnelVersion,
 } from '../api'
 import type { BlockMenuItem } from '../blockCatalog'
-import type { Funnel, FunnelEdge, FunnelGraph, FunnelStep } from '../types'
+import type { Funnel, FunnelEdge, FunnelGraph, FunnelStep, FunnelVersion } from '../types'
 import AddBlockMenu from './AddBlockMenu'
 import EdgeSettingsPanel from './EdgeSettingsPanel'
 import FieldMappingsPanel from './FieldMappingsPanel'
@@ -59,8 +63,9 @@ export default function FunnelBuilder({
   const [funnel, setFunnel] = useState<Funnel | null>(null)
   const [graph, setGraph] = useState<FunnelGraph | null>(null)
   const [activeVersionId, setActiveVersionId] = useState(versionId ?? null)
+  const [versions, setVersions] = useState<FunnelVersion[]>([])
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
-  const [connectingFromId, setConnectingFromId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
@@ -83,9 +88,11 @@ export default function FunnelBuilder({
           throw new Error('version_not_found')
         }
         const loadedGraph = await fetchGraph(funnelId, resolvedVersionId, projectId)
+        const loadedVersions = await fetchVersions(funnelId, projectId)
         if (isMounted) {
           setFunnel(loadedFunnel)
           setActiveVersionId(resolvedVersionId)
+          setVersions(loadedVersions)
           onVersionReady(resolvedVersionId)
           setGraph(graphWithDefaults(loadedGraph))
           setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
@@ -107,6 +114,14 @@ export default function FunnelBuilder({
   const selectedStep = useMemo(
     () => graph?.steps.find((step) => step.id === selectedStepId) ?? null,
     [graph?.steps, selectedStepId],
+  )
+  const selectedEdge = useMemo(
+    () => graph?.edges.find((edge) => edge.id === selectedEdgeId) ?? null,
+    [graph?.edges, selectedEdgeId],
+  )
+  const selectedVersion = useMemo(
+    () => versions.find((version) => version.id === activeVersionId) ?? null,
+    [activeVersionId, versions],
   )
 
   const updateStep = useCallback((stepId: string, patch: Partial<FunnelStep>) => {
@@ -139,6 +154,7 @@ export default function FunnelBuilder({
         : current,
     )
     setSelectedStepId((current) => (current === stepId ? null : current))
+    setSelectedEdgeId(null)
   }
 
   const addBlock = (item: BlockMenuItem) => {
@@ -177,14 +193,15 @@ export default function FunnelBuilder({
     )
   }
 
-  const removeEdge = (edgeId: string) => {
+  const removeEdge = useCallback((edgeId: string) => {
     setGraph((current) =>
       current ? { ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) } : current,
     )
-  }
+    setSelectedEdgeId((current) => (current === edgeId ? null : current))
+  }, [])
 
-  const finishConnect = (toStepId: string) => {
-    if (!connectingFromId || connectingFromId === toStepId) {
+  const connectSteps = (fromStepId: string, toStepId: string, outcome: string | null) => {
+    if (fromStepId === toStepId) {
       return
     }
     setGraph((current) => {
@@ -192,7 +209,7 @@ export default function FunnelBuilder({
         return current
       }
       const exists = current.edges.some(
-        (edge) => edge.from_step_id === connectingFromId && edge.to_step_id === toStepId,
+        (edge) => edge.from_step_id === fromStepId && edge.to_step_id === toStepId,
       )
       if (exists) {
         return current
@@ -203,15 +220,14 @@ export default function FunnelBuilder({
           ...current.edges,
           {
             id: crypto.randomUUID(),
-            from_step_id: connectingFromId,
+            from_step_id: fromStepId,
             to_step_id: toStepId,
-            condition_json: null,
+            condition_json: outcome ? { outcome, label: outcome } : null,
             priority: 0,
           },
         ],
       }
     })
-    setConnectingFromId(null)
   }
 
   const saveDraft = async () => {
@@ -222,6 +238,7 @@ export default function FunnelBuilder({
     try {
       const saved = await saveGraph(funnelId, activeVersionId, projectId, graph)
       setGraph(graphWithDefaults(saved))
+      void fetchVersions(funnelId, projectId).then(setVersions)
       notify({ tone: 'success', message: 'Черновик сохранён.' })
     } catch {
       notify({ tone: 'error', message: 'Не удалось сохранить черновик.' })
@@ -269,7 +286,101 @@ export default function FunnelBuilder({
     notify({ tone: 'success', message: 'Воронка опубликована.' })
     setIsPublishOpen(false)
     void fetchFunnel(funnelId, projectId).then(setFunnel)
+    void fetchVersions(funnelId, projectId).then(setVersions)
   }
+
+  const switchVersion = async (nextVersionId: string) => {
+    if (nextVersionId === activeVersionId) {
+      return
+    }
+    try {
+      const loadedGraph = await fetchGraph(funnelId, nextVersionId, projectId)
+      setActiveVersionId(nextVersionId)
+      onVersionReady(nextVersionId)
+      setGraph(graphWithDefaults(loadedGraph))
+      setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
+      setSelectedEdgeId(null)
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось открыть версию.' })
+    }
+  }
+
+  const createDraftFromCurrent = async () => {
+    if (!activeVersionId) {
+      return
+    }
+    try {
+      const draft = await createDraftFromVersion(funnelId, activeVersionId, projectId)
+      const loadedGraph = await fetchGraph(funnelId, draft.id, projectId)
+      setActiveVersionId(draft.id)
+      onVersionReady(draft.id)
+      setVersions(await fetchVersions(funnelId, projectId))
+      setGraph(graphWithDefaults(loadedGraph))
+      notify({ tone: 'success', message: 'Черновик из версии создан.' })
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось создать черновик из версии.' })
+    }
+  }
+
+  const makeCurrentActive = async () => {
+    if (!funnel || !activeVersionId) {
+      return
+    }
+    try {
+      await setBotActiveFunnel(funnel.bot_id, projectId, {
+        funnel_id: funnel.id,
+        version_id: activeVersionId,
+      })
+      notify({ tone: 'success', message: 'Активная версия бота переключена.' })
+      setFunnel(await fetchFunnel(funnelId, projectId))
+      setVersions(await fetchVersions(funnelId, projectId))
+    } catch {
+      notify({ tone: 'error', message: 'Можно активировать только опубликованную версию.' })
+    }
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isSave = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's'
+      if (isSave) {
+        event.preventDefault()
+        void saveDraft()
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === '0') {
+        event.preventDefault()
+        return
+      }
+      if (event.key === 'Escape') {
+        setSelectedStepId(null)
+        setSelectedEdgeId(null)
+        return
+      }
+      if (event.key !== 'Delete' && event.key !== 'Backspace') {
+        return
+      }
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select')) {
+        return
+      }
+      if (selectedEdgeId) {
+        event.preventDefault()
+        removeEdge(selectedEdgeId)
+        return
+      }
+      if (selectedStepId) {
+        const hasEdges = graph?.edges.some(
+          (edge) => edge.from_step_id === selectedStepId || edge.to_step_id === selectedStepId,
+        )
+        if (!hasEdges || window.confirm('Удалить блок и связанные с ним связи?')) {
+          event.preventDefault()
+          deleteStep(selectedStepId)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [activeVersionId, graph?.edges, removeEdge, selectedEdgeId, selectedStepId])
 
   if (isLoading || !graph || !funnel || !activeVersionId) {
     return (
@@ -295,11 +406,43 @@ export default function FunnelBuilder({
           <div className="min-w-0">
             <h1 className="truncate text-lg font-semibold text-white">{funnel.name}</h1>
             <p className="text-sm text-gray-500">
-              Черновик · {graph.steps.length} блоков · {graph.edges.length} связей
+              {selectedVersion?.status === 'published'
+                ? 'Опубликована'
+                : selectedVersion?.status === 'archived'
+                  ? 'Архив'
+                  : 'Черновик'}{' '}
+              · {selectedVersion?.is_active_for_bot ? 'Активна на боте' : 'Не активна'} ·{' '}
+              {graph.steps.length} блоков · {graph.edges.length} связей
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <select
+            value={activeVersionId}
+            onChange={(event) => void switchVersion(event.target.value)}
+            className="h-9 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none"
+          >
+            {versions.map((version) => (
+              <option key={version.id} value={version.id}>
+                v{version.version_number} ·{' '}
+                {version.status === 'draft'
+                  ? 'черновик'
+                  : version.status === 'published'
+                    ? version.is_active_for_bot
+                      ? 'активна'
+                      : 'опубликована'
+                    : 'архив'}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void createDraftFromCurrent()}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 transition hover:border-accent-300/35"
+          >
+            <CopyPlus size={15} />
+            Черновик из версии
+          </button>
           <button
             type="button"
             onClick={() => void saveDraft()}
@@ -326,6 +469,14 @@ export default function FunnelBuilder({
             <Send size={15} />
             Проверка публикации
           </button>
+          <button
+            type="button"
+            onClick={() => void makeCurrentActive()}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 text-sm text-emerald-50 transition hover:border-emerald-300/40"
+          >
+            <CheckCircle2 size={15} />
+            Сделать активной
+          </button>
         </div>
       </header>
 
@@ -339,13 +490,13 @@ export default function FunnelBuilder({
           steps={graph.steps}
           edges={graph.edges}
           selectedStepId={selectedStepId}
-          connectingFromId={connectingFromId}
+          selectedEdgeId={selectedEdgeId}
           onSelectStep={setSelectedStepId}
+          onSelectEdge={setSelectedEdgeId}
           onMoveStep={(stepId, position) =>
             updateStep(stepId, { position_x: position.x, position_y: position.y })
           }
-          onStartConnect={setConnectingFromId}
-          onFinishConnect={finishConnect}
+          onConnect={connectSteps}
         />
         <div className="min-h-0 space-y-3 overflow-y-auto rounded-lg border border-white/8 bg-surface/90 p-3">
           <StepSettingsPanel step={selectedStep} onUpdate={updateStep} onDelete={deleteStep} />
@@ -365,10 +516,12 @@ export default function FunnelBuilder({
             }
           />
           <EdgeSettingsPanel
+            selectedEdge={selectedEdge}
             edges={graph.edges}
             steps={graph.steps}
             onUpdate={updateEdge}
             onRemove={removeEdge}
+            onSelect={setSelectedEdgeId}
           />
           {funnel.published_version_id ? (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-500/10 p-3 text-sm text-emerald-50">

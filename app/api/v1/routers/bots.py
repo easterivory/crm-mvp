@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
 from app.schemas.common import PaginatedResponse
+from app.schemas.funnel import BotActiveFunnelOut, BotActiveFunnelSetIn
 from app.services.bot_service import BotService
+from app.services.funnel_service import FunnelService
 
 router = APIRouter(tags=["bots"])
 
@@ -54,6 +56,36 @@ async def get_bot(
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
     return await BotService(db).get_bot(bot_id=bot_id, project_id=project_id)
+
+
+@router.get("/bots/{bot_id}/active-funnel", response_model=BotActiveFunnelOut)
+async def get_bot_active_funnel(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BotActiveFunnelOut:
+    return await FunnelService(db).get_active_funnel_for_bot(
+        bot_id=bot_id,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+
+@router.post("/bots/{bot_id}/active-funnel", response_model=BotActiveFunnelOut)
+async def set_bot_active_funnel(
+    bot_id: UUID,
+    data: BotActiveFunnelSetIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BotActiveFunnelOut:
+    return await FunnelService(db).set_active_funnel_for_bot(
+        bot_id=bot_id,
+        project_id=project_id,
+        data=data,
+        current_user=current_user,
+    )
 
 
 @router.patch("/bots/{bot_id}", response_model=BotOut)

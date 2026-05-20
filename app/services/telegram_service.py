@@ -47,6 +47,7 @@ from app.schemas.message import MessageCreate, MessageOut
 from app.schemas.telegram import TelegramMessage, TelegramUpdate
 from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
+from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.message_service import MessageService
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class TelegramService:
         self.tracking_repo = TrackingRepository(db)
         self.message_service = MessageService(db)
         self.bot_engine = BotEngineService(db)
+        self.funnel_runtime = FunnelRuntimeService(db)
         self.audit = AuditService(db)
 
     # ── Parsing ────────────────────────────────────────────────────────────────
@@ -147,16 +149,22 @@ class TelegramService:
             project_id,
             bot_id,
         )
-        chat, was_created = await self._find_or_create_chat(
+        chat, should_start_runtime, is_reactivated_cycle = await self._find_or_create_chat(
             message,
             project_id,
             bot_id=bot_id,
             tracking_link_id=tracking_link_id,
         )
         msg = await self._create_message(chat.id, project_id, message)
-        await self._find_or_create_lead(chat.id, project_id, message)
-        if was_created:
+        await self._find_or_create_lead(
+            chat.id,
+            project_id,
+            message,
+            reset_existing=is_reactivated_cycle,
+        )
+        if should_start_runtime:
             await self.bot_engine.initialize_chat(chat.id, project_id)
+            await self._start_active_funnel_if_available(chat.id, bot_id)
         else:
             await self.bot_engine.process_chat(chat.id, user_message=msg)
 
@@ -168,7 +176,7 @@ class TelegramService:
         project_id: UUID,
         bot_id: UUID,
         tracking_link_id: Optional[UUID] = None,
-    ) -> tuple[Chat, bool]:
+    ) -> tuple[Chat, bool, bool]:
         """
         Return the Chat for this external_chat_id, creating it if absent.
 
@@ -186,7 +194,7 @@ class TelegramService:
             bot_id=bot_id,
         )
         if chat is not None:
-            return chat, False
+            return chat, False, False
 
         # Build a human-readable contact name from available sender fields
         contact_name = self._contact_name_from_message(message)
@@ -214,7 +222,7 @@ class TelegramService:
                 project_id,
                 bot_id,
             )
-            return reactivated, True
+            return reactivated, True, True
 
         try:
             async with self.db.begin_nested():
@@ -251,9 +259,23 @@ class TelegramService:
                     f"Chat row missing after IntegrityError for "
                     f"external_chat_id={external_chat_id}"
                 )
-            return chat, False
+            return chat, False, False
 
-        return chat, True
+        return chat, True, False
+
+    async def _start_active_funnel_if_available(
+        self,
+        chat_id: UUID,
+        bot_id: UUID,
+    ) -> None:
+        active_version = await self.funnel_runtime.get_published_funnel_for_bot(bot_id)
+        if active_version is None:
+            return
+        await self.funnel_runtime.start_funnel_for_chat(
+            chat_id=chat_id,
+            funnel_id=active_version.funnel_id,
+            funnel_version_id=active_version.id,
+        )
 
     @staticmethod
     def _contact_name_from_message(message: TelegramMessage) -> Optional[str]:
@@ -350,6 +372,8 @@ class TelegramService:
         chat_id: UUID,
         project_id: UUID,
         message: TelegramMessage,
+        *,
+        reset_existing: bool = False,
     ) -> None:
         """
         Ensure a Lead exists for this chat. If the chat already has a lead,
@@ -361,7 +385,7 @@ class TelegramService:
         existing = await self.lead_repo.get_by_chat(chat_id, project_id)
         if existing is not None:
             chat = await self.chat_repo.get_active(chat_id, project_id)
-            if (
+            if reset_existing or (
                 chat is not None
                 and chat.current_cycle_started_at is not None
                 and existing.updated_at < chat.current_cycle_started_at
@@ -371,11 +395,17 @@ class TelegramService:
                     if message.from_user and message.from_user.username
                     else None
                 )
-                await self.lead_repo.reset_existing_for_new_cycle(
+                reset_lead = await self.lead_repo.reset_existing_for_new_cycle(
                     existing.id,
                     project_id,
                     username=username,
                 )
+                if reset_lead is None:
+                    logger.error(
+                        "Could not reset lead for new Telegram cycle chat_id=%s project_id=%s",
+                        chat_id,
+                        project_id,
+                    )
             return
 
         # Resolve the 'new' status — must exist in the reference table

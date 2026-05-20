@@ -646,6 +646,14 @@ Backend registry живёт в `app/services/funnel_block_registry.py` и вал
 future-блоки документированы и могут храниться только если явно добавлены в
 registry; runtime v1 их не исполняет.
 
+Frontend builder использует универсальную UX-модель поверх registry. В меню
+добавления показываются 9 понятных блоков: `generic_trigger`,
+`generic_message`, `generic_input`, `generic_condition`, `generic_crm_action`,
+`generic_delay`, `generic_operator`, `generic_integration`, `generic_finish`.
+Конкретный subtype выбирается внутри настроек блока и хранится в
+`config_json`. Legacy `block_type` остаются валидными для совместимости с уже
+сохранёнными воронками.
+
 ### MVP Block Types
 
 MVP UI поддерживает группы:
@@ -703,6 +711,37 @@ predictive sale probability, source/creative budget recommendations.
 - При publish предыдущая published version переводится в `archived`.
 - Физического удаления funnels нет; `/archive` переводит funnel в `archived`.
 
+## One Active Funnel Per Bot
+
+У bot есть явный указатель на runtime-сценарий:
+
+- `bots.active_funnel_id`;
+- `bots.active_funnel_version_id`.
+
+Это source of truth для runtime. Больше нельзя выбирать active funnel
+эвристикой по “последней published version”.
+
+Правило: у одного bot одновременно может быть только одна активная
+опубликованная funnel version. При publish новой draft version сервис:
+
+- архивирует другие `published` versions всех funnels этого bot;
+- публикует выбранную draft;
+- записывает её в `bots.active_funnel_id/active_funnel_version_id`.
+
+`GET /api/v1/bots/{bot_id}/active-funnel` возвращает текущее назначение.
+`POST /api/v1/bots/{bot_id}/active-funnel` переключает active version на
+published/archived version этой же bot funnel. Archived version при таком
+rollback снова переводится в `published`, а остальные published versions bot
+архивируются.
+
+## Funnel Version Switching
+
+Builder показывает versions текущей funnel (`draft`, `published`, `archived`).
+Оператор может открыть любую version, создать draft из выбранной version,
+publish draft после validation или сделать published/archived version активной
+для bot. Полноценный diff/rollback UI не реализован; безопасный путь возврата:
+создать draft из старой version, проверить, publish.
+
 ## Funnel Copy Semantics
 
 `POST /funnels/{funnel_id}/copy` копирует steps, edges, config, conditions,
@@ -755,6 +794,12 @@ Runtime v1 намеренно не подключён к Telegram webhook и н�
 следующего этапа, но текущий тестовый бот и legacy webhook остаются без
 поведенческого rewrite.
 
+Reset lifecycle теперь явно поддерживает новый `/start`: reset-chat скрыт из
+active lists, но следующий Telegram message реактивирует тот же chat row как
+новый cycle, очищает `reset_at`, обновляет `current_cycle_started_at`,
+переинициализирует `ChatBotState`, очищает/переоткрывает lead в `new` и
+стартует `ChatFunnelState`, если у bot есть active published funnel.
+
 ## Funnel Permissions
 
 - `super_admin`: read/write по всем project/bot/funnel при явном `project_id`.
@@ -770,7 +815,12 @@ backend, frontend checks не считаются защитой.
 ## Funnel UI Limitations V1
 
 - Визуальный builder является каноничным способом редактировать graph.
-- Canvas v1 реализован лёгким local graph editor без тяжёлой UI-библиотеки.
+- Canvas v1 реализован local graph editor без тяжёлой UI-библиотеки: большое
+  рабочее поле, grid, pan, zoom, drag nodes, handle-to-handle connections,
+  selected edge settings, Delete/Backspace removal and Cmd/Ctrl+S draft save.
+- Связи создаются перетаскиванием из output handle в input handle. Кнопки
+  “Связать” не являются основным UX. Полный список связей спрятан в
+  advanced/debug секции.
 - На маленьких экранах редактор не падает и показывает предупреждение, что
   удобнее работать на компьютере.
 - Реальных external CRM integrations, оплат, товаров, мини-лендингов, AI-блоков

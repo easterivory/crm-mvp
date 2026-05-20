@@ -43,19 +43,39 @@ const toneByType = {
 type StepNodeProps = {
   step: FunnelStep
   isSelected: boolean
-  isConnecting: boolean
-  canConnectHere: boolean
   onSelect: (stepId: string) => void
   onPointerDown: (event: PointerEvent<HTMLDivElement>, stepId: string) => void
-  onStartConnect: (stepId: string) => void
-  onFinishConnect: (stepId: string) => void
+  onStartConnect: (
+    stepId: string,
+    outcome: string | null,
+    event: PointerEvent<HTMLButtonElement>,
+  ) => void
+  onFinishConnect: (stepId: string, event: PointerEvent<HTMLButtonElement>) => void
+}
+
+function getOutputLabels(step: FunnelStep) {
+  if (step.step_type === 'condition') {
+    const outcomes = step.config_json.outcomes
+    if (Array.isArray(outcomes) && outcomes.length > 0) {
+      return outcomes.map(String)
+    }
+    return ['true', 'false']
+  }
+  if (step.step_type === 'input') {
+    const choices = step.config_json.choices ?? step.config_json.options ?? step.config_json.buttons
+    if (Array.isArray(choices) && choices.length > 0) {
+      return choices.slice(0, 4).map(String)
+    }
+  }
+  if (step.step_type === 'finish') {
+    return []
+  }
+  return ['Далее']
 }
 
 export default function StepNode({
   step,
   isSelected,
-  isConnecting,
-  canConnectHere,
   onSelect,
   onPointerDown,
   onStartConnect,
@@ -63,16 +83,25 @@ export default function StepNode({
 }: StepNodeProps) {
   const Icon = iconByType[step.step_type] ?? Bell
   const isSupported = mvpBlockTypes.has(step.block_type)
+  const outputs = getOutputLabels(step)
 
   return (
     <div
-      style={{ left: step.position_x, top: step.position_y, width: 230 }}
+      style={{ left: step.position_x, top: step.position_y, width: 250 }}
       className={`absolute select-none rounded-lg border bg-[#111827]/95 p-3 shadow-card transition ${
         isSelected ? 'border-accent-300/60 ring-2 ring-accent-300/20' : 'border-white/10'
       }`}
       onPointerDown={(event) => onPointerDown(event, step.id)}
       onClick={() => onSelect(step.id)}
     >
+      <button
+        type="button"
+        aria-label="Вход блока"
+        className="absolute -left-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-white/30 bg-background shadow-card transition hover:border-accent-300"
+        onPointerDown={(event) => event.stopPropagation()}
+        onPointerUp={(event) => onFinishConnect(step.id, event)}
+      />
+
       <div className="flex items-start gap-3">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${toneByType[step.step_type]}`}>
           <Icon size={17} />
@@ -89,34 +118,22 @@ export default function StepNode({
         </div>
       ) : null}
 
-      <div className="mt-3 flex justify-end">
-        {isConnecting ? (
-          <button
-            type="button"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation()
-              onFinishConnect(step.id)
-            }}
-            disabled={!canConnectHere}
-            className="rounded-lg border border-accent-300/25 bg-accent-300/10 px-2 py-1 text-xs text-accent-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Сюда
-          </button>
-        ) : (
-          <button
-            type="button"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation()
-              onStartConnect(step.id)
-            }}
-            className="rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-xs text-gray-300 transition hover:border-accent-300/30"
-          >
-            Связать
-          </button>
-        )}
-      </div>
+      {outputs.length > 0 ? (
+        <div className="mt-3 flex flex-wrap justify-end gap-1.5">
+          {outputs.map((label) => (
+            <button
+              key={label}
+              type="button"
+              title={`Потянуть связь: ${label}`}
+              onPointerDown={(event) => onStartConnect(step.id, label, event)}
+              className="inline-flex items-center gap-1 rounded-full border border-accent-300/25 bg-accent-300/10 px-2 py-1 text-[11px] text-accent-50 transition hover:border-accent-300/50"
+            >
+              <span className="max-w-[92px] truncate">{label}</span>
+              <span className="h-2 w-2 rounded-full bg-accent-300" />
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

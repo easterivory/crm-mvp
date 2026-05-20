@@ -33,6 +33,12 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     telegram_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     bot_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    active_funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=True
+    )
+    active_funnel_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_versions.id"), nullable=True
+    )
 
     project: Mapped[Project] = relationship("Project", back_populates="bots")
     versions: Mapped[list[BotVersion]] = relationship(

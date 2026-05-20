@@ -17,6 +17,7 @@ type FunnelListProps = {
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
+  onMakeActive: (funnel: Funnel) => void
 }
 
 export default function FunnelList({
@@ -30,6 +31,7 @@ export default function FunnelList({
   onOpen,
   onCopy,
   onArchive,
+  onMakeActive,
 }: FunnelListProps) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -44,6 +46,13 @@ export default function FunnelList({
   }, [bots, selectedBotIds])
 
   const botById = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots])
+  const funnelsByBot = useMemo(() => {
+    const grouped = new Map<string, Funnel[]>()
+    for (const funnel of funnels) {
+      grouped.set(funnel.bot_id, [...(grouped.get(funnel.bot_id) ?? []), funnel])
+    }
+    return grouped
+  }, [funnels])
   const canUseCurrentBot = Boolean(botId && visibleBots.some((bot) => bot.id === botId))
   const needsExplicitBotChoice = selectedBotIds.length !== 1
   const canCreate = Boolean(name.trim() && visibleBots.length > 0 && canUseCurrentBot)
@@ -161,6 +170,31 @@ export default function FunnelList({
           {isLoading ? <LoaderCircle size={18} className="animate-spin text-gray-500" /> : null}
         </div>
 
+        {visibleBots.length > 0 ? (
+          <div className="mb-4 grid gap-2 lg:grid-cols-2">
+            {visibleBots.map((bot) => {
+              const botFunnels = funnelsByBot.get(bot.id) ?? []
+              const active = botFunnels.find((funnel) => funnel.is_active_for_bot)
+              return (
+                <div key={bot.id} className="rounded-lg border border-white/8 bg-white/[0.025] p-3">
+                  <p className="truncate text-sm font-medium text-white">
+                    {bot.name}
+                    {bot.bot_username ? ` · @${bot.bot_username}` : ''}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {active ? `Активна: ${active.name}` : 'Воронка не назначена'}
+                  </p>
+                  {botFunnels.length > 1 ? (
+                    <p className="mt-2 rounded-md border border-amber-300/15 bg-amber-300/10 px-2 py-1 text-xs text-amber-100">
+                      У этого бота несколько воронок. Активной может быть только одна.
+                    </p>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        ) : null}
+
         {funnels.length === 0 && !isLoading ? (
           <EmptyState
             icon={<Workflow size={28} />}
@@ -177,6 +211,7 @@ export default function FunnelList({
                 onOpen={onOpen}
                 onCopy={onCopy}
                 onArchive={onArchive}
+                onMakeActive={onMakeActive}
               />
             ))}
           </div>

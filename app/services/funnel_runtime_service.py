@@ -38,6 +38,9 @@ class FunnelRuntimeService:
     async def get_published_funnel_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         return await self.repo.get_published_for_bot(bot_id)
 
+    async def reset_chat_state(self, chat_id: UUID) -> None:
+        await self.repo.reset_chat_funnel_state(chat_id)
+
     async def start_funnel_for_chat(
         self,
         *,

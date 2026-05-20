@@ -147,15 +147,105 @@ class FunnelRepository(BaseRepository[Funnel]):
         result = await self.db.execute(
             select(FunnelVersion)
             .join(Funnel, Funnel.id == FunnelVersion.funnel_id)
+            .join(Bot, Bot.id == Funnel.bot_id)
             .where(
                 Funnel.bot_id == bot_id,
                 Funnel.status == "active",
                 FunnelVersion.status == "published",
+                Bot.active_funnel_version_id == FunnelVersion.id,
             )
             .order_by(FunnelVersion.published_at.desc().nullslast())
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_active_funnel_for_bot(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> tuple[Optional[Funnel], Optional[FunnelVersion]]:
+        result = await self.db.execute(
+            select(Funnel, FunnelVersion)
+            .select_from(Bot)
+            .outerjoin(Funnel, Funnel.id == Bot.active_funnel_id)
+            .outerjoin(FunnelVersion, FunnelVersion.id == Bot.active_funnel_version_id)
+            .where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+        )
+        row = result.first()
+        if row is None:
+            return None, None
+        return row[0], row[1]
+
+    async def set_active_funnel_for_bot(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+        funnel_id: UUID,
+        version_id: UUID,
+    ) -> Optional[Bot]:
+        result = await self.db.execute(
+            update(Bot)
+            .where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+            .values(
+                active_funnel_id=funnel_id,
+                active_funnel_version_id=version_id,
+                updated_at=func.now(),
+            )
+        )
+        if result.rowcount == 0:
+            return None
+        bot_result = await self.db.execute(select(Bot).where(Bot.id == bot_id))
+        return bot_result.scalar_one_or_none()
+
+    async def clear_active_funnel_for_bot(
+        self,
+        *,
+        bot_id: UUID,
+        funnel_id: UUID,
+    ) -> None:
+        await self.db.execute(
+            update(Bot)
+            .where(Bot.id == bot_id, Bot.active_funnel_id == funnel_id)
+            .values(
+                active_funnel_id=None,
+                active_funnel_version_id=None,
+                updated_at=func.now(),
+            )
+        )
+
+    async def archive_published_versions_for_bot(
+        self,
+        *,
+        bot_id: UUID,
+        exclude_version_id: Optional[UUID] = None,
+    ) -> None:
+        stmt = (
+            update(FunnelVersion)
+            .where(
+                FunnelVersion.funnel_id == Funnel.id,
+                Funnel.bot_id == bot_id,
+                FunnelVersion.status == "published",
+            )
+        )
+        if exclude_version_id is not None:
+            stmt = stmt.where(FunnelVersion.id != exclude_version_id)
+        await self.db.execute(stmt.values(status="archived", updated_at=func.now()))
+
+    async def reset_chat_funnel_state(self, chat_id: UUID) -> None:
+        await self.db.execute(
+            update(ChatFunnelState)
+            .where(ChatFunnelState.chat_id == chat_id)
+            .values(completed_at=func.now(), updated_at=func.now())
+        )
 
     async def next_version_number(self, funnel_id: UUID) -> int:
         result = await self.db.execute(

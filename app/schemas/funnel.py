@@ -58,6 +58,7 @@ class FunnelOut(OrmBase):
     updated_at: datetime
     draft_version_id: Optional[uuid.UUID] = None
     published_version_id: Optional[uuid.UUID] = None
+    is_active_for_bot: bool = False
 
 
 class FunnelVersionOut(OrmBase):
@@ -69,6 +70,7 @@ class FunnelVersionOut(OrmBase):
     created_at: datetime
     updated_at: datetime
     published_at: Optional[datetime]
+    is_active_for_bot: bool = False
 
 
 class FunnelVersionUpdate(BaseModel):
@@ -190,6 +192,17 @@ class FunnelCopyIn(BaseModel):
 class FunnelCopyOut(BaseModel):
     new_funnel_id: uuid.UUID
     new_version_id: uuid.UUID
+
+
+class BotActiveFunnelSetIn(BaseModel):
+    funnel_id: uuid.UUID
+    version_id: uuid.UUID
+
+
+class BotActiveFunnelOut(BaseModel):
+    bot_id: uuid.UUID
+    funnel: Optional[FunnelOut] = None
+    version: Optional[FunnelVersionOut] = None
 
 
 class FunnelValidationIssue(BaseModel):

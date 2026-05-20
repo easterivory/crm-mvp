@@ -13,6 +13,8 @@ from app.models.user import User
 from app.repositories.funnel_repository import FunnelRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
+    BotActiveFunnelOut,
+    BotActiveFunnelSetIn,
     FunnelCopyIn,
     FunnelCopyOut,
     FunnelCreate,
@@ -121,7 +123,7 @@ class FunnelService:
         current_user: User,
     ) -> FunnelOut:
         self._ensure_write_allowed(current_user)
-        await self._get_funnel_or_404(funnel_id, project_id)
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
         values = data.model_dump(exclude_unset=True)
         if "name" in values and values["name"] is not None:
             values["name"] = values["name"].strip()
@@ -137,13 +139,17 @@ class FunnelService:
         current_user: User,
     ) -> FunnelOut:
         self._ensure_write_allowed(current_user)
-        await self._get_funnel_or_404(funnel_id, project_id)
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
         updated = await self.repo.update_in_project(
             funnel_id,
             project_id,
             status="archived",
         )
         await self.repo.archive_published_versions(funnel_id=funnel_id)
+        await self.repo.clear_active_funnel_for_bot(
+            bot_id=funnel.bot_id,
+            funnel_id=funnel.id,
+        )
         assert updated is not None
         return await self._funnel_out(updated)
 
@@ -155,9 +161,16 @@ class FunnelService:
         current_user: User,
     ) -> list[FunnelVersionOut]:
         self._ensure_read_allowed(current_user)
-        await self._get_funnel_or_404(funnel_id, project_id)
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
+        _, active_version = await self.repo.get_active_funnel_for_bot(
+            funnel.bot_id,
+            project_id,
+        )
+        active_version_id = active_version.id if active_version else None
         return [
-            FunnelVersionOut.model_validate(version)
+            FunnelVersionOut.model_validate(version).model_copy(
+                update={"is_active_for_bot": version.id == active_version_id}
+            )
             for version in await self.repo.list_versions(funnel_id)
         ]
 
@@ -185,6 +198,24 @@ class FunnelService:
             await self.repo.clone_graph(published.id, version.id)
         return FunnelVersionOut.model_validate(version)
 
+    async def create_draft_from_version(
+        self,
+        *,
+        funnel_id: UUID,
+        source_version_id: UUID,
+        project_id: UUID,
+        current_user: User,
+    ) -> FunnelVersionOut:
+        self._ensure_write_allowed(current_user)
+        await self._get_version_or_404(funnel_id, source_version_id, project_id)
+        draft = await self.repo.create_version(
+            funnel_id=funnel_id,
+            version_number=await self.repo.next_version_number(funnel_id),
+            created_by_user_id=current_user.id,
+        )
+        await self.repo.clone_graph(source_version_id, draft.id)
+        return FunnelVersionOut.model_validate(draft)
+
     async def get_version(
         self,
         *,
@@ -195,7 +226,18 @@ class FunnelService:
     ) -> FunnelVersionOut:
         self._ensure_read_allowed(current_user)
         version = await self._get_version_or_404(funnel_id, version_id, project_id)
-        return FunnelVersionOut.model_validate(version)
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
+        _, active_version = await self.repo.get_active_funnel_for_bot(
+            funnel.bot_id,
+            project_id,
+        )
+        return FunnelVersionOut.model_validate(version).model_copy(
+            update={
+                "is_active_for_bot": bool(
+                    active_version is not None and active_version.id == version.id
+                )
+            }
+        )
 
     async def update_version(
         self,
@@ -218,6 +260,61 @@ class FunnelService:
         updated = await self.repo.update_version_status(version_id, data.status)
         assert updated is not None
         return FunnelVersionOut.model_validate(updated)
+
+    async def get_active_funnel_for_bot(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+        current_user: User,
+    ) -> BotActiveFunnelOut:
+        self._ensure_read_allowed(current_user)
+        await self._ensure_bot_in_project(bot_id, project_id)
+        funnel, version = await self.repo.get_active_funnel_for_bot(bot_id, project_id)
+        return BotActiveFunnelOut(
+            bot_id=bot_id,
+            funnel=await self._funnel_out(funnel) if funnel is not None else None,
+            version=(
+                FunnelVersionOut.model_validate(version).model_copy(
+                    update={"is_active_for_bot": True}
+                )
+                if version is not None
+                else None
+            ),
+        )
+
+    async def set_active_funnel_for_bot(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+        data: BotActiveFunnelSetIn,
+        current_user: User,
+    ) -> BotActiveFunnelOut:
+        self._ensure_write_allowed(current_user)
+        await self._ensure_bot_in_project(bot_id, project_id)
+        version = await self._get_version_or_404(data.funnel_id, data.version_id, project_id)
+        funnel = await self._get_funnel_or_404(data.funnel_id, project_id)
+        if funnel.bot_id != bot_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Funnel belongs to another bot",
+            )
+        if version.status not in {"published", "archived"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only published or archived versions can be activated",
+            )
+        await self._activate_version_for_bot(
+            funnel=funnel,
+            version=version,
+            project_id=project_id,
+        )
+        return await self.get_active_funnel_for_bot(
+            bot_id=bot_id,
+            project_id=project_id,
+            current_user=current_user,
+        )
 
     async def get_graph(
         self,
@@ -296,15 +393,59 @@ class FunnelService:
                 detail=[issue.model_dump(mode="json") for issue in validation.errors],
             )
 
-        await self.repo.archive_published_versions(funnel_id=funnel_id)
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
+        await self.repo.archive_published_versions_for_bot(
+            bot_id=funnel.bot_id,
+            exclude_version_id=version_id,
+        )
+        await self.repo.archive_published_versions(
+            funnel_id=funnel_id,
+            exclude_version_id=version_id,
+        )
         published = await self.repo.update_version_status(
             version_id,
             "published",
             published_at=datetime.now(timezone.utc),
         )
-        await self.repo.update_in_project(funnel_id, project_id)
         assert published is not None
-        return FunnelVersionOut.model_validate(published)
+        await self.repo.set_active_funnel_for_bot(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+            funnel_id=funnel.id,
+            version_id=published.id,
+        )
+        await self.repo.update_in_project(funnel_id, project_id)
+        return FunnelVersionOut.model_validate(published).model_copy(
+            update={"is_active_for_bot": True}
+        )
+
+    async def _activate_version_for_bot(
+        self,
+        *,
+        funnel: Funnel,
+        version: FunnelVersion,
+        project_id: UUID,
+    ) -> None:
+        await self.repo.archive_published_versions_for_bot(
+            bot_id=funnel.bot_id,
+            exclude_version_id=version.id,
+        )
+        await self.repo.archive_published_versions(
+            funnel_id=funnel.id,
+            exclude_version_id=version.id,
+        )
+        if version.status == "archived":
+            await self.repo.update_version_status(
+                version.id,
+                "published",
+                published_at=datetime.now(timezone.utc),
+            )
+        await self.repo.set_active_funnel_for_bot(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+            funnel_id=funnel.id,
+            version_id=version.id,
+        )
 
     async def copy_funnel(
         self,
@@ -353,10 +494,19 @@ class FunnelService:
     async def _funnel_out(self, funnel: Funnel) -> FunnelOut:
         draft = await self.repo.get_latest_draft(funnel.id)
         published = await self.repo.get_published(funnel.id)
+        _, active_version = await self.repo.get_active_funnel_for_bot(
+            funnel.bot_id,
+            funnel.project_id,
+        )
         return FunnelOut.model_validate(funnel).model_copy(
             update={
                 "draft_version_id": draft.id if draft else None,
                 "published_version_id": published.id if published else None,
+                "is_active_for_bot": bool(
+                    active_version is not None
+                    and published is not None
+                    and active_version.id == published.id
+                ),
             }
         )
 
@@ -617,12 +767,12 @@ class FunnelService:
     def _default_trigger_step() -> FunnelStepIn:
         return FunnelStepIn(
             key="start",
-            title="Новый чат",
+            title="Старт",
             step_type="trigger",
-            block_type="new_chat",
+            block_type="generic_trigger",
             position_x=80,
             position_y=120,
-            config_json={},
+            config_json={"trigger_type": "new_chat"},
         )
 
     async def _get_funnel_or_404(self, funnel_id: UUID, project_id: UUID) -> Funnel:

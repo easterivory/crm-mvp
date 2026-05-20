@@ -38,12 +38,14 @@ LEAD_FIELD_KEYS = [
 
 MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
     "trigger": [
+        ("generic_trigger", "Старт / Триггер"),
         ("new_chat", "Новый чат"),
         ("start_command", "/start"),
         ("start_with_ref_code", "/start с ref-кодом"),
         ("manual_operator_start", "Ручной запуск"),
     ],
     "message": [
+        ("generic_message", "Сообщение"),
         ("send_text", "Текст"),
         ("send_inline_buttons", "Текст + кнопки"),
         ("send_personalized_message", "Персонализированное сообщение"),
@@ -51,6 +53,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("notify_admin_chat", "Уведомить админ-чат"),
     ],
     "input": [
+        ("generic_input", "Вопрос / сбор данных"),
         ("ask_name", "Имя"),
         ("ask_phone", "Телефон"),
         ("ask_age", "Возраст"),
@@ -63,6 +66,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("ask_time", "Время"),
     ],
     "condition": [
+        ("generic_condition", "Условие"),
         ("button_equals", "По кнопке"),
         ("text_contains", "По тексту"),
         ("field_exists", "Поле заполнено"),
@@ -78,6 +82,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("field_compare", "Сравнение поля"),
     ],
     "action": [
+        ("generic_crm_action", "CRM-действие"),
         ("create_lead", "Создать лид"),
         ("update_lead", "Обновить лид"),
         ("set_lead_status", "Изменить статус"),
@@ -96,11 +101,13 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("send_to_crm_placeholder", "Заглушка отправки в CRM"),
     ],
     "delay": [
+        ("generic_delay", "Таймер / ожидание"),
         ("wait_minutes", "Ждать N минут"),
         ("wait_hours", "Ждать N часов"),
         ("wait_for_reply_timeout", "Нет ответа N минут"),
     ],
     "operator": [
+        ("generic_operator", "Оператор"),
         ("handoff_to_operator", "Передать оператору"),
         ("assign_specific_operator", "Назначить конкретного оператора"),
         ("assign_random_operator", "Назначить случайного оператора"),
@@ -111,11 +118,13 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("open_dialog", "Открыть диалог"),
     ],
     "integration": [
+        ("generic_integration", "Интеграция"),
         ("outgoing_webhook", "Webhook"),
         ("http_request", "HTTP request"),
         ("external_crm_placeholder", "Внешняя CRM placeholder"),
     ],
     "finish": [
+        ("generic_finish", "Завершение"),
         ("stop_scenario", "Остановить сценарий"),
         ("finish_success", "Успешно завершить"),
         ("finish_lost", "Завершить как lost"),
@@ -332,6 +341,80 @@ class FunnelBlockRegistry:
             return [f"Неизвестная категория блока: {step_type}."]
         if not self.is_known(step_type, block_type):
             return [f"Блок {block_type} не разрешён для категории {step_type}."]
+
+        if block_type == "generic_trigger":
+            trigger_type = str(config.get("trigger_type") or "new_chat").strip()
+            if trigger_type not in {
+                "new_chat",
+                "start_command",
+                "start_with_ref_code",
+                "manual_operator_start",
+            }:
+                errors.append("Выберите допустимый тип триггера.")
+        if block_type == "generic_message":
+            if not self._text(config, "text", "message_text"):
+                errors.append("Для сообщения нужен текст.")
+            buttons = config.get("buttons")
+            if buttons is not None and not isinstance(buttons, list):
+                errors.append("Кнопки сообщения должны быть списком.")
+        if block_type == "generic_input":
+            if not self._text(config, "question_text", "text", "message_text"):
+                errors.append("Для вопроса нужен текст вопроса.")
+            answer_type = str(config.get("answer_type") or "").strip()
+            if answer_type not in {"text", "phone", "number", "choice", "date", "time"}:
+                errors.append("Для вопроса выберите тип ответа.")
+            save_to = str(config.get("save_to") or "").strip()
+            if save_to and save_to not in LEAD_FIELD_KEYS:
+                errors.append("Поле для сохранения ответа не поддерживается.")
+            if answer_type == "choice" and not self._list(config, "choices", "options", "buttons"):
+                errors.append("Для выбора нужен хотя бы один вариант.")
+        if block_type == "generic_condition":
+            mode = str(config.get("mode") or "all").strip()
+            if mode not in {"all", "any"}:
+                errors.append("Режим условия должен быть all или any.")
+            conditions = config.get("conditions")
+            if not isinstance(conditions, list) or not conditions:
+                errors.append("Добавьте хотя бы одно условие.")
+            else:
+                for index, condition in enumerate(conditions, start=1):
+                    if not isinstance(condition, dict):
+                        errors.append(f"Условие #{index} должно быть объектом.")
+                        continue
+                    condition_type = str(condition.get("type") or "").strip()
+                    if not condition_type:
+                        errors.append(f"Условие #{index}: выберите тип.")
+            outcomes = config.get("outcomes")
+            if outcomes is not None and not isinstance(outcomes, list):
+                errors.append("Исходы условия должны быть списком.")
+        if block_type == "generic_crm_action":
+            actions = config.get("actions")
+            if not isinstance(actions, list) or not actions:
+                errors.append("Добавьте хотя бы одно CRM-действие.")
+            else:
+                for index, action in enumerate(actions, start=1):
+                    if not isinstance(action, dict) or not str(action.get("type") or "").strip():
+                        errors.append(f"CRM-действие #{index}: выберите тип.")
+        if block_type == "generic_delay":
+            delay_type = str(config.get("delay_type") or "minutes").strip()
+            if delay_type == "hours":
+                if self._positive_number(config, "hours", "delay_hours") is None:
+                    errors.append("Укажите задержку в часах больше 0.")
+            elif delay_type in {"minutes", "reply_timeout"}:
+                if self._positive_number(config, "minutes", "delay_minutes") is None:
+                    errors.append("Укажите задержку в минутах больше 0.")
+            else:
+                errors.append("Выберите допустимый тип таймера.")
+        if block_type == "generic_operator":
+            if not self._text(config, "operator_action", "action_type"):
+                errors.append("Выберите действие оператора.")
+        if block_type == "generic_integration":
+            integration_type = str(config.get("integration_type") or "webhook").strip()
+            if integration_type in {"webhook", "http_request"} and not self._text(config, "url"):
+                errors.append("Для интеграции нужен URL.")
+        if block_type == "generic_finish":
+            result = str(config.get("result") or "stop").strip()
+            if result not in {"success", "lost", "rejected", "stop"}:
+                errors.append("Выберите допустимый результат завершения.")
 
         if block_type in {"send_text", "send_personalized_message", "send_inline_buttons"}:
             if not self._text(config, "text", "message_text"):

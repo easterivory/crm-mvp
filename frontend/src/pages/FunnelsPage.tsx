@@ -7,6 +7,7 @@ import {
   archiveFunnel,
   createFunnel,
   fetchFunnels,
+  setBotActiveFunnel,
   type Funnel,
 } from '../features/funnels'
 import CopyFunnelModal from '../features/funnels/components/CopyFunnelModal'
@@ -136,6 +137,22 @@ export default function FunnelsPage() {
     }
   }
 
+  const handleMakeActive = async (funnel: Funnel) => {
+    if (!selectedProjectId || !funnel.published_version_id) {
+      return
+    }
+    try {
+      await setBotActiveFunnel(funnel.bot_id, selectedProjectId, {
+        funnel_id: funnel.id,
+        version_id: funnel.published_version_id,
+      })
+      notify({ tone: 'success', message: 'Воронка назначена активной для бота.' })
+      await loadData()
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }
+
   const handleVersionReady = useCallback(
     (resolvedVersionId: string) => {
       if (versionId === resolvedVersionId) {
@@ -179,6 +196,7 @@ export default function FunnelsPage() {
         }
         onCopy={setCopyTarget}
         onArchive={(funnel) => void handleArchive(funnel)}
+        onMakeActive={(funnel) => void handleMakeActive(funnel)}
       />
 
       {copyTarget ? (
