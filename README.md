@@ -159,6 +159,12 @@ Frontend deploy rules:
 - `frontend/dist/index.html` and hashed JS/CSS assets are printed after build;
 - nginx is reloaded when available, otherwise fresh static files are updated in place.
 
+GitHub Actions deploy guardrails:
+
+- only one dev deploy may run at a time; a newer push cancels an older in-progress deploy;
+- the SSH connect step has a short timeout so an unreachable dev host fails visibly;
+- the remote deploy command has an 18 minute limit and cannot hang forever.
+
 Fresh frontend verification:
 
 ```bash
