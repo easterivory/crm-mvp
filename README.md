@@ -162,8 +162,9 @@ Frontend deploy rules:
 GitHub Actions deploy guardrails:
 
 - only one dev deploy may run at a time; a newer push cancels an older in-progress deploy;
-- the SSH connect step has a short timeout so an unreachable dev host fails visibly;
-- the remote deploy command has an 18 minute limit and cannot hang forever.
+- deploy uses direct OpenSSH with `ConnectTimeout`, `ServerAlive*`, and shell `timeout`;
+- the SSH connect step has a short timeout so an unreachable or banner-stuck dev host fails visibly;
+- the remote deploy command has a 19 minute limit and cannot hang forever.
 
 Fresh frontend verification:
 
