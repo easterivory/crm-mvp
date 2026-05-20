@@ -5,7 +5,6 @@ import {
   CheckCheck,
   LoaderCircle,
   MessageSquareText,
-  RotateCcw,
   Send,
   UserRound,
 } from 'lucide-react'
@@ -24,7 +23,7 @@ import api from '../api/client'
 import ChatList, { Chat, ChatFilter } from '../components/ChatList'
 import LeadSidebar from '../components/LeadSidebar'
 import { fetchBots, type Bot as BotRecord } from '../features/bots'
-import { useProjectBotSelection } from '../shared/lib'
+import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
 import { ConfirmDialog, Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
@@ -83,6 +82,7 @@ function getErrorMessage(err: unknown) {
 export default function ChatsPage() {
   const user = useAuthStore((state) => state.user)
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
+  const notify = useNotificationStore((state) => state.notify)
 
   const [chats, setChats] = useState<Chat[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
@@ -91,8 +91,6 @@ export default function ChatsPage() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ChatFilter>('all')
   const [draft, setDraft] = useState('')
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -147,7 +145,6 @@ export default function ChatsPage() {
     }
 
     setIsChatsLoading(true)
-    setError('')
 
     try {
       const params: Record<string, boolean | number | string> = {
@@ -182,7 +179,7 @@ export default function ChatsPage() {
         return data.items[0]?.id ?? null
       })
     } catch (err) {
-      setError(getErrorMessage(err))
+      notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsChatsLoading(false)
     }
@@ -204,7 +201,6 @@ export default function ChatsPage() {
     if (showLoader) {
       setIsMessagesLoading(true)
     }
-    setError('')
 
     try {
       const { data } = await api.get<PaginatedResponse<Message>>(
@@ -227,7 +223,7 @@ export default function ChatsPage() {
         ),
       )
     } catch (err) {
-      setError(getErrorMessage(err))
+      notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       if (showLoader) {
         setIsMessagesLoading(false)
@@ -271,7 +267,6 @@ export default function ChatsPage() {
     }
 
     setIsSending(true)
-    setError('')
 
     try {
       const { data } = await api.post<Message>(`/chats/${selectedChatId}/messages`, {
@@ -286,7 +281,7 @@ export default function ChatsPage() {
       setDraft('')
       await loadChats()
     } catch (err) {
-      setError(getErrorMessage(err))
+      notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsSending(false)
     }
@@ -298,8 +293,6 @@ export default function ChatsPage() {
     }
 
     setIsResettingChat(true)
-    setError('')
-    setNotice('')
 
     try {
       await api.post(`/chats/${selectedChatId}/reset`, null, {
@@ -310,11 +303,14 @@ export default function ChatsPage() {
       setMessages([])
       setIsResetConfirmOpen(false)
       setIsLeadOpen(false)
-      setNotice('Диалог сброшен. Если пользователь напишет снова, он начнёт путь заново.')
+      notify({
+        tone: 'success',
+        message: 'Диалог сброшен. Если пользователь напишет снова, он начнёт путь заново.',
+      })
       await loadChats()
       setSelectedChatId(null)
     } catch (err) {
-      setError(getErrorMessage(err))
+      notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsResettingChat(false)
     }
@@ -336,18 +332,6 @@ export default function ChatsPage() {
 
   return (
     <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
-      {notice ? (
-        <div className="absolute right-3 top-3 z-30 max-w-[calc(100%-1.5rem)] rounded-xl border border-accent-400/30 bg-accent-950/95 px-4 py-3 text-sm text-accent-100 shadow-card sm:right-4 sm:top-4 sm:max-w-md">
-          {notice}
-        </div>
-      ) : null}
-
-      {error ? (
-        <div className="absolute right-3 top-3 z-30 max-w-[calc(100%-1.5rem)] rounded-xl border border-red-400/30 bg-red-950/95 px-4 py-3 text-sm text-red-100 shadow-card sm:right-4 sm:top-4 sm:max-w-md">
-          {error}
-        </div>
-      ) : null}
-
       <div className={`${selectedChat ? 'hidden xl:block' : 'min-h-0'} overflow-hidden`}>
         <ChatList
           activeFilter={activeFilter}
@@ -397,14 +381,6 @@ export default function ChatsPage() {
                 >
                   <UserRound size={15} />
                   Лид
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsResetConfirmOpen(true)}
-                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 text-sm text-red-100 transition hover:border-red-300/60"
-                >
-                  <RotateCcw size={15} />
-                  <span className="hidden sm:inline">Сбросить диалог</span>
                 </button>
                 <div className="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
                   <CheckCheck size={16} />
@@ -508,6 +484,7 @@ export default function ChatsPage() {
           activeChatId={selectedChatId}
           hasActiveScope={Boolean(selectedProjectId)}
           currentUserId={user?.id ?? null}
+          onResetRequest={() => setIsResetConfirmOpen(true)}
         />
       </div>
 
@@ -519,6 +496,7 @@ export default function ChatsPage() {
             activeChatId={selectedChatId}
             hasActiveScope={Boolean(selectedProjectId)}
             currentUserId={user?.id ?? null}
+            onResetRequest={() => setIsResetConfirmOpen(true)}
           />
         </Modal>
       ) : null}

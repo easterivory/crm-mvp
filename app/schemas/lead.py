@@ -13,8 +13,13 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)
     username: Optional[str] = Field(None, max_length=255)
+    age: Optional[int] = Field(None, ge=0, le=150)
+    country: Optional[str] = Field(None, max_length=100)
+    call_time_text: Optional[str] = Field(None, max_length=255)
+    has_card: Optional[bool] = None
 
 
 class LeadStatusCreate(BaseModel):
@@ -56,8 +61,14 @@ class LeadOut(OrmBase):
     chat_id: uuid.UUID
     manager_id: Optional[uuid.UUID]
     status_id: uuid.UUID
+    name: Optional[str]
     phone: Optional[str]
     username: Optional[str]
+    age: Optional[int]
+    country: Optional[str]
+    call_time_text: Optional[str]
+    has_card: Optional[bool]
+    custom_fields: dict = Field(default_factory=dict)
     updated_at: datetime
     created_at: datetime
     is_deleted: bool

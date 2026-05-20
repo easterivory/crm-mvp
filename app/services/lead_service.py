@@ -425,6 +425,9 @@ class LeadService:
         actor_id: UUID,
     ) -> LeadOut:
         values = data.model_dump(exclude_unset=True)
+        for field_name in ("name", "country", "call_time_text"):
+            if field_name in values:
+                values[field_name] = self._normalize_optional(values[field_name])
         if "phone" in values:
             values["phone"] = self._normalize_optional(values["phone"])
         if "username" in values:

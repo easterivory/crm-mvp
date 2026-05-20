@@ -5,6 +5,7 @@ import {
   Phone,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Tag,
   UserRound,
@@ -22,8 +23,14 @@ type Lead = {
   chat_id: string
   manager_id: string | null
   status_id: string
+  name: string | null
   phone: string | null
   username: string | null
+  age: number | null
+  country: string | null
+  call_time_text: string | null
+  has_card: boolean | null
+  custom_fields?: Record<string, unknown>
   updated_at: string
   created_at: string
   is_deleted: boolean
@@ -69,6 +76,7 @@ type LeadSidebarProps = {
   activeChatId: string | null
   hasActiveScope: boolean
   currentUserId: string | null
+  onResetRequest?: () => void
 }
 
 function formatDateTime(value: string | null) {
@@ -108,6 +116,7 @@ export default function LeadSidebar({
   activeChatId,
   hasActiveScope,
   currentUserId,
+  onResetRequest,
 }: LeadSidebarProps) {
   const { selectedProjectId } = useProjectBotSelection()
   const [lead, setLead] = useState<Lead | null>(null)
@@ -145,6 +154,20 @@ export default function LeadSidebar({
     const attachedTagIds = new Set((lead?.tags ?? []).map((tag) => tag.id))
     return tags.filter((tag) => !attachedTagIds.has(tag.id))
   }, [lead?.tags, tags])
+
+  const mappedDetails = useMemo(() => {
+    if (!lead) {
+      return []
+    }
+    return [
+      ['Имя', lead.name],
+      ['Телефон', lead.phone],
+      ['Возраст', lead.age ? String(lead.age) : null],
+      ['Страна', lead.country],
+      ['Удобное время', lead.call_time_text],
+      ['Карта', lead.has_card === null ? null : lead.has_card ? 'Есть' : 'Нет'],
+    ].filter(([, value]) => Boolean(value))
+  }, [lead])
 
   const loadStatuses = useCallback(async () => {
     const { data } = await api.get<LeadStatus[]>('/leads/statuses')
@@ -432,6 +455,76 @@ export default function LeadSidebar({
               ) : null}
             </div>
 
+            <div className="rounded-xl border border-accent-300/15 bg-accent-400/[0.045] p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-medium text-white">
+                  <Tag size={16} className="text-accent-200" />
+                  Теги
+                </div>
+                {isTagsLoading ? (
+                  <LoaderCircle size={15} className="animate-spin text-gray-400" />
+                ) : null}
+              </div>
+              {lead.tags && lead.tags.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {lead.tags.map((tag) => (
+                    <span
+                      key={tag.id}
+                      className="inline-flex items-center gap-1 rounded-full border border-accent-300/20 bg-accent-300/10 px-2 py-1 text-xs font-medium text-accent-50"
+                    >
+                      {tag.name}
+                      <button
+                        type="button"
+                        title="Убрать тег"
+                        onClick={() => void handleRemoveTag(tag.id)}
+                        disabled={isTagMutating}
+                        className="rounded-full text-accent-50/70 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">Тегов пока нет.</p>
+              )}
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] xl:grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_auto]">
+                <select
+                  value={selectedTagId}
+                  onChange={(event) => setSelectedTagId(event.target.value)}
+                  disabled={isTagsLoading || isTagMutating || availableTags.length === 0}
+                  className="min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">
+                    {isTagsLoading
+                      ? 'Загрузка тегов...'
+                      : availableTags.length === 0
+                        ? 'Нет доступных тегов'
+                        : 'Выберите тег'}
+                  </option>
+                  {availableTags.map((tag) => (
+                    <option key={tag.id} value={tag.id}>
+                      {tag.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void handleAddTag()}
+                  disabled={!selectedTagId || isTagMutating}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 text-sm font-medium text-accent-50 transition hover:border-accent-300/50 hover:bg-accent-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isTagMutating ? (
+                    <LoaderCircle size={15} className="animate-spin" />
+                  ) : (
+                    <Plus size={15} />
+                  )}
+                  Добавить тег
+                </button>
+              </div>
+            </div>
+
             <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -493,7 +586,20 @@ export default function LeadSidebar({
                     Сохранить
                   </button>
                 </div>
-                <div className="space-y-3">
+              <div className="space-y-3">
+                  <label className="block">
+                    <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
+                      <UserRound size={14} />
+                      Имя
+                    </span>
+                    <input
+                      value={lead.name ?? ''}
+                      disabled
+                      placeholder="Будет заполнено из воронки"
+                      className="w-full rounded-xl border border-white/10 bg-background/40 px-3 py-2 text-sm text-gray-400 outline-none placeholder:text-gray-600"
+                    />
+                  </label>
+
                   <label className="block">
                     <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
                       <AtSign size={14} />
@@ -522,6 +628,24 @@ export default function LeadSidebar({
                     />
                   </label>
                 </div>
+
+                {mappedDetails.length > 0 ? (
+                  <div className="mt-4 rounded-xl border border-white/5 bg-background/35 p-3">
+                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Данные из воронки
+                    </p>
+                    <div className="grid gap-2 text-sm">
+                      {mappedDetails.map(([label, value]) => (
+                        <div key={label} className="flex items-start justify-between gap-3">
+                          <span className="text-gray-500">{label}</span>
+                          <span className="max-w-[60%] break-words text-right text-gray-100">
+                            {value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
@@ -535,70 +659,22 @@ export default function LeadSidebar({
               </div>
             </div>
 
-            <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
-              <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
-                <Tag size={16} className="text-gray-500" />
-                Теги
-              </div>
-              {lead.tags && lead.tags.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {lead.tags.map((tag) => (
-                    <span
-                      key={tag.id}
-                      className="inline-flex items-center gap-1 rounded-full bg-primary-500/12 px-2 py-1 text-xs font-medium text-primary-100"
-                    >
-                      {tag.name}
-                      <button
-                        type="button"
-                        title="Убрать тег"
-                        onClick={() => void handleRemoveTag(tag.id)}
-                        disabled={isTagMutating}
-                        className="rounded-full text-primary-100/70 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <X size={12} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-500">Тегов пока нет.</p>
-              )}
-
-              <div className="mt-3 flex gap-2">
-                <select
-                  value={selectedTagId}
-                  onChange={(event) => setSelectedTagId(event.target.value)}
-                  disabled={isTagsLoading || isTagMutating || availableTags.length === 0}
-                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <option value="">
-                    {isTagsLoading
-                      ? 'Загрузка тегов...'
-                      : availableTags.length === 0
-                        ? 'Нет доступных тегов'
-                        : 'Выберите тег'}
-                  </option>
-                  {availableTags.map((tag) => (
-                    <option key={tag.id} value={tag.id}>
-                      {tag.name}
-                    </option>
-                  ))}
-                </select>
+            {onResetRequest ? (
+              <div className="rounded-xl border border-red-300/10 bg-red-500/[0.035] p-4">
+                <p className="text-sm font-medium text-gray-200">Опасная зона</p>
+                <p className="mt-1 text-xs leading-5 text-gray-500">
+                  Сброс очищает текущий цикл диалога, теги и состояние воронки.
+                </p>
                 <button
                   type="button"
-                  onClick={() => void handleAddTag()}
-                  disabled={!selectedTagId || isTagMutating}
-                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-gray-100 transition hover:border-accent-300/45 hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  title="Добавить тег"
+                  onClick={onResetRequest}
+                  className="mt-3 inline-flex h-9 items-center gap-2 rounded-xl border border-red-300/20 bg-transparent px-3 text-sm text-red-200 transition hover:border-red-300/40 hover:bg-red-500/10"
                 >
-                  {isTagMutating ? (
-                    <LoaderCircle size={15} className="animate-spin" />
-                  ) : (
-                    <Plus size={15} />
-                  )}
+                  <RotateCcw size={15} />
+                  Сбросить диалог
                 </button>
               </div>
-            </div>
+            ) : null}
           </div>
         ) : null}
       </div>

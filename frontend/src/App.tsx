@@ -14,6 +14,7 @@ import SettingsPage from './pages/SettingsPage'
 import TrackingPage from './pages/TrackingPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
+import { NotificationViewport } from './shared/ui'
 import { useAuthStore } from './store/authStore'
 
 export default function App() {
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="/analytics" element={<DashboardPage />} />
           <Route path="/chats" element={<ChatsPage />} />
           <Route path="/funnels" element={<FunnelsPage />} />
+          <Route path="/funnels/:funnelId/builder" element={<FunnelsPage />} />
           <Route path="/broadcasts" element={<BroadcastsPage />} />
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/leads" element={<LeadsPage />} />
@@ -53,6 +55,7 @@ export default function App() {
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+      <NotificationViewport />
     </BrowserRouter>
   )
 }

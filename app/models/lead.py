@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import (
@@ -49,8 +49,19 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         UUID(as_uuid=True), ForeignKey("lead_statuses.id"), nullable=False
     )
 
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    age: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    call_time_text: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    has_card: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    custom_fields: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
 
     # Relationships
     project: Mapped[Project] = relationship("Project", back_populates="leads")

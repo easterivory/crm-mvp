@@ -601,3 +601,177 @@ Frontend rule: `page -> feature public API -> feature internals -> shared`.
 - Permissions: `super_admin` может читать метрики любого project; остальные
   роли читают только свой `project_id`. `bot_id` и `link_id` дополнительно
   проверяются на принадлежность доступному project.
+
+---
+
+## Funnel Builder Domain
+
+Funnel Builder v1 добавляет отдельный production foundation для визуальных
+воронок без замены legacy `bot_engine_service`.
+
+Backend сохраняет правило слоёв:
+
+```text
+router -> service -> repository -> model
+```
+
+Основные таблицы:
+
+- `funnels`: project/bot scoped контейнер сценария, `status=active|archived`.
+- `funnel_versions`: версии одной funnel, `status=draft|published|archived`.
+- `funnel_steps`: узлы графа с `step_type`, `block_type`, координатами и JSON config.
+- `funnel_edges`: связи между узлами с optional condition и priority.
+- `funnel_push_rules`: правила напоминаний для пользователей, застрявших на шаге.
+- `funnel_field_mappings`: правила записи ответов в карточку лида.
+- `chat_funnel_states`: будущий runtime state воронок, отдельно от `chat_bot_states`.
+
+`chat_bot_states` не расширяется, потому что он уже принадлежит текущему
+Telegram/bot engine lifecycle и хранит ссылки на `bot_steps`. Отдельная
+`chat_funnel_states` позволяет подготовить runtime foundation без риска
+сломать webhook или существующий state machine.
+
+## Funnel Block Registry
+
+Funnel v1 не хардкодит редактор под несколько step types. Канон:
+
+- `step_type`: широкая категория (`trigger`, `message`, `input`, `condition`,
+  `action`, `delay`, `operator`, `integration`, `finish`).
+- `block_type`: конкретное поведение блока.
+- `config_json`: block-specific настройки.
+- `validation_json` и `ui_schema_json`: optional расширения для будущих
+  валидаторов и редакторов.
+
+Backend registry живёт в `app/services/funnel_block_registry.py` и валидирует
+`step_type + block_type`. Неизвестные блоки API отклоняет. Зарезервированные
+future-блоки документированы и могут храниться только если явно добавлены в
+registry; runtime v1 их не исполняет.
+
+### MVP Block Types
+
+MVP UI поддерживает группы:
+
+- Триггеры: `new_chat`, `start_command`, `start_with_ref_code`,
+  `manual_operator_start`.
+- Сообщения: `send_text`, `send_inline_buttons`,
+  `send_personalized_message`, `notify_manager`, `notify_admin_chat`.
+- Сбор данных: `ask_name`, `ask_phone`, `ask_age`, `ask_country`,
+  `ask_call_time`, `ask_text`, `ask_choice`, `ask_number`, `ask_date`,
+  `ask_time`.
+- Условия: `button_equals`, `text_contains`, `field_exists`, `field_empty`,
+  `has_tag`, `not_has_tag`, `lead_status_equals`, `tracking_link_equals`,
+  `source_equals`, `operator_assigned`, `operator_not_assigned`,
+  `client_no_reply_for`, `field_compare`.
+- CRM-действия: `create_lead`, `update_lead`, `set_lead_status`, `add_tag`,
+  `remove_tag`, `clear_tags`, `assign_operator`, `unassign_operator`,
+  `add_note`, `write_field`, `attach_tracking_link`, `close_chat`,
+  `mark_lost`, `mark_rejected`, `mark_success`, `send_to_crm_placeholder`.
+- Таймеры: `wait_minutes`, `wait_hours`, `wait_for_reply_timeout`.
+- Оператор: `handoff_to_operator`, `assign_specific_operator`,
+  `assign_random_operator`, `notify_operator`, `stop_bot_for_operator`,
+  `return_to_bot`, `close_dialog`, `open_dialog`.
+- Интеграции: `outgoing_webhook`, `http_request`,
+  `external_crm_placeholder`.
+- Завершение: `stop_scenario`, `finish_success`, `finish_lost`,
+  `finish_rejected`.
+
+Frontend рендерит неизвестные для UI block types как read-only карточки
+`Неподдерживаемый блок`, чтобы сохранённый backend graph не ломал редактор.
+
+### Future Reserved Block Types
+
+Зарезервированы, но не реализуются в v1: AI classify lead, AI summarize chat,
+AI extract fields, AI generate funnel, AI audit funnel, AI suggest funnel
+improvements, AI operator quality control, smart lead distribution,
+SLA escalation, payment blocks, product/catalog blocks, mini landing blocks,
+A/B branch, scenario analytics heatmap, version rollback, test simulator,
+predictive sale probability, source/creative budget recommendations.
+
+Чтобы добавить новый block type безопасно:
+
+1. Добавить его в backend registry с категорией и минимальной config validation.
+2. Добавить schema/editor поддержку во frontend, если блок должен быть editable.
+3. Добавить runtime handler только после publish validation и smoke tests.
+4. Не переиспользовать `block_type` с другим смыслом.
+
+## Funnel Versioning And Publish Lifecycle
+
+- Редактирование идёт только через `draft`.
+- У одной funnel может быть много versions.
+- Одновременно активна только одна `published` version; это закреплено partial
+  unique index `uq_funnel_versions_one_published_per_funnel`.
+- Publish review вызывает `/validate`; публикация блокируется при errors.
+- При publish предыдущая published version переводится в `archived`.
+- Физического удаления funnels нет; `/archive` переводит funnel в `archived`.
+
+## Funnel Copy Semantics
+
+`POST /funnels/{funnel_id}/copy` копирует steps, edges, config, conditions,
+push rules и field mappings. Результат всегда создаётся как новая funnel с
+draft version на target project/bot. Frontend после copy открывает builder и
+показывает оператору, что настройки нужно проверить перед публикацией.
+
+## Funnel Field Mappings
+
+Field mappings сохраняют ответы из input/question steps в карточку лида.
+Прямые поля лида v1: `name`, `phone`, `username`, `age`, `country`,
+`call_time_text`, `has_card`. Остальные поддержанные ключи (`call_date`,
+`call_time_from`, `call_time_to`, `experience`, etc.) сохраняются в
+`leads.custom_fields`, чтобы не раздувать схему колонками под каждый будущий
+опросник.
+
+LeadSidebar показывает заполненные mapped values: телефон, время созвона,
+возраст, страну, наличие карты и имя, если они есть.
+
+## Funnel Push Rules
+
+Push rules хранятся per step:
+
+- `delay_minutes`;
+- `message_text`;
+- `action_after_send=stay|move_to_step|finish|assign_operator`;
+- optional `target_step_id`.
+
+`FunnelRuntimeService.find_stuck_chats_for_push_rules()` и
+`app/workers/funnel_push_worker.py` подготовлены как foundation. Worker пока не
+подключён к production scheduler и не отправляет Telegram-сообщения, потому что
+это должно быть включено отдельным шагом после согласования delivery/audit
+семантики.
+
+## Funnel Runtime Foundation
+
+`FunnelRuntimeService` содержит методы:
+
+- `get_published_funnel_for_bot(bot_id)`;
+- `start_funnel_for_chat(chat_id, funnel_id/version_id)`;
+- `get_current_step(chat_id)`;
+- `process_user_answer(chat_id, text/button_payload)`;
+- `apply_field_mappings(chat_id, step_id, answer)`;
+- `move_to_next_step(chat_id, edge)`;
+- `find_stuck_chats_for_push_rules()`;
+- `mark_push_sent(...)` placeholder.
+
+Runtime v1 намеренно не подключён к Telegram webhook и не заменяет
+`bot_engine_service`. Published funnel готова быть source of truth для
+следующего этапа, но текущий тестовый бот и legacy webhook остаются без
+поведенческого rewrite.
+
+## Funnel Permissions
+
+- `super_admin`: read/write по всем project/bot/funnel при явном `project_id`.
+- `admin`: read/write в своём project.
+- `manager`: read/write в своём project, чтобы настраивать рабочие сценарии.
+- `operator`: read-only backend access; UI может быть скрыт позднее, но API не
+  позволит publish/edit.
+- `buyer`: CRM UI не предоставляется.
+
+Все write endpoints проверяют project access и `bot_id -> project_id` на
+backend, frontend checks не считаются защитой.
+
+## Funnel UI Limitations V1
+
+- Визуальный builder является каноничным способом редактировать graph.
+- Canvas v1 реализован лёгким local graph editor без тяжёлой UI-библиотеки.
+- На маленьких экранах редактор не падает и показывает предупреждение, что
+  удобнее работать на компьютере.
+- Реальных external CRM integrations, оплат, товаров, мини-лендингов, AI-блоков
+  и analytics heatmap нет; они только зарезервированы в архитектуре.

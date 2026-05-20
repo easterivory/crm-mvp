@@ -373,7 +373,18 @@ class LeadRepository(BaseRepository[Lead]):
 
         values: dict = {"status_id": lead_status.id, "updated_at": func.now()}
         if reset_contact:
-            values.update({"phone": None, "username": None})
+            values.update(
+                {
+                    "name": None,
+                    "phone": None,
+                    "username": None,
+                    "age": None,
+                    "country": None,
+                    "call_time_text": None,
+                    "has_card": None,
+                    "custom_fields": {},
+                }
+            )
         if reset_manager:
             values["manager_id"] = None
 
@@ -412,8 +423,14 @@ class LeadRepository(BaseRepository[Lead]):
             .values(
                 status_id=new_status.id,
                 manager_id=None,
+                name=None,
                 phone=None,
                 username=username,
+                age=None,
+                country=None,
+                call_time_text=None,
+                has_card=None,
+                custom_fields={},
                 updated_at=func.now(),
             )
         )
