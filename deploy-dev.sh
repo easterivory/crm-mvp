@@ -7,6 +7,7 @@ FRONTEND_DIR="$PWD/frontend"
 FRONTEND_DIST="$FRONTEND_DIR/dist"
 FRONTEND_API_URL="${VITE_API_URL:-/api/v1}"
 NODE_IMAGE="${NODE_IMAGE:-node:20-alpine}"
+BUILD_FRONTEND_ON_SERVER="${BUILD_FRONTEND_ON_SERVER:-0}"
 
 print_frontend_assets() {
   echo "Frontend dist path: $FRONTEND_DIST"
@@ -74,12 +75,16 @@ docker compose rm -sf api worker
 echo "=== Build and restart DEV containers ==="
 docker compose up -d --build postgres redis api worker
 
-echo "=== Build frontend ==="
-echo "VITE_API_URL=$FRONTEND_API_URL"
-if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-  build_frontend_with_host_node
+echo "=== Frontend static assets ==="
+if [ "$BUILD_FRONTEND_ON_SERVER" = "1" ]; then
+  echo "VITE_API_URL=$FRONTEND_API_URL"
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    build_frontend_with_host_node
+  else
+    build_frontend_with_docker_node
+  fi
 else
-  build_frontend_with_docker_node
+  echo "Using committed frontend/dist assets. Set BUILD_FRONTEND_ON_SERVER=1 to rebuild on the server."
 fi
 print_frontend_assets
 reload_nginx_if_present
