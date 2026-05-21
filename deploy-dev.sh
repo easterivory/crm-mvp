@@ -107,8 +107,19 @@ else
 fi
 
 echo "=== Health check ==="
-sleep 3
-curl -fsS http://localhost:8001/health
+for attempt in $(seq 1 30); do
+  if curl -fsS http://localhost:8001/health; then
+    break
+  fi
+
+  if [ "$attempt" = "30" ]; then
+    echo "Health check failed after $attempt attempts" >&2
+    exit 1
+  fi
+
+  echo "Health check is not ready yet; retrying ($attempt/30)..."
+  sleep 2
+done
 
 echo ""
 echo "=== DEV status ==="
