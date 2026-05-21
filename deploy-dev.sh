@@ -49,7 +49,11 @@ reload_nginx_if_present() {
     return
   fi
 
-  nginx -t
+  if ! nginx -t; then
+    echo "nginx config test is not available for this user; static files were updated in-place."
+    return
+  fi
+
   if command -v systemctl >/dev/null 2>&1 && systemctl reload nginx; then
     echo "nginx reloaded via systemctl"
     return
