@@ -25,6 +25,8 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
         Index("ix_bots_project_id", "project_id"),
         Index("ix_bots_bot_username", "bot_username"),
         Index("ix_bots_is_deleted", "is_deleted"),
+        Index("ix_bots_active_funnel_id", "active_funnel_id"),
+        Index("ix_bots_active_funnel_version_id", "active_funnel_version_id"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

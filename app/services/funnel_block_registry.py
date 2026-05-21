@@ -358,7 +358,7 @@ class FunnelBlockRegistry:
             if buttons is not None and not isinstance(buttons, list):
                 errors.append("Кнопки сообщения должны быть списком.")
         if block_type == "generic_input":
-            if not self._text(config, "question_text", "text", "message_text"):
+            if not self._text(config, "prompt", "question_text", "text", "message_text"):
                 errors.append("Для вопроса нужен текст вопроса.")
             answer_type = str(config.get("answer_type") or "").strip()
             if answer_type not in {"text", "phone", "number", "choice", "date", "time"}:

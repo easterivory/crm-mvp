@@ -41,9 +41,11 @@ export const universalBlocks: UniversalBlock[] = [
     defaultTitle: 'Вопрос',
     description: 'Задаёт вопрос, валидирует ответ и может сохранить его в лида.',
     defaultConfig: {
-      question_text: 'Напишите ответ',
+      prompt: 'Напишите ответ',
       answer_type: 'text',
       save_to: '',
+      validation: {},
+      retry_message: '',
       choices: [],
     },
   },
@@ -56,7 +58,7 @@ export const universalBlocks: UniversalBlock[] = [
     defaultConfig: {
       mode: 'all',
       conditions: [{ type: 'text_contains', field: 'last_answer', operator: 'contains', value: '' }],
-      outcomes: ['true', 'false'],
+      outcomes: ['true', 'false', 'fallback'],
     },
   },
   {
@@ -81,7 +83,7 @@ export const universalBlocks: UniversalBlock[] = [
     label: 'Оператор',
     defaultTitle: 'Оператор',
     description: 'Передаёт диалог оператору или возвращает в бота.',
-    defaultConfig: { operator_action: 'handoff_to_operator' },
+    defaultConfig: { operator_action: 'handoff' },
   },
   {
     stepType: 'integration',

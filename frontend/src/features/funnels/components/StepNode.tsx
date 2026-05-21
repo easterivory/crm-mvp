@@ -1,3 +1,4 @@
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import {
   Bell,
   CheckCircle2,
@@ -10,11 +11,31 @@ import {
   Send,
   Workflow,
 } from 'lucide-react'
-import { PointerEvent } from 'react'
 
 import { getBlockLabel, mvpBlockTypes } from '../blockCatalog'
 import type { FunnelStep } from '../types'
 import UnsupportedBlockCard from './UnsupportedBlockCard'
+
+export type StepNodeData = {
+  step: FunnelStep
+} & Record<string, unknown>
+
+export type StepFlowNode = Node<StepNodeData, 'funnelStep'>
+
+export const TARGET_HANDLE_ID = 'in'
+export const DEFAULT_SOURCE_HANDLE_ID = 'next'
+
+export function sourceHandleId(label: string | null) {
+  const normalized = label?.trim()
+  return normalized ? `out:${normalized}` : DEFAULT_SOURCE_HANDLE_ID
+}
+
+export function outcomeFromSourceHandle(handleId: string | null) {
+  if (!handleId || handleId === DEFAULT_SOURCE_HANDLE_ID) {
+    return null
+  }
+  return handleId.startsWith('out:') ? handleId.slice(4) : handleId
+}
 
 const iconByType = {
   trigger: MousePointer2,
@@ -40,26 +61,13 @@ const toneByType = {
   finish: 'border-green-300/30 bg-green-300/10 text-green-50',
 }
 
-type StepNodeProps = {
-  step: FunnelStep
-  isSelected: boolean
-  onSelect: (stepId: string) => void
-  onPointerDown: (event: PointerEvent<HTMLDivElement>, stepId: string) => void
-  onStartConnect: (
-    stepId: string,
-    outcome: string | null,
-    event: PointerEvent<HTMLButtonElement>,
-  ) => void
-  onFinishConnect: (stepId: string, event: PointerEvent<HTMLButtonElement>) => void
-}
-
 function getOutputLabels(step: FunnelStep) {
   if (step.step_type === 'condition') {
     const outcomes = step.config_json.outcomes
     if (Array.isArray(outcomes) && outcomes.length > 0) {
       return outcomes.map(String)
     }
-    return ['true', 'false']
+    return ['true', 'false', 'fallback']
   }
   if (step.step_type === 'input') {
     const choices = step.config_json.choices ?? step.config_json.options ?? step.config_json.buttons
@@ -73,33 +81,24 @@ function getOutputLabels(step: FunnelStep) {
   return ['Далее']
 }
 
-export default function StepNode({
-  step,
-  isSelected,
-  onSelect,
-  onPointerDown,
-  onStartConnect,
-  onFinishConnect,
-}: StepNodeProps) {
+export default function StepNode({ data, selected, isConnectable }: NodeProps<StepFlowNode>) {
+  const { step } = data
   const Icon = iconByType[step.step_type] ?? Bell
   const isSupported = mvpBlockTypes.has(step.block_type)
   const outputs = getOutputLabels(step)
 
   return (
     <div
-      style={{ left: step.position_x, top: step.position_y, width: 250 }}
-      className={`absolute select-none rounded-lg border bg-[#111827]/95 p-3 shadow-card transition ${
-        isSelected ? 'border-accent-300/60 ring-2 ring-accent-300/20' : 'border-white/10'
+      className={`relative w-[250px] select-none rounded-lg border bg-[#111827]/95 p-3 shadow-card transition ${
+        selected ? 'border-accent-300/60 ring-2 ring-accent-300/20' : 'border-white/10'
       }`}
-      onPointerDown={(event) => onPointerDown(event, step.id)}
-      onClick={() => onSelect(step.id)}
     >
-      <button
-        type="button"
-        aria-label="Вход блока"
-        className="absolute -left-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-white/30 bg-background shadow-card transition hover:border-accent-300"
-        onPointerDown={(event) => event.stopPropagation()}
-        onPointerUp={(event) => onFinishConnect(step.id, event)}
+      <Handle
+        id={TARGET_HANDLE_ID}
+        type="target"
+        position={Position.Left}
+        isConnectable={isConnectable}
+        className="!h-4 !w-4 !border !border-white/30 !bg-background !shadow-card"
       />
 
       <div className="flex items-start gap-3">
@@ -119,18 +118,22 @@ export default function StepNode({
       ) : null}
 
       {outputs.length > 0 ? (
-        <div className="mt-3 flex flex-wrap justify-end gap-1.5">
+        <div className="mt-3 grid gap-1.5">
           {outputs.map((label) => (
-            <button
+            <div
               key={label}
-              type="button"
-              title={`Потянуть связь: ${label}`}
-              onPointerDown={(event) => onStartConnect(step.id, label, event)}
-              className="inline-flex items-center gap-1 rounded-full border border-accent-300/25 bg-accent-300/10 px-2 py-1 text-[11px] text-accent-50 transition hover:border-accent-300/50"
+              className="relative flex min-h-7 items-center justify-end gap-2 rounded-md border border-accent-300/15 bg-accent-300/5 px-2 text-[11px] text-accent-50"
             >
-              <span className="max-w-[92px] truncate">{label}</span>
-              <span className="h-2 w-2 rounded-full bg-accent-300" />
-            </button>
+              <span className="max-w-[170px] truncate">{label}</span>
+              <Handle
+                id={sourceHandleId(label)}
+                type="source"
+                position={Position.Right}
+                isConnectable={isConnectable}
+                title={`Потянуть связь: ${label}`}
+                className="!right-[-14px] !h-3.5 !w-3.5 !border !border-accent-200 !bg-accent-300"
+              />
+            </div>
           ))}
         </div>
       ) : null}

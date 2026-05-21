@@ -384,12 +384,7 @@ class TelegramService:
         # Fast path: lead already exists for this chat
         existing = await self.lead_repo.get_by_chat(chat_id, project_id)
         if existing is not None:
-            chat = await self.chat_repo.get_active(chat_id, project_id)
-            if reset_existing or (
-                chat is not None
-                and chat.current_cycle_started_at is not None
-                and existing.updated_at < chat.current_cycle_started_at
-            ):
+            if reset_existing:
                 username = (
                     message.from_user.username
                     if message.from_user and message.from_user.username

@@ -84,7 +84,7 @@ export default function MainLayout() {
     <aside
       className={cn(
         'relative flex h-full shrink-0 flex-col border-white/5 bg-[#090D16]/95 p-4 text-gray-200 shadow-card backdrop-blur-xl transition-all duration-200',
-        isCollapsed ? 'md:w-20 md:p-4' : 'md:w-72 md:p-5',
+        isCollapsed ? 'md:w-20 md:px-3 md:py-4' : 'md:w-72 md:p-5',
         'w-72 border-r',
       )}
     >
@@ -152,8 +152,9 @@ export default function MainLayout() {
 
         <div
           className={cn(
-            'rounded-xl border border-white/5 bg-white/[0.03] shadow-card transition-all duration-200',
-            isCollapsed ? 'md:flex md:items-center md:justify-center md:p-1' : 'p-4',
+            'max-w-full rounded-xl border border-white/5 bg-white/[0.03] p-4 shadow-card transition-all duration-200',
+            isCollapsed &&
+              'md:flex md:h-12 md:w-12 md:items-center md:justify-center md:self-center md:overflow-hidden md:p-0',
           )}
           title={isCollapsed ? `${displayName} · ${roleLabel}` : undefined}
         >

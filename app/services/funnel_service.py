@@ -300,10 +300,10 @@ class FunnelService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Funnel belongs to another bot",
             )
-        if version.status not in {"published", "archived"}:
+        if version.status != "published":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Only published or archived versions can be activated",
+                detail="Only published versions can be activated",
             )
         await self._activate_version_for_bot(
             funnel=funnel,
@@ -434,12 +434,6 @@ class FunnelService:
             funnel_id=funnel.id,
             exclude_version_id=version.id,
         )
-        if version.status == "archived":
-            await self.repo.update_version_status(
-                version.id,
-                "published",
-                published_at=datetime.now(timezone.utc),
-            )
         await self.repo.set_active_funnel_for_bot(
             bot_id=funnel.bot_id,
             project_id=project_id,

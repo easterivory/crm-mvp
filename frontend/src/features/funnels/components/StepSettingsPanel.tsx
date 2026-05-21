@@ -1,6 +1,6 @@
 import { Trash2 } from 'lucide-react'
 
-import { legacyBlockGroups, getBlockLabel, mvpBlockTypes } from '../blockCatalog'
+import { getBlockLabel, mvpBlockTypes, universalBlocks } from '../blockCatalog'
 import type { FunnelStep } from '../types'
 import UnsupportedBlockCard from './UnsupportedBlockCard'
 
@@ -40,8 +40,33 @@ export default function StepSettingsPanel({
   }
 
   const isSupported = mvpBlockTypes.has(step.block_type)
+  const isUniversalBlock = universalBlocks.some((item) => item.blockType === step.block_type)
   const patchConfig = (patch: Record<string, unknown>) => {
     onUpdate(step.id, { config_json: { ...step.config_json, ...patch } })
+  }
+
+  if (!isSupported) {
+    return (
+      <section className="rounded-lg border border-white/8 bg-white/[0.03] p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-white">Настройки блока</h3>
+            <p className="truncate text-xs text-gray-500">{getBlockLabel(step.block_type)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onDelete(step.id)}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-red-300/15 text-red-200 transition hover:border-red-300/35"
+            title="Удалить блок"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+        <div className="mt-3">
+          <UnsupportedBlockCard blockType={step.block_type} />
+        </div>
+      </section>
+    )
   }
 
   return (
@@ -74,11 +99,14 @@ export default function StepSettingsPanel({
         <label className="block">
           <span className="mb-1 block text-xs text-gray-500">Тип блока</span>
           <select
-            value={step.block_type}
+            value={isUniversalBlock ? step.block_type : '__legacy__'}
             onChange={(event) => {
-              const item = legacyBlockGroups
-                .flatMap((group) => group.items)
-                .find((candidate) => candidate.blockType === event.target.value)
+              if (event.target.value === '__legacy__') {
+                return
+              }
+              const item = universalBlocks.find(
+                (candidate) => candidate.blockType === event.target.value,
+              )
               if (!item) {
                 return
               }
@@ -91,19 +119,16 @@ export default function StepSettingsPanel({
             }}
             className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
           >
-            {legacyBlockGroups.map((group) => (
-              <optgroup key={group.title} label={group.title}>
-                {group.items.map((item) => (
-                  <option key={item.blockType} value={item.blockType}>
-                    {item.label}
-                  </option>
-                ))}
-              </optgroup>
+            {!isUniversalBlock ? (
+              <option value="__legacy__">{getBlockLabel(step.block_type)} · legacy</option>
+            ) : null}
+            {universalBlocks.map((item) => (
+              <option key={item.blockType} value={item.blockType}>
+                {item.label}
+              </option>
             ))}
           </select>
         </label>
-
-        {!isSupported ? <UnsupportedBlockCard blockType={step.block_type} /> : null}
 
         {isSupported && step.block_type === 'generic_trigger' ? (
           <label className="block">
@@ -188,8 +213,12 @@ export default function StepSettingsPanel({
               <span className="mb-1 block text-xs text-gray-500">Текст вопроса</span>
               <textarea
                 rows={3}
-                value={textValue(step.config_json, 'question_text') || textValue(step.config_json, 'text')}
-                onChange={(event) => patchConfig({ question_text: event.target.value })}
+                value={
+                  textValue(step.config_json, 'prompt') ||
+                  textValue(step.config_json, 'question_text') ||
+                  textValue(step.config_json, 'text')
+                }
+                onChange={(event) => patchConfig({ prompt: event.target.value })}
                 className="w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
               />
             </label>
@@ -241,6 +270,29 @@ export default function StepSettingsPanel({
                   })
                 }
                 className="w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Сообщение при ошибке</span>
+              <input
+                value={textValue(step.config_json, 'retry_message')}
+                onChange={(event) => patchConfig({ retry_message: event.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Validation JSON</span>
+              <textarea
+                rows={3}
+                value={JSON.stringify(step.config_json.validation ?? {}, null, 2)}
+                onChange={(event) => {
+                  try {
+                    patchConfig({ validation: JSON.parse(event.target.value || '{}') })
+                  } catch {
+                    patchConfig({ validation_raw: event.target.value })
+                  }
+                }}
+                className="w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 font-mono text-xs text-gray-100 outline-none"
               />
             </label>
           </>
@@ -431,7 +483,46 @@ export default function StepSettingsPanel({
           </div>
         ) : null}
 
-        {isSupported && step.step_type === 'delay' ? (
+        {isSupported && step.block_type === 'generic_delay' ? (
+          <>
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Тип ожидания</span>
+              <select
+                value={textValue(step.config_json, 'delay_type') || 'minutes'}
+                onChange={(event) => patchConfig({ delay_type: event.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              >
+                <option value="minutes">Минуты</option>
+                <option value="hours">Часы</option>
+                <option value="reply_timeout">Нет ответа</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">
+                {textValue(step.config_json, 'delay_type') === 'hours' ? 'Часы' : 'Минуты'}
+              </span>
+              <input
+                type="number"
+                min={1}
+                value={
+                  textValue(step.config_json, 'delay_type') === 'hours'
+                    ? numberValue(step.config_json, 'hours', 1)
+                    : numberValue(step.config_json, 'minutes', 10)
+                }
+                onChange={(event) =>
+                  patchConfig({
+                    [textValue(step.config_json, 'delay_type') === 'hours'
+                      ? 'hours'
+                      : 'minutes']: Number(event.target.value) || 1,
+                  })
+                }
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              />
+            </label>
+          </>
+        ) : null}
+
+        {isSupported && step.step_type === 'delay' && step.block_type !== 'generic_delay' ? (
           <label className="block">
             <span className="mb-1 block text-xs text-gray-500">
               {step.block_type === 'wait_hours' ? 'Часы' : 'Минуты'}
@@ -440,19 +531,13 @@ export default function StepSettingsPanel({
               type="number"
               min={1}
               value={
-                step.block_type === 'generic_delay'
-                  ? numberValue(step.config_json, 'minutes', 10)
-                  : step.block_type === 'wait_hours'
-                    ? numberValue(step.config_json, 'delay_hours', 1)
-                    : numberValue(step.config_json, 'delay_minutes', 10)
+                step.block_type === 'wait_hours'
+                  ? numberValue(step.config_json, 'delay_hours', 1)
+                  : numberValue(step.config_json, 'delay_minutes', 10)
               }
               onChange={(event) =>
                 patchConfig({
-                  [step.block_type === 'generic_delay'
-                    ? 'minutes'
-                    : step.block_type === 'wait_hours'
-                      ? 'delay_hours'
-                      : 'delay_minutes']:
+                  [step.block_type === 'wait_hours' ? 'delay_hours' : 'delay_minutes']:
                     Number(event.target.value) || 1,
                 })
               }
@@ -465,29 +550,40 @@ export default function StepSettingsPanel({
           <label className="block">
             <span className="mb-1 block text-xs text-gray-500">Действие оператора</span>
             <select
-              value={textValue(step.config_json, 'operator_action') || 'handoff_to_operator'}
+              value={textValue(step.config_json, 'operator_action') || 'handoff'}
               onChange={(event) => patchConfig({ operator_action: event.target.value })}
               className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
             >
-              <option value="handoff_to_operator">Передать оператору</option>
-              <option value="assign_specific_operator">Назначить конкретного</option>
-              <option value="assign_random_operator">Назначить случайного</option>
-              <option value="stop_bot_for_operator">Остановить бота</option>
-              <option value="return_to_bot">Вернуть в бота</option>
+              <option value="handoff">Передать оператору</option>
+              <option value="notify">Уведомить оператора</option>
+              <option value="stop_bot">Остановить бота</option>
             </select>
           </label>
         ) : null}
 
         {isSupported && step.step_type === 'integration' ? (
-          <label className="block">
-            <span className="mb-1 block text-xs text-gray-500">URL</span>
-            <input
-              value={textValue(step.config_json, 'url')}
-              onChange={(event) => patchConfig({ url: event.target.value })}
-              placeholder="https://example.com/webhook"
-              className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none placeholder:text-gray-600"
-            />
-          </label>
+          <>
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Тип интеграции</span>
+              <select
+                value={textValue(step.config_json, 'integration_type') || 'webhook'}
+                onChange={(event) => patchConfig({ integration_type: event.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              >
+                <option value="webhook">Webhook</option>
+                <option value="http_request">HTTP request</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">URL</span>
+              <input
+                value={textValue(step.config_json, 'url')}
+                onChange={(event) => patchConfig({ url: event.target.value })}
+                placeholder="https://example.com/webhook"
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none placeholder:text-gray-600"
+              />
+            </label>
+          </>
         ) : null}
 
         {isSupported && step.step_type === 'finish' ? (

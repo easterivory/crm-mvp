@@ -115,6 +115,7 @@ Manual smoke checklist:
 - Send `/start NEW_REF` to the same Telegram bot; confirm the chat reappears with the same `bot_id`, empty old tags, lead status `new`, and tracking identity for `NEW_REF`.
 - Send a message after reset without `/start ref_code`; confirm the chat reappears without reusing the old tracking link.
 - Repeat with the same Telegram user in another bot; reset in one bot must not affect the other bot's chat.
+- Service smoke: `python scripts/smoke_reset_start_lifecycle.py --bot-id ... --external-chat-id ... --actor-id ... --ref-code NEW_REF`.
 
 ### Role Permission Matrix
 
@@ -730,9 +731,10 @@ predictive sale probability, source/creative budget recommendations.
 
 `GET /api/v1/bots/{bot_id}/active-funnel` возвращает текущее назначение.
 `POST /api/v1/bots/{bot_id}/active-funnel` переключает active version на
-published/archived version этой же bot funnel. Archived version при таком
-rollback снова переводится в `published`, а остальные published versions bot
-архивируются.
+published version этой же bot funnel, а остальные published versions bot
+архивируются. Copy всегда создаёт draft и не делает новую funnel active.
+
+Service smoke: `python scripts/smoke_active_funnel_per_bot.py --project-id ... --bot-id ... --actor-id ...`.
 
 ## Funnel Version Switching
 
@@ -789,10 +791,10 @@ Push rules хранятся per step:
 - `find_stuck_chats_for_push_rules()`;
 - `mark_push_sent(...)` placeholder.
 
-Runtime v1 намеренно не подключён к Telegram webhook и не заменяет
-`bot_engine_service`. Published funnel готова быть source of truth для
-следующего этапа, но текущий тестовый бот и legacy webhook остаются без
-поведенческого rewrite.
+Runtime v1 не заменяет `bot_engine_service` и не исполняет всю graph-логику
+в webhook. Webhook только стартует `ChatFunnelState` для active published
+funnel как runtime pointer; поведенческий rewrite исполнения блоков остаётся
+следующим этапом.
 
 Reset lifecycle теперь явно поддерживает новый `/start`: reset-chat скрыт из
 active lists, но следующий Telegram message реактивирует тот же chat row как
