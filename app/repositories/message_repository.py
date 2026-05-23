@@ -161,3 +161,20 @@ class MessageRepository(BaseRepository[Message]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_by_id_in_project(
+        self,
+        message_id: UUID,
+        project_id: UUID,
+    ) -> Optional[Message]:
+        result = await self.db.execute(
+            select(Message)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(
+                Message.id == message_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()

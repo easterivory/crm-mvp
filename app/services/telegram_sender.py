@@ -25,6 +25,7 @@ class TelegramSenderService:
         bot_id: UUID | None,
         external_chat_id: str,
         text: str,
+        reply_markup: dict | None = None,
     ) -> None:
         token = (
             await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
@@ -39,7 +40,9 @@ class TelegramSenderService:
             return
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": external_chat_id, "text": message_text}
+        payload: dict = {"chat_id": external_chat_id, "text": message_text}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -90,3 +93,68 @@ class TelegramSenderService:
             raise RuntimeError(payload.get("description") or "Telegram rejected setWebhook")
 
         return payload
+
+    async def delete_webhook(self, token: str) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"https://api.telegram.org/bot{token}/deleteWebhook",
+                params={"drop_pending_updates": "false"},
+            )
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(payload.get("description") or "Telegram rejected deleteWebhook")
+
+        return payload
+
+    async def get_me(self, token: str) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(payload.get("description") or "Telegram rejected getMe")
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Telegram getMe response does not contain bot identity")
+        return result
+
+    async def get_file(self, token: str, file_id: str) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"https://api.telegram.org/bot{token}/getFile",
+                params={"file_id": file_id},
+            )
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(payload.get("description") or "Telegram rejected getFile")
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Telegram getFile response does not contain file metadata")
+        return result
+
+    async def get_webhook_info(self, token: str) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"https://api.telegram.org/bot{token}/getWebhookInfo")
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(payload.get("description") or "Telegram rejected getWebhookInfo")
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Telegram getWebhookInfo response does not contain webhook metadata")
+        return result
+
+    async def answer_callback_query(self, token: str, callback_query_id: str) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+                    json={"callback_query_id": callback_query_id},
+                )
+        except httpx.HTTPError:
+            logger.debug("Telegram answerCallbackQuery failed", exc_info=True)

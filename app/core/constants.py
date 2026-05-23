@@ -16,14 +16,36 @@ class SenderType:
 
 class MessageType:
     TEXT = "text"
+    PHOTO = "photo"
     IMAGE = "image"
     VIDEO = "video"
+    VOICE = "voice"
+    VIDEO_NOTE = "video_note"
+    DOCUMENT = "document"
     AUDIO = "audio"
+    ANIMATION = "animation"
     FILE = "file"
     STICKER = "sticker"
     SYSTEM = "system"
+    UNKNOWN = "unknown"
 
-    ALL: frozenset[str] = frozenset({TEXT, IMAGE, VIDEO, AUDIO, FILE, STICKER, SYSTEM})
+    ALL: frozenset[str] = frozenset(
+        {
+            TEXT,
+            PHOTO,
+            IMAGE,
+            VIDEO,
+            VOICE,
+            VIDEO_NOTE,
+            DOCUMENT,
+            AUDIO,
+            ANIMATION,
+            FILE,
+            STICKER,
+            SYSTEM,
+            UNKNOWN,
+        }
+    )
 
 
 class LeadStatusCode:

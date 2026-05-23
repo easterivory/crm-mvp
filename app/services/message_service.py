@@ -19,9 +19,12 @@ Security:
   rejected with 404.
 """
 import logging
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from fastapi.responses import StreamingResponse
+import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,6 +113,14 @@ class MessageService:
                     sender_type=data.sender_type,
                     sender_id=data.sender_id,
                     body=data.body,
+                    caption=data.caption,
+                    telegram_file_id=data.telegram_file_id,
+                    file_unique_id=data.file_unique_id,
+                    file_name=data.file_name,
+                    mime_type=data.mime_type,
+                    file_size=data.file_size,
+                    media_group_id=data.media_group_id,
+                    raw_payload_json=data.raw_payload_json,
                 )
         except IntegrityError:
             # SAVEPOINT was rolled back. Re-fetch the row that caused the conflict.
@@ -169,6 +180,7 @@ class MessageService:
             bot_id=bot_id,
             external_chat_id=external_chat_id,
             text=data.body,
+            reply_markup=data.reply_markup,
         )
 
     async def list_messages(
@@ -200,3 +212,92 @@ class MessageService:
             since=chat.current_cycle_started_at,
         )
         return [MessageOut.model_validate(m) for m in messages], total
+
+    async def media_response(self, message_id: UUID, project_id: UUID) -> StreamingResponse:
+        message = await self.message_repo.get_by_id_in_project(message_id, project_id)
+        if message is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Message not found",
+            )
+        if not message.telegram_file_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Message has no Telegram media file",
+            )
+
+        chat = await self.chat_repo.get_active(message.chat_id, project_id)
+        if chat is None or chat.bot_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found in this project",
+            )
+
+        token = await self.bot_repo.get_bot_token_by_id(chat.bot_id, project_id)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Bot token is not configured",
+            )
+
+        try:
+            file_info = await self.telegram_sender.get_file(token, message.telegram_file_id)
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Telegram getFile request failed: {exc}",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+        file_path = file_info.get("file_path")
+        if not isinstance(file_path, str) or not file_path:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Telegram getFile response did not include file_path",
+            )
+
+        media_type = self._media_content_type(message.message_type, message.mime_type)
+        file_url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+        headers = {
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": self._content_disposition(message.message_type, message.file_name),
+        }
+        return StreamingResponse(
+            self._iter_telegram_file(file_url),
+            media_type=media_type,
+            headers=headers,
+        )
+
+    @staticmethod
+    async def _iter_telegram_file(file_url: str):
+        async with httpx.AsyncClient(timeout=30) as client:
+            async with client.stream("GET", file_url) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
+
+    @staticmethod
+    def _media_content_type(message_type: str, mime_type: str | None) -> str:
+        if mime_type:
+            return mime_type
+        if message_type in {MessageType.PHOTO, MessageType.IMAGE, MessageType.STICKER}:
+            return "image/jpeg"
+        if message_type == MessageType.VIDEO:
+            return "video/mp4"
+        if message_type == MessageType.VOICE:
+            return "audio/ogg"
+        if message_type == MessageType.AUDIO:
+            return "audio/mpeg"
+        return "application/octet-stream"
+
+    @staticmethod
+    def _content_disposition(message_type: str, file_name: str | None) -> str:
+        disposition = "attachment" if message_type == MessageType.DOCUMENT else "inline"
+        if not file_name:
+            return disposition
+        return f"{disposition}; filename*=UTF-8''{quote(file_name)}"

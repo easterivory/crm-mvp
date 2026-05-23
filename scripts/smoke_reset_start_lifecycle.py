@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.database import get_db_session
 from app.repositories.bot_repository import BotRepository

@@ -1,6 +1,7 @@
 """
 BotService - project-scoped Telegram bot management.
 """
+import logging
 from typing import Any, Optional
 from uuid import UUID
 
@@ -13,12 +14,21 @@ from app.core.config import settings
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
-from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
+from app.schemas.bot import (
+    BotCreate,
+    BotOut,
+    BotStepOut,
+    BotTelegramStatusOut,
+    BotUpdate,
+    BotWebhookOut,
+)
 from app.services.telegram_sender import TelegramSenderService
 
 
 DEFAULT_PROJECT_NAME = "Default Project"
 DEFAULT_PROJECT_SLUG = "default-project"
+
+logger = logging.getLogger(__name__)
 
 
 class BotService:
@@ -26,6 +36,7 @@ class BotService:
         self.db = db
         self.bot_repo = BotRepository(db)
         self.project_repo = ProjectRepository(db)
+        self.telegram_sender = TelegramSenderService(db)
 
     async def list_bots(
         self,
@@ -61,24 +72,26 @@ class BotService:
     ) -> BotOut:
         project = await self._resolve_project_for_create(data.project_id or project_id)
         token = self._normalize_required(data.telegram_token, "telegram_token")
-        username = self._normalize_username(data.bot_username)
-        telegram_info = await self._fetch_telegram_bot_info(token) if not username else None
-
-        username = username or self._normalize_username(
-            telegram_info.get("username") if telegram_info else None
+        telegram_info = await self._fetch_telegram_bot_info(token)
+        identity_values = self._identity_values_from_get_me(telegram_info)
+        name = (
+            self._normalize_optional(data.name)
+            or identity_values.get("telegram_first_name")
+            or (
+                f"@{identity_values['bot_username']}"
+                if identity_values.get("bot_username")
+                else None
+            )
+            or "Telegram bot"
         )
-        name = self._normalize_optional(data.name)
-        if not name and telegram_info:
-            name = self._normalize_optional(telegram_info.get("first_name"))
-        name = name or (f"@{username}" if username else "Telegram bot")
 
         bot = await self.bot_repo.create(
             project_id=project.id,
             name=name,
             telegram_token=token,
-            bot_username=username,
+            **identity_values,
         )
-        await self.set_webhook(bot_id=bot.id, project_id=project.id)
+        await self._set_webhook_for_token(token=token, bot_id=bot.id)
         return await self.get_bot(bot_id=bot.id, project_id=project.id)
 
     async def update_bot(
@@ -92,32 +105,30 @@ class BotService:
 
         if "name" in values:
             values["name"] = self._normalize_required(values["name"], "name")
-        if "telegram_token" in values and values["telegram_token"] is not None:
-            values["telegram_token"] = self._normalize_required(
-                values["telegram_token"], "telegram_token"
-            )
-        if "bot_username" in values:
-            values["bot_username"] = self._normalize_username(values["bot_username"])
+        values.pop("bot_username", None)
+        if "telegram_token" in values and values["telegram_token"] is None:
+            values.pop("telegram_token")
 
-        if (
-            "telegram_token" in values
-            and values["telegram_token"]
-            and "bot_username" not in values
-        ):
-            telegram_info = await self._fetch_telegram_bot_info(values["telegram_token"])
-            username = self._normalize_username(
-                telegram_info.get("username") if telegram_info else None
-            )
-            if username:
-                values["bot_username"] = username
-            if "name" not in values and telegram_info:
-                first_name = self._normalize_optional(telegram_info.get("first_name"))
-                if first_name and bot.name == "Telegram bot":
-                    values["name"] = first_name
-
-        should_refresh_webhook = "telegram_token" in values and bool(
-            values["telegram_token"]
-        )
+        new_token: Optional[str] = None
+        old_token: Optional[str] = None
+        if "telegram_token" in values:
+            new_token = self._normalize_required(values["telegram_token"], "telegram_token")
+            old_token = self._normalize_optional(bot.telegram_token)
+            telegram_info = await self._fetch_telegram_bot_info(new_token)
+            identity_values = self._identity_values_from_get_me(telegram_info)
+            await self._set_webhook_for_token(token=new_token, bot_id=bot_id)
+            values["telegram_token"] = new_token
+            values.update(identity_values)
+            if "name" not in values:
+                values["name"] = (
+                    identity_values.get("telegram_first_name")
+                    or (
+                        f"@{identity_values['bot_username']}"
+                        if identity_values.get("bot_username")
+                        else None
+                    )
+                    or bot.name
+                )
 
         if not values:
             return BotOut.model_validate(bot)
@@ -126,8 +137,8 @@ class BotService:
         if updated is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
 
-        if should_refresh_webhook:
-            await self.set_webhook(bot_id=bot_id, project_id=project_id)
+        if new_token and old_token and old_token != new_token:
+            await self._delete_webhook_safely(old_token)
             return await self.get_bot(bot_id=bot_id, project_id=project_id)
 
         return BotOut.model_validate(updated)
@@ -155,25 +166,70 @@ class BotService:
                 detail="Bot telegram_token is required to set webhook",
             )
 
-        base_url = self._normalize_optional(settings.BASE_URL)
-        if not base_url:
+        telegram_info = await self._fetch_telegram_bot_info(token)
+        payload, webhook_url = await self._set_webhook_for_token(
+            token=token,
+            bot_id=bot.id,
+        )
+        identity_values = self._identity_values_from_get_me(telegram_info)
+        identity_values["name"] = (
+            identity_values.get("telegram_first_name")
+            or (
+                f"@{identity_values['bot_username']}"
+                if identity_values.get("bot_username")
+                else None
+            )
+            or bot.name
+        )
+        await self.bot_repo.update_in_project(bot.id, project_id, **identity_values)
+        return BotWebhookOut(
+            ok=True,
+            webhook_url=webhook_url,
+            telegram_response=payload,
+        )
+
+    async def sync_bot_identity_from_token(self, bot_id: UUID, project_id: UUID) -> BotOut:
+        bot = await self._get_bot_or_404(bot_id, project_id)
+        token = self._normalize_optional(bot.telegram_token)
+        if not token:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="BASE_URL is not configured",
+                detail="Bot telegram_token is required to sync identity",
             )
 
-        webhook_url = f"{base_url.rstrip('/')}/api/v1/telegram/webhook/{bot.id}"
+        telegram_info = await self._fetch_telegram_bot_info(token)
+        await self._set_webhook_for_token(token=token, bot_id=bot.id)
+        identity_values = self._identity_values_from_get_me(telegram_info)
+        identity_values["name"] = (
+            identity_values.get("telegram_first_name")
+            or (
+                f"@{identity_values['bot_username']}"
+                if identity_values.get("bot_username")
+                else None
+            )
+            or bot.name
+        )
+        updated = await self.bot_repo.update_in_project(bot_id, project_id, **identity_values)
+        if updated is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        return BotOut.model_validate(updated)
 
+    async def telegram_status(self, bot_id: UUID, project_id: UUID) -> BotTelegramStatusOut:
+        bot = await self._get_bot_or_404(bot_id, project_id)
+        token = self._normalize_optional(bot.telegram_token)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Bot telegram_token is required to check Telegram status",
+            )
+
+        get_me = await self._fetch_telegram_bot_info(token)
         try:
-            payload = await TelegramSenderService(self.db).set_webhook(
-                token=token,
-                webhook_url=webhook_url,
-                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
-            )
+            webhook_info = await self.telegram_sender.get_webhook_info(token)
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Telegram setWebhook request failed: {exc}",
+                detail=f"Telegram getWebhookInfo request failed: {exc}",
             ) from exc
         except ValueError as exc:
             raise HTTPException(
@@ -186,11 +242,24 @@ class BotService:
                 detail=str(exc),
             ) from exc
 
-        await self.ensure_bot_username(bot_id=bot.id, project_id=project_id)
-        return BotWebhookOut(
-            ok=True,
-            webhook_url=webhook_url,
-            telegram_response=payload,
+        expected_webhook_url = self._webhook_url_for_bot(bot.id)
+        identity_values = self._identity_values_from_get_me(get_me)
+        identity_matches = (
+            bot.telegram_bot_id == identity_values.get("telegram_bot_id")
+            and bot.bot_username == identity_values.get("bot_username")
+            and bot.telegram_first_name == identity_values.get("telegram_first_name")
+        )
+        return BotTelegramStatusOut(
+            bot_id=bot.id,
+            project_id=project_id,
+            telegram_bot_id=bot.telegram_bot_id,
+            bot_username=bot.bot_username,
+            telegram_first_name=bot.telegram_first_name,
+            get_me=get_me,
+            webhook_info=webhook_info,
+            identity_matches_crm=identity_matches,
+            expected_webhook_url=expected_webhook_url,
+            webhook_matches_expected=webhook_info.get("url") == expected_webhook_url,
         )
 
     async def ensure_bot_username(self, bot_id: UUID, project_id: UUID):
@@ -206,10 +275,8 @@ class BotService:
             )
 
         telegram_info = await self._fetch_telegram_bot_info(token)
-        username = self._normalize_username(
-            telegram_info.get("username") if telegram_info else None
-        )
-        if not username:
+        identity_values = self._identity_values_from_get_me(telegram_info)
+        if not identity_values.get("bot_username"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Could not resolve bot username from Telegram",
@@ -218,7 +285,7 @@ class BotService:
         bot = await self.bot_repo.update_in_project(
             bot_id,
             project_id,
-            bot_username=username,
+            **identity_values,
         )
         if bot is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
@@ -294,20 +361,87 @@ class BotService:
             sla_threshold_minutes=30,
         )
 
-    @staticmethod
-    async def _fetch_telegram_bot_info(token: str) -> Optional[dict[str, Any]]:
+    async def _set_webhook_for_token(self, *, token: str, bot_id: UUID) -> tuple[dict, str]:
+        webhook_url = self._webhook_url_for_bot(bot_id)
         try:
-            async with httpx.AsyncClient(timeout=6) as client:
-                response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-                payload = response.json()
-        except (httpx.HTTPError, ValueError):
-            return None
+            payload = await self.telegram_sender.set_webhook(
+                token=token,
+                webhook_url=webhook_url,
+                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Telegram setWebhook request failed: {exc}",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Telegram returned a non-JSON response",
+            ) from exc
+        except RuntimeError as exc:
+            if self._is_invalid_token_error(str(exc)):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Telegram token is invalid: {exc}",
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
 
-        if response.status_code >= 400 or payload.get("ok") is not True:
-            return None
+        return payload, webhook_url
 
-        result = payload.get("result")
-        return result if isinstance(result, dict) else None
+    def _webhook_url_for_bot(self, bot_id: UUID) -> str:
+        base_url = self._normalize_optional(settings.BASE_URL)
+        if not base_url:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="BASE_URL is not configured",
+            )
+
+        return f"{base_url.rstrip('/')}/api/v1/telegram/webhook/{bot_id}"
+
+    async def _delete_webhook_safely(self, token: str) -> None:
+        try:
+            await self.telegram_sender.delete_webhook(token)
+        except Exception:
+            logger.warning("Could not delete old Telegram webhook", exc_info=True)
+
+    async def _fetch_telegram_bot_info(self, token: str) -> dict[str, Any]:
+        try:
+            return await self.telegram_sender.get_me(token)
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Telegram getMe request failed: {exc}",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Telegram returned a non-JSON response",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Telegram token is invalid: {exc}",
+            ) from exc
+
+    @classmethod
+    def _identity_values_from_get_me(cls, telegram_info: dict[str, Any]) -> dict[str, Any]:
+        username = cls._normalize_username(telegram_info.get("username"))
+        first_name = cls._normalize_optional(telegram_info.get("first_name"))
+        telegram_bot_id = telegram_info.get("id")
+        return {
+            "telegram_bot_id": int(telegram_bot_id) if telegram_bot_id is not None else None,
+            "telegram_first_name": first_name,
+            "bot_username": username,
+        }
+
+    @staticmethod
+    def _is_invalid_token_error(message: str) -> bool:
+        normalized = message.strip().lower()
+        return "not found" in normalized or "unauthorized" in normalized
 
     @staticmethod
     def _normalize_required(value: str | None, field_name: str) -> str:

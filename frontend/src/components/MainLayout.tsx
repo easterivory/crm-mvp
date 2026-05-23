@@ -31,7 +31,6 @@ const navItems = [
   { label: t('bots'), path: '/bots', icon: Bot },
   { label: t('leads'), path: '/leads', icon: UsersRound },
   { label: t('tracking'), path: '/tracking', icon: BarChart3 },
-  { label: t('analytics'), path: '/analytics', icon: BarChart3, aliases: ['/dashboard'] },
   { label: t('settings'), path: '/settings', icon: Settings },
 ]
 
@@ -104,9 +103,7 @@ export default function MainLayout() {
       <nav className="relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {navItems.map((item) => {
           const Icon = item.icon
-          const isActive =
-            location.pathname.startsWith(item.path) ||
-            item.aliases?.some((alias) => location.pathname.startsWith(alias))
+          const isActive = location.pathname.startsWith(item.path)
 
           return (
             <button

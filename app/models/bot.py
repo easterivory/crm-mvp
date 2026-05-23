@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,7 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     __table_args__ = (
         Index("ix_bots_project_id", "project_id"),
         Index("ix_bots_bot_username", "bot_username"),
+        Index("ix_bots_telegram_bot_id", "telegram_bot_id"),
         Index("ix_bots_is_deleted", "is_deleted"),
         Index("ix_bots_active_funnel_id", "active_funnel_id"),
         Index("ix_bots_active_funnel_version_id", "active_funnel_version_id"),
@@ -34,6 +35,8 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     telegram_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    telegram_bot_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    telegram_first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     bot_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     active_funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=True

@@ -16,6 +16,7 @@ Endpoints stubbed (Phase 3):
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_db
@@ -24,6 +25,7 @@ from app.schemas.message import MessageCreate, MessageOut
 from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
+media_router = APIRouter(prefix="/messages", tags=["messages"])
 
 
 @router.post("", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
@@ -70,3 +72,15 @@ async def list_messages(
         offset=offset,
     )
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@media_router.get("/{message_id}/media", response_class=StreamingResponse)
+async def get_message_media(
+    message_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    return await MessageService(db).media_response(
+        message_id=message_id,
+        project_id=project_id,
+    )

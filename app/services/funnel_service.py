@@ -13,6 +13,7 @@ from app.models.user import User
 from app.repositories.funnel_repository import FunnelRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
+    BotActiveFunnelGraphSummary,
     BotActiveFunnelOut,
     BotActiveFunnelSetIn,
     FunnelCopyIn,
@@ -271,8 +272,15 @@ class FunnelService:
         self._ensure_read_allowed(current_user)
         await self._ensure_bot_in_project(bot_id, project_id)
         funnel, version = await self.repo.get_active_funnel_for_bot(bot_id, project_id)
+        graph_summary = (
+            await self._active_graph_summary(version.id)
+            if version is not None
+            else None
+        )
         return BotActiveFunnelOut(
             bot_id=bot_id,
+            active_funnel_id=funnel.id if funnel is not None else None,
+            active_funnel_version_id=version.id if version is not None else None,
             funnel=await self._funnel_out(funnel) if funnel is not None else None,
             version=(
                 FunnelVersionOut.model_validate(version).model_copy(
@@ -281,6 +289,9 @@ class FunnelService:
                 if version is not None
                 else None
             ),
+            version_status=version.status if version is not None else None,
+            version_number=version.version_number if version is not None else None,
+            graph_summary=graph_summary,
         )
 
     async def set_active_funnel_for_bot(
@@ -524,6 +535,42 @@ class FunnelService:
             ],
         )
 
+    async def _active_graph_summary(self, version_id: UUID) -> BotActiveFunnelGraphSummary:
+        steps = await self.repo.list_steps(version_id)
+        edges = await self.repo.list_edges(version_id)
+        first_message_text: Optional[str] = None
+        message_step = next(
+            (
+                step
+                for step in steps
+                if step.step_type == "message"
+                or step.block_type
+                in {
+                    "generic_message",
+                    "send_text",
+                    "send_inline_buttons",
+                    "send_personalized_message",
+                }
+            ),
+            None,
+        )
+        if message_step is not None:
+            config = message_step.config_json or {}
+            raw_text = (
+                config.get("text")
+                or config.get("message")
+                or config.get("message_text")
+                or config.get("body")
+                or config.get("content")
+            )
+            first_message_text = str(raw_text).strip() if raw_text is not None else None
+        return BotActiveFunnelGraphSummary(
+            steps_count=len(steps),
+            edges_count=len(edges),
+            has_trigger=any(step.step_type == "trigger" for step in steps),
+            first_message_text=first_message_text or None,
+        )
+
     async def _graph_in_from_db(self, version_id: UUID) -> FunnelGraphIn:
         graph = await self._graph_out(version_id)
         return FunnelGraphIn(
@@ -661,6 +708,16 @@ class FunnelService:
                 adjacency.setdefault(edge.from_step_id, []).append(edge.to_step_id)
 
         trigger_ids = [step.id for step in triggers if step.id is not None]
+        for trigger_id in trigger_ids:
+            if not adjacency.get(trigger_id):
+                errors.append(
+                    self._issue(
+                        "trigger_without_edge",
+                        "Стартовый блок должен вести к следующему блоку.",
+                        "error",
+                        step_id=trigger_id,
+                    )
+                )
         reachable = self._reachable(trigger_ids, adjacency)
         for step in graph.steps:
             if step.id is not None and step.step_type != "trigger" and step.id not in reachable:

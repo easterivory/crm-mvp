@@ -3,7 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,6 +41,14 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     )
     # NULL for media messages without a caption
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    telegram_file_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
+    file_unique_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    file_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    media_group_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    raw_payload_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     # Relationships
     chat: Mapped[Chat] = relationship("Chat", back_populates="messages")

@@ -5,7 +5,14 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
-from app.schemas.bot import BotCreate, BotOut, BotStepOut, BotUpdate, BotWebhookOut
+from app.schemas.bot import (
+    BotCreate,
+    BotOut,
+    BotStepOut,
+    BotTelegramStatusOut,
+    BotUpdate,
+    BotWebhookOut,
+)
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import BotActiveFunnelOut, BotActiveFunnelSetIn
 from app.services.bot_service import BotService
@@ -118,3 +125,24 @@ async def set_bot_webhook(
     db: AsyncSession = Depends(get_db),
 ) -> BotWebhookOut:
     return await BotService(db).set_webhook(bot_id=bot_id, project_id=project_id)
+
+
+@router.post("/bots/{bot_id}/sync-telegram-identity", response_model=BotOut)
+async def sync_bot_telegram_identity(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> BotOut:
+    return await BotService(db).sync_bot_identity_from_token(
+        bot_id=bot_id,
+        project_id=project_id,
+    )
+
+
+@router.get("/bots/{bot_id}/telegram-status", response_model=BotTelegramStatusOut)
+async def get_bot_telegram_status(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> BotTelegramStatusOut:
+    return await BotService(db).telegram_status(bot_id=bot_id, project_id=project_id)

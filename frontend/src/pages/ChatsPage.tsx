@@ -3,10 +3,17 @@ import {
   ArrowLeft,
   Bot,
   CheckCheck,
+  Download,
+  FileText,
+  Film,
+  Image as ImageIcon,
   LoaderCircle,
+  Mic,
   MessageSquareText,
+  Music,
   Send,
   UserRound,
+  Video,
 } from 'lucide-react'
 import {
   FormEvent,
@@ -42,11 +49,32 @@ type Message = {
   sender_type: 'user' | 'manager' | 'bot' | 'system'
   sender_id: string | null
   body: string | null
+  caption: string | null
+  telegram_file_id: string | null
+  file_unique_id: string | null
+  file_name: string | null
+  mime_type: string | null
+  file_size: number | null
+  media_group_id: string | null
   created_at: string
 }
 
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
+
+const mediaLabels: Record<string, string> = {
+  animation: 'Анимация',
+  audio: 'Аудио',
+  document: 'Файл',
+  file: 'Файл',
+  image: 'Фото',
+  photo: 'Фото',
+  sticker: 'Стикер',
+  unknown: 'Вложение',
+  video: 'Видео',
+  video_note: 'Кружок',
+  voice: 'Голосовое',
+}
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -79,6 +107,39 @@ function getErrorMessage(err: unknown) {
   return 'Запрос не выполнен. Попробуйте снова.'
 }
 
+function getMediaLabel(message: Message) {
+  return mediaLabels[message.message_type] ?? message.message_type
+}
+
+function getMediaIcon(messageType: string) {
+  if (messageType === 'photo' || messageType === 'image') {
+    return ImageIcon
+  }
+  if (messageType === 'video' || messageType === 'video_note') {
+    return Video
+  }
+  if (messageType === 'voice') {
+    return Mic
+  }
+  if (messageType === 'audio') {
+    return Music
+  }
+  if (messageType === 'animation' || messageType === 'sticker') {
+    return Film
+  }
+  return FileText
+}
+
+function formatFileSize(value: number | null) {
+  if (!value || value <= 0) {
+    return null
+  }
+  if (value < 1024 * 1024) {
+    return `${Math.ceil(value / 1024)} КБ`
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} МБ`
+}
+
 export default function ChatsPage() {
   const user = useAuthStore((state) => state.user)
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
@@ -94,6 +155,7 @@ export default function ChatsPage() {
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
   const [isLeadOpen, setIsLeadOpen] = useState(false)
@@ -321,6 +383,38 @@ export default function ChatsPage() {
     await sendMessage()
   }
 
+  const openMedia = async (message: Message) => {
+    if (!message.telegram_file_id || openingMediaId) {
+      return
+    }
+
+    setOpeningMediaId(message.id)
+    try {
+      const { data } = await api.get<Blob>(`/messages/${message.id}/media`, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+        responseType: 'blob',
+      })
+      const blobUrl = window.URL.createObjectURL(data)
+      const isDocument = message.message_type === 'document' || message.message_type === 'file'
+      if (isDocument) {
+        const link = document.createElement('a')
+        link.href = blobUrl
+        link.download = message.file_name || 'telegram-file'
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000)
+      } else {
+        window.open(blobUrl, '_blank', 'noopener,noreferrer')
+        window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 15000)
+      }
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) || 'Не удалось открыть медиа.' })
+    } finally {
+      setOpeningMediaId(null)
+    }
+  }
+
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
       return
@@ -446,9 +540,55 @@ export default function ChatsPage() {
                         <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
                         <span>{formatDateTime(message.created_at)}</span>
                       </div>
-                      <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                        {message.body || `[${message.message_type}]`}
-                      </p>
+                      {message.message_type === 'text' || message.message_type === 'system' ? (
+                        <p className="whitespace-pre-wrap break-words text-sm leading-6">
+                          {message.body || ''}
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-black/10 p-2">
+                            {(() => {
+                              const Icon = getMediaIcon(message.message_type)
+                              const size = formatFileSize(message.file_size)
+                              return (
+                                <>
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06]">
+                                    <Icon size={16} />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold">
+                                      {message.file_name || getMediaLabel(message)}
+                                    </p>
+                                    <p className="truncate text-xs opacity-70">
+                                      {[getMediaLabel(message), size].filter(Boolean).join(' · ')}
+                                    </p>
+                                  </div>
+                                  {message.telegram_file_id ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void openMedia(message)}
+                                      disabled={openingMediaId === message.id}
+                                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-60"
+                                      title="Открыть медиа"
+                                    >
+                                      {openingMediaId === message.id ? (
+                                        <LoaderCircle size={15} className="animate-spin" />
+                                      ) : (
+                                        <Download size={15} />
+                                      )}
+                                    </button>
+                                  ) : null}
+                                </>
+                              )
+                            })()}
+                          </div>
+                          {message.caption ? (
+                            <p className="whitespace-pre-wrap break-words text-sm leading-6">
+                              {message.caption}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )

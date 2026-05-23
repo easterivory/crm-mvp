@@ -44,11 +44,12 @@ from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.message import MessageCreate, MessageOut
-from app.schemas.telegram import TelegramMessage, TelegramUpdate
+from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
 from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.message_service import MessageService
+from app.services.telegram_sender import TelegramSenderService
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class TelegramService:
         self.message_service = MessageService(db)
         self.bot_engine = BotEngineService(db)
         self.funnel_runtime = FunnelRuntimeService(db)
+        self.telegram_sender = TelegramSenderService(db)
         self.audit = AuditService(db)
 
     # ── Parsing ────────────────────────────────────────────────────────────────
@@ -138,10 +140,14 @@ class TelegramService:
         """
         message = self.extract_message(update)
         if message is None:
-            logger.debug(
-                "update_id=%s: not a message update — skipping",
-                update.update_id,
-            )
+            if update.callback_query is not None:
+                await self._handle_callback_query(
+                    update.callback_query,
+                    project_id=project_id,
+                    bot_id=bot_id,
+                )
+                return
+            logger.debug("update_id=%s: unsupported update — skipping", update.update_id)
             return
 
         tracking_link_id = await self._resolve_tracking_link_id(
@@ -162,11 +168,13 @@ class TelegramService:
             message,
             reset_existing=is_reactivated_cycle,
         )
-        if should_start_runtime:
-            await self.bot_engine.initialize_chat(chat.id, project_id)
-            await self._start_active_funnel_if_available(chat.id, bot_id)
-        else:
-            await self.bot_engine.process_chat(chat.id, user_message=msg)
+        await self._process_runtime_or_legacy(
+            chat=chat,
+            project_id=project_id,
+            bot_id=bot_id,
+            user_message=msg,
+            start_requested=should_start_runtime or self._is_start_command(message.text),
+        )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -263,18 +271,255 @@ class TelegramService:
 
         return chat, True, False
 
-    async def _start_active_funnel_if_available(
+    async def _process_runtime_or_legacy(
         self,
-        chat_id: UUID,
+        *,
+        chat: Chat,
+        project_id: UUID,
+        bot_id: UUID,
+        user_message: MessageOut,
+        start_requested: bool,
+    ) -> None:
+        bot = await self.bot_repo.get_active(bot_id)
+        has_active_pointer = bool(
+            bot is not None
+            and bot.active_funnel_id is not None
+            and bot.active_funnel_version_id is not None
+        )
+        active_funnel, active_version = await self.funnel_runtime.get_active_published_funnel_for_bot(
+            bot_id,
+            project_id,
+        )
+
+        if active_version is not None and active_funnel is not None:
+            logger.info(
+                "Using active funnel runtime bot_id=%s project_id=%s chat_id=%s "
+                "funnel_id=%s funnel_version_id=%s start_requested=%s",
+                bot_id,
+                project_id,
+                chat.id,
+                active_funnel.id,
+                active_version.id,
+                start_requested,
+            )
+            try:
+                await self._run_active_funnel_runtime(
+                    chat=chat,
+                    active_funnel_id=active_funnel.id,
+                    active_funnel_version_id=active_version.id,
+                    user_message=user_message,
+                    start_requested=start_requested,
+                )
+            except Exception:
+                logger.exception(
+                    "Active funnel runtime failed bot_id=%s project_id=%s chat_id=%s "
+                    "funnel_id=%s funnel_version_id=%s",
+                    bot_id,
+                    project_id,
+                    chat.id,
+                    active_funnel.id,
+                    active_version.id,
+                )
+            return
+
+        if has_active_pointer:
+            logger.error(
+                "Active funnel pointer exists but no published runnable version was found; "
+                "legacy fallback is disabled bot_id=%s project_id=%s chat_id=%s "
+                "active_funnel_id=%s active_funnel_version_id=%s",
+                bot_id,
+                project_id,
+                chat.id,
+                bot.active_funnel_id if bot else None,
+                bot.active_funnel_version_id if bot else None,
+            )
+            return
+
+        logger.info(
+            "No active funnel, using legacy bot_engine fallback bot_id=%s project_id=%s "
+            "chat_id=%s start_requested=%s",
+            bot_id,
+            project_id,
+            chat.id,
+            start_requested,
+        )
+        if start_requested:
+            await self.bot_engine.initialize_chat(chat.id, project_id)
+        else:
+            await self.bot_engine.process_chat(chat.id, user_message=user_message)
+
+    async def _run_active_funnel_runtime(
+        self,
+        *,
+        chat: Chat,
+        active_funnel_id: UUID,
+        active_funnel_version_id: UUID,
+        user_message: MessageOut,
+        start_requested: bool,
+    ) -> None:
+        if start_requested:
+            await self.bot_repo.reset_chat_state(chat.id)
+            await self.funnel_runtime.reset_chat_state(chat.id)
+            await self.funnel_runtime.start_funnel_for_chat(
+                chat_id=chat.id,
+                funnel_id=active_funnel_id,
+                funnel_version_id=active_funnel_version_id,
+            )
+            return
+
+        handled = await self.funnel_runtime.process_incoming_message(
+            chat_id=chat.id,
+            text=user_message.body or user_message.caption or user_message.message_type,
+        )
+        if not handled:
+            await self.funnel_runtime.start_funnel_for_chat(
+                chat_id=chat.id,
+                funnel_id=active_funnel_id,
+                funnel_version_id=active_funnel_version_id,
+            )
+
+    async def _process_callback_runtime_or_legacy(
+        self,
+        *,
+        chat: Chat,
+        project_id: UUID,
+        bot_id: UUID,
+        callback_query: TelegramCallbackQuery,
+        user_message: MessageOut,
+        fallback_text: str,
+    ) -> None:
+        bot = await self.bot_repo.get_active(bot_id)
+        has_active_pointer = bool(
+            bot is not None
+            and bot.active_funnel_id is not None
+            and bot.active_funnel_version_id is not None
+        )
+        active_funnel, active_version = await self.funnel_runtime.get_active_published_funnel_for_bot(
+            bot_id,
+            project_id,
+        )
+
+        if active_version is not None and active_funnel is not None:
+            logger.info(
+                "Using active funnel runtime for callback bot_id=%s project_id=%s "
+                "chat_id=%s funnel_id=%s funnel_version_id=%s",
+                bot_id,
+                project_id,
+                chat.id,
+                active_funnel.id,
+                active_version.id,
+            )
+            try:
+                handled = await self.funnel_runtime.process_incoming_button(
+                    chat_id=chat.id,
+                    callback_data=callback_query.data,
+                    fallback_text=fallback_text,
+                )
+                if not handled:
+                    await self.funnel_runtime.start_funnel_for_chat(
+                        chat_id=chat.id,
+                        funnel_id=active_funnel.id,
+                        funnel_version_id=active_version.id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Active funnel runtime failed for callback bot_id=%s project_id=%s "
+                    "chat_id=%s funnel_id=%s funnel_version_id=%s",
+                    bot_id,
+                    project_id,
+                    chat.id,
+                    active_funnel.id,
+                    active_version.id,
+                )
+            return
+
+        if has_active_pointer:
+            logger.error(
+                "Active funnel pointer exists but no published runnable version was found "
+                "for callback; legacy fallback is disabled bot_id=%s project_id=%s chat_id=%s "
+                "active_funnel_id=%s active_funnel_version_id=%s",
+                bot_id,
+                project_id,
+                chat.id,
+                bot.active_funnel_id if bot else None,
+                bot.active_funnel_version_id if bot else None,
+            )
+            return
+
+        logger.info(
+            "No active funnel, using legacy bot_engine fallback for callback "
+            "bot_id=%s project_id=%s chat_id=%s",
+            bot_id,
+            project_id,
+            chat.id,
+        )
+        await self.bot_engine.process_chat(chat.id, user_message=user_message)
+
+    async def _handle_callback_query(
+        self,
+        callback_query: TelegramCallbackQuery,
+        *,
+        project_id: UUID,
         bot_id: UUID,
     ) -> None:
-        active_version = await self.funnel_runtime.get_published_funnel_for_bot(bot_id)
-        if active_version is None:
+        if callback_query.message is None:
             return
-        await self.funnel_runtime.start_funnel_for_chat(
-            chat_id=chat_id,
-            funnel_id=active_version.funnel_id,
-            funnel_version_id=active_version.id,
+
+        chat = await self.chat_repo.get_by_external(
+            project_id,
+            str(callback_query.message.chat.id),
+            bot_id=bot_id,
+        )
+        if chat is None:
+            logger.info(
+                "Telegram callback for unknown chat project_id=%s bot_id=%s chat_id=%s",
+                project_id,
+                bot_id,
+                callback_query.message.chat.id,
+            )
+            return
+
+        token = await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
+        if token:
+            await self.telegram_sender.answer_callback_query(token, callback_query.id)
+
+        active_funnel, active_version = await self.funnel_runtime.get_active_published_funnel_for_bot(
+            bot_id,
+            project_id,
+        )
+        selected_value = (
+            await self.funnel_runtime.resolve_callback_value(
+                chat_id=chat.id,
+                callback_data=callback_query.data,
+            )
+            if active_version is not None and active_funnel is not None
+            else None
+        )
+        body = selected_value or callback_query.data or "Нажата кнопка"
+        msg = await self.message_service.create_message(
+            chat_id=chat.id,
+            project_id=project_id,
+            data=MessageCreate(
+                external_message_id=f"callback:{callback_query.id}",
+                message_type=MessageType.TEXT,
+                sender_type=SenderType.USER,
+                sender_id=None,
+                body=body,
+                raw_payload_json=callback_query.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                ),
+            ),
+        )
+
+        await self._process_callback_runtime_or_legacy(
+            chat=chat,
+            project_id=project_id,
+            bot_id=bot_id,
+            callback_query=callback_query,
+            user_message=msg,
+            fallback_text=body,
         )
 
     @staticmethod
@@ -331,13 +576,20 @@ class TelegramService:
             return None
 
         command = parts[0]
-        if command != "/start" and not command.startswith("/start@"):
+        if not TelegramService._is_start_command(command):
             return None
         if len(parts) == 1:
             return None
 
         ref_code = parts[1].strip().split(maxsplit=1)[0]
         return ref_code or None
+
+    @staticmethod
+    def _is_start_command(text: Optional[str]) -> bool:
+        if not text:
+            return False
+        command = text.strip().split(maxsplit=1)[0]
+        return command == "/start" or command.startswith("/start@")
 
     async def _create_message(
         self,
@@ -349,22 +601,75 @@ class TelegramService:
         Persist the Telegram message via MessageService (includes idempotency,
         SAVEPOINT, and chat timestamp update).
 
-        message.text may be None for stickers, photos, etc. We store body=None
-        in that case and tag message_type appropriately.
+        message.text may be None for stickers, photos, etc. Media metadata is
+        stored for lazy proxy access; files are not downloaded here.
         """
-        message_type = MessageType.TEXT if message.text is not None else MessageType.FILE
-
-        data = MessageCreate(
-            external_message_id=str(message.message_id),
-            message_type=message_type,
-            sender_type=SenderType.USER,
-            sender_id=None,  # Telegram users are not CRM users
-            body=message.text,
-        )
+        data = self._telegram_message_to_create(message)
         return await self.message_service.create_message(
             chat_id=chat_id,
             project_id=project_id,
             data=data,
+        )
+
+    @staticmethod
+    def _telegram_message_to_create(message: TelegramMessage) -> MessageCreate:
+        raw_payload = message.model_dump(mode="json", by_alias=True, exclude_none=True)
+        base = {
+            "external_message_id": str(message.message_id),
+            "sender_type": SenderType.USER,
+            "sender_id": None,
+            "raw_payload_json": raw_payload,
+        }
+
+        if message.text is not None:
+            return MessageCreate(
+                **base,
+                message_type=MessageType.TEXT,
+                body=message.text,
+            )
+
+        if message.photo:
+            photo = max(message.photo, key=lambda item: item.file_size or 0)
+            return MessageCreate(
+                **base,
+                message_type=MessageType.PHOTO,
+                body=None,
+                caption=message.caption,
+                telegram_file_id=photo.file_id,
+                file_unique_id=photo.file_unique_id,
+                file_size=photo.file_size,
+                media_group_id=message.media_group_id,
+            )
+
+        media_specs = [
+            (MessageType.VIDEO, message.video),
+            (MessageType.VOICE, message.voice),
+            (MessageType.VIDEO_NOTE, message.video_note),
+            (MessageType.DOCUMENT, message.document),
+            (MessageType.AUDIO, message.audio),
+            (MessageType.STICKER, message.sticker),
+            (MessageType.ANIMATION, message.animation),
+        ]
+        for message_type, media in media_specs:
+            if media is None:
+                continue
+            return MessageCreate(
+                **base,
+                message_type=message_type,
+                body=None,
+                caption=message.caption,
+                telegram_file_id=media.file_id,
+                file_unique_id=media.file_unique_id,
+                file_name=getattr(media, "file_name", None),
+                mime_type=getattr(media, "mime_type", None),
+                file_size=media.file_size,
+                media_group_id=message.media_group_id,
+            )
+
+        return MessageCreate(
+            **base,
+            message_type=MessageType.UNKNOWN,
+            body=None,
         )
 
     async def _find_or_create_lead(

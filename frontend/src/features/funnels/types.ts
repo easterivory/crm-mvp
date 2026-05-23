@@ -147,6 +147,16 @@ export type CopyFunnelResult = {
 
 export type BotActiveFunnel = {
   bot_id: string
+  active_funnel_id: string | null
+  active_funnel_version_id: string | null
   funnel: Funnel | null
   version: FunnelVersion | null
+  version_status: FunnelVersionStatus | null
+  version_number: number | null
+  graph_summary: {
+    steps_count: number
+    edges_count: number
+    has_trigger: boolean
+    first_message_text: string | null
+  } | null
 }

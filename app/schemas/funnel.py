@@ -199,10 +199,22 @@ class BotActiveFunnelSetIn(BaseModel):
     version_id: uuid.UUID
 
 
+class BotActiveFunnelGraphSummary(BaseModel):
+    steps_count: int = 0
+    edges_count: int = 0
+    has_trigger: bool = False
+    first_message_text: Optional[str] = None
+
+
 class BotActiveFunnelOut(BaseModel):
     bot_id: uuid.UUID
+    active_funnel_id: Optional[uuid.UUID] = None
+    active_funnel_version_id: Optional[uuid.UUID] = None
     funnel: Optional[FunnelOut] = None
     version: Optional[FunnelVersionOut] = None
+    version_status: Optional[FunnelVersionStatus] = None
+    version_number: Optional[int] = None
+    graph_summary: Optional[BotActiveFunnelGraphSummary] = None
 
 
 class FunnelValidationIssue(BaseModel):

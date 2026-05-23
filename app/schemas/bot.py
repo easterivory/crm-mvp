@@ -13,12 +13,14 @@ class BotCreate(BaseModel):
     project_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(None, max_length=255)
     telegram_token: str = Field(..., max_length=255)
+    # Ignored by BotService. Kept only so old clients do not fail validation.
     bot_username: Optional[str] = Field(None, max_length=255)
 
 
 class BotUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     telegram_token: Optional[str] = Field(None, max_length=255)
+    # Ignored by BotService. Telegram getMe is the source of truth.
     bot_username: Optional[str] = Field(None, max_length=255)
 
 
@@ -27,6 +29,8 @@ class BotOut(OrmBase):
     project_id: uuid.UUID
     name: str
     has_telegram_token: bool
+    telegram_bot_id: Optional[int] = None
+    telegram_first_name: Optional[str] = None
     bot_username: Optional[str]
     active_funnel_id: Optional[uuid.UUID] = None
     active_funnel_version_id: Optional[uuid.UUID] = None
@@ -39,6 +43,19 @@ class BotWebhookOut(BaseModel):
     ok: bool
     webhook_url: str
     telegram_response: dict[str, Any]
+
+
+class BotTelegramStatusOut(BaseModel):
+    bot_id: uuid.UUID
+    project_id: uuid.UUID
+    telegram_bot_id: Optional[int] = None
+    bot_username: Optional[str] = None
+    telegram_first_name: Optional[str] = None
+    get_me: dict[str, Any]
+    webhook_info: dict[str, Any]
+    identity_matches_crm: bool
+    expected_webhook_url: str
+    webhook_matches_expected: bool
 
 
 class BotStepOut(OrmBase):

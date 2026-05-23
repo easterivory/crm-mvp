@@ -149,15 +149,47 @@ class FunnelRepository(BaseRepository[Funnel]):
             .join(Funnel, Funnel.id == FunnelVersion.funnel_id)
             .join(Bot, Bot.id == Funnel.bot_id)
             .where(
+                Bot.id == bot_id,
+                Bot.is_deleted.is_(False),
                 Funnel.bot_id == bot_id,
+                Funnel.id == Bot.active_funnel_id,
                 Funnel.status == "active",
+                FunnelVersion.id == Bot.active_funnel_version_id,
                 FunnelVersion.status == "published",
-                Bot.active_funnel_version_id == FunnelVersion.id,
             )
             .order_by(FunnelVersion.published_at.desc().nullslast())
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_active_published_funnel_for_bot(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> tuple[Optional[Funnel], Optional[FunnelVersion]]:
+        result = await self.db.execute(
+            select(Funnel, FunnelVersion)
+            .select_from(Bot)
+            .join(Funnel, Funnel.id == Bot.active_funnel_id)
+            .join(FunnelVersion, FunnelVersion.id == Bot.active_funnel_version_id)
+            .where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+                Funnel.id == Bot.active_funnel_id,
+                Funnel.bot_id == Bot.id,
+                Funnel.project_id == Bot.project_id,
+                Funnel.status == "active",
+                FunnelVersion.id == Bot.active_funnel_version_id,
+                FunnelVersion.funnel_id == Funnel.id,
+                FunnelVersion.status == "published",
+            )
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None, None
+        return row[0], row[1]
 
     async def get_active_funnel_for_bot(
         self,
