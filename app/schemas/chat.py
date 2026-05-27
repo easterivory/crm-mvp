@@ -39,6 +39,20 @@ class ChatOut(OrmBase):
     unread: bool = False
     unanswered: bool = False
     is_red: bool = False
+    last_incoming_at: Optional[datetime] = None
+    last_outgoing_at: Optional[datetime] = None
+    has_unanswered_incoming: bool = False
+
+    active_funnel_id: Optional[uuid.UUID] = None
+    active_funnel_name: Optional[str] = None
+    active_funnel_version_id: Optional[uuid.UUID] = None
+    active_funnel_version_number: Optional[int] = None
+    active_funnel_version_status: Optional[str] = None
+    current_step_id: Optional[uuid.UUID] = None
+    current_step_title: Optional[str] = None
+    waiting_for_answer: bool = False
+    completed_at: Optional[datetime] = None
+    lifecycle_status: str = "manual"
 
     updated_at: datetime
     created_at: datetime
@@ -46,9 +60,20 @@ class ChatOut(OrmBase):
 
 
 class ChatFilters(BaseModel):
+    q: Optional[str] = None
     bot_id: Optional[uuid.UUID] = None
     bot_ids: list[uuid.UUID] = Field(default_factory=list)
     unread: Optional[bool] = None
     unanswered: Optional[bool] = None
+    has_unanswered_incoming: Optional[bool] = None
     is_red: Optional[bool] = None
     manager_id: Optional[uuid.UUID] = None
+    assigned_user_id: Optional[uuid.UUID] = None
+    unassigned: Optional[bool] = None
+    tracking_link_id: Optional[uuid.UUID] = None
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    tag_ids: list[uuid.UUID] = Field(default_factory=list)
+    tag_mode: str = "any"
+    lead_statuses: list[str] = Field(default_factory=list)
+    funnel_state: Optional[str] = None

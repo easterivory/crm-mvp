@@ -278,9 +278,63 @@ class ChatFunnelState(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     entered_step_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    waiting_for_answer: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    runtime_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
     chat: Mapped[Chat] = relationship("Chat")
     funnel: Mapped[Funnel] = relationship("Funnel")
     version: Mapped[FunnelVersion] = relationship("FunnelVersion")
     current_step: Mapped[FunnelStep] = relationship("FunnelStep")
+
+
+class FunnelScheduledJob(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
+    """Short-lived runtime jobs for delayed funnel execution."""
+
+    __tablename__ = "funnel_scheduled_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'done', 'failed', 'cancelled')",
+            name="ck_funnel_scheduled_jobs_status",
+        ),
+        Index("ix_funnel_scheduled_jobs_status_run_at", "status", "run_at"),
+        Index("ix_funnel_scheduled_jobs_chat_id", "chat_id"),
+        Index("ix_funnel_scheduled_jobs_step_id", "step_id"),
+        Index("ix_funnel_scheduled_jobs_job_type", "job_type"),
+    )
+
+    job_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chats.id"), nullable=False
+    )
+    funnel_state_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_funnel_states.id"), nullable=True
+    )
+    funnel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=False
+    )
+    funnel_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_versions.id"), nullable=False
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_steps.id"), nullable=False
+    )
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    chat: Mapped[Chat] = relationship("Chat")
+    state: Mapped[Optional[ChatFunnelState]] = relationship("ChatFunnelState")
+    funnel: Mapped[Funnel] = relationship("Funnel")
+    version: Mapped[FunnelVersion] = relationship("FunnelVersion")
+    step: Mapped[FunnelStep] = relationship("FunnelStep")

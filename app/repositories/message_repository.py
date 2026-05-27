@@ -24,7 +24,7 @@ class MessageRepository(BaseRepository[Message]):
         stmt = select(Message).where(Message.chat_id == chat_id)
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
-        stmt = stmt.order_by(Message.created_at.asc()).limit(limit).offset(offset)
+        stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc()).limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

@@ -556,7 +556,17 @@ class FunnelService:
         )
         if message_step is not None:
             config = message_step.config_json or {}
-            raw_text = (
+            raw_text = None
+            messages = config.get("messages")
+            if isinstance(messages, list):
+                first = next((item for item in messages if isinstance(item, dict)), None)
+                if first is not None:
+                    raw_text = (
+                        first.get("text")
+                        or first.get("message")
+                        or first.get("message_text")
+                    )
+            raw_text = raw_text or (
                 config.get("text")
                 or config.get("message")
                 or config.get("message_text")

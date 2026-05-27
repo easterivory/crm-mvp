@@ -162,6 +162,15 @@ class TelegramService:
             tracking_link_id=tracking_link_id,
         )
         msg = await self._create_message(chat.id, project_id, message)
+        logger.info(
+            "Incoming Telegram message persisted bot_id=%s project_id=%s chat_id=%s "
+            "message_id=%s text=%s",
+            bot_id,
+            project_id,
+            chat.id,
+            msg.id,
+            message.text,
+        )
         await self._find_or_create_lead(
             chat.id,
             project_id,
@@ -174,6 +183,7 @@ class TelegramService:
             bot_id=bot_id,
             user_message=msg,
             start_requested=should_start_runtime or self._is_start_command(message.text),
+            fresh_lifecycle=should_start_runtime,
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
@@ -279,6 +289,7 @@ class TelegramService:
         bot_id: UUID,
         user_message: MessageOut,
         start_requested: bool,
+        fresh_lifecycle: bool,
     ) -> None:
         bot = await self.bot_repo.get_active(bot_id)
         has_active_pointer = bool(
@@ -309,6 +320,7 @@ class TelegramService:
                     active_funnel_version_id=active_version.id,
                     user_message=user_message,
                     start_requested=start_requested,
+                    fresh_lifecycle=fresh_lifecycle,
                 )
             except Exception:
                 logger.exception(
@@ -356,8 +368,24 @@ class TelegramService:
         active_funnel_version_id: UUID,
         user_message: MessageOut,
         start_requested: bool,
+        fresh_lifecycle: bool,
     ) -> None:
-        if start_requested:
+        status_name, state = await self.funnel_runtime.get_state_status(
+            chat_id=chat.id,
+            active_funnel_version_id=active_funnel_version_id,
+        )
+        logger.info(
+            "Active funnel state bot_id=%s chat_id=%s funnel_version_id=%s state=%s "
+            "fresh_lifecycle=%s start_requested=%s",
+            chat.bot_id,
+            chat.id,
+            active_funnel_version_id,
+            status_name,
+            fresh_lifecycle,
+            start_requested,
+        )
+
+        if fresh_lifecycle:
             await self.bot_repo.reset_chat_state(chat.id)
             await self.funnel_runtime.reset_chat_state(chat.id)
             await self.funnel_runtime.start_funnel_for_chat(
@@ -367,15 +395,51 @@ class TelegramService:
             )
             return
 
+        if start_requested:
+            if status_name == "not_started":
+                await self.bot_repo.reset_chat_state(chat.id)
+                await self.funnel_runtime.start_funnel_for_chat(
+                    chat_id=chat.id,
+                    funnel_id=active_funnel_id,
+                    funnel_version_id=active_funnel_version_id,
+                )
+                return
+
+            logger.info(
+                "Ignoring repeated /start because funnel is %s chat_id=%s "
+                "funnel_version_id=%s",
+                status_name,
+                chat.id,
+                active_funnel_version_id,
+            )
+            return
+
+        if status_name == "completed":
+            logger.info(
+                "No auto response after completed funnel chat_id=%s funnel_version_id=%s",
+                chat.id,
+                active_funnel_version_id,
+            )
+            return
+
+        if status_name == "not_started":
+            logger.info(
+                "No auto response before funnel start chat_id=%s funnel_version_id=%s",
+                chat.id,
+                active_funnel_version_id,
+            )
+            return
+
         handled = await self.funnel_runtime.process_incoming_message(
             chat_id=chat.id,
             text=user_message.body or user_message.caption or user_message.message_type,
         )
         if not handled:
-            await self.funnel_runtime.start_funnel_for_chat(
-                chat_id=chat.id,
-                funnel_id=active_funnel_id,
-                funnel_version_id=active_funnel_version_id,
+            logger.error(
+                "Active funnel runtime did not handle in-progress message chat_id=%s "
+                "funnel_version_id=%s",
+                chat.id,
+                active_funnel_version_id,
             )
 
     async def _process_callback_runtime_or_legacy(
@@ -400,15 +464,28 @@ class TelegramService:
         )
 
         if active_version is not None and active_funnel is not None:
+            status_name, _ = await self.funnel_runtime.get_state_status(
+                chat_id=chat.id,
+                active_funnel_version_id=active_version.id,
+            )
             logger.info(
                 "Using active funnel runtime for callback bot_id=%s project_id=%s "
-                "chat_id=%s funnel_id=%s funnel_version_id=%s",
+                "chat_id=%s funnel_id=%s funnel_version_id=%s state=%s",
                 bot_id,
                 project_id,
                 chat.id,
                 active_funnel.id,
                 active_version.id,
+                status_name,
             )
+            if status_name in {"not_started", "completed"}:
+                logger.info(
+                    "Ignoring callback because funnel is %s chat_id=%s funnel_version_id=%s",
+                    status_name,
+                    chat.id,
+                    active_version.id,
+                )
+                return
             try:
                 handled = await self.funnel_runtime.process_incoming_button(
                     chat_id=chat.id,
@@ -416,10 +493,11 @@ class TelegramService:
                     fallback_text=fallback_text,
                 )
                 if not handled:
-                    await self.funnel_runtime.start_funnel_for_chat(
-                        chat_id=chat.id,
-                        funnel_id=active_funnel.id,
-                        funnel_version_id=active_version.id,
+                    logger.error(
+                        "Active funnel runtime did not handle callback chat_id=%s "
+                        "funnel_version_id=%s",
+                        chat.id,
+                        active_version.id,
                     )
             except Exception:
                 logger.exception(

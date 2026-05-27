@@ -65,15 +65,51 @@ function getOutputLabels(step: FunnelStep) {
   if (step.step_type === 'condition') {
     const outcomes = step.config_json.outcomes
     if (Array.isArray(outcomes) && outcomes.length > 0) {
-      return outcomes.map(String)
+      return outcomes.map((item) => {
+        if (typeof item === 'object' && item !== null) {
+          const outcome = item as Record<string, unknown>
+          return String(outcome.label ?? outcome.id ?? 'Исход')
+        }
+        return String(item)
+      })
     }
-    return ['true', 'false', 'fallback']
+    return ['Да', 'Нет', 'Fallback']
   }
   if (step.step_type === 'input') {
     const choices = step.config_json.choices ?? step.config_json.options ?? step.config_json.buttons
     if (Array.isArray(choices) && choices.length > 0) {
-      return choices.slice(0, 4).map(String)
+      return choices.slice(0, 4).map((item) => {
+        if (typeof item === 'object' && item !== null) {
+          const choice = item as Record<string, unknown>
+          return String(choice.label ?? choice.value ?? choice.id ?? 'Вариант')
+        }
+        return String(item)
+      })
     }
+  }
+  if (step.step_type === 'message') {
+    const messages = step.config_json.messages
+    const lastMessage =
+      Array.isArray(messages) && messages.length > 0
+        ? messages[messages.length - 1]
+        : step.config_json
+    const buttons =
+      typeof lastMessage === 'object' && lastMessage !== null
+        ? (lastMessage as Record<string, unknown>).buttons
+        : undefined
+    if (Array.isArray(buttons) && buttons.length > 0) {
+      return buttons.slice(0, 4).map((item) => {
+        if (typeof item === 'object' && item !== null) {
+          const button = item as Record<string, unknown>
+          return String(button.label ?? button.value ?? button.id ?? 'Кнопка')
+        }
+        return String(item)
+      })
+    }
+  }
+  if (step.step_type === 'delay') {
+    const delayType = step.config_json.delay_type
+    return [delayType === 'no_reply_timeout' ? 'timeout' : 'Далее']
   }
   if (step.step_type === 'finish') {
     return []

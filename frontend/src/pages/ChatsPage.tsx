@@ -27,7 +27,12 @@ import {
 import axios from 'axios'
 
 import api from '../api/client'
-import ChatList, { Chat, ChatFilter } from '../components/ChatList'
+import ChatList, {
+  Chat,
+  ChatAdvancedFilters,
+  ChatFilter,
+  FilterOption,
+} from '../components/ChatList'
 import LeadSidebar from '../components/LeadSidebar'
 import { fetchBots, type Bot as BotRecord } from '../features/bots'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
@@ -59,8 +64,32 @@ type Message = {
   created_at: string
 }
 
+type TrackingLinkOption = {
+  id: string
+  code: string
+  title: string
+}
+
+type ProjectTag = {
+  id: string
+  name: string
+}
+
+type LeadStatus = {
+  id: string
+  code: string
+  name: string
+}
+
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
+const EMPTY_ADVANCED_FILTERS: ChatAdvancedFilters = {
+  trackingLinkId: '',
+  dateFrom: '',
+  dateTo: '',
+  tagIds: [],
+  leadStatuses: [],
+}
 
 const mediaLabels: Record<string, string> = {
   animation: 'Анимация',
@@ -130,6 +159,19 @@ function getMediaIcon(messageType: string) {
   return FileText
 }
 
+function getLifecycleLabel(chat: Chat) {
+  if (chat.lifecycle_status === 'waiting_for_answer') {
+    return 'Ждёт ответ'
+  }
+  if (chat.lifecycle_status === 'in_progress') {
+    return 'В воронке'
+  }
+  if (chat.lifecycle_status === 'completed') {
+    return 'Завершил воронку'
+  }
+  return 'Ручная обработка'
+}
+
 function formatFileSize(value: number | null) {
   if (!value || value <= 0) {
     return null
@@ -148,9 +190,15 @@ export default function ChatsPage() {
   const [chats, setChats] = useState<Chat[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  const [trackingOptions, setTrackingOptions] = useState<FilterOption[]>([])
+  const [tagOptions, setTagOptions] = useState<FilterOption[]>([])
+  const [statusOptions, setStatusOptions] = useState<FilterOption[]>([])
   const [total, setTotal] = useState(0)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ChatFilter>('all')
+  const [advancedFilters, setAdvancedFilters] = useState<ChatAdvancedFilters>(
+    EMPTY_ADVANCED_FILTERS,
+  )
   const [draft, setDraft] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
@@ -230,6 +278,21 @@ export default function ChatsPage() {
       if (activeFilter === 'red') {
         params.is_red = true
       }
+      if (advancedFilters.trackingLinkId) {
+        params.tracking_link_id = advancedFilters.trackingLinkId
+      }
+      if (advancedFilters.dateFrom) {
+        params.date_from = advancedFilters.dateFrom
+      }
+      if (advancedFilters.dateTo) {
+        params.date_to = advancedFilters.dateTo
+      }
+      if (advancedFilters.tagIds.length > 0) {
+        params.tag_ids = advancedFilters.tagIds.join(',')
+      }
+      if (advancedFilters.leadStatuses.length > 0) {
+        params.lead_statuses = advancedFilters.leadStatuses.join(',')
+      }
 
       const { data } = await api.get<PaginatedResponse<Chat>>('/chats', { params })
       setChats(data.items)
@@ -245,7 +308,7 @@ export default function ChatsPage() {
     } finally {
       setIsChatsLoading(false)
     }
-  }, [activeFilter, selectedBotIds, selectedProjectId, user?.id])
+  }, [activeFilter, advancedFilters, selectedBotIds, selectedProjectId, user?.id])
 
   const loadBots = useCallback(async () => {
     if (!selectedProjectId) {
@@ -258,6 +321,53 @@ export default function ChatsPage() {
       setBots([])
     }
   }, [selectedProjectId])
+
+  const loadFilterOptions = useCallback(async () => {
+    if (!selectedProjectId) {
+      setTrackingOptions([])
+      setTagOptions([])
+      setStatusOptions([])
+      return
+    }
+
+    try {
+      const [trackingResponse, tagsResponse, statusesResponse] = await Promise.all([
+        api.get<PaginatedResponse<TrackingLinkOption>>('/tracking/links', {
+          params: {
+            project_id: selectedProjectId,
+            limit: 100,
+            offset: 0,
+            ...(selectedBotIds.length === 1 ? { bot_id: selectedBotIds[0] } : {}),
+          },
+        }),
+        api.get<PaginatedResponse<ProjectTag>>('/tags', {
+          params: {
+            project_id: selectedProjectId,
+            limit: 100,
+            offset: 0,
+          },
+        }),
+        api.get<LeadStatus[]>('/leads/statuses'),
+      ])
+      setTrackingOptions(
+        trackingResponse.data.items.map((link) => ({
+          id: link.id,
+          label: `${link.title} · ${link.code}`,
+        })),
+      )
+      setTagOptions(tagsResponse.data.items.map((tag) => ({ id: tag.id, label: tag.name })))
+      setStatusOptions(
+        statusesResponse.data.map((status) => ({
+          id: status.code,
+          label: status.name,
+        })),
+      )
+    } catch {
+      setTrackingOptions([])
+      setTagOptions([])
+      setStatusOptions([])
+    }
+  }, [selectedBotIds, selectedProjectId])
 
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
     if (showLoader) {
@@ -296,12 +406,17 @@ export default function ChatsPage() {
   useEffect(() => {
     void loadChats()
     void loadBots()
+    void loadFilterOptions()
     const timer = window.setInterval(() => {
       void loadChats()
     }, 15000)
 
     return () => window.clearInterval(timer)
-  }, [loadBots, loadChats])
+  }, [loadBots, loadChats, loadFilterOptions])
+
+  useEffect(() => {
+    setAdvancedFilters(EMPTY_ADVANCED_FILTERS)
+  }, [selectedProjectId])
 
   useEffect(() => {
     if (!selectedChatId) {
@@ -321,6 +436,18 @@ export default function ChatsPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [messages])
+
+  useEffect(() => {
+    if (!selectedChatId || !selectedChat?.last_message_at) {
+      return undefined
+    }
+
+    void loadMessages(selectedChatId)
+    const timer = window.setTimeout(() => {
+      void loadMessages(selectedChatId)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [loadMessages, selectedChat?.last_message_at, selectedChatId])
 
   const sendMessage = async () => {
     const text = draft.trim()
@@ -436,18 +563,24 @@ export default function ChatsPage() {
           chats={chats}
           currentUserId={user?.id ?? null}
           getBotLabel={getBotLabel}
+          advancedFilters={advancedFilters}
+          trackingOptions={trackingOptions}
+          tagOptions={tagOptions}
+          statusOptions={statusOptions}
           isLoading={isChatsLoading}
           scopeLabel={botScopeLabel}
           selectedChatId={selectedChatId}
           total={total}
           onFilterChange={setActiveFilter}
+          onAdvancedFiltersChange={setAdvancedFilters}
+          onResetAdvancedFilters={() => setAdvancedFilters(EMPTY_ADVANCED_FILTERS)}
           onRefresh={() => void loadChats()}
           onSelectChat={setSelectedChatId}
         />
       </div>
 
       <div className={`${selectedChat ? 'flex' : 'hidden xl:flex'} h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}>
-        <header className="flex min-h-[73px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-4 sm:px-5">
+        <header className="flex min-h-[96px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-4 sm:px-5">
           {selectedChat ? (
             <>
               <div className="flex min-w-0 items-center gap-3">
@@ -468,6 +601,17 @@ export default function ChatsPage() {
                 </div>
                 <p className="truncate text-sm text-gray-500">
                   {getBotLabel(selectedChat)} · Telegram ID {selectedChat.external_chat_id}
+                </p>
+                <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                  <span className="truncate">
+                    Воронка:{' '}
+                    {selectedChat.active_funnel_name
+                      ? `${selectedChat.active_funnel_name} v${selectedChat.active_funnel_version_number ?? '—'}`
+                      : 'не выбрана'}
+                  </span>
+                  <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-sky-200">
+                    {getLifecycleLabel(selectedChat)}
+                  </span>
                 </p>
                 </div>
               </div>

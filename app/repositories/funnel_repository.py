@@ -14,6 +14,7 @@ from app.models.funnel import (
     FunnelEdge,
     FunnelFieldMapping,
     FunnelPushRule,
+    FunnelScheduledJob,
     FunnelStep,
     FunnelVersion,
 )
@@ -273,10 +274,16 @@ class FunnelRepository(BaseRepository[Funnel]):
         await self.db.execute(stmt.values(status="archived", updated_at=func.now()))
 
     async def reset_chat_funnel_state(self, chat_id: UUID) -> None:
+        await self.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
         await self.db.execute(
             update(ChatFunnelState)
             .where(ChatFunnelState.chat_id == chat_id)
-            .values(completed_at=func.now(), updated_at=func.now())
+            .values(
+                waiting_for_answer=False,
+                completed_at=func.now(),
+                runtime_json={},
+                updated_at=func.now(),
+            )
         )
 
     async def next_version_number(self, funnel_id: UUID) -> int:
@@ -478,7 +485,9 @@ class FunnelRepository(BaseRepository[Funnel]):
         funnel_version_id: UUID,
         current_step_id: UUID,
         entered_step_at: datetime,
+        waiting_for_answer: bool = False,
         completed_at: Optional[datetime] = None,
+        runtime_json: Optional[dict] = None,
     ) -> ChatFunnelState:
         existing = await self.get_chat_funnel_state(chat_id)
         if existing is None:
@@ -488,24 +497,30 @@ class FunnelRepository(BaseRepository[Funnel]):
                 funnel_version_id=funnel_version_id,
                 current_step_id=current_step_id,
                 entered_step_at=entered_step_at,
+                waiting_for_answer=waiting_for_answer,
                 completed_at=completed_at,
+                runtime_json=runtime_json or {},
             )
             self.db.add(state)
             await self.db.flush()
             await self.db.refresh(state)
             return state
 
+        values = {
+            "funnel_id": funnel_id,
+            "funnel_version_id": funnel_version_id,
+            "current_step_id": current_step_id,
+            "entered_step_at": entered_step_at,
+            "waiting_for_answer": waiting_for_answer,
+            "completed_at": completed_at,
+            "updated_at": func.now(),
+        }
+        if runtime_json is not None:
+            values["runtime_json"] = runtime_json
         await self.db.execute(
             update(ChatFunnelState)
             .where(ChatFunnelState.chat_id == chat_id)
-            .values(
-                funnel_id=funnel_id,
-                funnel_version_id=funnel_version_id,
-                current_step_id=current_step_id,
-                entered_step_at=entered_step_at,
-                completed_at=completed_at,
-                updated_at=func.now(),
-            )
+            .values(**values)
         )
         refreshed = await self.get_chat_funnel_state(chat_id)
         assert refreshed is not None
@@ -518,6 +533,162 @@ class FunnelRepository(BaseRepository[Funnel]):
             .with_for_update()
         )
         return result.scalar_one_or_none()
+
+    async def update_chat_funnel_runtime(
+        self,
+        *,
+        chat_id: UUID,
+        runtime_json: dict,
+    ) -> Optional[ChatFunnelState]:
+        result = await self.db.execute(
+            update(ChatFunnelState)
+            .where(ChatFunnelState.chat_id == chat_id)
+            .values(runtime_json=runtime_json, updated_at=func.now())
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_chat_funnel_state(chat_id)
+
+    async def create_scheduled_job(
+        self,
+        *,
+        job_type: str,
+        chat_id: UUID,
+        funnel_state_id: Optional[UUID],
+        funnel_id: UUID,
+        funnel_version_id: UUID,
+        step_id: UUID,
+        run_at: datetime,
+        payload_json: Optional[dict] = None,
+    ) -> FunnelScheduledJob:
+        job = FunnelScheduledJob(
+            job_type=job_type,
+            chat_id=chat_id,
+            funnel_state_id=funnel_state_id,
+            funnel_id=funnel_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step_id,
+            run_at=run_at,
+            payload_json=payload_json or {},
+        )
+        self.db.add(job)
+        await self.db.flush()
+        await self.db.refresh(job)
+        return job
+
+    async def list_due_scheduled_jobs(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> list[FunnelScheduledJob]:
+        result = await self.db.execute(
+            select(FunnelScheduledJob)
+            .where(
+                FunnelScheduledJob.status == "pending",
+                FunnelScheduledJob.run_at <= now,
+            )
+            .order_by(FunnelScheduledJob.run_at.asc(), FunnelScheduledJob.created_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return list(result.scalars().all())
+
+    async def mark_scheduled_job_running(self, job_id: UUID) -> None:
+        await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(FunnelScheduledJob.id == job_id, FunnelScheduledJob.status == "pending")
+            .values(
+                status="running",
+                attempts=FunnelScheduledJob.attempts + 1,
+                updated_at=func.now(),
+            )
+        )
+
+    async def mark_scheduled_job_done(self, job_id: UUID) -> None:
+        await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(FunnelScheduledJob.id == job_id)
+            .values(status="done", updated_at=func.now())
+        )
+
+    async def mark_scheduled_job_failed(self, job_id: UUID, error: str) -> None:
+        await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(FunnelScheduledJob.id == job_id)
+            .values(status="failed", last_error=error[:2000], updated_at=func.now())
+        )
+
+    async def cancel_scheduled_jobs_for_chat(
+        self,
+        *,
+        chat_id: UUID,
+        job_type: Optional[str] = None,
+        step_id: Optional[UUID] = None,
+    ) -> None:
+        stmt = update(FunnelScheduledJob).where(
+            FunnelScheduledJob.chat_id == chat_id,
+            FunnelScheduledJob.status == "pending",
+        )
+        if job_type is not None:
+            stmt = stmt.where(FunnelScheduledJob.job_type == job_type)
+        if step_id is not None:
+            stmt = stmt.where(FunnelScheduledJob.step_id == step_id)
+        await self.db.execute(stmt.values(status="cancelled", updated_at=func.now()))
+
+    async def get_chat_funnel_contexts(
+        self,
+        *,
+        project_id: UUID,
+        chat_ids: list[UUID],
+    ) -> dict[UUID, dict]:
+        if not chat_ids:
+            return {}
+
+        result = await self.db.execute(
+            select(
+                Chat.id.label("chat_id"),
+                Funnel.id.label("active_funnel_id"),
+                Funnel.name.label("active_funnel_name"),
+                FunnelVersion.id.label("active_funnel_version_id"),
+                FunnelVersion.version_number.label("active_funnel_version_number"),
+                FunnelVersion.status.label("active_funnel_version_status"),
+                ChatFunnelState.current_step_id.label("current_step_id"),
+                FunnelStep.title.label("current_step_title"),
+                ChatFunnelState.waiting_for_answer.label("waiting_for_answer"),
+                ChatFunnelState.completed_at.label("completed_at"),
+            )
+            .select_from(Chat)
+            .outerjoin(Bot, Bot.id == Chat.bot_id)
+            .outerjoin(
+                Funnel,
+                (Funnel.id == Bot.active_funnel_id)
+                & (Funnel.bot_id == Bot.id)
+                & (Funnel.project_id == Chat.project_id)
+                & (Funnel.status == "active"),
+            )
+            .outerjoin(
+                FunnelVersion,
+                (FunnelVersion.id == Bot.active_funnel_version_id)
+                & (FunnelVersion.funnel_id == Funnel.id)
+                & (FunnelVersion.status == "published"),
+            )
+            .outerjoin(
+                ChatFunnelState,
+                (ChatFunnelState.chat_id == Chat.id)
+                & (ChatFunnelState.funnel_version_id == FunnelVersion.id),
+            )
+            .outerjoin(FunnelStep, FunnelStep.id == ChatFunnelState.current_step_id)
+            .where(
+                Chat.project_id == project_id,
+                Chat.id.in_(chat_ids),
+                Chat.is_deleted.is_(False),
+            )
+        )
+        contexts: dict[UUID, dict] = {}
+        for row in result.mappings().all():
+            contexts[row["chat_id"]] = dict(row)
+        return contexts
 
     async def get_step(self, step_id: UUID) -> Optional[FunnelStep]:
         result = await self.db.execute(select(FunnelStep).where(FunnelStep.id == step_id))

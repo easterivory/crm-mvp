@@ -1,5 +1,5 @@
 """
-Workers entrypoint — run via: python -m app.workers [alert|stats|all]
+Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|all]
 
 Each worker is an independent asyncio loop.
 Running 'all' starts both workers concurrently in the same process.
@@ -7,7 +7,8 @@ Running 'all' starts both workers concurrently in the same process.
 Usage:
     python -m app.workers alert   # alert worker only
     python -m app.workers stats   # stats worker only
-    python -m app.workers all     # both workers (default in Docker)
+    python -m app.workers funnel  # funnel scheduled jobs worker only
+    python -m app.workers all     # all workers (default in Docker)
 """
 import asyncio
 import logging
@@ -32,8 +33,13 @@ def main() -> None:
         from app.workers.stats_worker import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "funnel":
+        from app.workers.funnel_scheduled_worker import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "all":
         from app.workers.alert_worker import run_loop as alert_loop
+        from app.workers.funnel_scheduled_worker import run_loop as funnel_loop
         from app.workers.stats_worker import run_loop as stats_loop
 
         async def run_all() -> None:
@@ -41,12 +47,13 @@ def main() -> None:
             await asyncio.gather(
                 alert_loop(),
                 stats_loop(),
+                funnel_loop(),
             )
 
         asyncio.run(run_all())
 
     else:
-        logger.error("Unknown worker mode: %r. Use: alert | stats | all", mode)
+        logger.error("Unknown worker mode: %r. Use: alert | stats | funnel | all", mode)
         sys.exit(1)
 
 

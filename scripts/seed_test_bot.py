@@ -29,7 +29,8 @@ from app.models.project import Project
 
 DEFAULT_PROJECT_NAME = "Test CRM Project"
 DEFAULT_BOT_NAME = "CRM Test Bot"
-DEFAULT_VERSION_NAME = "v1.0"
+# Legacy BotEngine fallback only. Active published funnels bypass this text.
+DEFAULT_VERSION_NAME = "legacy fallback v1.0"
 DEFAULT_WELCOME_TEXT = "Привет! Я тестовый бот CRM. Напишите сообщение, и я сохраню ответ."
 
 

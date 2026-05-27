@@ -1,4 +1,4 @@
-import { LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
+import { Filter, LoaderCircle, RefreshCw, RotateCcw, UserRound } from 'lucide-react'
 
 export type Chat = {
   id: string
@@ -10,16 +10,42 @@ export type Chat = {
   last_message_at: string | null
   last_user_message_at: string | null
   last_manager_reply_at: string | null
+  last_incoming_at: string | null
+  last_outgoing_at: string | null
   last_read_at: string | null
   unread: boolean
   unanswered: boolean
+  has_unanswered_incoming: boolean
   is_red: boolean
+  active_funnel_id: string | null
+  active_funnel_name: string | null
+  active_funnel_version_id: string | null
+  active_funnel_version_number: number | null
+  active_funnel_version_status: string | null
+  current_step_id: string | null
+  current_step_title: string | null
+  waiting_for_answer: boolean
+  completed_at: string | null
+  lifecycle_status: 'in_progress' | 'waiting_for_answer' | 'completed' | 'manual'
   updated_at: string
   created_at: string
   is_deleted: boolean
 }
 
 export type ChatFilter = 'all' | 'mine' | 'unanswered' | 'red'
+
+export type ChatAdvancedFilters = {
+  trackingLinkId: string
+  dateFrom: string
+  dateTo: string
+  tagIds: string[]
+  leadStatuses: string[]
+}
+
+export type FilterOption = {
+  id: string
+  label: string
+}
 
 type ChatListProps = {
   activeFilter: ChatFilter
@@ -30,7 +56,13 @@ type ChatListProps = {
   selectedChatId: string | null
   total: number
   getBotLabel?: (chat: Chat) => string
+  advancedFilters: ChatAdvancedFilters
+  trackingOptions: FilterOption[]
+  tagOptions: FilterOption[]
+  statusOptions: FilterOption[]
   onFilterChange: (filter: ChatFilter) => void
+  onAdvancedFiltersChange: (filters: ChatAdvancedFilters) => void
+  onResetAdvancedFilters: () => void
   onRefresh: () => void
   onSelectChat: (chatId: string) => void
 }
@@ -68,6 +100,19 @@ function getInitials(label: string) {
     .join('')
 }
 
+function getLifecycleLabel(chat: Chat) {
+  if (chat.lifecycle_status === 'waiting_for_answer') {
+    return 'Ждёт ответ'
+  }
+  if (chat.lifecycle_status === 'in_progress') {
+    return 'В воронке'
+  }
+  if (chat.lifecycle_status === 'completed') {
+    return 'Завершил воронку'
+  }
+  return 'Ручная обработка'
+}
+
 export default function ChatList({
   activeFilter,
   chats,
@@ -77,10 +122,24 @@ export default function ChatList({
   selectedChatId,
   total,
   getBotLabel,
+  advancedFilters,
+  trackingOptions,
+  tagOptions,
+  statusOptions,
   onFilterChange,
+  onAdvancedFiltersChange,
+  onResetAdvancedFilters,
   onRefresh,
   onSelectChat,
 }: ChatListProps) {
+  const advancedCount = [
+    advancedFilters.trackingLinkId,
+    advancedFilters.dateFrom,
+    advancedFilters.dateTo,
+    ...advancedFilters.tagIds,
+    ...advancedFilters.leadStatuses,
+  ].filter(Boolean).length
+
   return (
     <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card">
       <div className="shrink-0 border-b border-white/5 p-4">
@@ -133,6 +192,148 @@ export default function ChatList({
             )
           })}
         </div>
+
+        <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-200">
+              <Filter size={15} />
+              Фильтры
+            </div>
+            <button
+              type="button"
+              onClick={onResetAdvancedFilters}
+              disabled={advancedCount === 0}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 px-2 text-xs text-gray-400 transition hover:border-accent-300/40 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RotateCcw size={13} />
+              Сбросить
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Ссылка</span>
+              <select
+                value={advancedFilters.trackingLinkId}
+                onChange={(event) =>
+                  onAdvancedFiltersChange({
+                    ...advancedFilters,
+                    trackingLinkId: event.target.value,
+                  })
+                }
+                className="h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
+              >
+                <option value="">Все ссылки</option>
+                {trackingOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-500">Дата с</span>
+                <input
+                  type="date"
+                  value={advancedFilters.dateFrom}
+                  onChange={(event) =>
+                    onAdvancedFiltersChange({
+                      ...advancedFilters,
+                      dateFrom: event.target.value,
+                    })
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-500">Дата до</span>
+                <input
+                  type="date"
+                  value={advancedFilters.dateTo}
+                  onChange={(event) =>
+                    onAdvancedFiltersChange({
+                      ...advancedFilters,
+                      dateTo: event.target.value,
+                    })
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
+                />
+              </label>
+            </div>
+
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Теги</span>
+              <select
+                multiple
+                value={advancedFilters.tagIds}
+                onChange={(event) =>
+                  onAdvancedFiltersChange({
+                    ...advancedFilters,
+                    tagIds: Array.from(event.target.selectedOptions, (option) => option.value),
+                  })
+                }
+                className="min-h-16 w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
+              >
+                {tagOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Статусы</span>
+              <select
+                multiple
+                value={advancedFilters.leadStatuses}
+                onChange={(event) =>
+                  onAdvancedFiltersChange({
+                    ...advancedFilters,
+                    leadStatuses: Array.from(
+                      event.target.selectedOptions,
+                      (option) => option.value,
+                    ),
+                  })
+                }
+                className="min-h-16 w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
+              >
+                {statusOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {advancedCount > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {advancedFilters.trackingLinkId ? (
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs text-gray-300">
+                  Ссылка
+                </span>
+              ) : null}
+              {advancedFilters.dateFrom || advancedFilters.dateTo ? (
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs text-gray-300">
+                  Дата
+                </span>
+              ) : null}
+              {advancedFilters.tagIds.length > 0 ? (
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs text-gray-300">
+                  Теги: {advancedFilters.tagIds.length}
+                </span>
+              ) : null}
+              {advancedFilters.leadStatuses.length > 0 ? (
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs text-gray-300">
+                  Статусы: {advancedFilters.leadStatuses.length}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -178,9 +379,9 @@ export default function ChatList({
                       Новое
                     </span>
                   ) : null}
-                  {chat.unanswered ? (
+                  {chat.has_unanswered_incoming ? (
                     <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-300">
-                      Без ответа
+                      Не отвечено
                     </span>
                   ) : null}
                   {chat.is_red ? (
@@ -188,7 +389,10 @@ export default function ChatList({
                       SLA
                     </span>
                   ) : null}
-                  {!chat.unread && !chat.unanswered && !chat.is_red ? (
+                  <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">
+                    {getLifecycleLabel(chat)}
+                  </span>
+                  {!chat.unread && !chat.has_unanswered_incoming && !chat.is_red ? (
                     <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs font-medium text-gray-500">
                       Готово
                     </span>

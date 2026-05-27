@@ -214,8 +214,84 @@ export default function FunnelBuilder({
       if (exists) {
         return current
       }
+      const syncedSteps = current.steps.map((step) => {
+        if (step.id !== fromStepId || !outcome) {
+          return step
+        }
+        if (step.step_type === 'condition' && Array.isArray(step.config_json.outcomes)) {
+          return {
+            ...step,
+            config_json: {
+              ...step.config_json,
+              outcomes: step.config_json.outcomes.map((item) => {
+                if (typeof item !== 'object' || item === null) {
+                  return item
+                }
+                const outcomeConfig = item as Record<string, unknown>
+                const label = String(outcomeConfig.label ?? outcomeConfig.id ?? '')
+                return label === outcome ? { ...outcomeConfig, target_step_id: toStepId } : item
+              }),
+            },
+          }
+        }
+        if (step.step_type === 'input' && Array.isArray(step.config_json.choices)) {
+          return {
+            ...step,
+            config_json: {
+              ...step.config_json,
+              choices: step.config_json.choices.map((item) => {
+                if (typeof item !== 'object' || item === null) {
+                  return item
+                }
+                const choice = item as Record<string, unknown>
+                const label = String(choice.label ?? choice.value ?? choice.id ?? '')
+                return label === outcome ? { ...choice, target_step_id: toStepId } : item
+              }),
+            },
+          }
+        }
+        if (step.step_type === 'message' && Array.isArray(step.config_json.messages)) {
+          const messages = step.config_json.messages
+          return {
+            ...step,
+            config_json: {
+              ...step.config_json,
+              messages: messages.map((message, messageIndex) => {
+                if (
+                  messageIndex !== messages.length - 1 ||
+                  typeof message !== 'object' ||
+                  message === null
+                ) {
+                  return message
+                }
+                const messageConfig = message as Record<string, unknown>
+                const buttons = Array.isArray(messageConfig.buttons) ? messageConfig.buttons : []
+                return {
+                  ...messageConfig,
+                  buttons: buttons.map((item) => {
+                    if (typeof item !== 'object' || item === null) {
+                      return item
+                    }
+                    const button = item as Record<string, unknown>
+                    const label = String(button.label ?? button.value ?? button.id ?? '')
+                    return label === outcome ? { ...button, target_step_id: toStepId } : item
+                  }),
+                }
+              }),
+            },
+          }
+        }
+        if (step.step_type === 'delay') {
+          return {
+            ...step,
+            config_json: { ...step.config_json, target_step_id: toStepId },
+          }
+        }
+        return step
+      })
       return {
         ...current,
+        steps: syncedSteps,
         edges: [
           ...current.edges,
           {
@@ -499,7 +575,12 @@ export default function FunnelBuilder({
           onConnect={connectSteps}
         />
         <div className="min-h-0 space-y-3 overflow-y-auto rounded-lg border border-white/8 bg-surface/90 p-3">
-          <StepSettingsPanel step={selectedStep} onUpdate={updateStep} onDelete={deleteStep} />
+          <StepSettingsPanel
+            step={selectedStep}
+            steps={graph.steps}
+            onUpdate={updateStep}
+            onDelete={deleteStep}
+          />
           <FieldMappingsPanel
             selectedStep={selectedStep}
             mappings={graph.field_mappings}

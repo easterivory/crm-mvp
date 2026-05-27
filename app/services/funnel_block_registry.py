@@ -352,11 +352,27 @@ class FunnelBlockRegistry:
             }:
                 errors.append("Выберите допустимый тип триггера.")
         if block_type == "generic_message":
-            if not self._text(config, "text", "message_text"):
+            messages = config.get("messages")
+            has_sequence_text = (
+                isinstance(messages, list)
+                and any(
+                    isinstance(message, dict)
+                    and str(
+                        message.get("text")
+                        or message.get("message")
+                        or message.get("message_text")
+                        or ""
+                    ).strip()
+                    for message in messages
+                )
+            )
+            if not has_sequence_text and not self._text(config, "text", "message_text"):
                 errors.append("Для сообщения нужен текст.")
             buttons = config.get("buttons")
             if buttons is not None and not isinstance(buttons, list):
                 errors.append("Кнопки сообщения должны быть списком.")
+            if messages is not None and not isinstance(messages, list):
+                errors.append("Sequence сообщений должен быть списком.")
         if block_type == "generic_input":
             if not self._text(config, "prompt", "question_text", "text", "message_text"):
                 errors.append("Для вопроса нужен текст вопроса.")
@@ -370,8 +386,8 @@ class FunnelBlockRegistry:
                 errors.append("Для выбора нужен хотя бы один вариант.")
         if block_type == "generic_condition":
             mode = str(config.get("mode") or "all").strip()
-            if mode not in {"all", "any"}:
-                errors.append("Режим условия должен быть all или any.")
+            if mode not in {"all", "any", "simple_yes_no"}:
+                errors.append("Режим условия должен быть all, any или simple_yes_no.")
             conditions = config.get("conditions")
             if not isinstance(conditions, list) or not conditions:
                 errors.append("Добавьте хотя бы одно условие.")
@@ -380,7 +396,9 @@ class FunnelBlockRegistry:
                     if not isinstance(condition, dict):
                         errors.append(f"Условие #{index} должно быть объектом.")
                         continue
-                    condition_type = str(condition.get("type") or "").strip()
+                    condition_type = str(
+                        condition.get("type") or condition.get("operator") or condition.get("source") or ""
+                    ).strip()
                     if not condition_type:
                         errors.append(f"Условие #{index}: выберите тип.")
             outcomes = config.get("outcomes")
@@ -395,11 +413,14 @@ class FunnelBlockRegistry:
                     if not isinstance(action, dict) or not str(action.get("type") or "").strip():
                         errors.append(f"CRM-действие #{index}: выберите тип.")
         if block_type == "generic_delay":
-            delay_type = str(config.get("delay_type") or "minutes").strip()
-            if delay_type == "hours":
+            delay_type = str(config.get("delay_type") or "wait").strip()
+            if delay_type in {"wait", "no_reply_timeout", "reply_timeout"}:
+                if self._positive_number(config, "delay_seconds", "seconds", "minutes", "delay_minutes") is None:
+                    errors.append("Укажите задержку больше 0.")
+            elif delay_type == "hours":
                 if self._positive_number(config, "hours", "delay_hours") is None:
                     errors.append("Укажите задержку в часах больше 0.")
-            elif delay_type in {"minutes", "reply_timeout"}:
+            elif delay_type == "minutes":
                 if self._positive_number(config, "minutes", "delay_minutes") is None:
                     errors.append("Укажите задержку в минутах больше 0.")
             else:
@@ -422,7 +443,7 @@ class FunnelBlockRegistry:
         if block_type in {"notify_manager", "notify_admin_chat", "notify_operator"}:
             if not self._text(config, "text", "message_text"):
                 errors.append("Для уведомления нужен текст.")
-        if step_type == "input":
+        if step_type == "input" and block_type != "generic_input":
             if not self._text(config, "question_text", "text", "message_text"):
                 errors.append("Для вопроса нужен текст вопроса.")
             if block_type == "ask_choice" and not self._list(config, "options", "buttons"):

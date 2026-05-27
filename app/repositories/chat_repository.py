@@ -35,11 +35,15 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, String, case, func, or_, select, update
 
 from app.core.constants import SenderType
 from app.models.chat import Chat
-from app.models.lead import Lead
+from app.models.funnel import ChatFunnelState
+from app.models.lead import Lead, LeadTag
+from app.models.lead_status import LeadStatus
+from app.models.message import Message
+from app.models.tracking import TrackingLink
 from app.repositories.base import BaseRepository
 
 
@@ -114,25 +118,196 @@ class ChatRepository(BaseRepository[Chat]):
         only_red: bool,
         sla_threshold_minutes: int,
         manager_id: Optional[UUID],
+        assigned_user_id: Optional[UUID],
+        unassigned: bool,
+        search_query: Optional[str],
+        tracking_link_id: Optional[UUID],
+        date_from: Optional[datetime],
+        date_to: Optional[datetime],
+        tag_ids: Sequence[UUID],
+        tag_mode: str,
+        lead_statuses: Sequence[str],
+        funnel_state: Optional[str],
     ):
-        if manager_id is not None:
-            # INNER JOIN: only chats that have a lead assigned to this manager.
-            stmt = (
-                stmt.join(
-                    Lead,
-                    (Lead.chat_id == Chat.id) & Lead.is_deleted.is_(False),
+        effective_manager_id = assigned_user_id or manager_id
+        if effective_manager_id is not None:
+            stmt = stmt.where(
+                select(Lead.id)
+                .where(
+                    Lead.chat_id == Chat.id,
+                    Lead.is_deleted.is_(False),
+                    Lead.manager_id == effective_manager_id,
                 )
-                .where(Lead.manager_id == manager_id)
+                .exists()
             )
-
+        if unassigned:
+            stmt = stmt.where(
+                select(Lead.id)
+                .where(
+                    Lead.chat_id == Chat.id,
+                    Lead.is_deleted.is_(False),
+                    Lead.manager_id.is_(None),
+                )
+                .exists()
+            )
         if only_red:
             stmt = stmt.where(self._is_red_expr(sla_threshold_minutes))
         if only_unanswered:
             stmt = stmt.where(self._unanswered_expr())
         if only_unread:
             stmt = stmt.where(self._unread_expr())
+        if tracking_link_id is not None:
+            stmt = stmt.where(Chat.tracking_link_id == tracking_link_id)
+        if search_query:
+            stmt = stmt.where(self._search_expr(search_query))
+        if date_from is not None or date_to is not None:
+            added_at = func.coalesce(Chat.current_cycle_started_at, Chat.created_at)
+            if date_from is not None:
+                stmt = stmt.where(added_at >= date_from)
+            if date_to is not None:
+                stmt = stmt.where(added_at < date_to)
+        if lead_statuses:
+            stmt = stmt.where(
+                select(Lead.id)
+                .join(LeadStatus, LeadStatus.id == Lead.status_id)
+                .where(
+                    Lead.chat_id == Chat.id,
+                    Lead.is_deleted.is_(False),
+                    LeadStatus.code.in_(lead_statuses),
+                )
+                .exists()
+            )
+        if tag_ids:
+            if tag_mode == "all":
+                for tag_id in tag_ids:
+                    stmt = stmt.where(self._tag_exists_expr(tag_id))
+            else:
+                stmt = stmt.where(
+                    select(LeadTag.lead_id)
+                    .join(Lead, Lead.id == LeadTag.lead_id)
+                    .where(
+                        Lead.chat_id == Chat.id,
+                        Lead.is_deleted.is_(False),
+                        LeadTag.tag_id.in_(tag_ids),
+                    )
+                    .exists()
+                )
 
+        if funnel_state:
+            stmt = stmt.where(self._funnel_state_expr(funnel_state))
         return stmt
+
+    @staticmethod
+    def _search_expr(search_query: str) -> ColumnElement:
+        needle = f"%{search_query.strip().lower()}%"
+        if needle == "%%":
+            return True
+        lead_exists = (
+            select(Lead.id)
+            .where(
+                Lead.chat_id == Chat.id,
+                Lead.is_deleted.is_(False),
+                or_(
+                    func.lower(func.coalesce(Lead.name, "")).like(needle),
+                    func.lower(func.coalesce(Lead.phone, "")).like(needle),
+                    func.lower(func.coalesce(Lead.username, "")).like(needle),
+                    func.lower(func.cast(Lead.custom_fields, String)).like(needle),
+                ),
+            )
+            .exists()
+        )
+        tracking_exists = (
+            select(TrackingLink.id)
+            .where(
+                TrackingLink.id == Chat.tracking_link_id,
+                or_(
+                    func.lower(func.coalesce(TrackingLink.code, "")).like(needle),
+                    func.lower(func.coalesce(TrackingLink.ref_code, "")).like(needle),
+                    func.lower(func.coalesce(TrackingLink.title, "")).like(needle),
+                    func.lower(func.coalesce(TrackingLink.buyer_name, "")).like(needle),
+                ),
+            )
+            .exists()
+        )
+        message_exists = (
+            select(Message.id)
+            .where(
+                Message.chat_id == Chat.id,
+                Message.created_at >= func.coalesce(Chat.current_cycle_started_at, Chat.created_at),
+                or_(
+                    func.lower(func.coalesce(Message.body, "")).like(needle),
+                    func.lower(func.coalesce(Message.caption, "")).like(needle),
+                ),
+            )
+            .limit(1)
+            .exists()
+        )
+        return or_(
+            func.lower(func.coalesce(Chat.contact_name, "")).like(needle),
+            func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle),
+            func.lower(func.coalesce(Chat.external_user_id, "")).like(needle),
+            lead_exists,
+            tracking_exists,
+            message_exists,
+        )
+
+    @staticmethod
+    def _funnel_state_expr(funnel_state: str) -> ColumnElement:
+        state_exists = (
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_(None),
+            )
+            .exists()
+        )
+        waiting_exists = (
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_(None),
+                ChatFunnelState.waiting_for_answer.is_(True),
+            )
+            .exists()
+        )
+        completed_exists = (
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_not(None),
+            )
+            .exists()
+        )
+        manual_after_completed = (
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_not(None),
+                Chat.last_user_message_at.is_not(None),
+                Chat.last_user_message_at > ChatFunnelState.completed_at,
+            )
+            .exists()
+        )
+        if funnel_state == "waiting_for_answer":
+            return waiting_exists
+        if funnel_state == "in_funnel":
+            return state_exists
+        if funnel_state == "completed":
+            return completed_exists
+        return (~state_exists & ~completed_exists) | manual_after_completed
+
+    @staticmethod
+    def _tag_exists_expr(tag_id: UUID) -> ColumnElement:
+        return (
+            select(LeadTag.lead_id)
+            .join(Lead, Lead.id == LeadTag.lead_id)
+            .where(
+                Lead.chat_id == Chat.id,
+                Lead.is_deleted.is_(False),
+                LeadTag.tag_id == tag_id,
+            )
+            .exists()
+        )
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -218,8 +393,18 @@ class ChatRepository(BaseRepository[Chat]):
         only_red: bool = False,
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
+        assigned_user_id: Optional[UUID] = None,
+        unassigned: bool = False,
+        search_query: Optional[str] = None,
         bot_id: Optional[UUID] = None,
         bot_ids: Sequence[UUID] | None = None,
+        tracking_link_id: Optional[UUID] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        tag_ids: Sequence[UUID] | None = None,
+        tag_mode: str = "any",
+        lead_statuses: Sequence[str] | None = None,
+        funnel_state: Optional[str] = None,
     ) -> list[Chat]:
         """
         Returns chats matching the given filters, ordered by priority:
@@ -234,6 +419,16 @@ class ChatRepository(BaseRepository[Chat]):
             only_red=only_red,
             sla_threshold_minutes=sla_threshold_minutes,
             manager_id=manager_id,
+            assigned_user_id=assigned_user_id,
+            unassigned=unassigned,
+            search_query=search_query,
+            tracking_link_id=tracking_link_id,
+            date_from=date_from,
+            date_to=date_to,
+            tag_ids=tag_ids or (),
+            tag_mode=tag_mode,
+            lead_statuses=lead_statuses or (),
+            funnel_state=funnel_state,
         )
         stmt = (
             stmt.order_by(
@@ -255,8 +450,18 @@ class ChatRepository(BaseRepository[Chat]):
         only_red: bool = False,
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
+        assigned_user_id: Optional[UUID] = None,
+        unassigned: bool = False,
+        search_query: Optional[str] = None,
         bot_id: Optional[UUID] = None,
         bot_ids: Sequence[UUID] | None = None,
+        tracking_link_id: Optional[UUID] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        tag_ids: Sequence[UUID] | None = None,
+        tag_mode: str = "any",
+        lead_statuses: Sequence[str] | None = None,
+        funnel_state: Optional[str] = None,
     ) -> int:
         """
         Mirror of list() without LIMIT/OFFSET — used for pagination totals.
@@ -264,12 +469,7 @@ class ChatRepository(BaseRepository[Chat]):
         COUNT(DISTINCT Chat.id) is used only when a JOIN is present — adding
         DISTINCT unconditionally hurts performance on the common no-join path.
         """
-        # Use DISTINCT only when the JOIN could produce duplicate chat rows.
-        count_col = (
-            func.count(Chat.id.distinct())
-            if manager_id is not None
-            else func.count(Chat.id)
-        )
+        count_col = func.count(Chat.id)
         stmt = select(count_col).where(
             Chat.project_id == project_id,
             Chat.is_deleted.is_(False),
@@ -287,6 +487,16 @@ class ChatRepository(BaseRepository[Chat]):
             only_red=only_red,
             sla_threshold_minutes=sla_threshold_minutes,
             manager_id=manager_id,
+            assigned_user_id=assigned_user_id,
+            unassigned=unassigned,
+            search_query=search_query,
+            tracking_link_id=tracking_link_id,
+            date_from=date_from,
+            date_to=date_to,
+            tag_ids=tag_ids or (),
+            tag_mode=tag_mode,
+            lead_statuses=lead_statuses or (),
+            funnel_state=funnel_state,
         )
         result = await self.db.execute(stmt)
         return result.scalar_one()
@@ -306,7 +516,22 @@ class ChatRepository(BaseRepository[Chat]):
         This should not happen in normal flow since MessageService validates
         the chat exists before calling this method.
         """
-        values: dict = {"last_message_at": ts, "updated_at": ts}
+        cycle_start = case(
+            (
+                Chat.current_cycle_started_at.is_(None),
+                ts,
+            ),
+            (
+                Chat.current_cycle_started_at > ts,
+                ts,
+            ),
+            else_=Chat.current_cycle_started_at,
+        )
+        values: dict = {
+            "last_message_at": ts,
+            "current_cycle_started_at": cycle_start,
+            "updated_at": ts,
+        }
         if sender_type == SenderType.USER:
             values["last_user_message_at"] = ts
         elif sender_type in {SenderType.MANAGER, SenderType.BOT}:

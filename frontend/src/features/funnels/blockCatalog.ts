@@ -32,7 +32,20 @@ export const universalBlocks: UniversalBlock[] = [
     label: 'Сообщение',
     defaultTitle: 'Сообщение',
     description: 'Отправляет текст, кнопки или персонализированное сообщение.',
-    defaultConfig: { message_type: 'text', text: 'Введите текст сообщения', buttons: [] },
+    defaultConfig: {
+      message_type: 'text',
+      text: 'Введите текст сообщения',
+      buttons: [],
+      messages: [
+        {
+          id: 'msg_1',
+          type: 'text',
+          text: 'Введите текст сообщения',
+          delay_seconds: 0,
+          buttons: [],
+        },
+      ],
+    },
   },
   {
     stepType: 'input',
@@ -44,9 +57,13 @@ export const universalBlocks: UniversalBlock[] = [
       prompt: 'Напишите ответ',
       answer_type: 'text',
       save_to: '',
-      validation: {},
+      wait_for_answer: true,
+      timeout_seconds: 0,
+      max_retries: 2,
+      validation: { type: 'text' },
       retry_message: '',
       choices: [],
+      timeout_target_step_id: '',
     },
   },
   {
@@ -56,9 +73,13 @@ export const universalBlocks: UniversalBlock[] = [
     defaultTitle: 'Условие',
     description: 'Проверяет одно или несколько условий и ведёт по исходам.',
     defaultConfig: {
-      mode: 'all',
-      conditions: [{ type: 'text_contains', field: 'last_answer', operator: 'contains', value: '' }],
-      outcomes: ['true', 'false', 'fallback'],
+      mode: 'simple_yes_no',
+      conditions: [{ id: 'cond_1', source: 'last_answer', field: '', operator: 'equals', value: 'yes' }],
+      outcomes: [
+        { id: 'true', label: 'Да', target_step_id: '' },
+        { id: 'false', label: 'Нет', target_step_id: '' },
+        { id: 'fallback', label: 'Fallback', target_step_id: '' },
+      ],
     },
   },
   {
@@ -67,7 +88,7 @@ export const universalBlocks: UniversalBlock[] = [
     label: 'CRM-действие',
     defaultTitle: 'CRM-действие',
     description: 'Выполняет одно или несколько CRM-действий.',
-    defaultConfig: { actions: [{ type: 'add_note', config: {} }] },
+    defaultConfig: { actions: [{ id: 'action_1', type: 'set_lead_status', status: 'in_progress' }] },
   },
   {
     stepType: 'delay',
@@ -75,7 +96,7 @@ export const universalBlocks: UniversalBlock[] = [
     label: 'Таймер / ожидание',
     defaultTitle: 'Ожидание',
     description: 'Ждёт минуты/часы или обрабатывает таймаут ответа.',
-    defaultConfig: { delay_type: 'minutes', minutes: 10 },
+    defaultConfig: { delay_type: 'wait', delay_seconds: 600, target_step_id: '' },
   },
   {
     stepType: 'operator',
@@ -99,7 +120,7 @@ export const universalBlocks: UniversalBlock[] = [
     label: 'Завершение',
     defaultTitle: 'Завершение',
     description: 'Останавливает сценарий или завершает его с результатом.',
-    defaultConfig: { result: 'stop' },
+    defaultConfig: { result: 'stop', set_lead_status: true },
   },
 ]
 

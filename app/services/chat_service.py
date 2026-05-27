@@ -22,7 +22,7 @@ Sorting order (enforced by repository):
   2. unanswered DESC
   3. last_message_at DESC NULLS LAST
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -33,6 +33,7 @@ from app.core.constants import AuditAction, EntityType, LeadStatusCode
 from app.models.chat import Chat
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
@@ -45,6 +46,7 @@ class ChatService:
         self.db = db
         self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
+        self.funnel_repo = FunnelRepository(db)
         self.lead_repo = LeadRepository(db)
         self.project_repo = ProjectRepository(db)
         self.audit = AuditService(db)
@@ -83,23 +85,36 @@ class ChatService:
         # truthy coercion of unexpected values (e.g. 0, empty string).
         filter_kwargs: dict = dict(
             project_id=project_id,
+            search_query=(filters.q or "").strip() or None,
             only_unread=filters.unread is True,
-            only_unanswered=filters.unanswered is True,
+            only_unanswered=filters.unanswered is True
+            or filters.has_unanswered_incoming is True,
             only_red=filters.is_red is True,
             sla_threshold_minutes=sla,
             manager_id=filters.manager_id,
+            assigned_user_id=filters.assigned_user_id,
+            unassigned=filters.unassigned is True,
             bot_id=filters.bot_id,
             bot_ids=filters.bot_ids,
+            tracking_link_id=filters.tracking_link_id,
+            date_from=filters.date_from,
+            date_to=filters.date_to,
+            tag_ids=filters.tag_ids,
+            tag_mode=filters.tag_mode,
+            lead_statuses=filters.lead_statuses,
+            funnel_state=filters.funnel_state,
         )
 
         # Sequential — AsyncSession does not support concurrent operations.
         chats = await self.chat_repo.list(limit=limit, offset=offset, **filter_kwargs)
         total = await self.chat_repo.count(**filter_kwargs)
 
+        contexts = await self.funnel_repo.get_chat_funnel_contexts(
+            project_id=project_id,
+            chat_ids=[chat.id for chat in chats],
+        )
         items = [
-            ChatOut.model_validate(chat).model_copy(
-                update=self._compute_flags(chat, sla)
-            )
+            self._chat_out(chat, sla, contexts.get(chat.id))
             for chat in chats
         ]
         return items, total
@@ -120,8 +135,15 @@ class ChatService:
                 detail="Chat not found",
             )
 
-        flags = self._compute_flags(chat, project.sla_threshold_minutes)
-        return ChatOut.model_validate(chat).model_copy(update=flags)
+        contexts = await self.funnel_repo.get_chat_funnel_contexts(
+            project_id=project_id,
+            chat_ids=[chat.id],
+        )
+        return self._chat_out(
+            chat,
+            project.sla_threshold_minutes,
+            contexts.get(chat.id),
+        )
 
     async def create_chat(self, project_id: UUID, data: ChatCreate) -> ChatOut:
         project = await self.project_repo.get_active(project_id)
@@ -191,8 +213,7 @@ class ChatService:
                 detail="Could not create chat",
             )
 
-        flags = self._compute_flags(chat, project.sla_threshold_minutes)
-        return ChatOut.model_validate(chat).model_copy(update=flags)
+        return self._chat_out(chat, project.sla_threshold_minutes, None)
 
     async def update_timestamps(
         self, chat_id: UUID, sender_type: str, ts: datetime
@@ -258,9 +279,7 @@ class ChatService:
             },
         )
 
-        return ChatOut.model_validate(updated).model_copy(
-            update=self._compute_flags(updated, 0)
-        )
+        return self._chat_out(updated, 0, None)
 
     async def count_red(self, project_id: UUID) -> int:
         project = await self.project_repo.get_active(project_id)
@@ -311,7 +330,59 @@ class ChatService:
             > sla_threshold_minutes
         )
 
-        return {"unread": unread, "unanswered": unanswered, "is_red": is_red}
+        return {
+            "unread": unread,
+            "unanswered": unanswered,
+            "is_red": is_red,
+            "last_incoming_at": chat.last_user_message_at,
+            "last_outgoing_at": chat.last_manager_reply_at,
+            "has_unanswered_incoming": unanswered,
+        }
+
+    def _chat_out(
+        self,
+        chat: Chat,
+        sla_threshold_minutes: int,
+        funnel_context: dict | None,
+    ) -> ChatOut:
+        flags = self._compute_flags(chat, sla_threshold_minutes)
+        context = dict(funnel_context or {})
+        context.pop("chat_id", None)
+        context["waiting_for_answer"] = bool(context.get("waiting_for_answer"))
+        context["lifecycle_status"] = self._lifecycle_status(chat, context)
+        return ChatOut.model_validate(chat).model_copy(update={**flags, **context})
+
+    @staticmethod
+    def _lifecycle_status(chat: Chat, funnel_context: dict) -> str:
+        if not funnel_context.get("active_funnel_version_id"):
+            return "manual"
+        completed_at = funnel_context.get("completed_at")
+        if completed_at is not None:
+            if chat.last_user_message_at and chat.last_user_message_at > completed_at:
+                return "manual"
+            return "completed"
+        if funnel_context.get("waiting_for_answer"):
+            return "waiting_for_answer"
+        if funnel_context.get("current_step_id"):
+            return "in_progress"
+        return "manual"
+
+    @staticmethod
+    def date_range_to_datetimes(
+        date_from: date | None,
+        date_to: date | None,
+    ) -> tuple[datetime | None, datetime | None]:
+        start = (
+            datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            if date_from is not None
+            else None
+        )
+        end = (
+            datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            if date_to is not None
+            else None
+        )
+        return start, end
 
     @staticmethod
     def _normalize_required(value: str, *, field_name: str) -> str:
