@@ -1,19 +1,32 @@
-import { Search, X } from 'lucide-react'
+import { RefreshCw, Save, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
-import type { ChatDatePreset, ChatFiltersState, FilterOption } from '../types'
+import type {
+  ChatDatePreset,
+  ChatFilterPreset,
+  ChatFiltersState,
+  FilterOption,
+} from '../types'
 
 type ChatFiltersPopoverProps = {
-  isOpen: boolean
-  filters: ChatFiltersState
+  canManageSharedPresets: boolean
   currentUserId: string | null
-  trackingOptions: FilterOption[]
-  tagOptions: FilterOption[]
+  filterPresets: ChatFilterPreset[]
+  filters: ChatFiltersState
+  isOpen: boolean
+  isSelectedPresetDirty: boolean
+  selectedPresetId: string
   statusOptions: FilterOption[]
+  tagOptions: FilterOption[]
+  trackingOptions: FilterOption[]
   userOptions: FilterOption[]
   onApply: (filters: ChatFiltersState) => void
+  onApplyPreset: (preset: ChatFilterPreset) => void
   onClose: () => void
+  onDeletePreset: (presetId: string) => void
   onReset: () => void
+  onSavePreset: (name: string, isShared: boolean, filters: ChatFiltersState) => void
+  onUpdatePreset: (presetId: string) => void
 }
 
 const funnelOptions = [
@@ -67,31 +80,50 @@ function withoutSearch(filters: ChatFiltersState) {
     hasUnansweredIncoming: false,
     isRed: false,
     leadStatuses: [] as string[],
+    quickFilter: '' as const,
     tagIds: [] as string[],
+    tagMode: 'any' as const,
     trackingLinkId: '',
     unassigned: false,
   }
 }
 
 export default function ChatFiltersPopover({
-  isOpen,
-  filters,
+  canManageSharedPresets,
   currentUserId,
-  trackingOptions,
-  tagOptions,
+  filterPresets,
+  filters,
+  isOpen,
+  isSelectedPresetDirty,
+  selectedPresetId,
   statusOptions,
+  tagOptions,
+  trackingOptions,
   userOptions,
   onApply,
+  onApplyPreset,
   onClose,
+  onDeletePreset,
   onReset,
+  onSavePreset,
+  onUpdatePreset,
 }: ChatFiltersPopoverProps) {
   const [draft, setDraft] = useState(filters)
   const [trackingSearch, setTrackingSearch] = useState('')
+  const [presetName, setPresetName] = useState('')
+  const [presetShared, setPresetShared] = useState(false)
+
+  const selectedPreset = useMemo(
+    () => filterPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [filterPresets, selectedPresetId],
+  )
 
   useEffect(() => {
     if (isOpen) {
       setDraft(filters)
       setTrackingSearch('')
+      setPresetName('')
+      setPresetShared(false)
     }
   }, [filters, isOpen])
 
@@ -142,6 +174,16 @@ export default function ChatFiltersPopover({
     onClose()
   }
 
+  const savePreset = () => {
+    const name = presetName.trim()
+    if (!name) {
+      return
+    }
+    onSavePreset(name, presetShared, draft)
+    setPresetName('')
+    setPresetShared(false)
+  }
+
   return (
     <div className="fixed inset-0 z-40 xl:absolute xl:inset-0">
       <button
@@ -168,6 +210,89 @@ export default function ChatFiltersPopover({
             <X size={15} />
           </button>
         </div>
+
+        <section className="mb-4 rounded-xl border border-white/8 bg-white/[0.03] p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-gray-400">Шаблоны</span>
+            {isSelectedPresetDirty && selectedPreset ? (
+              <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">
+                изменён
+              </span>
+            ) : null}
+          </div>
+
+          <select
+            value={selectedPresetId}
+            onChange={(event) => {
+              const preset = filterPresets.find((item) => item.id === event.target.value)
+              if (preset) {
+                setDraft(preset.filters_json)
+                onApplyPreset(preset)
+              }
+            }}
+            className="h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none"
+          >
+            <option value="">Выберите шаблон</option>
+            {filterPresets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.is_shared ? 'Общий · ' : ''}{preset.name}
+              </option>
+            ))}
+          </select>
+
+          {selectedPreset ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onUpdatePreset(selectedPreset.id)}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-white/10 text-xs text-gray-200 transition hover:border-accent-300/40"
+              >
+                <RefreshCw size={13} />
+                Обновить шаблон
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('Удалить шаблон фильтра?')) {
+                    onDeletePreset(selectedPreset.id)
+                  }
+                }}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-white/10 text-xs text-red-100 transition hover:border-red-300/40"
+              >
+                <Trash2 size={13} />
+                Удалить шаблон
+              </button>
+            </div>
+          ) : null}
+
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+            <input
+              value={presetName}
+              onChange={(event) => setPresetName(event.target.value)}
+              placeholder="Название фильтра"
+              className="h-9 min-w-0 rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-100 outline-none placeholder:text-gray-600"
+            />
+            <button
+              type="button"
+              onClick={savePreset}
+              disabled={!presetName.trim()}
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-accent-300/30 px-2 text-xs text-accent-50 transition hover:bg-accent-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Save size={13} />
+              Сохранить фильтр
+            </button>
+          </div>
+          {canManageSharedPresets ? (
+            <label className="mt-2 flex items-center gap-2 text-xs text-gray-300">
+              <input
+                type="checkbox"
+                checked={presetShared}
+                onChange={(event) => setPresetShared(event.target.checked)}
+              />
+              Общий для проекта
+            </label>
+          ) : null}
+        </section>
 
         <div className="space-y-4">
           <section className="space-y-2">
@@ -272,8 +397,32 @@ export default function ChatFiltersPopover({
             label="Теги"
             options={tagOptions}
             values={draft.tagIds}
-            onChange={(tagIds) => setDraft({ ...draft, tagIds })}
+            onChange={(tagIds) =>
+              setDraft({ ...draft, tagIds, tagMode: tagIds.length > 1 ? draft.tagMode : 'any' })
+            }
           />
+
+          {draft.tagIds.length > 1 ? (
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                ['any', 'Любой тег'],
+                ['all', 'Все теги'],
+              ].map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setDraft({ ...draft, tagMode: mode as ChatFiltersState['tagMode'] })}
+                  className={`h-8 rounded-lg border px-2 text-xs transition ${
+                    draft.tagMode === mode
+                      ? 'border-accent-300/45 bg-accent-400/10 text-accent-50'
+                      : 'border-white/10 bg-white/[0.03] text-gray-400 hover:text-gray-100'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <SelectableChipGroup
             emptyLabel="Статусов нет"
@@ -323,6 +472,7 @@ export default function ChatFiltersPopover({
                     : value && value !== '__unassigned__'
                       ? value
                       : '',
+                quickFilter: '',
                 unassigned: value === '__unassigned__',
               })
             }}
@@ -334,7 +484,11 @@ export default function ChatFiltersPopover({
               type="checkbox"
               checked={draft.hasUnansweredIncoming}
               onChange={(event) =>
-                setDraft({ ...draft, hasUnansweredIncoming: event.target.checked })
+                setDraft({
+                  ...draft,
+                  hasUnansweredIncoming: event.target.checked,
+                  quickFilter: '',
+                })
               }
             />
           </label>
@@ -343,9 +497,7 @@ export default function ChatFiltersPopover({
         <div className="mt-5 grid grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={() => {
-              setDraft(withoutSearch(draft))
-            }}
+            onClick={() => setDraft(withoutSearch(draft))}
             className="h-10 rounded-xl border border-white/10 text-sm text-gray-300 transition hover:border-red-300/35 hover:text-red-100"
           >
             Очистить

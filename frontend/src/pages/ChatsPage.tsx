@@ -32,9 +32,17 @@ import ChatList, { Chat } from '../components/ChatList'
 import LeadSidebar from '../components/LeadSidebar'
 import { fetchBots, type Bot as BotRecord } from '../features/bots'
 import {
+  createChatFilterPreset,
+  deleteChatFilterPreset,
+  fetchChatFilterPresets,
+  updateChatFilterPreset,
+} from '../features/chats/api'
+import {
+  type ChatFilterPreset,
   EMPTY_CHAT_FILTERS,
   type ChatDatePreset,
   type ChatFiltersState,
+  type ChatTagMode,
   type FilterOption,
 } from '../features/chats/types'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
@@ -202,9 +210,35 @@ function isFunnelState(value: string | null): value is ChatFiltersState['funnelS
     || value === 'completed' || value === 'manual'
 }
 
+function isTagMode(value: string | null): value is ChatTagMode {
+  return value === 'any' || value === 'all'
+}
+
+function isQuickFilter(value: string | null): value is ChatFiltersState['quickFilter'] {
+  return value === '' || value === 'all' || value === 'mine'
+    || value === 'unanswered' || value === 'hot'
+}
+
+function normalizeChatFilters(value: Partial<ChatFiltersState> | null | undefined) {
+  return {
+    ...EMPTY_CHAT_FILTERS,
+    ...(value ?? {}),
+    q: typeof value?.q === 'string' ? value.q : '',
+    datePreset: isDatePreset(value?.datePreset ?? null) ? value?.datePreset ?? '' : '',
+    tagIds: Array.isArray(value?.tagIds) ? value.tagIds.filter(Boolean) : [],
+    tagMode: isTagMode(value?.tagMode ?? null) ? value?.tagMode ?? 'any' : 'any',
+    leadStatuses: Array.isArray(value?.leadStatuses)
+      ? value.leadStatuses.filter(Boolean)
+      : [],
+    quickFilter: isQuickFilter(value?.quickFilter ?? null) ? value?.quickFilter ?? '' : '',
+  }
+}
+
 function readChatFilters(params: URLSearchParams): ChatFiltersState {
   const datePreset = params.get('date_preset')
   const funnelState = params.get('funnel_state')
+  const tagMode = params.get('tag_mode')
+  const quickFilter = params.get('quick_filter')
   return {
     ...EMPTY_CHAT_FILTERS,
     q: params.get('q') ?? '',
@@ -212,6 +246,7 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     dateFrom: params.get('date_from') ?? '',
     dateTo: params.get('date_to') ?? '',
     tagIds: csvOrAll(params, 'tag_ids'),
+    tagMode: isTagMode(tagMode) ? tagMode : 'any',
     leadStatuses: csvOrAll(params, 'lead_statuses'),
     trackingLinkId: params.get('tracking_link_id') ?? '',
     funnelState: isFunnelState(funnelState) ? funnelState : '',
@@ -219,6 +254,7 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     isRed: params.get('is_red') === 'true',
     assignedUserId: params.get('assigned_user_id') ?? '',
     unassigned: params.get('unassigned') === 'true',
+    quickFilter: isQuickFilter(quickFilter) ? quickFilter : '',
   }
 }
 
@@ -230,6 +266,9 @@ function writeChatFilters(filters: ChatFiltersState) {
   if (filters.dateFrom) params.set('date_from', filters.dateFrom)
   if (filters.dateTo) params.set('date_to', filters.dateTo)
   for (const tagId of filters.tagIds) params.append('tag_ids', tagId)
+  if (filters.tagIds.length > 0 && filters.tagMode !== 'any') {
+    params.set('tag_mode', filters.tagMode)
+  }
   for (const status of filters.leadStatuses) params.append('lead_statuses', status)
   if (filters.trackingLinkId) params.set('tracking_link_id', filters.trackingLinkId)
   if (filters.funnelState) params.set('funnel_state', filters.funnelState)
@@ -237,6 +276,7 @@ function writeChatFilters(filters: ChatFiltersState) {
   if (filters.isRed) params.set('is_red', 'true')
   if (filters.assignedUserId) params.set('assigned_user_id', filters.assignedUserId)
   if (filters.unassigned) params.set('unassigned', 'true')
+  if (filters.quickFilter) params.set('quick_filter', filters.quickFilter)
   return params
 }
 
@@ -264,6 +304,8 @@ export default function ChatsPage() {
   const [tagOptions, setTagOptions] = useState<FilterOption[]>([])
   const [statusOptions, setStatusOptions] = useState<FilterOption[]>([])
   const [userOptions, setUserOptions] = useState<FilterOption[]>([])
+  const [filterPresets, setFilterPresets] = useState<ChatFilterPreset[]>([])
+  const [selectedPresetId, setSelectedPresetId] = useState('')
   const [total, setTotal] = useState(0)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [chatFilters, setChatFilters] = useState<ChatFiltersState>(() =>
@@ -285,6 +327,17 @@ export default function ChatsPage() {
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId],
   )
+  const selectedPreset = useMemo(
+    () => filterPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [filterPresets, selectedPresetId],
+  )
+  const isSelectedPresetDirty = useMemo(() => {
+    if (!selectedPreset) {
+      return false
+    }
+    return JSON.stringify(normalizeChatFilters(selectedPreset.filters_json)) !== JSON.stringify(chatFilters)
+  }, [chatFilters, selectedPreset])
+  const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
 
   const botScopeLabel = useMemo(() => {
     if (!selectedProjectId) {
@@ -371,6 +424,7 @@ export default function ChatsPage() {
       }
       if (debouncedChatFilters.tagIds.length > 0) {
         params.tag_ids = debouncedChatFilters.tagIds.join(',')
+        params.tag_mode = debouncedChatFilters.tagMode
       }
       if (debouncedChatFilters.leadStatuses.length > 0) {
         params.lead_statuses = debouncedChatFilters.leadStatuses.join(',')
@@ -469,6 +523,25 @@ export default function ChatsPage() {
     }
   }, [selectedBotIds, selectedProjectId])
 
+  const loadFilterPresets = useCallback(async () => {
+    if (!selectedProjectId) {
+      setFilterPresets([])
+      setSelectedPresetId('')
+      return
+    }
+    try {
+      const presets = await fetchChatFilterPresets(selectedProjectId)
+      setFilterPresets(
+        presets.map((preset) => ({
+          ...preset,
+          filters_json: normalizeChatFilters(preset.filters_json),
+        })),
+      )
+    } catch {
+      setFilterPresets([])
+    }
+  }, [selectedProjectId])
+
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
     if (showLoader) {
       setIsMessagesLoading(true)
@@ -507,12 +580,13 @@ export default function ChatsPage() {
     void loadChats()
     void loadBots()
     void loadFilterOptions()
+    void loadFilterPresets()
     const timer = window.setInterval(() => {
       void loadChats()
     }, 15000)
 
     return () => window.clearInterval(timer)
-  }, [loadBots, loadChats, loadFilterOptions])
+  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets])
 
   useEffect(() => {
     if (!didMountProjectRef.current) {
@@ -520,6 +594,7 @@ export default function ChatsPage() {
       return
     }
     setChatFilters(EMPTY_CHAT_FILTERS)
+    setSelectedPresetId('')
   }, [selectedProjectId])
 
   useEffect(() => {
@@ -609,6 +684,73 @@ export default function ChatsPage() {
     }
   }
 
+  const handleApplyPreset = (preset: ChatFilterPreset) => {
+    setSelectedPresetId(preset.id)
+    setChatFilters(normalizeChatFilters(preset.filters_json))
+  }
+
+  const handleSavePreset = async (
+    name: string,
+    isShared: boolean,
+    filters: ChatFiltersState = chatFilters,
+  ) => {
+    if (!selectedProjectId) {
+      return
+    }
+    try {
+      const preset = await createChatFilterPreset({
+        project_id: selectedProjectId,
+        name,
+        filters_json: normalizeChatFilters(filters),
+        is_shared: isShared,
+      })
+      const normalizedPreset = {
+        ...preset,
+        filters_json: normalizeChatFilters(preset.filters_json),
+      }
+      setFilterPresets((current) => [
+        normalizedPreset,
+        ...current.filter((item) => item.id !== preset.id),
+      ])
+      setSelectedPresetId(preset.id)
+      notify({ tone: 'success', message: 'Фильтр сохранён.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }
+
+  const handleUpdatePreset = async (presetId: string) => {
+    try {
+      const preset = await updateChatFilterPreset(presetId, {
+        filters_json: normalizeChatFilters(chatFilters),
+      })
+      const normalizedPreset = {
+        ...preset,
+        filters_json: normalizeChatFilters(preset.filters_json),
+      }
+      setFilterPresets((current) =>
+        current.map((item) => (item.id === preset.id ? normalizedPreset : item)),
+      )
+      setSelectedPresetId(preset.id)
+      notify({ tone: 'success', message: 'Шаблон обновлён.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }
+
+  const handleDeletePreset = async (presetId: string) => {
+    try {
+      await deleteChatFilterPreset(presetId)
+      setFilterPresets((current) => current.filter((preset) => preset.id !== presetId))
+      if (selectedPresetId === presetId) {
+        setSelectedPresetId('')
+      }
+      notify({ tone: 'success', message: 'Шаблон удалён.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }
+
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     await sendMessage()
@@ -665,8 +807,11 @@ export default function ChatsPage() {
         <ChatList
           chats={chats}
           currentUserId={user?.id ?? null}
+          canManageSharedPresets={canManageSharedPresets}
           filters={chatFilters}
+          filterPresets={filterPresets}
           getBotLabel={getBotLabel}
+          isSelectedPresetDirty={isSelectedPresetDirty}
           trackingOptions={trackingOptions}
           tagOptions={tagOptions}
           statusOptions={statusOptions}
@@ -676,9 +821,14 @@ export default function ChatsPage() {
           selectedChatId={selectedChatId}
           total={total}
           onFiltersChange={setChatFilters}
+          onApplyPreset={handleApplyPreset}
+          onDeletePreset={(presetId) => void handleDeletePreset(presetId)}
           onResetFilters={() => setChatFilters(EMPTY_CHAT_FILTERS)}
           onRefresh={() => void loadChats()}
+          onSavePreset={(name, isShared) => void handleSavePreset(name, isShared)}
           onSelectChat={setSelectedChatId}
+          onUpdatePreset={(presetId) => void handleUpdatePreset(presetId)}
+          selectedPresetId={selectedPresetId}
         />
       </div>
 

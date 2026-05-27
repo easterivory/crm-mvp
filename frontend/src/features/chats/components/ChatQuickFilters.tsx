@@ -29,7 +29,7 @@ export default function ChatQuickFilters({
 
   const setQuick = (key: 'all' | 'mine' | 'unanswered' | 'hot') => {
     if (key === 'all') {
-      onChange({ ...filters, ...quickFilterBase })
+      onChange({ ...filters, ...quickFilterBase, quickFilter: 'all' })
       return
     }
     if (key === 'mine') {
@@ -40,6 +40,7 @@ export default function ChatQuickFilters({
         ...filters,
         ...quickFilterBase,
         assignedUserId: currentUserId,
+        quickFilter: 'mine',
       })
       return
     }
@@ -48,6 +49,7 @@ export default function ChatQuickFilters({
         ...filters,
         ...quickFilterBase,
         hasUnansweredIncoming: true,
+        quickFilter: 'unanswered',
       })
       return
     }
@@ -55,6 +57,7 @@ export default function ChatQuickFilters({
       ...filters,
       ...quickFilterBase,
       isRed: true,
+      quickFilter: 'hot',
     })
   }
 

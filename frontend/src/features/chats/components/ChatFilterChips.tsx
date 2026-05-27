@@ -52,14 +52,24 @@ export default function ChatFilterChips({
     chips.push({
       key: 'unanswered',
       label: 'Не отвечено',
-      remove: () => onChange({ ...filters, hasUnansweredIncoming: false }),
+      remove: () =>
+        onChange({
+          ...filters,
+          hasUnansweredIncoming: false,
+          quickFilter: filters.quickFilter === 'unanswered' ? '' : filters.quickFilter,
+        }),
     })
   }
   if (filters.isRed) {
     chips.push({
       key: 'hot',
       label: 'Горячие',
-      remove: () => onChange({ ...filters, isRed: false }),
+      remove: () =>
+        onChange({
+          ...filters,
+          isRed: false,
+          quickFilter: filters.quickFilter === 'hot' ? '' : filters.quickFilter,
+        }),
     })
   }
   if (filters.trackingLinkId) {
@@ -79,11 +89,14 @@ export default function ChatFilterChips({
       remove: () => onChange({ ...filters, datePreset: '', dateFrom: '', dateTo: '' }),
     })
   }
-  for (const tagId of filters.tagIds) {
+  if (filters.tagIds.length > 0) {
+    const tagNames = filters.tagIds
+      .map((tagId) => optionLabel(tagOptions, tagId, tagId.slice(0, 8)))
+      .join(', ')
     chips.push({
-      key: `tag-${tagId}`,
-      label: `Тег: ${optionLabel(tagOptions, tagId, tagId.slice(0, 8))}`,
-      remove: () => onChange({ ...filters, tagIds: filters.tagIds.filter((id) => id !== tagId) }),
+      key: 'tags',
+      label: `Теги: ${tagNames} · ${filters.tagMode === 'all' ? 'все' : 'любой'}`,
+      remove: () => onChange({ ...filters, tagIds: [], tagMode: 'any' }),
     })
   }
   for (const status of filters.leadStatuses) {
@@ -108,14 +121,19 @@ export default function ChatFilterChips({
     chips.push({
       key: 'manager',
       label: `Менеджер: ${optionLabel(userOptions, filters.assignedUserId, 'выбран')}`,
-      remove: () => onChange({ ...filters, assignedUserId: '' }),
+      remove: () =>
+        onChange({
+          ...filters,
+          assignedUserId: '',
+          quickFilter: filters.quickFilter === 'mine' ? '' : filters.quickFilter,
+        }),
     })
   }
   if (filters.unassigned) {
     chips.push({
       key: 'unassigned',
       label: 'Без менеджера',
-      remove: () => onChange({ ...filters, unassigned: false }),
+      remove: () => onChange({ ...filters, unassigned: false, quickFilter: '' }),
     })
   }
 

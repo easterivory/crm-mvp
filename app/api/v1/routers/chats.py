@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
+from app.schemas.chat_filter_preset import (
+    ChatFilterPresetCreate,
+    ChatFilterPresetOut,
+    ChatFilterPresetUpdate,
+)
 from app.schemas.common import PaginatedResponse
+from app.services.chat_filter_preset_service import ChatFilterPresetService
 from app.services.chat_service import ChatService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -171,6 +177,60 @@ def _merge_string_values(
             result.append(value)
             seen.add(value)
     return result
+
+
+@router.get("/filter-presets", response_model=list[ChatFilterPresetOut])
+async def list_filter_presets(
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ChatFilterPresetOut]:
+    return await ChatFilterPresetService(db).list_presets(
+        actor=current_user,
+        project_id=project_id,
+    )
+
+
+@router.post(
+    "/filter-presets",
+    response_model=ChatFilterPresetOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_filter_preset(
+    data: ChatFilterPresetCreate,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatFilterPresetOut:
+    return await ChatFilterPresetService(db).create_preset(
+        actor=current_user,
+        data=data,
+    )
+
+
+@router.patch("/filter-presets/{preset_id}", response_model=ChatFilterPresetOut)
+async def update_filter_preset(
+    preset_id: UUID,
+    data: ChatFilterPresetUpdate,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatFilterPresetOut:
+    return await ChatFilterPresetService(db).update_preset(
+        preset_id=preset_id,
+        actor=current_user,
+        data=data,
+    )
+
+
+@router.delete("/filter-presets/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_filter_preset(
+    preset_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await ChatFilterPresetService(db).delete_preset(
+        preset_id=preset_id,
+        actor=current_user,
+    )
 
 
 @router.get("/{chat_id}", response_model=ChatOut)

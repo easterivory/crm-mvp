@@ -17,7 +17,7 @@ export default function ChatSearchBar({
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="Поиск по имени, телефону, username, tg ID"
+        placeholder="Поиск по имени, телефону, username, tg ID, сообщению"
         className="h-10 w-full rounded-xl border border-white/10 bg-background/70 pl-9 pr-9 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/50"
       />
       {value ? (

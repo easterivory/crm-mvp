@@ -6,7 +6,7 @@ import ChatFilterChips from '../features/chats/components/ChatFilterChips'
 import ChatFiltersPopover from '../features/chats/components/ChatFiltersPopover'
 import ChatQuickFilters from '../features/chats/components/ChatQuickFilters'
 import ChatSearchBar from '../features/chats/components/ChatSearchBar'
-import type { ChatFiltersState, FilterOption } from '../features/chats/types'
+import type { ChatFilterPreset, ChatFiltersState, FilterOption } from '../features/chats/types'
 import { countActiveChatFilters } from '../features/chats/types'
 
 export type Chat = {
@@ -43,9 +43,12 @@ export type Chat = {
 
 type ChatListProps = {
   chats: Chat[]
+  canManageSharedPresets: boolean
   currentUserId: string | null
   filters: ChatFiltersState
+  filterPresets: ChatFilterPreset[]
   getBotLabel?: (chat: Chat) => string
+  isSelectedPresetDirty: boolean
   isLoading: boolean
   scopeLabel: string
   selectedChatId: string | null
@@ -54,10 +57,15 @@ type ChatListProps = {
   total: number
   trackingOptions: FilterOption[]
   userOptions: FilterOption[]
+  onApplyPreset: (preset: ChatFilterPreset) => void
+  onDeletePreset: (presetId: string) => void
   onFiltersChange: (filters: ChatFiltersState) => void
   onRefresh: () => void
   onResetFilters: () => void
+  onSavePreset: (name: string, isShared: boolean, filters: ChatFiltersState) => void
   onSelectChat: (chatId: string) => void
+  onUpdatePreset: (presetId: string) => void
+  selectedPresetId: string
 }
 
 function formatDateTime(value: string | null) {
@@ -101,9 +109,12 @@ function getLifecycleLabel(chat: Chat) {
 
 export default function ChatList({
   chats,
+  canManageSharedPresets,
   currentUserId,
   filters,
+  filterPresets,
   getBotLabel,
+  isSelectedPresetDirty,
   isLoading,
   scopeLabel,
   selectedChatId,
@@ -112,10 +123,15 @@ export default function ChatList({
   total,
   trackingOptions,
   userOptions,
+  onApplyPreset,
+  onDeletePreset,
   onFiltersChange,
   onRefresh,
   onResetFilters,
+  onSavePreset,
   onSelectChat,
+  onUpdatePreset,
+  selectedPresetId,
 }: ChatListProps) {
   const [isFiltersOpen, setIsFiltersOpen] = useState(false)
   const activeFilterCount = countActiveChatFilters(filters)
@@ -183,16 +199,24 @@ export default function ChatList({
         ) : null}
 
         <ChatFiltersPopover
+          canManageSharedPresets={canManageSharedPresets}
           currentUserId={currentUserId}
           filters={filters}
+          filterPresets={filterPresets}
           isOpen={isFiltersOpen}
+          isSelectedPresetDirty={isSelectedPresetDirty}
           statusOptions={statusOptions}
           tagOptions={tagOptions}
           trackingOptions={trackingOptions}
           userOptions={userOptions}
+          selectedPresetId={selectedPresetId}
+          onApplyPreset={onApplyPreset}
+          onDeletePreset={onDeletePreset}
           onApply={onFiltersChange}
           onClose={() => setIsFiltersOpen(false)}
           onReset={onResetFilters}
+          onSavePreset={onSavePreset}
+          onUpdatePreset={onUpdatePreset}
         />
       </div>
 

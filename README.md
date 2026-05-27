@@ -99,6 +99,20 @@ while `GET /bots?project_id=<id>` filters by the selected project.
 The frontend will later move this selection into a global ProjectSelector and
 BotSelector.
 
+## Chat Filters
+
+`GET /api/v1/chats` combines filter groups with AND semantics. Search (`q`)
+matches lead name, phone, Telegram username, Telegram chat/user IDs, tracking
+link title/code/buyer, and message body/caption through DB-side predicates.
+
+Tag filters support `tag_ids[]=...` or comma-separated `tag_ids`, plus
+`tag_mode=any|all` (`any` by default). Status lists are OR-ed inside the status
+group; tags use the selected tag mode inside the tag group.
+
+Saved chat filter templates live in `chat_filter_presets`. Users see their own
+presets and shared project presets. Admins and super admins may create shared
+project presets; managers/operators keep private presets.
+
 ## Non-Goals for MVP
 
 The following are intentionally excluded from this phase:

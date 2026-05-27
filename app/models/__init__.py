@@ -10,6 +10,7 @@ from app.models.role import Role  # noqa: F401
 from app.models.lead_status import LeadStatus  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.chat import Chat  # noqa: F401
+from app.models.chat_filter_preset import ChatFilterPreset  # noqa: F401
 from app.models.message import Message  # noqa: F401
 from app.models.tag import Tag  # noqa: F401
 from app.models.lead import Lead, LeadTag  # noqa: F401
@@ -36,6 +37,7 @@ __all__ = [
     "LeadStatus",
     "User",
     "Chat",
+    "ChatFilterPreset",
     "Message",
     "Tag",
     "Lead",

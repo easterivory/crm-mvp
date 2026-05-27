@@ -6,6 +6,8 @@ export type ChatFunnelStateFilter =
   | 'manual'
 
 export type ChatDatePreset = '' | 'today' | 'yesterday' | '7d' | '30d' | 'custom'
+export type ChatTagMode = 'any' | 'all'
+export type ChatQuickFilter = '' | 'all' | 'mine' | 'unanswered' | 'hot'
 
 export type ChatFiltersState = {
   q: string
@@ -13,6 +15,7 @@ export type ChatFiltersState = {
   dateFrom: string
   dateTo: string
   tagIds: string[]
+  tagMode: ChatTagMode
   leadStatuses: string[]
   trackingLinkId: string
   funnelState: ChatFunnelStateFilter
@@ -20,11 +23,23 @@ export type ChatFiltersState = {
   isRed: boolean
   assignedUserId: string
   unassigned: boolean
+  quickFilter: ChatQuickFilter
 }
 
 export type FilterOption = {
   id: string
   label: string
+}
+
+export type ChatFilterPreset = {
+  id: string
+  project_id: string
+  user_id: string
+  name: string
+  filters_json: ChatFiltersState
+  is_shared: boolean
+  created_at: string
+  updated_at: string
 }
 
 export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
@@ -33,6 +48,7 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   dateFrom: '',
   dateTo: '',
   tagIds: [],
+  tagMode: 'any',
   leadStatuses: [],
   trackingLinkId: '',
   funnelState: '',
@@ -40,13 +56,14 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   isRed: false,
   assignedUserId: '',
   unassigned: false,
+  quickFilter: '',
 }
 
 export function countActiveChatFilters(filters: ChatFiltersState) {
   return [
     filters.q,
     filters.dateFrom || filters.dateTo,
-    ...filters.tagIds,
+    filters.tagIds.length > 0 ? 'tags' : '',
     ...filters.leadStatuses,
     filters.trackingLinkId,
     filters.funnelState,
