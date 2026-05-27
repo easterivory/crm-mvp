@@ -6,99 +6,85 @@ type ChatQuickFiltersProps = {
   onChange: (filters: ChatFiltersState) => void
 }
 
-const statusLabels = {
-  new: 'Новые',
-  in_progress: 'В работе',
-} as const
+const quickFilterBase = {
+  assignedUserId: '',
+  hasUnansweredIncoming: false,
+  isRed: false,
+  unassigned: false,
+}
 
 export default function ChatQuickFilters({
   filters,
   currentUserId,
   onChange,
 }: ChatQuickFiltersProps) {
-  const toggleStatus = (status: keyof typeof statusLabels) => {
-    const enabled = filters.leadStatuses.includes(status)
+  const activeQuick =
+    filters.isRed
+      ? 'hot'
+      : filters.hasUnansweredIncoming
+        ? 'unanswered'
+        : currentUserId && filters.assignedUserId === currentUserId
+          ? 'mine'
+          : 'all'
+
+  const setQuick = (key: 'all' | 'mine' | 'unanswered' | 'hot') => {
+    if (key === 'all') {
+      onChange({ ...filters, ...quickFilterBase })
+      return
+    }
+    if (key === 'mine') {
+      if (!currentUserId) {
+        return
+      }
+      onChange({
+        ...filters,
+        ...quickFilterBase,
+        assignedUserId: currentUserId,
+      })
+      return
+    }
+    if (key === 'unanswered') {
+      onChange({
+        ...filters,
+        ...quickFilterBase,
+        hasUnansweredIncoming: true,
+      })
+      return
+    }
     onChange({
       ...filters,
-      leadStatuses: enabled
-        ? filters.leadStatuses.filter((item) => item !== status)
-        : [...filters.leadStatuses.filter((item) => !Object.keys(statusLabels).includes(item)), status],
+      ...quickFilterBase,
+      isRed: true,
     })
   }
 
   const items = [
-    {
-      key: 'unanswered',
-      label: 'Не отвечено',
-      active: filters.hasUnansweredIncoming,
-      onClick: () => onChange({ ...filters, hasUnansweredIncoming: !filters.hasUnansweredIncoming }),
-    },
-    {
-      key: 'new',
-      label: 'Новые',
-      active: filters.leadStatuses.includes('new'),
-      onClick: () => toggleStatus('new'),
-    },
-    {
-      key: 'in_progress',
-      label: 'В работе',
-      active: filters.leadStatuses.includes('in_progress'),
-      onClick: () => toggleStatus('in_progress'),
-    },
-    {
-      key: 'completed',
-      label: 'Завершили воронку',
-      active: filters.funnelState === 'completed',
-      onClick: () =>
-        onChange({
-          ...filters,
-          funnelState: filters.funnelState === 'completed' ? '' : 'completed',
-        }),
-    },
-    {
-      key: 'unassigned',
-      label: 'Без менеджера',
-      active: filters.unassigned,
-      onClick: () =>
-        onChange({
-          ...filters,
-          unassigned: !filters.unassigned,
-          assignedUserId: '',
-        }),
-    },
-    {
-      key: 'mine',
-      label: 'Мои чаты',
-      active: Boolean(currentUserId && filters.assignedUserId === currentUserId),
-      disabled: !currentUserId,
-      onClick: () =>
-        currentUserId
-          ? onChange({
-              ...filters,
-              assignedUserId: filters.assignedUserId === currentUserId ? '' : currentUserId,
-              unassigned: false,
-            })
-          : undefined,
-    },
-  ]
+    { key: 'all', label: 'Все' },
+    { key: 'mine', label: 'Мои', disabled: !currentUserId },
+    { key: 'unanswered', label: 'Не отвечено' },
+    { key: 'hot', label: 'Горячие' },
+  ] as const
 
   return (
     <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
-      {items.map((item) => (
-        <button
-          key={item.key}
-          type="button"
-          disabled={item.disabled}
-          onClick={item.onClick}
-          className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
-            item.active
-              ? 'border-primary-300/45 bg-primary-400/15 text-primary-50'
-              : 'border-white/10 bg-white/[0.03] text-gray-400 hover:border-accent-300/35 hover:text-gray-100'
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
+      {items.map((item) => {
+        const isActive = activeQuick === item.key
+        return (
+          <button
+            key={item.key}
+            type="button"
+            disabled={'disabled' in item ? item.disabled : false}
+            onClick={() => setQuick(item.key)}
+            className={`h-8 shrink-0 rounded-full border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+              isActive
+                ? 'border-primary-300/45 bg-primary-400/15 text-primary-50'
+                : 'border-white/10 bg-white/[0.03] text-gray-400 hover:border-accent-300/35 hover:text-gray-100'
+            }`}
+          >
+            {item.label}
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { X } from 'lucide-react'
 
 import type { ChatFiltersState, FilterOption } from '../types'
 
-type ActiveFilterChipsProps = {
+type ChatFilterChipsProps = {
   filters: ChatFiltersState
   trackingOptions: FilterOption[]
   tagOptions: FilterOption[]
@@ -19,11 +19,18 @@ const funnelLabels: Record<string, string> = {
   manual: 'Ручная обработка',
 }
 
+const dateLabels: Record<string, string> = {
+  today: 'Сегодня',
+  yesterday: 'Вчера',
+  '7d': '7 дней',
+  '30d': '30 дней',
+}
+
 function optionLabel(options: FilterOption[], id: string, fallback: string) {
   return options.find((option) => option.id === id)?.label ?? fallback
 }
 
-export default function ActiveFilterChips({
+export default function ChatFilterChips({
   filters,
   trackingOptions,
   tagOptions,
@@ -31,13 +38,13 @@ export default function ActiveFilterChips({
   userOptions,
   onChange,
   onReset,
-}: ActiveFilterChipsProps) {
+}: ChatFilterChipsProps) {
   const chips: Array<{ key: string; label: string; remove: () => void }> = []
 
-  if (filters.q) {
+  if (filters.q.trim()) {
     chips.push({
       key: 'q',
-      label: `Поиск: ${filters.q}`,
+      label: `Поиск: ${filters.q.trim()}`,
       remove: () => onChange({ ...filters, q: '' }),
     })
   }
@@ -46,6 +53,13 @@ export default function ActiveFilterChips({
       key: 'unanswered',
       label: 'Не отвечено',
       remove: () => onChange({ ...filters, hasUnansweredIncoming: false }),
+    })
+  }
+  if (filters.isRed) {
+    chips.push({
+      key: 'hot',
+      label: 'Горячие',
+      remove: () => onChange({ ...filters, isRed: false }),
     })
   }
   if (filters.trackingLinkId) {
@@ -60,8 +74,8 @@ export default function ActiveFilterChips({
       key: 'date',
       label:
         filters.datePreset && filters.datePreset !== 'custom'
-          ? `Дата: ${filters.datePreset === '7d' ? '7 дней' : filters.datePreset === '30d' ? '30 дней' : filters.datePreset === 'today' ? 'Сегодня' : 'Вчера'}`
-          : `Дата: ${filters.dateFrom || '...'} — ${filters.dateTo || '...'}`,
+          ? `Дата: ${dateLabels[filters.datePreset]}`
+          : `Дата: ${filters.dateFrom || '...'} - ${filters.dateTo || '...'}`,
       remove: () => onChange({ ...filters, datePreset: '', dateFrom: '', dateTo: '' }),
     })
   }

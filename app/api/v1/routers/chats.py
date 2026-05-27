@@ -40,13 +40,19 @@ async def list_chats(
     unassigned: Optional[bool] = Query(default=None),
     bot_id: Optional[UUID] = Query(default=None),
     bot_ids: Optional[str] = Query(default=None),
+    bot_ids_array: Optional[list[UUID]] = Query(default=None, alias="bot_ids[]"),
     q: Optional[str] = Query(default=None, max_length=255),
     tracking_link_id: Optional[UUID] = Query(default=None),
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
     tag_ids: Optional[str] = Query(default=None),
+    tag_ids_array: Optional[list[UUID]] = Query(default=None, alias="tag_ids[]"),
     tag_mode: str = Query(default="any", pattern="^(any|all)$"),
     lead_statuses: Optional[str] = Query(default=None),
+    lead_statuses_array: Optional[list[str]] = Query(
+        default=None,
+        alias="lead_statuses[]",
+    ),
     funnel_state: Optional[str] = Query(
         default=None,
         pattern="^(in_funnel|waiting_for_answer|completed|manual)$",
@@ -87,13 +93,19 @@ async def list_chats(
         assigned_user_id=assigned_user_id,
         unassigned=unassigned,
         bot_id=bot_id,
-        bot_ids=_parse_bot_ids(bot_ids),
+        bot_ids=_merge_uuid_values(_parse_bot_ids(bot_ids), bot_ids_array),
         tracking_link_id=tracking_link_id,
         date_from=date_from_dt,
         date_to=date_to_dt,
-        tag_ids=_parse_uuid_csv(tag_ids, "tag_ids"),
+        tag_ids=_merge_uuid_values(
+            _parse_uuid_csv(tag_ids, "tag_ids"),
+            tag_ids_array,
+        ),
         tag_mode=tag_mode,
-        lead_statuses=_parse_string_csv(lead_statuses),
+        lead_statuses=_merge_string_values(
+            _parse_string_csv(lead_statuses),
+            lead_statuses_array,
+        ),
         funnel_state=funnel_state,
     )
     items, total = await ChatService(db).get_chat_list(
@@ -132,6 +144,33 @@ def _parse_string_csv(value: Optional[str]) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _merge_uuid_values(
+    csv_values: list[UUID],
+    array_values: Optional[list[UUID]],
+) -> list[UUID]:
+    result: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in [*csv_values, *(array_values or [])]:
+        if value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result
+
+
+def _merge_string_values(
+    csv_values: list[str],
+    array_values: Optional[list[str]],
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_value in [*csv_values, *(array_values or [])]:
+        value = raw_value.strip()
+        if value and value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result
 
 
 @router.get("/{chat_id}", response_model=ChatOut)

@@ -25,16 +25,18 @@ import {
   useState,
 } from 'react'
 import axios from 'axios'
+import { useSearchParams } from 'react-router-dom'
 
 import api from '../api/client'
-import ChatList, {
-  Chat,
-  ChatAdvancedFilters,
-  ChatFilter,
-  FilterOption,
-} from '../components/ChatList'
+import ChatList, { Chat } from '../components/ChatList'
 import LeadSidebar from '../components/LeadSidebar'
 import { fetchBots, type Bot as BotRecord } from '../features/bots'
+import {
+  EMPTY_CHAT_FILTERS,
+  type ChatDatePreset,
+  type ChatFiltersState,
+  type FilterOption,
+} from '../features/chats/types'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
 import { ConfirmDialog, Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
@@ -81,15 +83,14 @@ type LeadStatus = {
   name: string
 }
 
+type UserOptionRecord = {
+  id: string
+  name: string
+  email: string
+}
+
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
-const EMPTY_ADVANCED_FILTERS: ChatAdvancedFilters = {
-  trackingLinkId: '',
-  dateFrom: '',
-  dateTo: '',
-  tagIds: [],
-  leadStatuses: [],
-}
 
 const mediaLabels: Record<string, string> = {
   animation: 'Анимация',
@@ -182,7 +183,76 @@ function formatFileSize(value: number | null) {
   return `${(value / (1024 * 1024)).toFixed(1)} МБ`
 }
 
+function csvOrAll(params: URLSearchParams, key: string) {
+  const values = params.getAll(key).filter(Boolean)
+  if (values.length > 0) {
+    return values
+  }
+  const csv = params.get(key)
+  return csv ? csv.split(',').map((item) => item.trim()).filter(Boolean) : []
+}
+
+function isDatePreset(value: string | null): value is ChatDatePreset {
+  return value === '' || value === 'today' || value === 'yesterday' || value === '7d'
+    || value === '30d' || value === 'custom'
+}
+
+function isFunnelState(value: string | null): value is ChatFiltersState['funnelState'] {
+  return value === '' || value === 'in_funnel' || value === 'waiting_for_answer'
+    || value === 'completed' || value === 'manual'
+}
+
+function readChatFilters(params: URLSearchParams): ChatFiltersState {
+  const datePreset = params.get('date_preset')
+  const funnelState = params.get('funnel_state')
+  return {
+    ...EMPTY_CHAT_FILTERS,
+    q: params.get('q') ?? '',
+    datePreset: isDatePreset(datePreset) ? datePreset : '',
+    dateFrom: params.get('date_from') ?? '',
+    dateTo: params.get('date_to') ?? '',
+    tagIds: csvOrAll(params, 'tag_ids'),
+    leadStatuses: csvOrAll(params, 'lead_statuses'),
+    trackingLinkId: params.get('tracking_link_id') ?? '',
+    funnelState: isFunnelState(funnelState) ? funnelState : '',
+    hasUnansweredIncoming: params.get('has_unanswered_incoming') === 'true',
+    isRed: params.get('is_red') === 'true',
+    assignedUserId: params.get('assigned_user_id') ?? '',
+    unassigned: params.get('unassigned') === 'true',
+  }
+}
+
+function writeChatFilters(filters: ChatFiltersState) {
+  const params = new URLSearchParams()
+  const q = filters.q.trim()
+  if (q) params.set('q', q)
+  if (filters.datePreset) params.set('date_preset', filters.datePreset)
+  if (filters.dateFrom) params.set('date_from', filters.dateFrom)
+  if (filters.dateTo) params.set('date_to', filters.dateTo)
+  for (const tagId of filters.tagIds) params.append('tag_ids', tagId)
+  for (const status of filters.leadStatuses) params.append('lead_statuses', status)
+  if (filters.trackingLinkId) params.set('tracking_link_id', filters.trackingLinkId)
+  if (filters.funnelState) params.set('funnel_state', filters.funnelState)
+  if (filters.hasUnansweredIncoming) params.set('has_unanswered_incoming', 'true')
+  if (filters.isRed) params.set('is_red', 'true')
+  if (filters.assignedUserId) params.set('assigned_user_id', filters.assignedUserId)
+  if (filters.unassigned) params.set('unassigned', 'true')
+  return params
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedValue(value), delayMs)
+    return () => window.clearTimeout(timer)
+  }, [delayMs, value])
+
+  return debouncedValue
+}
+
 export default function ChatsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const user = useAuthStore((state) => state.user)
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
   const notify = useNotificationStore((state) => state.notify)
@@ -193,12 +263,13 @@ export default function ChatsPage() {
   const [trackingOptions, setTrackingOptions] = useState<FilterOption[]>([])
   const [tagOptions, setTagOptions] = useState<FilterOption[]>([])
   const [statusOptions, setStatusOptions] = useState<FilterOption[]>([])
+  const [userOptions, setUserOptions] = useState<FilterOption[]>([])
   const [total, setTotal] = useState(0)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
-  const [activeFilter, setActiveFilter] = useState<ChatFilter>('all')
-  const [advancedFilters, setAdvancedFilters] = useState<ChatAdvancedFilters>(
-    EMPTY_ADVANCED_FILTERS,
+  const [chatFilters, setChatFilters] = useState<ChatFiltersState>(() =>
+    readChatFilters(searchParams),
   )
+  const debouncedChatFilters = useDebouncedValue(chatFilters, 350)
   const [draft, setDraft] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
@@ -208,6 +279,7 @@ export default function ChatsPage() {
   const [isResettingChat, setIsResettingChat] = useState(false)
   const [isLeadOpen, setIsLeadOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const didMountProjectRef = useRef(false)
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
@@ -245,6 +317,10 @@ export default function ChatsPage() {
     [botById],
   )
 
+  useEffect(() => {
+    setSearchParams(writeChatFilters(chatFilters), { replace: true })
+  }, [chatFilters, setSearchParams])
+
   const loadChats = useCallback(async () => {
     if (!selectedProjectId) {
       setChats([])
@@ -269,29 +345,38 @@ export default function ChatsPage() {
         params.bot_ids = selectedBotIds.join(',')
       }
 
-      if (activeFilter === 'mine' && user?.id) {
-        params.manager_id = user.id
+      if (debouncedChatFilters.q.trim()) {
+        params.q = debouncedChatFilters.q.trim()
       }
-      if (activeFilter === 'unanswered') {
-        params.unanswered = true
+      if (debouncedChatFilters.hasUnansweredIncoming) {
+        params.has_unanswered_incoming = true
       }
-      if (activeFilter === 'red') {
+      if (debouncedChatFilters.isRed) {
         params.is_red = true
       }
-      if (advancedFilters.trackingLinkId) {
-        params.tracking_link_id = advancedFilters.trackingLinkId
+      if (debouncedChatFilters.assignedUserId) {
+        params.assigned_user_id = debouncedChatFilters.assignedUserId
       }
-      if (advancedFilters.dateFrom) {
-        params.date_from = advancedFilters.dateFrom
+      if (debouncedChatFilters.unassigned) {
+        params.unassigned = true
       }
-      if (advancedFilters.dateTo) {
-        params.date_to = advancedFilters.dateTo
+      if (debouncedChatFilters.trackingLinkId) {
+        params.tracking_link_id = debouncedChatFilters.trackingLinkId
       }
-      if (advancedFilters.tagIds.length > 0) {
-        params.tag_ids = advancedFilters.tagIds.join(',')
+      if (debouncedChatFilters.dateFrom) {
+        params.date_from = debouncedChatFilters.dateFrom
       }
-      if (advancedFilters.leadStatuses.length > 0) {
-        params.lead_statuses = advancedFilters.leadStatuses.join(',')
+      if (debouncedChatFilters.dateTo) {
+        params.date_to = debouncedChatFilters.dateTo
+      }
+      if (debouncedChatFilters.tagIds.length > 0) {
+        params.tag_ids = debouncedChatFilters.tagIds.join(',')
+      }
+      if (debouncedChatFilters.leadStatuses.length > 0) {
+        params.lead_statuses = debouncedChatFilters.leadStatuses.join(',')
+      }
+      if (debouncedChatFilters.funnelState) {
+        params.funnel_state = debouncedChatFilters.funnelState
       }
 
       const { data } = await api.get<PaginatedResponse<Chat>>('/chats', { params })
@@ -308,7 +393,7 @@ export default function ChatsPage() {
     } finally {
       setIsChatsLoading(false)
     }
-  }, [activeFilter, advancedFilters, selectedBotIds, selectedProjectId, user?.id])
+  }, [debouncedChatFilters, selectedBotIds, selectedProjectId])
 
   const loadBots = useCallback(async () => {
     if (!selectedProjectId) {
@@ -327,11 +412,12 @@ export default function ChatsPage() {
       setTrackingOptions([])
       setTagOptions([])
       setStatusOptions([])
+      setUserOptions([])
       return
     }
 
     try {
-      const [trackingResponse, tagsResponse, statusesResponse] = await Promise.all([
+      const [trackingResponse, tagsResponse, statusesResponse, usersResponse] = await Promise.all([
         api.get<PaginatedResponse<TrackingLinkOption>>('/tracking/links', {
           params: {
             project_id: selectedProjectId,
@@ -348,6 +434,13 @@ export default function ChatsPage() {
           },
         }),
         api.get<LeadStatus[]>('/leads/statuses'),
+        api.get<PaginatedResponse<UserOptionRecord>>('/users', {
+          params: {
+            project_id: selectedProjectId,
+            limit: 100,
+            offset: 0,
+          },
+        }),
       ])
       setTrackingOptions(
         trackingResponse.data.items.map((link) => ({
@@ -362,10 +455,17 @@ export default function ChatsPage() {
           label: status.name,
         })),
       )
+      setUserOptions(
+        usersResponse.data.items.map((item) => ({
+          id: item.id,
+          label: item.name || item.email,
+        })),
+      )
     } catch {
       setTrackingOptions([])
       setTagOptions([])
       setStatusOptions([])
+      setUserOptions([])
     }
   }, [selectedBotIds, selectedProjectId])
 
@@ -415,7 +515,11 @@ export default function ChatsPage() {
   }, [loadBots, loadChats, loadFilterOptions])
 
   useEffect(() => {
-    setAdvancedFilters(EMPTY_ADVANCED_FILTERS)
+    if (!didMountProjectRef.current) {
+      didMountProjectRef.current = true
+      return
+    }
+    setChatFilters(EMPTY_CHAT_FILTERS)
   }, [selectedProjectId])
 
   useEffect(() => {
@@ -559,21 +663,20 @@ export default function ChatsPage() {
         }`}
       >
         <ChatList
-          activeFilter={activeFilter}
           chats={chats}
           currentUserId={user?.id ?? null}
+          filters={chatFilters}
           getBotLabel={getBotLabel}
-          advancedFilters={advancedFilters}
           trackingOptions={trackingOptions}
           tagOptions={tagOptions}
           statusOptions={statusOptions}
+          userOptions={userOptions}
           isLoading={isChatsLoading}
           scopeLabel={botScopeLabel}
           selectedChatId={selectedChatId}
           total={total}
-          onFilterChange={setActiveFilter}
-          onAdvancedFiltersChange={setAdvancedFilters}
-          onResetAdvancedFilters={() => setAdvancedFilters(EMPTY_ADVANCED_FILTERS)}
+          onFiltersChange={setChatFilters}
+          onResetFilters={() => setChatFilters(EMPTY_CHAT_FILTERS)}
           onRefresh={() => void loadChats()}
           onSelectChat={setSelectedChatId}
         />
