@@ -3,11 +3,10 @@ LeadService — lead lifecycle: status transitions and contact info updates.
 
 Status transition rules
 -----------------------
-- Transitions FROM a terminal status (is_final=True) are forbidden.
-  Once a lead is 'qualified' or 'lost', its status cannot be changed.
+- Manual status changes are allowed from any current status, including
+  terminal/final statuses, so operators can correct lead cards after a funnel.
 - The target status must exist in the lead_statuses reference table.
-- There is no fixed transition graph beyond the terminal-status guard;
-  any non-final status can move to any other status.
+- There is no fixed transition graph for manual status changes.
 
 Audit log
 ---------
@@ -72,10 +71,9 @@ class LeadService:
         Changes lead.status_id with validation:
 
         1. Lead must exist in this project and not be soft-deleted.
-        2. Current status must not be terminal (is_final=True).
-        3. Target status must exist in lead_statuses.
-        4. If target == current, returns early (idempotent, no write).
-        5. Writes audit log entry with before/after status codes.
+        2. Target status must exist in lead_statuses.
+        3. If target == current, returns early (idempotent, no write).
+        4. Writes audit log entry with before/after status codes.
         """
         # ── Fetch lead ────────────────────────────────────────────────────────
         lead = await self.lead_repo.get_active(lead_id, project_id)
@@ -96,16 +94,6 @@ class LeadService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Current lead status is missing from reference table",
-            )
-
-        # ── Guard: terminal status cannot transition ───────────────────────────
-        if current_status.is_final:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Cannot change status: lead is in terminal status "
-                    f"'{current_status.code}'. No further transitions are allowed."
-                ),
             )
 
         # ── Fetch target status ───────────────────────────────────────────────
@@ -148,8 +136,11 @@ class LeadService:
             meta={
                 "from_status_id": str(current_status.id),
                 "from_status_code": current_status.code,
+                "from_status_is_final": current_status.is_final,
                 "to_status_id": str(new_status.id),
                 "to_status_code": new_status.code,
+                "to_status_is_final": new_status.is_final,
+                "manual_override": current_status.is_final,
             },
         )
 

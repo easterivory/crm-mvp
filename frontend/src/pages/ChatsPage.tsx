@@ -1026,6 +1026,7 @@ export default function ChatsPage() {
           hasActiveScope={Boolean(selectedProjectId)}
           currentUserId={user?.id ?? null}
           onResetRequest={() => setIsResetConfirmOpen(true)}
+          onLeadStatusChanged={() => void loadChats()}
         />
       </div>
 
@@ -1039,6 +1040,7 @@ export default function ChatsPage() {
               hasActiveScope={Boolean(selectedProjectId)}
               currentUserId={user?.id ?? null}
               onResetRequest={() => setIsResetConfirmOpen(true)}
+              onLeadStatusChanged={() => void loadChats()}
             />
           </div>
         </Modal>

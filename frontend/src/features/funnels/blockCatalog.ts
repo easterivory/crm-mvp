@@ -6,6 +6,9 @@ export type BlockMenuItem = {
   label: string
   defaultTitle: string
   defaultConfig?: Record<string, unknown>
+  description?: string
+  disabled?: boolean
+  badge?: string
 }
 
 export type UniversalBlock = BlockMenuItem & {
@@ -14,6 +17,7 @@ export type UniversalBlock = BlockMenuItem & {
 
 export type BlockMenuGroup = {
   title: string
+  accent?: 'cyan' | 'violet' | 'emerald' | 'amber' | 'rose'
   items: BlockMenuItem[]
 }
 
@@ -126,8 +130,76 @@ export const universalBlocks: UniversalBlock[] = [
 
 export const blockGroups: BlockMenuGroup[] = [
   {
-    title: 'Универсальные блоки',
-    items: universalBlocks,
+    title: 'Базовые',
+    accent: 'cyan',
+    items: universalBlocks.filter((item) =>
+      ['generic_trigger', 'generic_message', 'generic_input', 'generic_delay'].includes(item.blockType),
+    ),
+  },
+  {
+    title: 'Логика',
+    accent: 'amber',
+    items: [
+      universalBlocks.find((item) => item.blockType === 'generic_condition') as UniversalBlock,
+      {
+        stepType: 'condition',
+        blockType: 'reserved_randomizer',
+        label: 'Рандомайзер',
+        defaultTitle: 'Рандомайзер',
+        description: 'Случайно распределяет пользователей по веткам.',
+        disabled: true,
+        badge: 'Скоро',
+      },
+      {
+        stepType: 'condition',
+        blockType: 'reserved_split',
+        label: 'Развилка',
+        defaultTitle: 'Развилка',
+        description: 'Явная ручная развилка на несколько сценариев.',
+        disabled: true,
+        badge: 'Скоро',
+      },
+    ],
+  },
+  {
+    title: 'CRM',
+    accent: 'emerald',
+    items: universalBlocks.filter((item) =>
+      ['generic_crm_action', 'generic_operator', 'generic_finish'].includes(item.blockType),
+    ),
+  },
+  {
+    title: 'Нейросеть',
+    accent: 'violet',
+    items: [
+      {
+        stepType: 'action',
+        blockType: 'reserved_ai_reply',
+        label: 'Сгенерировать ответ',
+        defaultTitle: 'Сгенерировать ответ',
+        description: 'AI-runtime будет подключён позже.',
+        disabled: true,
+        badge: 'Скоро',
+      },
+      {
+        stepType: 'condition',
+        blockType: 'reserved_ai_text_analysis',
+        label: 'Анализ текста',
+        defaultTitle: 'Анализ текста',
+        description: 'Анализ ответа пользователя в будущей версии.',
+        disabled: true,
+        badge: 'Скоро',
+      },
+      {
+        stepType: 'condition',
+        blockType: 'reserved_ai_sentiment',
+        label: 'Определение эмоции',
+        defaultTitle: 'Определение эмоции',
+        description: 'Классификация настроения без runtime на этом этапе.',
+        disabled: true,
+        badge: 'Скоро',
+      },
+    ],
   },
 ]
 

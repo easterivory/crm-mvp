@@ -77,6 +77,7 @@ type LeadSidebarProps = {
   hasActiveScope: boolean
   currentUserId: string | null
   onResetRequest?: () => void
+  onLeadStatusChanged?: () => void
 }
 
 function formatDateTime(value: string | null) {
@@ -117,6 +118,7 @@ export default function LeadSidebar({
   hasActiveScope,
   currentUserId,
   onResetRequest,
+  onLeadStatusChanged,
 }: LeadSidebarProps) {
   const { selectedProjectId } = useProjectBotSelection()
   const [lead, setLead] = useState<Lead | null>(null)
@@ -266,6 +268,7 @@ export default function LeadSidebar({
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
+      onLeadStatusChanged?.()
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -430,7 +433,7 @@ export default function LeadSidebar({
                   <select
                     value={lead.status_id}
                     onChange={(event) => void handleStatusChange(event.target.value)}
-                    disabled={isUpdatingStatus || currentStatus?.is_final}
+                    disabled={isUpdatingStatus}
                     className="w-full appearance-none rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {statuses.map((status) => (
@@ -450,7 +453,7 @@ export default function LeadSidebar({
 
               {currentStatus?.is_final ? (
                 <p className="mt-3 text-xs text-amber-300">
-                  Этот лид находится в финальном статусе.
+                  Финальный статус можно исправить вручную при необходимости.
                 </p>
               ) : null}
             </div>

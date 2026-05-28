@@ -64,7 +64,7 @@ async def change_status(
 
     Validates:
       - lead exists in the current project (404 otherwise)
-      - current status is not terminal / is_final=True (422 otherwise)
+      - manual change is allowed even when the current status is final
       - target status exists in lead_statuses table (404 otherwise)
       - no concurrent status change occurred (409 Conflict if race detected)
 

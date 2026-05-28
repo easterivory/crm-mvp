@@ -3,9 +3,9 @@ import {
   CheckCircle2,
   CopyPlus,
   LoaderCircle,
+  PlayCircle,
   Save,
   Send,
-  ShieldAlert,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -21,14 +21,17 @@ import {
   validateFunnelVersion,
 } from '../api'
 import type { BlockMenuItem } from '../blockCatalog'
+import {
+  normalizeButtons,
+  normalizeMessages,
+  normalizeOutcomes,
+  syncManagedEdgesForStep,
+} from '../funnelConfig'
 import type { Funnel, FunnelEdge, FunnelGraph, FunnelStep, FunnelVersion } from '../types'
-import AddBlockMenu from './AddBlockMenu'
-import EdgeSettingsPanel from './EdgeSettingsPanel'
-import FieldMappingsPanel from './FieldMappingsPanel'
+import BlockLibrary from './BlockLibrary'
 import FunnelCanvas from './FunnelCanvas'
+import InspectorPanel from './InspectorPanel'
 import PublishReviewModal from './PublishReviewModal'
-import PushRulesPanel from './PushRulesPanel'
-import StepSettingsPanel from './StepSettingsPanel'
 
 type FunnelBuilderProps = {
   funnelId: string
@@ -50,6 +53,64 @@ function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
     push_rules: graph.push_rules,
     field_mappings: graph.field_mappings,
   }
+}
+
+function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
+  if (step.step_type === 'condition') {
+    return {
+      ...step,
+      config_json: {
+        ...step.config_json,
+        outcomes: normalizeOutcomes(step.config_json.outcomes).map((outcome) =>
+          `condition:${outcome.id}` === sourceKey ? { ...outcome, target_step_id: '' } : outcome,
+        ),
+      },
+    }
+  }
+
+  if (step.step_type === 'message') {
+    return {
+      ...step,
+      config_json: {
+        ...step.config_json,
+        messages: normalizeMessages(step.config_json).map((message) => ({
+          ...message,
+          buttons: message.buttons.map((button) =>
+            `message:${message.id}:button:${button.id}` === sourceKey
+              ? { ...button, target_step_id: '' }
+              : button,
+          ),
+        })),
+      },
+    }
+  }
+
+  if (step.step_type === 'input') {
+    if (sourceKey === 'input:timeout') {
+      return {
+        ...step,
+        config_json: { ...step.config_json, timeout_target_step_id: '' },
+      }
+    }
+    return {
+      ...step,
+      config_json: {
+        ...step.config_json,
+        choices: normalizeButtons(step.config_json.choices).map((choice) =>
+          `choice:${choice.id}` === sourceKey ? { ...choice, target_step_id: '' } : choice,
+        ),
+      },
+    }
+  }
+
+  if (step.step_type === 'delay' && sourceKey === 'delay:target') {
+    return {
+      ...step,
+      config_json: { ...step.config_json, target_step_id: '' },
+    }
+  }
+
+  return step
 }
 
 export default function FunnelBuilder({
@@ -125,16 +186,23 @@ export default function FunnelBuilder({
   )
 
   const updateStep = useCallback((stepId: string, patch: Partial<FunnelStep>) => {
-    setGraph((current) =>
-      current
-        ? {
-            ...current,
-            steps: current.steps.map((step) =>
-              step.id === stepId ? { ...step, ...patch } : step,
-            ),
-          }
-        : current,
-    )
+    setGraph((current) => {
+      if (!current) {
+        return current
+      }
+      const steps = current.steps.map((step) =>
+        step.id === stepId ? { ...step, ...patch } : step,
+      )
+      const changedStep = steps.find((step) => step.id === stepId)
+      return {
+        ...current,
+        steps,
+        edges:
+          changedStep && patch.config_json
+            ? syncManagedEdgesForStep(current.edges, changedStep)
+            : current.edges,
+      }
+    })
   }, [])
 
   const deleteStep = (stepId: string) => {
@@ -195,7 +263,19 @@ export default function FunnelBuilder({
 
   const removeEdge = useCallback((edgeId: string) => {
     setGraph((current) =>
-      current ? { ...current, edges: current.edges.filter((edge) => edge.id !== edgeId) } : current,
+      current
+        ? {
+            ...current,
+            steps: current.steps.map((step) => {
+              const edge = current.edges.find((item) => item.id === edgeId)
+              const sourceKey = edge?.condition_json?.source_key
+              return edge?.from_step_id === step.id && typeof sourceKey === 'string'
+                ? clearManagedTarget(step, sourceKey)
+                : step
+            }),
+            edges: current.edges.filter((edge) => edge.id !== edgeId),
+          }
+        : current,
     )
     setSelectedEdgeId((current) => (current === edgeId ? null : current))
   }, [])
@@ -208,9 +288,14 @@ export default function FunnelBuilder({
       if (!current) {
         return current
       }
-      const exists = current.edges.some(
-        (edge) => edge.from_step_id === fromStepId && edge.to_step_id === toStepId,
-      )
+      const exists = current.edges.some((edge) => {
+        const edgeOutcome = edge.condition_json?.outcome ?? edge.condition_json?.label ?? null
+        return (
+          edge.from_step_id === fromStepId &&
+          edge.to_step_id === toStepId &&
+          (outcome ? edgeOutcome === outcome : !edgeOutcome)
+        )
+      })
       if (exists) {
         return current
       }
@@ -232,6 +317,12 @@ export default function FunnelBuilder({
                 return label === outcome ? { ...outcomeConfig, target_step_id: toStepId } : item
               }),
             },
+          }
+        }
+        if (step.step_type === 'input' && outcome === 'Таймаут') {
+          return {
+            ...step,
+            config_json: { ...step.config_json, timeout_target_step_id: toStepId },
           }
         }
         if (step.step_type === 'input' && Array.isArray(step.config_json.choices)) {
@@ -256,12 +347,8 @@ export default function FunnelBuilder({
             ...step,
             config_json: {
               ...step.config_json,
-              messages: messages.map((message, messageIndex) => {
-                if (
-                  messageIndex !== messages.length - 1 ||
-                  typeof message !== 'object' ||
-                  message === null
-                ) {
+              messages: messages.map((message) => {
+                if (typeof message !== 'object' || message === null) {
                   return message
                 }
                 const messageConfig = message as Record<string, unknown>
@@ -468,9 +555,9 @@ export default function FunnelBuilder({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto xl:overflow-hidden">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-white/8 bg-surface/90 px-4 py-3 shadow-card">
-        <div className="flex min-w-0 items-center gap-3">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/8 bg-[#090d18]/80">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/8 bg-[#0d1324]/95 px-4 py-3 shadow-card">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <button
             type="button"
             onClick={onBack}
@@ -479,45 +566,71 @@ export default function FunnelBuilder({
           >
             <ArrowLeft size={16} />
           </button>
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold text-white">{funnel.name}</h1>
-            <p className="text-sm text-gray-500">
-              {selectedVersion?.status === 'published'
-                ? 'Опубликована'
-                : selectedVersion?.status === 'archived'
-                  ? 'Архив'
-                  : 'Черновик'}{' '}
-              · {selectedVersion?.is_active_for_bot ? 'Активна на боте' : 'Не активна'} ·{' '}
-              {graph.steps.length} блоков · {graph.edges.length} связей
-            </p>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h1 className="truncate text-lg font-semibold text-white">{funnel.name}</h1>
+              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-xs text-gray-300">
+                {selectedVersion?.status === 'published'
+                  ? 'Опубликована'
+                  : selectedVersion?.status === 'archived'
+                    ? 'Архив'
+                    : 'Черновик'}
+              </span>
+              {selectedVersion?.is_active_for_bot ? (
+                <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-xs text-emerald-100">
+                  Активна
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <span>{graph.steps.length} блоков</span>
+              <span>{graph.edges.length} связей</span>
+              <select
+                value={activeVersionId}
+                onChange={(event) => void switchVersion(event.target.value)}
+                className="h-7 rounded-lg border border-white/10 bg-background/70 px-2 text-xs text-gray-100 outline-none"
+              >
+                {versions.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    v{version.version_number} ·{' '}
+                    {version.status === 'draft'
+                      ? 'черновик'
+                      : version.status === 'published'
+                        ? version.is_active_for_bot
+                          ? 'активна'
+                          : 'опубликована'
+                        : 'архив'}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void createDraftFromCurrent()}
+                className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-xs text-gray-300 transition hover:border-accent-300/35"
+              >
+                <CopyPlus size={13} />
+                Черновик
+              </button>
+              <button
+                type="button"
+                onClick={() => void makeCurrentActive()}
+                className="inline-flex h-7 items-center gap-1 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2 text-xs text-emerald-50 transition hover:border-emerald-300/40"
+              >
+                <CheckCircle2 size={13} />
+                Сделать активной
+              </button>
+            </div>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <select
-            value={activeVersionId}
-            onChange={(event) => void switchVersion(event.target.value)}
-            className="h-9 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none"
-          >
-            {versions.map((version) => (
-              <option key={version.id} value={version.id}>
-                v{version.version_number} ·{' '}
-                {version.status === 'draft'
-                  ? 'черновик'
-                  : version.status === 'published'
-                    ? version.is_active_for_bot
-                      ? 'активна'
-                      : 'опубликована'
-                    : 'архив'}
-              </option>
-            ))}
-          </select>
+        <div className="flex shrink-0 flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => void createDraftFromCurrent()}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 transition hover:border-accent-300/35"
+            onClick={() => void validate()}
+            disabled={isValidating}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <CopyPlus size={15} />
-            Черновик из версии
+            {isValidating ? <LoaderCircle size={15} className="animate-spin" /> : <PlayCircle size={15} />}
+            Тестировать
           </button>
           <button
             type="button"
@@ -530,28 +643,11 @@ export default function FunnelBuilder({
           </button>
           <button
             type="button"
-            onClick={() => void validate()}
-            disabled={isValidating}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isValidating ? <LoaderCircle size={15} className="animate-spin" /> : <ShieldAlert size={15} />}
-            Проверить
-          </button>
-          <button
-            type="button"
             onClick={() => void openPublish()}
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
           >
             <Send size={15} />
-            Проверка публикации
-          </button>
-          <button
-            type="button"
-            onClick={() => void makeCurrentActive()}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 text-sm text-emerald-50 transition hover:border-emerald-300/40"
-          >
-            <CheckCircle2 size={15} />
-            Сделать активной
+            Опубликовать
           </button>
         </div>
       </header>
@@ -560,57 +656,43 @@ export default function FunnelBuilder({
         Редактор воронок удобнее на компьютере.
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[260px_minmax(0,1fr)_330px] xl:overflow-hidden">
-        <AddBlockMenu onAdd={addBlock} />
-        <FunnelCanvas
+      <div className="grid min-h-0 flex-1 xl:grid-cols-[280px_minmax(0,1fr)_320px] xl:overflow-hidden">
+        <BlockLibrary onAdd={addBlock} />
+        <div className="min-h-0 overflow-hidden">
+          <FunnelCanvas
+            steps={graph.steps}
+            edges={graph.edges}
+            selectedStepId={selectedStepId}
+            selectedEdgeId={selectedEdgeId}
+            onSelectStep={setSelectedStepId}
+            onSelectEdge={setSelectedEdgeId}
+            onMoveStep={(stepId, position) =>
+              updateStep(stepId, { position_x: position.x, position_y: position.y })
+            }
+            onConnect={connectSteps}
+            onDeleteStep={deleteStep}
+          />
+        </div>
+        <InspectorPanel
+          selectedStep={selectedStep}
+          selectedEdge={selectedEdge}
           steps={graph.steps}
           edges={graph.edges}
-          selectedStepId={selectedStepId}
-          selectedEdgeId={selectedEdgeId}
-          onSelectStep={setSelectedStepId}
+          fieldMappings={graph.field_mappings}
+          pushRules={graph.push_rules}
+          hasPublishedVersion={Boolean(funnel.published_version_id)}
+          onUpdateStep={updateStep}
+          onDeleteStep={deleteStep}
+          onUpdateEdge={updateEdge}
+          onRemoveEdge={removeEdge}
           onSelectEdge={setSelectedEdgeId}
-          onMoveStep={(stepId, position) =>
-            updateStep(stepId, { position_x: position.x, position_y: position.y })
+          onFieldMappingsChange={(field_mappings) =>
+            setGraph((current) => (current ? { ...current, field_mappings } : current))
           }
-          onConnect={connectSteps}
+          onPushRulesChange={(push_rules) =>
+            setGraph((current) => (current ? { ...current, push_rules } : current))
+          }
         />
-        <div className="min-h-0 space-y-3 overflow-y-auto rounded-lg border border-white/8 bg-surface/90 p-3">
-          <StepSettingsPanel
-            step={selectedStep}
-            steps={graph.steps}
-            onUpdate={updateStep}
-            onDelete={deleteStep}
-          />
-          <FieldMappingsPanel
-            selectedStep={selectedStep}
-            mappings={graph.field_mappings}
-            onChange={(field_mappings) =>
-              setGraph((current) => (current ? { ...current, field_mappings } : current))
-            }
-          />
-          <PushRulesPanel
-            selectedStep={selectedStep}
-            steps={graph.steps}
-            rules={graph.push_rules}
-            onChange={(push_rules) =>
-              setGraph((current) => (current ? { ...current, push_rules } : current))
-            }
-          />
-          <EdgeSettingsPanel
-            selectedEdge={selectedEdge}
-            edges={graph.edges}
-            steps={graph.steps}
-            onUpdate={updateEdge}
-            onRemove={removeEdge}
-            onSelect={setSelectedEdgeId}
-          />
-          {funnel.published_version_id ? (
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-500/10 p-3 text-sm text-emerald-50">
-              <CheckCircle2 size={15} />
-              Есть опубликованная версия
-            </div>
-          ) : null}
-        </div>
       </div>
 
       {isPublishOpen ? (

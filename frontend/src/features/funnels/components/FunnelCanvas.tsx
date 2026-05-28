@@ -14,14 +14,15 @@ import {
 } from '@xyflow/react'
 import { useCallback, useMemo } from 'react'
 
+import { edgeLabel } from '../funnelConfig'
 import type { FunnelEdge, FunnelStep } from '../types'
-import StepNode, {
+import FunnelNode, {
   DEFAULT_SOURCE_HANDLE_ID,
   TARGET_HANDLE_ID,
   outcomeFromSourceHandle,
   sourceHandleId,
-  type StepFlowNode,
-} from './StepNode'
+  type FunnelFlowNode,
+} from './FunnelNode'
 
 type FunnelCanvasProps = {
   steps: FunnelStep[]
@@ -32,18 +33,14 @@ type FunnelCanvasProps = {
   onSelectEdge: (edgeId: string | null) => void
   onMoveStep: (stepId: string, position: { x: number; y: number }) => void
   onConnect: (fromStepId: string, toStepId: string, outcome: string | null) => void
+  onDeleteStep: (stepId: string) => void
 }
 
 type FlowEdge = Edge<Record<string, unknown>, 'smoothstep'>
 
 const nodeTypes = {
-  funnelStep: StepNode,
+  funnelStep: FunnelNode,
 } satisfies NodeTypes
-
-function edgeOutcome(edge: FunnelEdge) {
-  const raw = edge.condition_json?.outcome ?? edge.condition_json?.label
-  return typeof raw === 'string' && raw.trim() ? raw.trim() : null
-}
 
 function FunnelCanvasInner({
   steps,
@@ -54,24 +51,25 @@ function FunnelCanvasInner({
   onSelectEdge,
   onMoveStep,
   onConnect,
+  onDeleteStep,
 }: FunnelCanvasProps) {
-  const flowNodes = useMemo<StepFlowNode[]>(
+  const flowNodes = useMemo<FunnelFlowNode[]>(
     () =>
       steps.map((step) => ({
         id: step.id,
         type: 'funnelStep',
         position: { x: step.position_x, y: step.position_y },
-        data: { step },
+        data: { step, onDelete: onDeleteStep },
         selected: selectedStepId === step.id,
         draggable: true,
       })),
-    [selectedStepId, steps],
+    [onDeleteStep, selectedStepId, steps],
   )
 
   const flowEdges = useMemo<FlowEdge[]>(
     () =>
       edges.map((edge) => {
-        const outcome = edgeOutcome(edge)
+        const outcome = edgeLabel(edge)
         return {
           id: edge.id,
           type: 'smoothstep',
@@ -96,7 +94,7 @@ function FunnelCanvasInner({
   )
 
   const handleNodesChange = useCallback(
-    (changes: NodeChange<StepFlowNode>[]) => {
+    (changes: NodeChange<FunnelFlowNode>[]) => {
       for (const change of changes) {
         if (change.type === 'position' && change.position) {
           onMoveStep(change.id, change.position)
@@ -125,7 +123,7 @@ function FunnelCanvasInner({
   )
 
   return (
-    <div className="relative h-full min-h-[680px] overflow-hidden rounded-lg border border-white/8 bg-[#0b1020]">
+    <div className="relative h-full min-h-[620px] overflow-hidden bg-[#0b1020]">
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
@@ -153,7 +151,7 @@ function FunnelCanvasInner({
         connectionRadius={28}
         deleteKeyCode={null}
         fitView
-        fitViewOptions={{ padding: 0.24, includeHiddenNodes: false }}
+        fitViewOptions={{ padding: 0.18, includeHiddenNodes: false }}
         minZoom={0.25}
         maxZoom={1.7}
         nodesDraggable
@@ -162,7 +160,7 @@ function FunnelCanvasInner({
         edgesReconnectable={false}
         className="funnel-react-flow"
       >
-        <Background color="rgba(255,255,255,0.12)" gap={32} variant={BackgroundVariant.Lines} />
+        <Background color="rgba(255,255,255,0.16)" gap={28} variant={BackgroundVariant.Dots} />
         <Controls
           showInteractive={false}
           className="!border !border-white/10 !bg-background/80 !shadow-card"
