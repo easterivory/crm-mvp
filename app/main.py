@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.routers import (
     assignments,
     bots,
+    broadcasts,
     chats,
     funnels,
     health,
@@ -60,6 +61,7 @@ app.include_router(leads.router, prefix=_v1_prefix)
 app.include_router(assignments.router, prefix=_v1_prefix)
 app.include_router(tags.router, prefix=_v1_prefix)
 app.include_router(bots.router, prefix=_v1_prefix)
+app.include_router(broadcasts.router, prefix=_v1_prefix)
 app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)

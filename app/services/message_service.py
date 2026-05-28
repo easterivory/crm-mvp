@@ -53,6 +53,8 @@ class MessageService:
         chat_id: UUID,
         project_id: UUID,
         data: MessageCreate,
+        *,
+        send_to_telegram: bool = True,
     ) -> MessageOut:
         """
         Atomically (within one DB transaction):
@@ -151,12 +153,13 @@ class MessageService:
         if data.sender_type == SenderType.MANAGER:
             await self.bot_repo.disable_bot_for_chat(chat_id)
 
-        await self._send_to_telegram_if_needed(
-            project_id=project_id,
-            bot_id=chat.bot_id,
-            external_chat_id=chat.external_chat_id,
-            data=data,
-        )
+        if send_to_telegram:
+            await self._send_to_telegram_if_needed(
+                project_id=project_id,
+                bot_id=chat.bot_id,
+                external_chat_id=chat.external_chat_id,
+                data=data,
+            )
 
         return MessageOut.model_validate(message)
 

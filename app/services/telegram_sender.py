@@ -26,18 +26,18 @@ class TelegramSenderService:
         external_chat_id: str,
         text: str,
         reply_markup: dict | None = None,
-    ) -> None:
+    ) -> bool:
         token = (
             await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
             if bot_id is not None
             else await self.bot_repo.get_active_bot_token(project_id)
         )
         if not token:
-            return
+            return False
 
         message_text = text.strip()
         if not message_text:
-            return
+            return False
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload: dict = {"chat_id": external_chat_id, "text": message_text}
@@ -48,6 +48,7 @@ class TelegramSenderService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
+                return True
         except httpx.HTTPStatusError as exc:
             logger.error(
                 "Telegram sendMessage failed: project_id=%s chat_id=%s "
@@ -57,6 +58,7 @@ class TelegramSenderService:
                 exc.response.status_code,
                 exc.response.text[:500],
             )
+            return False
         except httpx.HTTPError as exc:
             logger.error(
                 "Telegram sendMessage failed: project_id=%s chat_id=%s error_type=%s",
@@ -64,6 +66,7 @@ class TelegramSenderService:
                 external_chat_id,
                 exc.__class__.__name__,
             )
+            return False
         except Exception:
             logger.exception(
                 "Unexpected error while sending Telegram message: "
@@ -71,6 +74,7 @@ class TelegramSenderService:
                 project_id,
                 external_chat_id,
             )
+            return False
 
     async def set_webhook(
         self,

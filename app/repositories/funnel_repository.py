@@ -126,6 +126,35 @@ class FunnelRepository(BaseRepository[Funnel]):
         )
         return result.scalar_one_or_none()
 
+    async def get_published_version_for_broadcast(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+        funnel_id: UUID,
+        version_id: Optional[UUID] = None,
+    ) -> tuple[Optional[Funnel], Optional[FunnelVersion]]:
+        stmt = (
+            select(Funnel, FunnelVersion)
+            .join(FunnelVersion, FunnelVersion.funnel_id == Funnel.id)
+            .where(
+                Funnel.id == funnel_id,
+                Funnel.project_id == project_id,
+                Funnel.bot_id == bot_id,
+                Funnel.status == "active",
+                FunnelVersion.status == "published",
+            )
+            .order_by(FunnelVersion.published_at.desc().nullslast())
+            .limit(1)
+        )
+        if version_id is not None:
+            stmt = stmt.where(FunnelVersion.id == version_id)
+        result = await self.db.execute(stmt)
+        row = result.first()
+        if row is None:
+            return None, None
+        return row[0], row[1]
+
     async def get_latest_draft(self, funnel_id: UUID) -> Optional[FunnelVersion]:
         result = await self.db.execute(
             select(FunnelVersion)

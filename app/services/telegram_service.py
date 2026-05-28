@@ -47,6 +47,7 @@ from app.schemas.message import MessageCreate, MessageOut
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
 from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
+from app.services.broadcast_service import BroadcastService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
@@ -63,6 +64,7 @@ class TelegramService:
         self.tracking_repo = TrackingRepository(db)
         self.message_service = MessageService(db)
         self.bot_engine = BotEngineService(db)
+        self.broadcasts = BroadcastService(db)
         self.funnel_runtime = FunnelRuntimeService(db)
         self.telegram_sender = TelegramSenderService(db)
         self.audit = AuditService(db)
@@ -590,6 +592,16 @@ class TelegramService:
                 ),
             ),
         )
+
+        if callback_query.data and callback_query.data.startswith("bcf:"):
+            handled = await self.broadcasts.process_start_funnel_callback(
+                project_id=project_id,
+                bot_id=bot_id,
+                chat_id=chat.id,
+                callback_data=callback_query.data,
+            )
+            if handled:
+                return
 
         await self._process_callback_runtime_or_legacy(
             chat=chat,
