@@ -97,3 +97,17 @@ class ProjectRepository(BaseRepository[Project]):
             )
         )
         return result.rowcount > 0
+
+    async def restore(self, id: UUID) -> Optional[Project]:
+        result = await self.db.execute(
+            update(Project)
+            .where(Project.id == id, Project.is_deleted.is_(True))
+            .values(
+                status="active",
+                is_deleted=False,
+                updated_at=func.now(),
+            )
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_any_by_id(id)

@@ -19,6 +19,8 @@ import {
 } from 'lucide-react'
 import {
   FormEvent,
+  ClipboardEvent,
+  DragEvent,
   KeyboardEvent,
   useCallback,
   useEffect,
@@ -333,6 +335,7 @@ export default function ChatsPage() {
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
   const [attachment, setAttachment] = useState<ChatAttachmentUpload | null>(null)
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null)
+  const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
@@ -356,6 +359,7 @@ export default function ChatsPage() {
     return JSON.stringify(normalizeChatFilters(selectedPreset.filters_json)) !== JSON.stringify(chatFilters)
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
+  const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
 
   const botScopeLabel = useMemo(() => {
     if (!selectedProjectId) {
@@ -648,6 +652,19 @@ export default function ChatsPage() {
   }, [messages])
 
   useEffect(() => {
+    if (!highlightedMessageId) {
+      return undefined
+    }
+    const timer = window.setTimeout(() => {
+      document.getElementById(`message-${highlightedMessageId}`)?.scrollIntoView({
+        block: 'center',
+        behavior: 'smooth',
+      })
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [highlightedMessageId, messages])
+
+  useEffect(() => {
     if (!selectedChatId || !selectedChat?.last_message_at) {
       return undefined
     }
@@ -736,6 +753,26 @@ export default function ChatsPage() {
     } finally {
       setIsUploadingAttachment(false)
     }
+  }
+
+  const handleAttachmentDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDraggingAttachment(false)
+    const file = event.dataTransfer.files?.[0]
+    if (file) {
+      void handleAttachmentSelected(file)
+    }
+  }
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const file = Array.from(event.clipboardData.files).find((item) =>
+      item.type.startsWith('image/'),
+    )
+    if (!file) {
+      return
+    }
+    event.preventDefault()
+    void handleAttachmentSelected(file)
   }
 
   const handleResetChat = async () => {
@@ -915,7 +952,27 @@ export default function ChatsPage() {
         />
       </div>
 
-      <div className={`${selectedChat ? 'flex' : 'hidden xl:flex'} h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}>
+      <div
+        className={`${selectedChat ? 'flex' : 'hidden xl:flex'} relative h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}
+        onDragEnter={(event) => {
+          if (event.dataTransfer.types.includes('Files')) {
+            event.preventDefault()
+            setIsDraggingAttachment(true)
+          }
+        }}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes('Files')) {
+            event.preventDefault()
+            setIsDraggingAttachment(true)
+          }
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setIsDraggingAttachment(false)
+          }
+        }}
+        onDrop={handleAttachmentDrop}
+      >
         <header className="flex min-h-[96px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-4 sm:px-5">
           {selectedChat ? (
             <>
@@ -1003,16 +1060,21 @@ export default function ChatsPage() {
 
                 return (
                   <div
+                    id={`message-${message.id}`}
                     key={message.id}
                     className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[72%] rounded-2xl border px-3 py-2 shadow-sm ${
+                      className={`max-w-[72%] rounded-2xl border px-3 py-2 shadow-sm transition ${
                         isOutgoing
                           ? isBot
                             ? 'border-accent-300/25 bg-accent-400/10 text-accent-50 shadow-glow-accent'
                             : 'border-primary-300/25 bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary'
                           : 'border-white/10 bg-white/[0.055] text-gray-100'
+                      } ${
+                        highlightedMessageId === message.id
+                          ? 'ring-2 ring-amber-300/70'
+                          : ''
                       }`}
                     >
                       <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
@@ -1136,6 +1198,7 @@ export default function ChatsPage() {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
+              onPaste={handleComposerPaste}
               className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 disabled:bg-background/40"
               placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
               disabled={!selectedChat || isSending}
@@ -1151,6 +1214,15 @@ export default function ChatsPage() {
             </button>
           </div>
         </form>
+        {isDraggingAttachment ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/75 backdrop-blur-sm">
+            <div className="rounded-2xl border border-dashed border-accent-300/70 bg-surface/95 px-6 py-5 text-center shadow-glow-accent">
+              <Paperclip size={24} className="mx-auto mb-2 text-accent-200" />
+              <p className="text-sm font-semibold text-white">Отпустите файл, чтобы прикрепить</p>
+              <p className="mt-1 text-xs text-gray-400">Фото, видео или документ</p>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="hidden h-full min-h-0 xl:block">

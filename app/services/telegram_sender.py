@@ -1,8 +1,8 @@
 """
 TelegramSenderService - outgoing Telegram Bot API client.
 
-Network/API failures are logged but never raised to callers. A temporary
-Telegram outage must not roll back local CRM writes.
+Network/API failures are logged and returned as None. Callers decide whether
+the local CRM write should be persisted or rejected for that workflow.
 """
 import json
 import logging
@@ -36,14 +36,60 @@ class TelegramSenderService:
         external_chat_id: str,
         text: str,
         reply_markup: dict | None = None,
-    ) -> bool:
+    ) -> dict[str, Any] | None:
         token = await self._get_token(project_id, bot_id)
         if not token:
-            return False
+            return None
 
         message_text = text.strip()
         if not message_text:
-            return False
+            return None
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload: dict[str, Any] = {"chat_id": external_chat_id, "text": message_text}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if data.get("ok") is not True or not isinstance(data.get("result"), dict):
+                    logger.error(
+                        "Telegram sendMessage failed: project_id=%s chat_id=%s response=%s",
+                        project_id,
+                        external_chat_id,
+                        str(data)[:500],
+                    )
+                    return None
+                return data["result"]
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Telegram sendMessage failed: project_id=%s chat_id=%s "
+                "status_code=%s response=%s",
+                project_id,
+                external_chat_id,
+                exc.response.status_code,
+                exc.response.text[:500],
+            )
+            return None
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Telegram sendMessage failed: project_id=%s chat_id=%s error_type=%s",
+                project_id,
+                external_chat_id,
+                exc.__class__.__name__,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "Unexpected error while sending Telegram message: "
+                "project_id=%s chat_id=%s",
+                project_id,
+                external_chat_id,
+            )
+            return None
 
     async def send_photo(
         self,
@@ -215,43 +261,6 @@ class TelegramSenderService:
                 external_chat_id,
             )
             return None
-
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload: dict = {"chat_id": external_chat_id, "text": message_text}
-        if reply_markup:
-            payload["reply_markup"] = reply_markup
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                return True
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "Telegram sendMessage failed: project_id=%s chat_id=%s "
-                "status_code=%s response=%s",
-                project_id,
-                external_chat_id,
-                exc.response.status_code,
-                exc.response.text[:500],
-            )
-            return False
-        except httpx.HTTPError as exc:
-            logger.error(
-                "Telegram sendMessage failed: project_id=%s chat_id=%s error_type=%s",
-                project_id,
-                external_chat_id,
-                exc.__class__.__name__,
-            )
-            return False
-        except Exception:
-            logger.exception(
-                "Unexpected error while sending Telegram message: "
-                "project_id=%s chat_id=%s",
-                project_id,
-                external_chat_id,
-            )
-            return False
 
     async def set_webhook(
         self,

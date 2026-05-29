@@ -142,6 +142,12 @@ class MessageService:
                 chat=chat,
                 data=data,
             )
+        elif send_to_telegram and self._is_outgoing_text(data):
+            data = await self._send_text_to_telegram(
+                project_id=project_id,
+                chat=chat,
+                data=data,
+            )
 
         # ── 1.2 Insert inside SAVEPOINT — race-condition safe idempotency ─────
         # If a concurrent request inserted the same external_message_id between
@@ -198,14 +204,6 @@ class MessageService:
 
         if data.sender_type == SenderType.MANAGER:
             await self.bot_repo.disable_bot_for_chat(chat_id)
-
-        if send_to_telegram:
-            await self._send_to_telegram_if_needed(
-                project_id=project_id,
-                bot_id=chat.bot_id,
-                external_chat_id=chat.external_chat_id,
-                data=data,
-            )
 
         return MessageOut.model_validate(message)
 
@@ -293,27 +291,35 @@ class MessageService:
                 continue
         return removed
 
-    async def _send_to_telegram_if_needed(
+    async def _send_text_to_telegram(
         self,
         *,
         project_id: UUID,
-        bot_id: UUID | None,
-        external_chat_id: str,
+        chat,
         data: MessageCreate,
-    ) -> None:
-        if data.sender_type not in {SenderType.MANAGER, SenderType.BOT}:
-            return
-        if data.message_type != MessageType.TEXT:
-            return
-        if data.body is None:
-            return
+    ) -> MessageCreate:
+        if chat.bot_id is None:
+            raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
 
-        await self.telegram_sender.send_message(
+        result = await self.telegram_sender.send_message(
             project_id=project_id,
-            bot_id=bot_id,
-            external_chat_id=external_chat_id,
-            text=data.body,
+            bot_id=chat.bot_id,
+            external_chat_id=chat.external_chat_id,
+            text=data.body or "",
             reply_markup=data.reply_markup,
+        )
+        if result is None:
+            raise HTTPException(status_code=502, detail="Telegram не принял текстовое сообщение.")
+
+        message_id = result.get("message_id")
+        raw_payload_json = dict(data.raw_payload_json or {})
+        raw_payload_json["telegram_result"] = result
+        return data.model_copy(
+            update={
+                "external_message_id": data.external_message_id
+                or (str(message_id) if message_id is not None else None),
+                "raw_payload_json": raw_payload_json,
+            }
         )
 
     async def _send_media_upload_to_telegram(
@@ -361,6 +367,8 @@ class MessageService:
         )
         return data.model_copy(
             update={
+                "external_message_id": data.external_message_id
+                or (str(result.get("message_id")) if result.get("message_id") is not None else None),
                 "message_type": upload.media_type,
                 "body": None,
                 "caption": caption,
@@ -422,6 +430,14 @@ class MessageService:
             data.upload_id is not None
             and data.sender_type in {SenderType.MANAGER, SenderType.BOT}
             and MessageService._is_outgoing_media_type(data.message_type)
+        )
+
+    @staticmethod
+    def _is_outgoing_text(data: MessageCreate) -> bool:
+        return (
+            data.sender_type in {SenderType.MANAGER, SenderType.BOT}
+            and data.message_type == MessageType.TEXT
+            and bool((data.body or "").strip())
         )
 
     @staticmethod

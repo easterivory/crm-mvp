@@ -9,10 +9,11 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import RoleName
+from app.core.constants import AuditAction, EntityType, RoleName
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectStatus, ProjectUpdate
+from app.services.audit_service import AuditService
 
 
 PROJECT_STATUSES: set[str] = {"active", "archived"}
@@ -21,6 +22,7 @@ PROJECT_STATUSES: set[str] = {"active", "archived"}
 class ProjectService:
     def __init__(self, db: AsyncSession) -> None:
         self.project_repo = ProjectRepository(db)
+        self.audit = AuditService(db)
 
     async def list_projects(
         self,
@@ -133,12 +135,53 @@ class ProjectService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only super_admin can archive projects",
             )
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        if await self.project_repo.count() <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot archive the last active project",
+            )
         archived = await self.project_repo.archive(project_id)
         if not archived:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found",
             )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.PROJECT_ARCHIVED,
+            entity_type=EntityType.PROJECT,
+            entity_id=project_id,
+            actor_id=actor.id,
+            meta={"name": project.name, "slug": project.slug},
+        )
+
+    async def restore_project(self, project_id: UUID, actor: User) -> ProjectOut:
+        if actor.role_name != RoleName.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super_admin can restore projects",
+            )
+        project = await self.project_repo.restore(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.PROJECT_RESTORED,
+            entity_type=EntityType.PROJECT,
+            entity_id=project_id,
+            actor_id=actor.id,
+            meta={"name": project.name, "slug": project.slug},
+        )
+        return ProjectOut.model_validate(project)
 
     async def _generate_unique_slug(self, name: str) -> str:
         base_slug = self._slugify(name)

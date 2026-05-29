@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Chat repository.
 
@@ -43,6 +45,7 @@ from app.models.funnel import ChatFunnelState
 from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
+from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.repositories.base import BaseRepository
 
@@ -511,6 +514,110 @@ class ChatRepository(BaseRepository[Chat]):
         )
         result = await self.db.execute(stmt)
         return result.scalar_one()
+
+    async def latest_messages_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, Message]:
+        if not chat_ids:
+            return {}
+        cycle_started_at = Chat.current_cycle_started_at - func.make_interval(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            self.CYCLE_START_TOLERANCE_SECONDS,
+        )
+        cycle_lower_bound = func.coalesce(cycle_started_at, Chat.created_at)
+        result = await self.db.execute(
+            select(Message)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(
+                Message.chat_id.in_(chat_ids),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Message.created_at >= cycle_lower_bound,
+            )
+            .order_by(Message.chat_id.asc(), Message.created_at.desc(), Message.id.desc())
+        )
+        latest: dict[UUID, Message] = {}
+        for message in result.scalars().all():
+            latest.setdefault(message.chat_id, message)
+        return latest
+
+    async def search_hit_messages_for_chats(
+        self,
+        chat_ids: Sequence[UUID],
+        search_query: str | None,
+    ) -> dict[UUID, Message]:
+        query = (search_query or "").strip()
+        if not chat_ids or not query:
+            return {}
+        needle = f"%{query.lower()}%"
+        cycle_started_at = Chat.current_cycle_started_at - func.make_interval(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            self.CYCLE_START_TOLERANCE_SECONDS,
+        )
+        cycle_lower_bound = func.coalesce(cycle_started_at, Chat.created_at)
+        result = await self.db.execute(
+            select(Message)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(
+                Message.chat_id.in_(chat_ids),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Message.created_at >= cycle_lower_bound,
+                or_(
+                    func.lower(func.coalesce(Message.body, "")).like(needle),
+                    func.lower(func.coalesce(Message.caption, "")).like(needle),
+                ),
+            )
+            .order_by(Message.chat_id.asc(), Message.created_at.desc(), Message.id.desc())
+        )
+        hits: dict[UUID, Message] = {}
+        for message in result.scalars().all():
+            hits.setdefault(message.chat_id, message)
+        return hits
+
+    async def lead_tags_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, list[dict]]:
+        if not chat_ids:
+            return {}
+        result = await self.db.execute(
+            select(Lead.chat_id, Tag.id, Tag.name)
+            .join(LeadTag, LeadTag.lead_id == Lead.id)
+            .join(Tag, Tag.id == LeadTag.tag_id)
+            .where(
+                Lead.chat_id.in_(chat_ids),
+                Lead.is_deleted.is_(False),
+            )
+            .order_by(Tag.name.asc())
+        )
+        tags_by_chat: dict[UUID, list[dict]] = {}
+        for chat_id, tag_id, tag_name in result.all():
+            tags_by_chat.setdefault(chat_id, []).append(
+                {"id": tag_id, "name": tag_name, "color": None}
+            )
+        return tags_by_chat
+
+    async def lead_statuses_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, dict]:
+        if not chat_ids:
+            return {}
+        result = await self.db.execute(
+            select(Lead.chat_id, LeadStatus.id, LeadStatus.code, LeadStatus.name)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                Lead.chat_id.in_(chat_ids),
+                Lead.is_deleted.is_(False),
+            )
+        )
+        statuses: dict[UUID, dict] = {}
+        for chat_id, status_id, code, name in result.all():
+            statuses[chat_id] = {"id": status_id, "code": code, "name": name}
+        return statuses
 
     async def update_timestamps(
         self,

@@ -18,6 +18,18 @@ class ChatUpdate(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=255)
 
 
+class ChatTagOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    color: Optional[str] = None
+
+
+class ChatLeadStatusOut(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+
+
 class ChatOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
@@ -42,6 +54,21 @@ class ChatOut(OrmBase):
     last_incoming_at: Optional[datetime] = None
     last_outgoing_at: Optional[datetime] = None
     has_unanswered_incoming: bool = False
+
+    last_message_text: Optional[str] = None
+    last_message_type: Optional[str] = None
+    last_message_caption: Optional[str] = None
+    last_message_sender_type: Optional[str] = None
+    last_message_created_at: Optional[datetime] = None
+    last_message_file_name: Optional[str] = None
+
+    search_hit_message_id: Optional[uuid.UUID] = None
+    search_hit_text: Optional[str] = None
+    search_hit_created_at: Optional[datetime] = None
+    search_hit_sender_type: Optional[str] = None
+
+    tags: list[ChatTagOut] = Field(default_factory=list)
+    lead_status: Optional[ChatLeadStatusOut] = None
 
     active_funnel_id: Optional[uuid.UUID] = None
     active_funnel_name: Optional[str] = None

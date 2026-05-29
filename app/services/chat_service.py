@@ -31,12 +31,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, LeadStatusCode
 from app.models.chat import Chat
+from app.models.message import Message
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
-from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
+from app.schemas.chat import ChatCreate, ChatFilters, ChatLeadStatusOut, ChatOut, ChatTagOut
 from app.services.audit_service import AuditService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 
@@ -108,13 +109,30 @@ class ChatService:
         # Sequential — AsyncSession does not support concurrent operations.
         chats = await self.chat_repo.list(limit=limit, offset=offset, **filter_kwargs)
         total = await self.chat_repo.count(**filter_kwargs)
+        chat_ids = [chat.id for chat in chats]
 
         contexts = await self.funnel_repo.get_chat_funnel_contexts(
             project_id=project_id,
-            chat_ids=[chat.id for chat in chats],
+            chat_ids=chat_ids,
         )
+        latest_messages = await self.chat_repo.latest_messages_for_chats(chat_ids)
+        search_hits = await self.chat_repo.search_hit_messages_for_chats(
+            chat_ids,
+            filters.q,
+        )
+        tags_by_chat = await self.chat_repo.lead_tags_for_chats(chat_ids)
+        statuses_by_chat = await self.chat_repo.lead_statuses_for_chats(chat_ids)
         items = [
-            self._chat_out(chat, sla, contexts.get(chat.id))
+            self._chat_out(
+                chat,
+                sla,
+                contexts.get(chat.id),
+                latest_message=latest_messages.get(chat.id),
+                search_hit=search_hits.get(chat.id),
+                search_query=filters.q,
+                tags=tags_by_chat.get(chat.id, []),
+                lead_status=statuses_by_chat.get(chat.id),
+            )
             for chat in chats
         ]
         return items, total
@@ -139,10 +157,16 @@ class ChatService:
             project_id=project_id,
             chat_ids=[chat.id],
         )
+        latest_messages = await self.chat_repo.latest_messages_for_chats([chat.id])
+        tags_by_chat = await self.chat_repo.lead_tags_for_chats([chat.id])
+        statuses_by_chat = await self.chat_repo.lead_statuses_for_chats([chat.id])
         return self._chat_out(
             chat,
             project.sla_threshold_minutes,
             contexts.get(chat.id),
+            latest_message=latest_messages.get(chat.id),
+            tags=tags_by_chat.get(chat.id, []),
+            lead_status=statuses_by_chat.get(chat.id),
         )
 
     async def create_chat(self, project_id: UUID, data: ChatCreate) -> ChatOut:
@@ -344,13 +368,80 @@ class ChatService:
         chat: Chat,
         sla_threshold_minutes: int,
         funnel_context: dict | None,
+        *,
+        latest_message: Message | None = None,
+        search_hit: Message | None = None,
+        search_query: str | None = None,
+        tags: list[dict] | None = None,
+        lead_status: dict | None = None,
     ) -> ChatOut:
         flags = self._compute_flags(chat, sla_threshold_minutes)
         context = dict(funnel_context or {})
         context.pop("chat_id", None)
         context["waiting_for_answer"] = bool(context.get("waiting_for_answer"))
         context["lifecycle_status"] = self._lifecycle_status(chat, context)
-        return ChatOut.model_validate(chat).model_copy(update={**flags, **context})
+        preview_context = self._message_preview_context(latest_message, prefix="last_message")
+        search_context = self._message_preview_context(
+            search_hit,
+            prefix="search_hit",
+            search_query=search_query,
+        )
+        return ChatOut.model_validate(chat).model_copy(
+            update={
+                **flags,
+                **context,
+                **preview_context,
+                **search_context,
+                "tags": [ChatTagOut.model_validate(tag) for tag in tags or []],
+                "lead_status": (
+                    ChatLeadStatusOut.model_validate(lead_status)
+                    if lead_status is not None
+                    else None
+                ),
+            }
+        )
+
+    @classmethod
+    def _message_preview_context(
+        cls,
+        message: Message | None,
+        *,
+        prefix: str,
+        search_query: str | None = None,
+    ) -> dict:
+        if message is None:
+            return {}
+        text = message.body or message.caption or ""
+        if prefix == "search_hit":
+            return {
+                "search_hit_message_id": message.id,
+                "search_hit_text": cls._snippet(text, search_query),
+                "search_hit_created_at": message.created_at,
+                "search_hit_sender_type": message.sender_type,
+            }
+        return {
+            "last_message_text": message.body,
+            "last_message_type": message.message_type,
+            "last_message_caption": message.caption,
+            "last_message_sender_type": message.sender_type,
+            "last_message_created_at": message.created_at,
+            "last_message_file_name": message.file_name,
+        }
+
+    @staticmethod
+    def _snippet(text: str, search_query: str | None, radius: int = 48) -> str:
+        if not text:
+            return ""
+        query = (search_query or "").strip().lower()
+        lowered = text.lower()
+        index = lowered.find(query) if query else -1
+        if index < 0:
+            return text[: radius * 2].strip()
+        start = max(0, index - radius)
+        end = min(len(text), index + len(query) + radius)
+        prefix = "..." if start > 0 else ""
+        suffix = "..." if end < len(text) else ""
+        return f"{prefix}{text[start:end].strip()}{suffix}"
 
     @staticmethod
     def _lifecycle_status(chat: Chat, funnel_context: dict) -> str:

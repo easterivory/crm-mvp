@@ -77,6 +77,8 @@ class AuditAction:
     LEAD_TAG_ADDED = "lead.tag_added"
     LEAD_TAG_REMOVED = "lead.tag_removed"
     CHAT_RESET = "chat.reset"
+    PROJECT_ARCHIVED = "project.archived"
+    PROJECT_RESTORED = "project.restored"
     LEAD_SUBMITTED_STUB = "lead.submitted_stub"
     LEAD_REJECTED = "lead.rejected"
 
@@ -85,6 +87,7 @@ class EntityType:
     LEAD = "lead"
     CHAT = "chat"
     MESSAGE = "message"
+    PROJECT = "project"
 
 
 class AlertType:

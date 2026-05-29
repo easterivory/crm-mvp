@@ -62,3 +62,12 @@ async def archive_project(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     await ProjectService(db).archive_project(project_id, actor=current_user)
+
+
+@router.post("/{project_id}/restore", response_model=ProjectOut)
+async def restore_project(
+    project_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ProjectOut:
+    return await ProjectService(db).restore_project(project_id, actor=current_user)

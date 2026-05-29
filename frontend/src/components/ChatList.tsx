@@ -26,6 +26,18 @@ export type Chat = {
   unanswered: boolean
   has_unanswered_incoming: boolean
   is_red: boolean
+  last_message_text: string | null
+  last_message_type: string | null
+  last_message_caption: string | null
+  last_message_sender_type: 'user' | 'manager' | 'bot' | 'system' | null
+  last_message_created_at: string | null
+  last_message_file_name: string | null
+  search_hit_message_id: string | null
+  search_hit_text: string | null
+  search_hit_created_at: string | null
+  search_hit_sender_type: 'user' | 'manager' | 'bot' | 'system' | null
+  tags: Array<{ id: string; name: string; color?: string | null }>
+  lead_status: { id: string; code: string; name: string } | null
   active_funnel_id: string | null
   active_funnel_name: string | null
   active_funnel_version_id: string | null
@@ -105,6 +117,66 @@ function getLifecycleLabel(chat: Chat) {
     return 'Завершил воронку'
   }
   return 'Ручная обработка'
+}
+
+function senderPrefix(senderType: Chat['last_message_sender_type']) {
+  if (senderType === 'manager') {
+    return 'Вы: '
+  }
+  if (senderType === 'bot') {
+    return 'Бот: '
+  }
+  if (senderType === 'user') {
+    return 'Клиент: '
+  }
+  return ''
+}
+
+function mediaPreviewLabel(chat: Chat) {
+  const type = chat.last_message_type
+  const caption = chat.last_message_caption?.trim()
+  if (type === 'photo' || type === 'image') {
+    return `Фото${caption ? `: ${caption}` : ''}`
+  }
+  if (type === 'video') {
+    return `Видео${caption ? `: ${caption}` : ''}`
+  }
+  if (type === 'document' || type === 'file') {
+    return chat.last_message_file_name ? `Файл: ${chat.last_message_file_name}` : 'Файл'
+  }
+  if (type === 'voice') {
+    return 'Голосовое'
+  }
+  if (type === 'video_note') {
+    return 'Кружок'
+  }
+  if (type === 'sticker') {
+    return 'Стикер'
+  }
+  if (type === 'animation') {
+    return 'Анимация'
+  }
+  return chat.last_message_text || chat.last_message_caption || 'Сообщений пока нет'
+}
+
+function highlightSnippet(snippet: string, query: string) {
+  const normalizedQuery = query.trim()
+  if (!normalizedQuery) {
+    return snippet
+  }
+  const index = snippet.toLowerCase().indexOf(normalizedQuery.toLowerCase())
+  if (index < 0) {
+    return snippet
+  }
+  return (
+    <>
+      {snippet.slice(0, index)}
+      <mark className="rounded bg-amber-300/25 px-0.5 text-amber-100">
+        {snippet.slice(index, index + normalizedQuery.length)}
+      </mark>
+      {snippet.slice(index + normalizedQuery.length)}
+    </>
+  )
 }
 
 export default function ChatList({
@@ -243,6 +315,12 @@ export default function ChatList({
         {chats.map((chat) => {
           const title = getChatTitle(chat)
           const isSelected = chat.id === selectedChatId
+          const hasSearchHit = Boolean(filters.q.trim() && chat.search_hit_text)
+          const preview = hasSearchHit
+            ? chat.search_hit_text || ''
+            : `${senderPrefix(chat.last_message_sender_type)}${mediaPreviewLabel(chat)}`
+          const visibleTags = chat.tags.slice(0, 3)
+          const hiddenTags = chat.tags.slice(3)
 
           return (
             <button
@@ -272,6 +350,18 @@ export default function ChatList({
                     {getBotLabel(chat)}
                   </p>
                 ) : null}
+                <p className={`mt-2 line-clamp-2 text-xs leading-5 ${
+                  hasSearchHit ? 'text-amber-100' : 'text-gray-400'
+                }`}>
+                  {hasSearchHit ? (
+                    <>
+                      <span className="text-amber-300">Найдено: </span>
+                      {highlightSnippet(preview, filters.q)}
+                    </>
+                  ) : (
+                    preview
+                  )}
+                </p>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {chat.unread ? (
                     <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-xs font-medium text-emerald-300">
@@ -291,7 +381,33 @@ export default function ChatList({
                   <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">
                     {getLifecycleLabel(chat)}
                   </span>
+                  {chat.lead_status ? (
+                    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-xs font-medium text-gray-200">
+                      {chat.lead_status.name}
+                    </span>
+                  ) : null}
                 </div>
+                {chat.tags.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {visibleTags.map((tag) => (
+                      <span
+                        key={tag.id}
+                        className="max-w-[96px] truncate rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-gray-300"
+                        title={tag.name}
+                      >
+                        {tag.name}
+                      </span>
+                    ))}
+                    {hiddenTags.length > 0 ? (
+                      <span
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-gray-400"
+                        title={hiddenTags.map((tag) => tag.name).join(', ')}
+                      >
+                        +{hiddenTags.length}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </button>
           )

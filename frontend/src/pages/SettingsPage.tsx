@@ -101,7 +101,7 @@ function roleLabel(roleName: string) {
 
 export default function SettingsPage() {
   const currentUser = useAuthStore((state) => state.user)
-  const { selectedProjectId } = useProjectBotSelection()
+  const { resetBotSelection, selectedProjectId, setSelectedProjectId } = useProjectBotSelection()
 
   const [activeTab, setActiveTab] = useState<TabKey>('project')
   const [project, setProject] = useState<Project | null>(null)
@@ -129,6 +129,9 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState('')
   const [isChangingPassword, setIsChangingPassword] = useState(false)
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null)
+  const [isArchiveProjectOpen, setIsArchiveProjectOpen] = useState(false)
+  const [archiveProjectName, setArchiveProjectName] = useState('')
+  const [isArchivingProject, setIsArchivingProject] = useState(false)
 
   const [projectName, setProjectName] = useState('')
   const [slaMinutes, setSlaMinutes] = useState('30')
@@ -147,6 +150,7 @@ export default function SettingsPage() {
     currentRoleName === 'super_admin' || currentRoleName === 'admin'
   const canManageProject =
     currentRoleName === 'super_admin' || currentRoleName === 'admin'
+  const canArchiveProject = currentRoleName === 'super_admin'
   const visibleTabs = useMemo(
     () =>
       tabs.filter((tab) => {
@@ -345,6 +349,31 @@ export default function SettingsPage() {
       setError(getErrorMessage(err, 'Не удалось сохранить проект.'))
     } finally {
       setIsSavingProject(false)
+    }
+  }
+
+  const handleArchiveProject = async () => {
+    if (!project || archiveProjectName !== project.name || isArchivingProject) {
+      return
+    }
+
+    setIsArchivingProject(true)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.delete(`/projects/${project.id}`)
+      setIsArchiveProjectOpen(false)
+      setArchiveProjectName('')
+      setProject(null)
+      setProjectName('')
+      resetBotSelection()
+      setSelectedProjectId(null)
+      setNotice('Проект архивирован. Данные скрыты из рабочего интерфейса, но не удалены физически.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось архивировать проект.'))
+    } finally {
+      setIsArchivingProject(false)
     }
   }
 
@@ -733,6 +762,30 @@ export default function SettingsPage() {
               {isSavingProject ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
               Сохранить проект
             </button>
+            {canArchiveProject && project ? (
+              <div className="mt-8 rounded-xl border border-red-500/25 bg-red-950/20 p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-red-100">Danger zone</h3>
+                    <p className="mt-1 text-sm leading-6 text-red-100/70">
+                      Архивирование скрывает проект, ботов, чаты, лидов, ссылки и воронки из
+                      рабочего интерфейса. Физически данные не удаляются.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setArchiveProjectName('')
+                      setIsArchiveProjectOpen(true)
+                    }}
+                    className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-red-400/40 px-3 py-2 text-sm font-semibold text-red-100 transition hover:bg-red-500/10"
+                  >
+                    <Trash2 size={15} />
+                    Удалить проект
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </form>
         ) : null}
 
@@ -1153,6 +1206,47 @@ export default function SettingsPage() {
           </div>
         ) : null}
       </div>
+
+      {isArchiveProjectOpen && project ? (
+        <Modal title="Архивировать проект" onClose={() => setIsArchiveProjectOpen(false)}>
+          <div className="space-y-4 text-sm text-zinc-300">
+            <p>
+              Проект будет архивирован. Боты, чаты, лиды, ссылки и воронки будут скрыты
+              из рабочего интерфейса, но не удалены физически.
+            </p>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-zinc-300">
+                Введите точное название проекта
+              </span>
+              <input
+                value={archiveProjectName}
+                onChange={(event) => setArchiveProjectName(event.target.value)}
+                placeholder={project.name}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-red-500 transition focus:ring-2"
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsArchiveProjectOpen(false)}
+                disabled={isArchivingProject}
+                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleArchiveProject()}
+                disabled={archiveProjectName !== project.name || isArchivingProject}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isArchivingProject ? <LoaderCircle size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                Архивировать
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
 
       {passwordUser ? (
         <Modal
