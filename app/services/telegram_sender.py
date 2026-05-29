@@ -258,10 +258,13 @@ class TelegramSenderService:
         token: str,
         webhook_url: str,
         secret_token: str | None = None,
+        allowed_updates: list[str] | tuple[str, ...] | None = None,
     ) -> dict:
         params: dict[str, str] = {"url": webhook_url}
         if secret_token:
             params["secret_token"] = secret_token
+        if allowed_updates:
+            params["allowed_updates"] = json.dumps(list(allowed_updates))
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(

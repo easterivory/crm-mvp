@@ -49,6 +49,7 @@ from app.repositories.base import BaseRepository
 
 class ChatRepository(BaseRepository[Chat]):
     model = Chat
+    CYCLE_START_TOLERANCE_SECONDS = 1
 
     # ── SQL expressions ────────────────────────────────────────────────────────
 
@@ -202,6 +203,16 @@ class ChatRepository(BaseRepository[Chat]):
         needle = f"%{search_query.strip().lower()}%"
         if needle == "%%":
             return True
+        cycle_started_at = Chat.current_cycle_started_at - func.make_interval(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            ChatRepository.CYCLE_START_TOLERANCE_SECONDS,
+        )
+        cycle_lower_bound = func.coalesce(cycle_started_at, Chat.created_at)
         lead_exists = (
             select(Lead.id)
             .where(
@@ -233,7 +244,7 @@ class ChatRepository(BaseRepository[Chat]):
             select(Message.id)
             .where(
                 Message.chat_id == Chat.id,
-                Message.created_at >= func.coalesce(Chat.current_cycle_started_at, Chat.created_at),
+                Message.created_at >= cycle_lower_bound,
                 or_(
                     func.lower(func.coalesce(Message.body, "")).like(needle),
                     func.lower(func.coalesce(Message.caption, "")).like(needle),

@@ -717,6 +717,40 @@ class FunnelService:
             if edge.from_step_id in step_ids and edge.to_step_id in step_ids:
                 adjacency.setdefault(edge.from_step_id, []).append(edge.to_step_id)
 
+        for step in graph.steps:
+            if step.id is None:
+                continue
+            for target_key, raw_target in self._iter_config_target_values(step.config_json):
+                if raw_target in (None, ""):
+                    continue
+                try:
+                    target_id = (
+                        raw_target
+                        if isinstance(raw_target, UUID)
+                        else UUID(str(raw_target))
+                    )
+                except (TypeError, ValueError):
+                    errors.append(
+                        self._issue(
+                            "invalid_config_target",
+                            f"Цель {target_key} должна быть UUID существующего блока.",
+                            "error",
+                            step_id=step.id,
+                        )
+                    )
+                    continue
+                if target_id not in step_ids:
+                    errors.append(
+                        self._issue(
+                            "config_target_missing_step",
+                            f"Цель {target_key} ведёт в несуществующий блок.",
+                            "error",
+                            step_id=step.id,
+                        )
+                    )
+                    continue
+                adjacency.setdefault(step.id, []).append(target_id)
+
         trigger_ids = [step.id for step in triggers if step.id is not None]
         for trigger_id in trigger_ids:
             if not adjacency.get(trigger_id):
@@ -806,6 +840,40 @@ class FunnelService:
             seen.add(current)
             queue.extend(adjacency.get(current, []))
         return seen
+
+    @staticmethod
+    def _iter_config_target_values(config: dict) -> list[tuple[str, object]]:
+        targets: list[tuple[str, object]] = []
+
+        def add_from_mapping(mapping: object, key: str, label: str) -> None:
+            if isinstance(mapping, dict) and mapping.get(key) not in (None, ""):
+                targets.append((label, mapping.get(key)))
+
+        def add_from_list(items: object, key: str, label: str) -> None:
+            if not isinstance(items, list):
+                return
+            for index, item in enumerate(items):
+                add_from_mapping(item, key, f"{label}[{index}].{key}")
+
+        add_from_mapping(config, "target_step_id", "target_step_id")
+        add_from_mapping(config, "timeout_target_step_id", "timeout_target_step_id")
+        add_from_mapping(config, "fallback_target_step_id", "fallback_target_step_id")
+        add_from_list(config.get("buttons"), "target_step_id", "buttons")
+        add_from_list(config.get("choices"), "target_step_id", "choices")
+        add_from_list(config.get("outcomes"), "target_step_id", "outcomes")
+
+        messages = config.get("messages")
+        if isinstance(messages, list):
+            for message_index, message in enumerate(messages):
+                if not isinstance(message, dict):
+                    continue
+                add_from_list(
+                    message.get("buttons"),
+                    "target_step_id",
+                    f"messages[{message_index}].buttons",
+                )
+
+        return targets
 
     @staticmethod
     def _issue(

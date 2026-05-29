@@ -30,6 +30,8 @@ DEFAULT_PROJECT_SLUG = "default-project"
 
 logger = logging.getLogger(__name__)
 
+TELEGRAM_WEBHOOK_ALLOWED_UPDATES = ("message", "callback_query")
+
 
 class BotService:
     def __init__(self, db: AsyncSession) -> None:
@@ -368,6 +370,7 @@ class BotService:
                 token=token,
                 webhook_url=webhook_url,
                 secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
+                allowed_updates=TELEGRAM_WEBHOOK_ALLOWED_UPDATES,
             )
         except httpx.HTTPError as exc:
             raise HTTPException(

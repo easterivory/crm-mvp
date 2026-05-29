@@ -44,6 +44,8 @@ from app.services.telegram_sender import TelegramSenderService
 
 logger = logging.getLogger(__name__)
 
+MESSAGE_CYCLE_START_TOLERANCE = timedelta(seconds=1)
+
 ALLOWED_CHAT_MEDIA: dict[str, str] = {
     "image/jpeg": MessageType.PHOTO,
     "image/png": MessageType.PHOTO,
@@ -483,15 +485,20 @@ class MessageService:
                 detail="Chat not found in this project",
             )
 
+        since = (
+            chat.current_cycle_started_at - MESSAGE_CYCLE_START_TOLERANCE
+            if chat.current_cycle_started_at is not None
+            else None
+        )
         messages = await self.message_repo.list_by_chat(
             chat_id,
             limit=limit,
             offset=offset,
-            since=chat.current_cycle_started_at,
+            since=since,
         )
         total = await self.message_repo.count_by_chat(
             chat_id,
-            since=chat.current_cycle_started_at,
+            since=since,
         )
         return [MessageOut.model_validate(m) for m in messages], total
 
