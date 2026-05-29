@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     BROADCAST_BATCH_SIZE: int = 25
     BROADCAST_SEND_INTERVAL_MS: int = 75
     BROADCAST_MAX_ATTEMPTS: int = 3
+    BROADCAST_UPLOAD_STORAGE_PATH: str = "storage/broadcast_uploads"
+    BROADCAST_UPLOAD_TTL_HOURS: int = 168
+    BROADCAST_PHOTO_MAX_BYTES: int = 10 * 1024 * 1024
+    BROADCAST_VIDEO_MAX_BYTES: int = 50 * 1024 * 1024
+    BROADCAST_DOCUMENT_MAX_BYTES: int = 20 * 1024 * 1024
+    CHAT_ATTACHMENT_STORAGE_PATH: str = "storage/chat_uploads"
+    CHAT_ATTACHMENT_TTL_HOURS: int = 24
+    CHAT_PHOTO_MAX_MB: int = 10
+    CHAT_VIDEO_MAX_MB: int = 50
+    CHAT_DOCUMENT_MAX_MB: int = 20
 
 
 @lru_cache

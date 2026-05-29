@@ -23,6 +23,7 @@ class MessageCreate(BaseModel):
     media_group_id: Optional[str] = Field(None, max_length=255)
     raw_payload_json: Optional[dict] = None
     reply_markup: Optional[dict] = None
+    upload_id: Optional[uuid.UUID] = None
 
 
 class MessageOut(OrmBase):
@@ -41,3 +42,15 @@ class MessageOut(OrmBase):
     file_size: Optional[int] = None
     media_group_id: Optional[str] = None
     created_at: datetime
+
+
+class MessageUploadOut(BaseModel):
+    upload_id: uuid.UUID
+    chat_id: uuid.UUID
+    project_id: uuid.UUID
+    file_name: str
+    mime_type: str
+    file_size: int
+    media_type: str
+    status: str
+    expires_at: Optional[datetime] = None

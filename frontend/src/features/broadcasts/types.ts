@@ -30,18 +30,45 @@ export type Broadcast = {
 
 export type BroadcastContent = {
   type: 'message'
-  messages: Array<{
-    type: 'text'
-    text: string
-    delay_seconds?: number
-    buttons?: Array<Record<string, unknown>>
-  }>
+  messages: BroadcastMessage[]
   after_send_action?: {
     type: 'start_funnel'
     funnel_id: string
     funnel_version_id?: string | null
     mode: 'restart' | 'skip_if_active' | 'skip_if_completed'
   } | null
+}
+
+export type BroadcastMediaType = 'photo' | 'video' | 'document'
+
+export type BroadcastMedia = {
+  source: 'upload' | 'telegram_file_id'
+  upload_id?: string
+  telegram_file_id?: string
+  file_name?: string
+  mime_type?: string
+  file_size?: number
+  media_type?: BroadcastMediaType
+}
+
+export type BroadcastMessage = {
+  type?: 'text' | BroadcastMediaType
+  text?: string
+  caption?: string
+  media?: BroadcastMedia
+  delay_seconds?: number
+  buttons?: Array<Record<string, unknown>>
+}
+
+export type BroadcastUpload = {
+  upload_id: string
+  project_id: string
+  file_name: string
+  mime_type: string
+  file_size: number
+  media_type: BroadcastMediaType
+  status: string
+  expires_at: string | null
 }
 
 export type AudienceRule = {

@@ -4,7 +4,10 @@ TelegramSenderService - outgoing Telegram Bot API client.
 Network/API failures are logged but never raised to callers. A temporary
 Telegram outage must not roll back local CRM writes.
 """
+import json
 import logging
+from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -19,6 +22,13 @@ class TelegramSenderService:
     def __init__(self, db: AsyncSession) -> None:
         self.bot_repo = BotRepository(db)
 
+    async def _get_token(self, project_id: UUID, bot_id: UUID | None) -> str | None:
+        return (
+            await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
+            if bot_id is not None
+            else await self.bot_repo.get_active_bot_token(project_id)
+        )
+
     async def send_message(
         self,
         project_id: UUID,
@@ -27,17 +37,184 @@ class TelegramSenderService:
         text: str,
         reply_markup: dict | None = None,
     ) -> bool:
-        token = (
-            await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
-            if bot_id is not None
-            else await self.bot_repo.get_active_bot_token(project_id)
-        )
+        token = await self._get_token(project_id, bot_id)
         if not token:
             return False
 
         message_text = text.strip()
         if not message_text:
             return False
+
+    async def send_photo(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        photo: str | Path,
+        *,
+        caption: str | None = None,
+        reply_markup: dict | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._send_media(
+            method="sendPhoto",
+            media_field="photo",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            media=photo,
+            caption=caption,
+            reply_markup=reply_markup,
+            file_name=file_name,
+            mime_type=mime_type,
+        )
+
+    async def send_video(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        video: str | Path,
+        *,
+        caption: str | None = None,
+        reply_markup: dict | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._send_media(
+            method="sendVideo",
+            media_field="video",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            media=video,
+            caption=caption,
+            reply_markup=reply_markup,
+            file_name=file_name,
+            mime_type=mime_type,
+            timeout=90.0,
+        )
+
+    async def send_document(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        document: str | Path,
+        *,
+        caption: str | None = None,
+        reply_markup: dict | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._send_media(
+            method="sendDocument",
+            media_field="document",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            media=document,
+            caption=caption,
+            reply_markup=reply_markup,
+            file_name=file_name,
+            mime_type=mime_type,
+            timeout=90.0,
+        )
+
+    async def _send_media(
+        self,
+        *,
+        method: str,
+        media_field: str,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        media: str | Path,
+        caption: str | None = None,
+        reply_markup: dict | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any] | None:
+        token = await self._get_token(project_id, bot_id)
+        if not token:
+            return None
+
+        url = f"https://api.telegram.org/bot{token}/{method}"
+        caption_text = caption.strip() if isinstance(caption, str) else ""
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                if isinstance(media, Path):
+                    data: dict[str, str] = {"chat_id": external_chat_id}
+                    if caption_text:
+                        data["caption"] = caption_text
+                    if reply_markup:
+                        data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                    with media.open("rb") as media_file:
+                        files = {
+                            media_field: (
+                                file_name or media.name,
+                                media_file,
+                                mime_type or "application/octet-stream",
+                            )
+                        }
+                        response = await client.post(url, data=data, files=files)
+                else:
+                    payload: dict[str, Any] = {"chat_id": external_chat_id, media_field: media}
+                    if caption_text:
+                        payload["caption"] = caption_text
+                    if reply_markup:
+                        payload["reply_markup"] = reply_markup
+                    response = await client.post(url, json=payload)
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
+                    logger.error(
+                        "Telegram %s failed: project_id=%s chat_id=%s response=%s",
+                        method,
+                        project_id,
+                        external_chat_id,
+                        str(payload)[:500],
+                    )
+                    return None
+                return payload["result"]
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Telegram %s failed: project_id=%s chat_id=%s status_code=%s response=%s",
+                method,
+                project_id,
+                external_chat_id,
+                exc.response.status_code,
+                exc.response.text[:500],
+            )
+            return None
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Telegram %s failed: project_id=%s chat_id=%s error_type=%s",
+                method,
+                project_id,
+                external_chat_id,
+                exc.__class__.__name__,
+            )
+            return None
+        except OSError as exc:
+            logger.error(
+                "Telegram %s failed to read media file: project_id=%s chat_id=%s error=%s",
+                method,
+                project_id,
+                external_chat_id,
+                exc,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "Unexpected error while sending Telegram media: method=%s project_id=%s chat_id=%s",
+                method,
+                project_id,
+                external_chat_id,
+            )
+            return None
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload: dict = {"chat_id": external_chat_id, "text": message_text}

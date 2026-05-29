@@ -141,3 +141,35 @@ class BroadcastTemplate(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         if "created_by" not in self.__dict__:
             return None
         return self.created_by.name if self.created_by is not None else None
+
+
+class BroadcastUpload(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "broadcast_uploads"
+    __table_args__ = (
+        Index("ix_broadcast_uploads_project_id", "project_id"),
+        Index("ix_broadcast_uploads_created_by_user_id", "created_by_user_id"),
+        Index("ix_broadcast_uploads_status", "status"),
+        Index("ix_broadcast_uploads_expires_at", "expires_at"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
+    )
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="uploaded",
+        server_default="uploaded",
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    project: Mapped[Project] = relationship("Project")
+    created_by: Mapped[Optional[User]] = relationship("User")

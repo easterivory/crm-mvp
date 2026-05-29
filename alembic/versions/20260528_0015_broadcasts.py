@@ -140,8 +140,53 @@ def upgrade() -> None:
         ["created_by_user_id"],
     )
 
+    op.create_table(
+        "broadcast_uploads",
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_by_user_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("file_name", sa.String(length=512), nullable=False),
+        sa.Column("mime_type", sa.String(length=255), nullable=False),
+        sa.Column("file_size", sa.Integer(), nullable=False),
+        sa.Column("media_type", sa.String(length=30), nullable=False),
+        sa.Column("storage_path", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(length=30), nullable=False, server_default="uploaded"),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            server_default=sa.text("gen_random_uuid()"),
+            nullable=False,
+        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.CheckConstraint(
+            "media_type IN ('photo','video','document')",
+            name="ck_broadcast_uploads_media_type",
+        ),
+        sa.CheckConstraint(
+            "status IN ('uploaded','used','expired','deleted')",
+            name="ck_broadcast_uploads_status",
+        ),
+        sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
+        sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_broadcast_uploads_project_id", "broadcast_uploads", ["project_id"])
+    op.create_index(
+        "ix_broadcast_uploads_created_by_user_id",
+        "broadcast_uploads",
+        ["created_by_user_id"],
+    )
+    op.create_index("ix_broadcast_uploads_status", "broadcast_uploads", ["status"])
+    op.create_index("ix_broadcast_uploads_expires_at", "broadcast_uploads", ["expires_at"])
+
 
 def downgrade() -> None:
+    op.drop_index("ix_broadcast_uploads_expires_at", table_name="broadcast_uploads")
+    op.drop_index("ix_broadcast_uploads_status", table_name="broadcast_uploads")
+    op.drop_index("ix_broadcast_uploads_created_by_user_id", table_name="broadcast_uploads")
+    op.drop_index("ix_broadcast_uploads_project_id", table_name="broadcast_uploads")
+    op.drop_table("broadcast_uploads")
+
     op.drop_index("ix_broadcast_templates_created_by_user_id", table_name="broadcast_templates")
     op.drop_index("ix_broadcast_templates_project_id", table_name="broadcast_templates")
     op.drop_table("broadcast_templates")

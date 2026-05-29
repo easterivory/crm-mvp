@@ -29,6 +29,17 @@ class BroadcastContent(BaseModel):
     after_send_action: Optional[dict[str, Any]] = None
 
 
+class BroadcastUploadOut(BaseModel):
+    upload_id: uuid.UUID
+    project_id: uuid.UUID
+    file_name: str
+    mime_type: str
+    file_size: int
+    media_type: Literal["photo", "video", "document"]
+    status: str
+    expires_at: Optional[datetime] = None
+
+
 class AudienceRule(BaseModel):
     field: str
     operator: str

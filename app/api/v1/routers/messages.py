@@ -15,17 +15,18 @@ Endpoints stubbed (Phase 3):
 """
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_project_id, get_db
+from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.schemas.common import PaginatedResponse
-from app.schemas.message import MessageCreate, MessageOut
+from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
 from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 media_router = APIRouter(prefix="/messages", tags=["messages"])
+attachments_router = APIRouter(prefix="/chats/{chat_id}/attachments", tags=["messages"])
 
 
 @router.post("", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
@@ -83,4 +84,20 @@ async def get_message_media(
     return await MessageService(db).media_response(
         message_id=message_id,
         project_id=project_id,
+    )
+
+
+@attachments_router.post("", response_model=MessageUploadOut, status_code=status.HTTP_201_CREATED)
+async def upload_chat_attachment(
+    chat_id: UUID,
+    file: UploadFile = File(...),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageUploadOut:
+    return await MessageService(db).upload_attachment(
+        chat_id=chat_id,
+        project_id=project_id,
+        actor=current_user,
+        file=file,
     )

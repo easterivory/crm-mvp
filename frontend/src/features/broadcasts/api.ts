@@ -8,6 +8,7 @@ import type {
   BroadcastContent,
   BroadcastReport,
   BroadcastTemplate,
+  BroadcastUpload,
 } from './types'
 
 export async function fetchBroadcasts(projectId: string) {
@@ -59,6 +60,16 @@ export async function deleteBroadcastTemplate(templateId: string, projectId: str
   await api.delete(`/broadcasts/templates/${templateId}`, {
     params: { project_id: projectId },
   })
+}
+
+export async function uploadBroadcastMedia(projectId: string, file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post<BroadcastUpload>('/broadcasts/uploads', formData, {
+    params: { project_id: projectId },
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
 }
 
 export async function createBroadcast(payload: {

@@ -2,12 +2,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import extract, func, select
+from sqlalchemy import extract, func, select, update
 from sqlalchemy.orm import aliased
 
 from app.core.constants import SenderType
 from app.models.chat import Chat
-from app.models.message import Message
+from app.models.message import Message, MessageUpload
 from app.repositories.base import BaseRepository
 
 
@@ -178,3 +178,108 @@ class MessageRepository(BaseRepository[Message]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def create_upload(
+        self,
+        *,
+        project_id: UUID,
+        chat_id: UUID,
+        created_by_user_id: UUID | None,
+        file_name: str,
+        mime_type: str,
+        file_size: int,
+        media_type: str,
+        storage_path: str,
+        expires_at: datetime | None,
+    ) -> MessageUpload:
+        upload = MessageUpload(
+            project_id=project_id,
+            chat_id=chat_id,
+            created_by_user_id=created_by_user_id,
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size=file_size,
+            media_type=media_type,
+            storage_path=storage_path,
+            expires_at=expires_at,
+        )
+        self.db.add(upload)
+        await self.db.flush()
+        await self.db.refresh(upload)
+        return upload
+
+    async def get_upload_for_send(
+        self,
+        *,
+        upload_id: UUID,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> Optional[MessageUpload]:
+        result = await self.db.execute(
+            select(MessageUpload).where(
+                MessageUpload.id == upload_id,
+                MessageUpload.chat_id == chat_id,
+                MessageUpload.project_id == project_id,
+                MessageUpload.status == "uploaded",
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_upload_path(
+        self,
+        upload_id: UUID,
+        project_id: UUID,
+        storage_path: str,
+    ) -> Optional[MessageUpload]:
+        await self.db.execute(
+            update(MessageUpload)
+            .where(MessageUpload.id == upload_id, MessageUpload.project_id == project_id)
+            .values(storage_path=storage_path)
+        )
+        result = await self.db.execute(
+            select(MessageUpload).where(
+                MessageUpload.id == upload_id,
+                MessageUpload.project_id == project_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def mark_upload_sent(
+        self,
+        upload_id: UUID,
+        project_id: UUID,
+        message_id: UUID,
+    ) -> None:
+        await self.db.execute(
+            update(MessageUpload)
+            .where(MessageUpload.id == upload_id, MessageUpload.project_id == project_id)
+            .values(status="sent", sent_message_id=message_id)
+        )
+
+    async def mark_upload_failed(
+        self,
+        upload_id: UUID,
+        project_id: UUID,
+    ) -> None:
+        await self.db.execute(
+            update(MessageUpload)
+            .where(MessageUpload.id == upload_id, MessageUpload.project_id == project_id)
+            .values(status="failed")
+        )
+
+    async def mark_expired_uploads(self, now: datetime) -> list[MessageUpload]:
+        result = await self.db.execute(
+            select(MessageUpload).where(
+                MessageUpload.status == "uploaded",
+                MessageUpload.expires_at.is_not(None),
+                MessageUpload.expires_at <= now,
+            )
+        )
+        uploads = list(result.scalars().all())
+        if uploads:
+            await self.db.execute(
+                update(MessageUpload)
+                .where(MessageUpload.id.in_([upload.id for upload in uploads]))
+                .values(status="expired")
+            )
+        return uploads

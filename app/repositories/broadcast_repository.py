@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
 
-from app.models.broadcast import Broadcast, BroadcastRecipient, BroadcastTemplate
+from app.models.broadcast import Broadcast, BroadcastRecipient, BroadcastTemplate, BroadcastUpload
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.repositories.base import BaseRepository
@@ -154,6 +154,84 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             )
         )
         return bool(result.rowcount)
+
+    async def create_upload(
+        self,
+        *,
+        project_id: UUID,
+        created_by_user_id: UUID | None,
+        file_name: str,
+        mime_type: str,
+        file_size: int,
+        media_type: str,
+        storage_path: str,
+        expires_at: datetime | None,
+    ) -> BroadcastUpload:
+        upload = BroadcastUpload(
+            project_id=project_id,
+            created_by_user_id=created_by_user_id,
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size=file_size,
+            media_type=media_type,
+            storage_path=storage_path,
+            expires_at=expires_at,
+        )
+        self.db.add(upload)
+        await self.db.flush()
+        await self.db.refresh(upload)
+        return upload
+
+    async def get_upload_in_project(
+        self,
+        upload_id: UUID,
+        project_id: UUID,
+    ) -> Optional[BroadcastUpload]:
+        result = await self.db.execute(
+            select(BroadcastUpload).where(
+                BroadcastUpload.id == upload_id,
+                BroadcastUpload.project_id == project_id,
+                BroadcastUpload.status.in_(("uploaded", "used")),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_upload_path(
+        self,
+        upload_id: UUID,
+        project_id: UUID,
+        storage_path: str,
+    ) -> Optional[BroadcastUpload]:
+        await self.db.execute(
+            update(BroadcastUpload)
+            .where(BroadcastUpload.id == upload_id, BroadcastUpload.project_id == project_id)
+            .values(storage_path=storage_path)
+        )
+        return await self.get_upload_in_project(upload_id, project_id)
+
+    async def mark_upload_used(self, upload_id: UUID, project_id: UUID) -> None:
+        await self.db.execute(
+            update(BroadcastUpload)
+            .where(BroadcastUpload.id == upload_id, BroadcastUpload.project_id == project_id)
+            .values(status="used")
+        )
+
+    async def mark_expired_uploads(self, now: datetime) -> list[BroadcastUpload]:
+        result = await self.db.execute(
+            select(BroadcastUpload).where(
+                BroadcastUpload.status == "uploaded",
+                BroadcastUpload.expires_at.is_not(None),
+                BroadcastUpload.expires_at <= now,
+            )
+        )
+        uploads = list(result.scalars().all())
+        if uploads:
+            await self.db.execute(
+                update(BroadcastUpload)
+                .where(BroadcastUpload.id.in_([upload.id for upload in uploads]))
+                .values(status="expired")
+            )
+        return uploads
 
     async def list_due_broadcasts(self, limit: int = 20) -> list[Broadcast]:
         now = datetime.now(timezone.utc)

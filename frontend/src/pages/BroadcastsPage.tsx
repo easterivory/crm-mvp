@@ -13,6 +13,7 @@ import {
   fetchBroadcastTemplates,
   pauseBroadcast,
   resumeBroadcast,
+  uploadBroadcastMedia,
 } from '../features/broadcasts/api'
 import BroadcastList from '../features/broadcasts/components/BroadcastList'
 import BroadcastWizard from '../features/broadcasts/components/BroadcastWizard'
@@ -22,6 +23,7 @@ import type {
   BroadcastOption,
   BroadcastReport,
   BroadcastTemplate,
+  BroadcastUpload,
 } from '../features/broadcasts/types'
 import { fetchFunnels } from '../features/funnels/api'
 import { fetchLeadStatuses } from '../features/leads/api'
@@ -61,6 +63,12 @@ function botLabel(bot: BotRecord) {
 
 function duplicateName(name: string) {
   return name.trim() ? `${name.trim()} · копия` : 'Копия рассылки'
+}
+
+function contentHasMedia(content: BroadcastContent) {
+  return content.messages.some((message) =>
+    message.type === 'photo' || message.type === 'video' || message.type === 'document',
+  )
 }
 
 export default function BroadcastsPage() {
@@ -207,6 +215,10 @@ export default function BroadcastsPage() {
 
   const handleSaveTemplate = async (templateName: string, content: BroadcastContent) => {
     if (!selectedProjectId) return
+    if (contentHasMedia(content)) {
+      notify({ tone: 'error', message: 'Шаблоны с медиа будут добавлены позже.' })
+      return
+    }
     try {
       const template = await createBroadcastTemplate({
         project_id: selectedProjectId,
@@ -217,6 +229,20 @@ export default function BroadcastsPage() {
       notify({ tone: 'success', message: 'Шаблон сохранён.' })
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось сохранить шаблон.') })
+    }
+  }
+
+  const handleUploadMedia = async (file: File): Promise<BroadcastUpload> => {
+    if (!selectedProjectId) {
+      throw new Error('project required')
+    }
+    try {
+      const upload = await uploadBroadcastMedia(selectedProjectId, file)
+      notify({ tone: 'success', message: 'Файл загружен.' })
+      return upload
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось загрузить файл.') })
+      throw err
     }
   }
 
@@ -301,6 +327,7 @@ export default function BroadcastsPage() {
         funnels={funnels}
         templates={templates}
         onSaveTemplate={handleSaveTemplate}
+        onUploadMedia={handleUploadMedia}
         onBack={() => {
           setIsWizardOpen(false)
           setEditingBroadcast(null)

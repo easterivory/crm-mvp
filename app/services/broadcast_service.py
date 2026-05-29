@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -32,6 +34,7 @@ from app.schemas.broadcast import (
     BroadcastTemplateOut,
     BroadcastTemplateUpdate,
     BroadcastUpdate,
+    BroadcastUploadOut,
     SendNowRequest,
 )
 from app.schemas.message import MessageCreate
@@ -40,6 +43,31 @@ from app.services.audit_service import AuditService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
+
+
+ALLOWED_BROADCAST_MEDIA: dict[str, str] = {
+    "image/jpeg": "photo",
+    "image/png": "photo",
+    "image/webp": "photo",
+    "video/mp4": "video",
+    "application/pdf": "document",
+    "text/plain": "document",
+    "application/msword": "document",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "document",
+}
+
+DANGEROUS_EXTENSIONS = {
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".scr",
+    ".js",
+    ".jar",
+    ".sh",
+    ".php",
+    ".py",
+}
 
 
 class BroadcastService:
@@ -104,6 +132,8 @@ class BroadcastService:
         if data.project_id != project_id:
             raise HTTPException(status_code=422, detail="project_id does not match current project")
         self._validate_content(data.content_json)
+        if self._content_has_media(data.content_json):
+            raise HTTPException(status_code=422, detail="Шаблоны с медиа будут добавлены позже.")
         template = await self.repo.create_template(
             project_id=project_id,
             name=data.name,
@@ -134,6 +164,8 @@ class BroadcastService:
         values = data.model_dump(exclude_unset=True)
         if "content_json" in values:
             self._validate_content(values["content_json"])
+            if self._content_has_media(values["content_json"]):
+                raise HTTPException(status_code=422, detail="Шаблоны с медиа будут добавлены позже.")
         template = await self.repo.update_template_in_project(template_id, project_id, **values)
         assert template is not None
         await self._audit(
@@ -162,6 +194,83 @@ class BroadcastService:
             action="broadcast_template.deleted",
             entity_id=template_id,
         )
+
+    async def upload_media(
+        self,
+        *,
+        actor: User,
+        project_id: UUID,
+        file: UploadFile,
+    ) -> BroadcastUploadOut:
+        self._ensure_can_manage(actor)
+        file_name = os.path.basename(file.filename or "upload")
+        suffix = Path(file_name).suffix.lower()
+        if suffix in DANGEROUS_EXTENSIONS:
+            raise HTTPException(status_code=422, detail="Этот тип файла нельзя загружать.")
+
+        mime_type = file.content_type or "application/octet-stream"
+        media_type = ALLOWED_BROADCAST_MEDIA.get(mime_type)
+        if media_type is None:
+            raise HTTPException(status_code=422, detail="Неподдерживаемый тип файла.")
+
+        max_size = self._max_upload_size(media_type)
+        storage_root = Path(settings.BROADCAST_UPLOAD_STORAGE_PATH)
+        storage_root.mkdir(parents=True, exist_ok=True)
+        project_dir = storage_root / str(project_id)
+        project_dir.mkdir(parents=True, exist_ok=True)
+
+        upload_id = UUID(int=0)
+        temp_path = project_dir / f"tmp_{actor.id}_{file_name}"
+        size = 0
+        try:
+            with temp_path.open("wb") as output:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > max_size:
+                        raise HTTPException(status_code=413, detail="Файл слишком большой.")
+                    output.write(chunk)
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.BROADCAST_UPLOAD_TTL_HOURS)
+            upload = await self.repo.create_upload(
+                project_id=project_id,
+                created_by_user_id=actor.id,
+                file_name=file_name,
+                mime_type=mime_type,
+                file_size=size,
+                media_type=media_type,
+                storage_path="",
+                expires_at=expires_at,
+            )
+            upload_id = upload.id
+            final_path = project_dir / f"{upload.id.hex}{suffix or '.bin'}"
+            temp_path.replace(final_path)
+            upload = await self.repo.update_upload_path(upload.id, project_id, str(final_path))
+            assert upload is not None
+            return BroadcastUploadOut(
+                upload_id=upload.id,
+                project_id=upload.project_id,
+                file_name=upload.file_name,
+                mime_type=upload.mime_type,
+                file_size=upload.file_size,
+                media_type=upload.media_type,
+                status=upload.status,
+                expires_at=upload.expires_at,
+            )
+        finally:
+            if temp_path.exists() and upload_id.int == 0:
+                temp_path.unlink(missing_ok=True)
+
+    async def cleanup_expired_uploads(self) -> int:
+        uploads = await self.repo.mark_expired_uploads(datetime.now(timezone.utc))
+        removed = 0
+        for upload in uploads:
+            try:
+                path = Path(upload.storage_path)
+                if path.exists():
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        return removed
 
     async def create_broadcast(
         self,
@@ -449,34 +558,63 @@ class BroadcastService:
             delay_seconds = self._message_delay_seconds(message)
             if delay_seconds > 0:
                 await asyncio.sleep(delay_seconds)
-            text = await self._render_text(str(message.get("text") or ""), broadcast, chat, lead)
-            if not text.strip():
-                continue
             reply_markup = self._reply_markup_for_buttons(
                 broadcast=broadcast,
                 message_index=message_index,
                 buttons=self._normalize_buttons(message.get("buttons") or []),
             )
+            message_type = self._broadcast_message_type(message)
+            if message_type == MessageType.TEXT:
+                text = await self._render_text(str(message.get("text") or ""), broadcast, chat, lead)
+                if not text.strip():
+                    continue
+                sent = await self.telegram_sender.send_message(
+                    project_id=broadcast.project_id,
+                    bot_id=broadcast.bot_id,
+                    external_chat_id=chat.external_chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                )
+                if not sent:
+                    raise RuntimeError("Telegram sendMessage failed")
+                await service.create_message(
+                    chat_id=chat_id,
+                    project_id=broadcast.project_id,
+                    data=MessageCreate(
+                        message_type=MessageType.TEXT,
+                        sender_type=SenderType.BOT,
+                        body=text,
+                        reply_markup=reply_markup,
+                    ),
+                    send_to_telegram=False,
+                )
+                continue
+
+            media_result = await self._send_broadcast_media(
+                broadcast=broadcast,
+                chat=chat,
+                lead=lead,
+                message=message,
+                message_type=message_type,
+                reply_markup=reply_markup,
+            )
             await service.create_message(
                 chat_id=chat_id,
                 project_id=broadcast.project_id,
                 data=MessageCreate(
-                    message_type=MessageType.TEXT,
+                    message_type=message_type,
                     sender_type=SenderType.BOT,
-                    body=text,
+                    body=None,
+                    caption=media_result["caption"],
+                    telegram_file_id=media_result["telegram_file_id"],
+                    file_name=media_result["file_name"],
+                    mime_type=media_result["mime_type"],
+                    file_size=media_result["file_size"],
+                    raw_payload_json=media_result["raw_payload_json"],
                     reply_markup=reply_markup,
                 ),
                 send_to_telegram=False,
             )
-            sent = await self.telegram_sender.send_message(
-                project_id=broadcast.project_id,
-                bot_id=broadcast.bot_id,
-                external_chat_id=chat.external_chat_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-            if not sent:
-                raise RuntimeError("Telegram sendMessage failed")
         await self._run_after_send_action(broadcast=broadcast, chat=chat)
 
     async def _snapshot_recipients(
@@ -509,11 +647,130 @@ class BroadcastService:
 
     def _validate_content(self, content: dict[str, Any]) -> None:
         messages = self._content_messages(content)
-        if not any(str(message.get("text") or "").strip() for message in messages):
+        has_sendable_content = False
+        for message in messages:
+            message_type = self._broadcast_message_type(message)
+            if message_type == MessageType.TEXT:
+                if str(message.get("text") or "").strip():
+                    has_sendable_content = True
+                continue
+            media = message.get("media")
+            if not isinstance(media, dict):
+                raise HTTPException(status_code=422, detail="Media message requires media metadata")
+            if not media.get("upload_id") and not media.get("telegram_file_id"):
+                raise HTTPException(status_code=422, detail="Media message requires upload_id or telegram_file_id")
+            has_sendable_content = True
+        if not has_sendable_content:
             raise HTTPException(status_code=422, detail="Broadcast content is empty")
         action = content.get("after_send_action") if isinstance(content, dict) else None
         if isinstance(action, dict) and action.get("type") == "start_funnel" and not action.get("funnel_id"):
             raise HTTPException(status_code=422, detail="start_funnel action requires funnel_id")
+
+    async def _send_broadcast_media(
+        self,
+        *,
+        broadcast: Broadcast,
+        chat: Chat,
+        lead: Lead | None,
+        message: dict[str, Any],
+        message_type: str,
+        reply_markup: dict | None,
+    ) -> dict[str, Any]:
+        media = message.get("media")
+        if not isinstance(media, dict):
+            raise RuntimeError("Media message is missing media metadata")
+
+        source = str(media.get("source") or "upload")
+        media_file: str | Path
+        upload_id: UUID | None = None
+        file_name = str(media.get("file_name") or "").strip() or None
+        mime_type = str(media.get("mime_type") or "").strip() or None
+        file_size = self._safe_int(media.get("file_size"))
+        if source == "telegram_file_id":
+            telegram_file_id = str(media.get("telegram_file_id") or "").strip()
+            if not telegram_file_id:
+                raise RuntimeError("Media message is missing telegram_file_id")
+            media_file = telegram_file_id
+        else:
+            try:
+                upload_id = UUID(str(media.get("upload_id") or ""))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Media message has invalid upload_id") from exc
+            upload = await self.repo.get_upload_in_project(upload_id, broadcast.project_id)
+            if upload is None:
+                raise RuntimeError("Broadcast upload is missing or unavailable")
+            if upload.media_type != message_type:
+                raise RuntimeError("Broadcast upload media type does not match message type")
+            if (
+                upload.status == "uploaded"
+                and upload.expires_at is not None
+                and upload.expires_at <= datetime.now(timezone.utc)
+            ):
+                raise RuntimeError("Broadcast upload has expired")
+            path = Path(upload.storage_path)
+            if not upload.storage_path or not path.exists():
+                raise RuntimeError("Broadcast upload file is missing from private storage")
+            media_file = path
+            file_name = upload.file_name
+            mime_type = upload.mime_type
+            file_size = upload.file_size
+
+        raw_caption = message.get("caption")
+        if raw_caption is None:
+            raw_caption = message.get("text")
+        caption = await self._render_text(str(raw_caption or ""), broadcast, chat, lead)
+
+        if message_type == MessageType.PHOTO:
+            telegram_result = await self.telegram_sender.send_photo(
+                project_id=broadcast.project_id,
+                bot_id=broadcast.bot_id,
+                external_chat_id=chat.external_chat_id,
+                photo=media_file,
+                caption=caption,
+                reply_markup=reply_markup,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        elif message_type == MessageType.VIDEO:
+            telegram_result = await self.telegram_sender.send_video(
+                project_id=broadcast.project_id,
+                bot_id=broadcast.bot_id,
+                external_chat_id=chat.external_chat_id,
+                video=media_file,
+                caption=caption,
+                reply_markup=reply_markup,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        elif message_type == MessageType.DOCUMENT:
+            telegram_result = await self.telegram_sender.send_document(
+                project_id=broadcast.project_id,
+                bot_id=broadcast.bot_id,
+                external_chat_id=chat.external_chat_id,
+                document=media_file,
+                caption=caption,
+                reply_markup=reply_markup,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        else:
+            raise RuntimeError("Unsupported broadcast media type")
+
+        if not telegram_result:
+            raise RuntimeError(f"Telegram send{message_type.title()} failed")
+
+        if upload_id is not None:
+            await self.repo.mark_upload_used(upload_id, broadcast.project_id)
+
+        return {
+            "caption": caption or None,
+            "telegram_file_id": self._extract_telegram_file_id(message_type, telegram_result)
+            or (str(media.get("telegram_file_id") or "").strip() or None),
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "file_size": file_size,
+            "raw_payload_json": {"telegram_result": telegram_result, "broadcast_media": media},
+        }
 
     @staticmethod
     def _content_messages(content: dict[str, Any]) -> list[dict[str, Any]]:
@@ -522,6 +779,42 @@ class BroadcastService:
             return [item for item in raw_messages if isinstance(item, dict)]
         text = content.get("text") if isinstance(content, dict) else None
         return [{"type": "text", "text": text or ""}]
+
+    @staticmethod
+    def _content_has_media(content: dict[str, Any]) -> bool:
+        return any(
+            BroadcastService._broadcast_message_type(message)
+            in {MessageType.PHOTO, MessageType.VIDEO, MessageType.DOCUMENT}
+            for message in BroadcastService._content_messages(content)
+        )
+
+    @staticmethod
+    def _broadcast_message_type(message: dict[str, Any]) -> str:
+        message_type = str(message.get("type") or MessageType.TEXT).strip().lower()
+        if message_type in {MessageType.PHOTO, MessageType.VIDEO, MessageType.DOCUMENT}:
+            return message_type
+        return MessageType.TEXT
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_telegram_file_id(message_type: str, result: dict[str, Any]) -> str | None:
+        if message_type == MessageType.PHOTO:
+            photos = result.get("photo")
+            if isinstance(photos, list) and photos:
+                largest = photos[-1]
+                if isinstance(largest, dict):
+                    return largest.get("file_id")
+            return None
+        media_payload = result.get(message_type)
+        if isinstance(media_payload, dict):
+            return media_payload.get("file_id")
+        return None
 
     async def _render_text(
         self,
@@ -753,6 +1046,14 @@ class BroadcastService:
                 status_code=422,
                 detail="Large audience requires confirmation text",
             )
+
+    @staticmethod
+    def _max_upload_size(media_type: str) -> int:
+        if media_type == "photo":
+            return settings.BROADCAST_PHOTO_MAX_BYTES
+        if media_type == "video":
+            return settings.BROADCAST_VIDEO_MAX_BYTES
+        return settings.BROADCAST_DOCUMENT_MAX_BYTES
 
     async def _get_or_404(self, broadcast_id: UUID, project_id: UUID) -> Broadcast:
         broadcast = await self.repo.get_in_project(broadcast_id, project_id)

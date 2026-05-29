@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -59,3 +60,43 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     # Partial unique index — declared via DDL in the Alembic migration.
     # UNIQUE(chat_id, external_message_id) WHERE external_message_id IS NOT NULL
     # Cannot be expressed purely through __table_args__ Index; must be in migration.
+
+
+class MessageUpload(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "message_uploads"
+    __table_args__ = (
+        Index("ix_message_uploads_project_id", "project_id"),
+        Index("ix_message_uploads_chat_id", "chat_id"),
+        Index("ix_message_uploads_created_by_user_id", "created_by_user_id"),
+        Index("ix_message_uploads_status", "status"),
+        Index("ix_message_uploads_expires_at", "expires_at"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chats.id"), nullable=False
+    )
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="uploaded",
+        server_default="uploaded",
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id"), nullable=True
+    )
+
+    chat: Mapped[Chat] = relationship("Chat")
+    created_by: Mapped[Optional[User]] = relationship("User")
+    sent_message: Mapped[Optional[Message]] = relationship("Message")

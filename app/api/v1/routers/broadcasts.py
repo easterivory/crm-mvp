@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
@@ -16,6 +16,7 @@ from app.schemas.broadcast import (
     BroadcastTemplateOut,
     BroadcastTemplateUpdate,
     BroadcastUpdate,
+    BroadcastUploadOut,
     SendNowRequest,
 )
 from app.schemas.common import PaginatedResponse
@@ -50,6 +51,20 @@ async def create_broadcast(
         actor=current_user,
         project_id=project_id,
         data=data,
+    )
+
+
+@router.post("/uploads", response_model=BroadcastUploadOut, status_code=status.HTTP_201_CREATED)
+async def upload_broadcast_media(
+    file: UploadFile = File(...),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BroadcastUploadOut:
+    return await BroadcastService(db).upload_media(
+        actor=current_user,
+        project_id=project_id,
+        file=file,
     )
 
 

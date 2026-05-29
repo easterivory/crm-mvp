@@ -27,7 +27,11 @@ export default function ReviewStep({
 }: ReviewStepProps) {
   const count = audience?.count ?? 0
   const requiresConfirmation = count > 1000
-  const firstLine = content.messages[0]?.text?.split('\n')[0] || 'Нет текста'
+  const firstMessage = content.messages[0]
+  const firstLine =
+    firstMessage?.type === 'photo' || firstMessage?.type === 'video' || firstMessage?.type === 'document'
+      ? `${firstMessage.type === 'photo' ? 'Фото' : firstMessage.type === 'video' ? 'Видео' : 'Документ'}: ${firstMessage.media?.file_name || 'файл'}`
+      : firstMessage?.text?.split('\n')[0] || 'Нет текста'
   const startsFunnel = content.after_send_action?.type === 'start_funnel'
 
   return (

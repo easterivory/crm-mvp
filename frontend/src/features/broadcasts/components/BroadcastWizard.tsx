@@ -17,6 +17,7 @@ import {
   type BroadcastContent,
   type BroadcastOption,
   type BroadcastTemplate,
+  type BroadcastUpload,
 } from '../types'
 import AudienceBuilder from './AudienceBuilder'
 import AudiencePreviewCard from './AudiencePreviewCard'
@@ -37,6 +38,7 @@ type BroadcastWizardProps = {
   funnels: BroadcastOption[]
   templates: BroadcastTemplate[]
   onSaveTemplate: (name: string, content: BroadcastContent) => Promise<void>
+  onUploadMedia: (file: File) => Promise<BroadcastUpload>
   onBack: () => void
   onSaved: (broadcast: Broadcast) => void
 }
@@ -69,6 +71,7 @@ export default function BroadcastWizard({
   funnels,
   templates,
   onSaveTemplate,
+  onUploadMedia,
   onBack,
   onSaved,
 }: BroadcastWizardProps) {
@@ -99,7 +102,12 @@ export default function BroadcastWizard({
     () => bots.find((bot) => bot.id === botId)?.label ?? '',
     [botId, bots],
   )
-  const hasContent = content.messages.some((message) => message.text.trim())
+  const hasContent = content.messages.some((message) => {
+    if (message.type === 'photo' || message.type === 'video' || message.type === 'document') {
+      return Boolean(message.media?.upload_id || message.media?.telegram_file_id)
+    }
+    return Boolean(message.text?.trim())
+  })
   const requiresLargeAudienceConfirmation = (audience?.count ?? 0) > 1000
   const hasLargeAudienceConfirmation =
     !requiresLargeAudienceConfirmation || confirmation.trim() === 'ПОДТВЕРЖДАЮ'
@@ -312,6 +320,7 @@ export default function BroadcastWizard({
               templates={templates}
               onChange={setContent}
               onApplyTemplate={setContent}
+              onUploadMedia={onUploadMedia}
               onSaveTemplate={async () => {
                 const templateName = window.prompt('Название шаблона', name)
                 if (templateName) {

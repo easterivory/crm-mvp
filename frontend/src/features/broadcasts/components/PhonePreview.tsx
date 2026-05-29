@@ -5,7 +5,12 @@ type PhonePreviewProps = {
 }
 
 export default function PhonePreview({ content }: PhonePreviewProps) {
-  const messages = content.messages.filter((message) => message.text?.trim())
+  const messages = content.messages.filter((message) => {
+    if (message.type === 'photo' || message.type === 'video' || message.type === 'document') {
+      return Boolean(message.media?.upload_id || message.media?.telegram_file_id)
+    }
+    return Boolean(message.text?.trim())
+  })
 
   return (
     <div className="rounded-[28px] border border-white/10 bg-[#070b13] p-3 shadow-card">
@@ -20,7 +25,21 @@ export default function PhonePreview({ content }: PhonePreviewProps) {
                   {message.delay_seconds ? (
                     <p className="mb-1 text-[11px] text-accent-100/70">+{message.delay_seconds} сек.</p>
                   ) : null}
-                  <p className="whitespace-pre-wrap">{message.text}</p>
+                  {message.type === 'photo' || message.type === 'video' || message.type === 'document' ? (
+                    <div className="mb-2 rounded-xl border border-accent-100/15 bg-black/20 p-3">
+                      <p className="text-xs font-semibold text-accent-50">
+                        {message.type === 'photo'
+                          ? 'Фото'
+                          : message.type === 'video'
+                            ? 'Видео'
+                            : 'Документ'}
+                      </p>
+                      <p className="mt-1 truncate text-[11px] text-gray-400">
+                        {message.media?.file_name || 'Файл'}
+                      </p>
+                    </div>
+                  ) : null}
+                  <p className="whitespace-pre-wrap">{message.type === 'text' || !message.type ? message.text : message.caption}</p>
                   {message.buttons?.length ? (
                     <div className="mt-2 grid gap-1">
                       {message.buttons.map((button, buttonIndex) => (

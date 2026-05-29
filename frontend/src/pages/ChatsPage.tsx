@@ -11,9 +11,11 @@ import {
   Mic,
   MessageSquareText,
   Music,
+  Paperclip,
   Send,
   UserRound,
   Video,
+  X,
 } from 'lucide-react'
 import {
   FormEvent,
@@ -72,6 +74,18 @@ type Message = {
   file_size: number | null
   media_group_id: string | null
   created_at: string
+}
+
+type ChatAttachmentUpload = {
+  upload_id: string
+  chat_id: string
+  project_id: string
+  file_name: string
+  mime_type: string
+  file_size: number
+  media_type: 'photo' | 'video' | 'document'
+  status: string
+  expires_at: string | null
 }
 
 type TrackingLinkOption = {
@@ -316,11 +330,15 @@ export default function ChatsPage() {
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
+  const [attachment, setAttachment] = useState<ChatAttachmentUpload | null>(null)
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null)
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
   const [isLeadOpen, setIsLeadOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const didMountProjectRef = useRef(false)
 
   const selectedChat = useMemo(
@@ -613,6 +631,19 @@ export default function ChatsPage() {
   }, [loadMessages, selectedChatId])
 
   useEffect(() => {
+    setAttachment(null)
+    setDraft('')
+    if (attachmentPreviewUrl) {
+      window.URL.revokeObjectURL(attachmentPreviewUrl)
+      setAttachmentPreviewUrl(null)
+    }
+    if (attachmentInputRef.current) {
+      attachmentInputRef.current.value = ''
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChatId])
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [messages])
 
@@ -630,28 +661,80 @@ export default function ChatsPage() {
 
   const sendMessage = async () => {
     const text = draft.trim()
-    if (!selectedChatId || !text || isSending) {
+    if (!selectedChatId || (!text && !attachment) || isSending) {
       return
     }
 
     setIsSending(true)
 
     try {
-      const { data } = await api.post<Message>(`/chats/${selectedChatId}/messages`, {
-        body: text,
-        message_type: 'text',
-        sender_id: user?.id ?? null,
-        sender_type: 'manager',
-      }, {
+      const payload = attachment
+        ? {
+            caption: text || null,
+            message_type: attachment.media_type,
+            sender_id: user?.id ?? null,
+            sender_type: 'manager',
+            upload_id: attachment.upload_id,
+          }
+        : {
+            body: text,
+            message_type: 'text',
+            sender_id: user?.id ?? null,
+            sender_type: 'manager',
+          }
+      const { data } = await api.post<Message>(`/chats/${selectedChatId}/messages`, payload, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setMessages((current) => [...current, data])
       setDraft('')
+      clearAttachment()
       await loadChats()
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsSending(false)
+    }
+  }
+
+  const clearAttachment = () => {
+    setAttachment(null)
+    if (attachmentPreviewUrl) {
+      window.URL.revokeObjectURL(attachmentPreviewUrl)
+      setAttachmentPreviewUrl(null)
+    }
+    if (attachmentInputRef.current) {
+      attachmentInputRef.current.value = ''
+    }
+  }
+
+  const handleAttachmentSelected = async (file: File | null | undefined) => {
+    if (!file || !selectedChatId || isUploadingAttachment) {
+      return
+    }
+    setIsUploadingAttachment(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const { data } = await api.post<ChatAttachmentUpload>(
+        `/chats/${selectedChatId}/attachments`,
+        formData,
+        {
+          params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+          headers: { 'Content-Type': 'multipart/form-data' },
+        },
+      )
+      clearAttachment()
+      setAttachment(data)
+      if (data.media_type === 'photo') {
+        setAttachmentPreviewUrl(window.URL.createObjectURL(file))
+      }
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) || 'Не удалось загрузить вложение.' })
+      if (attachmentInputRef.current) {
+        attachmentInputRef.current.value = ''
+      }
+    } finally {
+      setIsUploadingAttachment(false)
     }
   }
 
@@ -996,20 +1079,72 @@ export default function ChatsPage() {
         </div>
 
         <form className="shrink-0 border-t border-white/5 bg-surface/80 p-4" onSubmit={handleSend}>
+          {attachment ? (
+            <div className="mb-3 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
+              {attachment.media_type === 'photo' && attachmentPreviewUrl ? (
+                <img
+                  src={attachmentPreviewUrl}
+                  alt=""
+                  className="h-12 w-12 shrink-0 rounded-lg object-cover"
+                />
+              ) : (
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06]">
+                  {(() => {
+                    const Icon = getMediaIcon(attachment.media_type)
+                    return <Icon size={18} />
+                  })()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-white">{attachment.file_name}</p>
+                <p className="text-xs text-gray-500">
+                  {[mediaLabels[attachment.media_type], formatFileSize(attachment.file_size)].filter(Boolean).join(' · ')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={clearAttachment}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 transition hover:border-red-300/40 hover:text-red-100"
+                title="Убрать вложение"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ) : null}
           <div className="flex items-end gap-3">
+            <input
+              ref={attachmentInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip"
+              className="hidden"
+              onChange={(event) => void handleAttachmentSelected(event.target.files?.[0])}
+            />
+            <button
+              type="button"
+              onClick={() => attachmentInputRef.current?.click()}
+              disabled={!selectedChat || isSending || isUploadingAttachment}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Прикрепить файл"
+            >
+              {isUploadingAttachment ? (
+                <LoaderCircle size={18} className="animate-spin" />
+              ) : (
+                <Paperclip size={18} />
+              )}
+            </button>
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 disabled:bg-background/40"
-              placeholder="Ответить в Telegram"
+              placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
               disabled={!selectedChat || isSending}
               rows={2}
             />
             <button
               type="submit"
               title="Отправить сообщение"
-              disabled={!selectedChat || !draft.trim() || isSending}
+              disabled={!selectedChat || (!draft.trim() && !attachment) || isSending || isUploadingAttachment}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
