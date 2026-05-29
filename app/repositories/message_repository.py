@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import extract, func, select, update
+from sqlalchemy import case, extract, func, select, update
 from sqlalchemy.orm import aliased
 
 from app.core.constants import SenderType
@@ -24,7 +24,17 @@ class MessageRepository(BaseRepository[Message]):
         stmt = select(Message).where(Message.chat_id == chat_id)
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
-        stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc()).limit(limit).offset(offset)
+        sender_order = case(
+            (Message.sender_type == SenderType.USER, 0),
+            (Message.sender_type == SenderType.BOT, 1),
+            (Message.sender_type == SenderType.MANAGER, 2),
+            else_=3,
+        )
+        stmt = (
+            stmt.order_by(Message.created_at.asc(), sender_order.asc(), Message.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
