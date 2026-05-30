@@ -191,3 +191,6 @@ Do not accept a deploy where frontend build is skipped silently.
 
 # Test deploy - Sat May 30 21:13:51 MSK 2026
 Автоматический деплой настроен!
+# Auto-deploy test - 2026-05-30 21:23:22
+
+GitHub Actions автоматический деплой активирован!
