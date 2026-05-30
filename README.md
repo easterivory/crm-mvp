@@ -188,3 +188,6 @@ curl -fsS http://<dev-host>/api/v1/health
 ```
 
 Do not accept a deploy where frontend build is skipped silently.
+
+# Test deploy - Sat May 30 21:13:51 MSK 2026
+Автоматический деплой настроен!
