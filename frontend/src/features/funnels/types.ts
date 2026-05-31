@@ -37,6 +37,7 @@ export type FunnelVersion = {
   updated_at: string
   published_at: string | null
   is_active_for_bot: boolean
+  is_hold_active: boolean
 }
 
 export type FunnelStep = {

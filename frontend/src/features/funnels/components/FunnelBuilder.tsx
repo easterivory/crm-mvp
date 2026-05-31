@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useNotificationStore } from '../../../shared/lib'
-import { client } from '../../../api/client'
+import client from '../../../api/client'
 import {
   createDraftVersion,
   createDraftFromVersion,
