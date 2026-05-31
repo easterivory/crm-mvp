@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.common import OrmBase
+
 
 class PartnerIntegrationCreate(BaseModel):
     project_id: UUID
@@ -20,18 +22,15 @@ class PartnerIntegrationUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-class PartnerIntegrationOut(BaseModel):
+class PartnerIntegrationOut(OrmBase):
     id: UUID
     project_id: UUID
     name: str
     postback_url: str
-    auth_token: Optional[str]
+    has_auth_token: bool = False
     is_active: bool
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class SubmitLeadRequest(BaseModel):
@@ -39,7 +38,7 @@ class SubmitLeadRequest(BaseModel):
     partner_integration_id: UUID
 
 
-class LeadSubmissionOut(BaseModel):
+class LeadSubmissionOut(OrmBase):
     id: UUID
     lead_id: UUID
     partner_integration_id: UUID
@@ -49,6 +48,3 @@ class LeadSubmissionOut(BaseModel):
     error_message: Optional[str]
     submitted_at: datetime
     completed_at: Optional[datetime]
-
-    class Config:
-        from_attributes = True

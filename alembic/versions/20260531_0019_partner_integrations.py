@@ -18,7 +18,7 @@ depends_on = None
 def upgrade():
     op.create_table(
         'partner_integrations',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', postgresql.UUID(as_uuid=True), server_default=sa.text('gen_random_uuid()'), nullable=False),
         sa.Column('project_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('name', sa.String(), nullable=False),
         sa.Column('postback_url', sa.String(), nullable=False),
@@ -26,13 +26,19 @@ def upgrade():
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.PrimaryKeyConstraint('id')
+        sa.PrimaryKeyConstraint('id'),
+        sa.ForeignKeyConstraint(
+            ['project_id'],
+            ['projects.id'],
+            name='fk_partner_integrations_project_id_projects',
+            ondelete='CASCADE',
+        )
     )
     op.create_index('ix_partner_integrations_project_id', 'partner_integrations', ['project_id'])
 
     op.create_table(
         'lead_submissions',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', postgresql.UUID(as_uuid=True), server_default=sa.text('gen_random_uuid()'), nullable=False),
         sa.Column('lead_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('partner_integration_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('status', sa.String(), nullable=False),
