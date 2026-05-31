@@ -28,7 +28,6 @@ from app.models.funnel import (  # noqa: F401
     FunnelPushRule,
     FunnelScheduledJob,
     FunnelStep,
-    FunnelStepLog,
     FunnelVersion,
 )
 from app.models.partner import PartnerIntegration, LeadSubmission  # noqa: F401
@@ -67,7 +66,6 @@ __all__ = [
     "FunnelPushRule",
     "FunnelScheduledJob",
     "FunnelFieldMapping",
-    "FunnelStepLog",
     "ChatFunnelState",
     "PartnerIntegration",
     "LeadSubmission",
