@@ -1,7 +1,7 @@
 """partner_integrations
 
 Revision ID: 20260531_0019
-Revises: 20260531_0018
+Revises: 20260529_0016
 Create Date: 2026-05-31 17:53:00.000000
 
 """
@@ -18,8 +18,8 @@ depends_on = None
 def upgrade():
     op.create_table(
         'partner_integrations',
-        sa.Column('id', sa.String(), nullable=False),
-        sa.Column('project_id', sa.String(), nullable=False),
+        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('project_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('name', sa.String(), nullable=False),
         sa.Column('postback_url', sa.String(), nullable=False),
         sa.Column('auth_token', sa.String(), nullable=True),
@@ -32,9 +32,9 @@ def upgrade():
 
     op.create_table(
         'lead_submissions',
-        sa.Column('id', sa.String(), nullable=False),
-        sa.Column('lead_id', sa.String(), nullable=False),
-        sa.Column('partner_integration_id', sa.String(), nullable=False),
+        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('lead_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('partner_integration_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('status', sa.String(), nullable=False),
         sa.Column('request_payload', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('response_payload', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
