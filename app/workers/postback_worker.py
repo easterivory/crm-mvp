@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import async_session_maker
+from app.core.database import async_session_factory
 from app.models.lead import Lead
 from app.models.partner import LeadSubmission, PartnerIntegration
 
@@ -33,7 +33,7 @@ async def send_lead_postback(
     Returns:
         dict with status and submission_id
     """
-    async with async_session_maker() as db:
+    async with async_session_factory() as db:
         try:
             lead_uuid = UUID(lead_id)
             partner_uuid = UUID(partner_integration_id)
