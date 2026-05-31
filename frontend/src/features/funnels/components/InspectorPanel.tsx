@@ -8,6 +8,7 @@ import StepSettingsPanel from './StepSettingsPanel'
 
 type InspectorPanelProps = {
   selectedStep: FunnelStep | null
+  projectId: string
   selectedEdge: FunnelEdge | null
   steps: FunnelStep[]
   edges: FunnelEdge[]
@@ -25,6 +26,7 @@ type InspectorPanelProps = {
 
 export default function InspectorPanel({
   selectedStep,
+  projectId,
   selectedEdge,
   steps,
   edges,
@@ -62,6 +64,7 @@ export default function InspectorPanel({
           <>
             <StepSettingsPanel
               step={selectedStep}
+              projectId={projectId}
               steps={steps}
               onUpdate={onUpdateStep}
               onDelete={onDeleteStep}

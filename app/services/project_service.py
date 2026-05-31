@@ -3,6 +3,7 @@ ProjectService - project CRUD and validation.
 """
 import re
 import unicodedata
+from datetime import date
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -12,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import AuditAction, EntityType, RoleName
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectStatus, ProjectUpdate
+from app.repositories.project_metrics_repository import ProjectMetricsRepository
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectDashboardHeaderOut,
+    ProjectOut,
+    ProjectStatus,
+    ProjectUpdate,
+)
 from app.services.audit_service import AuditService
 
 
@@ -22,6 +30,7 @@ PROJECT_STATUSES: set[str] = {"active", "archived"}
 class ProjectService:
     def __init__(self, db: AsyncSession) -> None:
         self.project_repo = ProjectRepository(db)
+        self.metrics_repo = ProjectMetricsRepository(db)
         self.audit = AuditService(db)
 
     async def list_projects(
@@ -182,6 +191,26 @@ class ProjectService:
             meta={"name": project.name, "slug": project.slug},
         )
         return ProjectOut.model_validate(project)
+
+    async def dashboard_header(
+        self,
+        project_id: UUID,
+        actor: User,
+    ) -> ProjectDashboardHeaderOut:
+        if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Dashboard header metrics are available only for admins",
+            )
+        self._ensure_project_access(actor, project_id)
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        metrics = await self.metrics_repo.header_metrics(project_id, date.today())
+        return ProjectDashboardHeaderOut(**metrics)
 
     async def _generate_unique_slug(self, name: str) -> str:
         base_slug = self._slugify(name)

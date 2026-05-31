@@ -14,6 +14,7 @@ from app.models.lead import Lead
 from app.models.partner import LeadSubmission, PartnerIntegration
 from app.models.user import User
 from app.repositories.partner_repository import PartnerIntegrationRepository
+from app.repositories.lead_repository import LeadRepository
 from app.schemas.partner import (
     LeadSubmissionOut,
     PartnerIntegrationCreate,
@@ -28,6 +29,7 @@ class PartnerService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.repo = PartnerIntegrationRepository(db)
+        self.lead_repo = LeadRepository(db)
 
     async def list_integrations(
         self,
@@ -206,6 +208,16 @@ class PartnerService:
         if response.status_code in (200, 201, 202):
             submission.status = "success"
             submission.error_message = None
+            updated = await self.lead_repo.set_status_by_code(
+                lead.id,
+                lead.project_id,
+                "submitted",
+            )
+            if updated is None:
+                logger.warning(
+                    "Postback succeeded but submitted status is missing lead_id=%s",
+                    lead.id,
+                )
         else:
             submission.status = "failed"
             submission.error_message = f"HTTP {response.status_code}: {response.text[:500]}"

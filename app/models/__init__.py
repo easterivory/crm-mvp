@@ -27,6 +27,7 @@ from app.models.funnel import (  # noqa: F401
     FunnelFieldMapping,
     FunnelPushRule,
     FunnelScheduledJob,
+    FunnelStepLog,
     FunnelStep,
     FunnelVersion,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "FunnelEdge",
     "FunnelPushRule",
     "FunnelScheduledJob",
+    "FunnelStepLog",
     "FunnelFieldMapping",
     "ChatFunnelState",
     "PartnerIntegration",

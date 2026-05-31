@@ -10,12 +10,18 @@ import VisualRuleBuilder from './VisualRuleBuilder'
 type ConditionBlockSettingsProps = {
   step: FunnelStep
   steps: FunnelStep[]
+  tags?: Array<{ id: string; name?: string }>
+  statuses?: Array<{ id: string; code?: string; name?: string }>
+  trackingLinks?: Array<{ id: string; code?: string; title?: string; ref_code?: string }>
   onConfigChange: (config: Record<string, unknown>) => void
 }
 
 export default function ConditionBlockSettings({
   step,
   steps,
+  tags = [],
+  statuses = [],
+  trackingLinks = [],
   onConfigChange,
 }: ConditionBlockSettingsProps) {
   const mode = textValue(step.config_json, 'mode') || 'all'
@@ -40,11 +46,17 @@ export default function ConditionBlockSettings({
           <option value="all">Все условия / AND</option>
           <option value="any">Любое условие / OR</option>
           <option value="simple_yes_no">Да / Нет</option>
+          {step.block_type === 'generic_hold_router' ? (
+            <option value="hold_mode">Hold toggle</option>
+          ) : null}
         </select>
       </label>
 
       <VisualRuleBuilder
         rules={conditions}
+        tags={tags}
+        statuses={statuses}
+        trackingLinks={trackingLinks}
         onChange={(nextConditions) => patchConfig({ conditions: nextConditions })}
       />
 

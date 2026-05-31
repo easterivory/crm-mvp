@@ -1,12 +1,14 @@
 import { ChevronDown, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
+import api from '../../../api/client'
 import { getBlockLabel, mvpBlockTypes, universalBlocks } from '../blockCatalog'
 import {
   actionTypes,
   boolValue,
   collectConfiguredOutputs,
   configId,
+  leadFields,
   normalizeActions,
   numberValue,
   textValue,
@@ -20,18 +22,67 @@ import UnsupportedBlockCard from './UnsupportedBlockCard'
 
 type StepSettingsPanelProps = {
   step: FunnelStep | null
+  projectId: string
   steps: FunnelStep[]
   onUpdate: (stepId: string, patch: Partial<FunnelStep>) => void
   onDelete: (stepId: string) => void
 }
 
+type BuilderRef = {
+  id: string
+  name?: string
+  code?: string
+  title?: string
+  ref_code?: string
+}
+
 export default function StepSettingsPanel({
   step,
+  projectId,
   steps,
   onUpdate,
   onDelete,
 }: StepSettingsPanelProps) {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
+  const [tags, setTags] = useState<BuilderRef[]>([])
+  const [statuses, setStatuses] = useState<BuilderRef[]>([])
+  const [trackingLinks, setTrackingLinks] = useState<BuilderRef[]>([])
+  const [newTagName, setNewTagName] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const loadRefs = async () => {
+      try {
+        const [tagsResponse, statusesResponse, linksResponse] = await Promise.all([
+          api.get('/tags', { params: { project_id: projectId, limit: 100, offset: 0 } }),
+          api.get('/leads/statuses'),
+          api.get('/tracking/links', { params: { project_id: projectId, limit: 100, offset: 0 } }),
+        ])
+        if (cancelled) return
+        setTags(tagsResponse.data.items ?? [])
+        setStatuses(statusesResponse.data ?? [])
+        setTrackingLinks(linksResponse.data.items ?? [])
+      } catch {
+        if (!cancelled) {
+          setTags([])
+          setStatuses([])
+          setTrackingLinks([])
+        }
+      }
+    }
+    void loadRefs()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  const createTag = async () => {
+    const name = newTagName.trim()
+    if (!name) return
+    const { data } = await api.post('/tags', { name }, { params: { project_id: projectId } })
+    setTags((current) => [...current, data])
+    setNewTagName('')
+  }
 
   if (!step) {
     return (
@@ -185,7 +236,25 @@ export default function StepSettingsPanel({
           ) : null}
 
           {step.block_type === 'generic_condition' ? (
-            <ConditionBlockSettings step={step} steps={steps} onConfigChange={replaceConfig} />
+            <ConditionBlockSettings
+              step={step}
+              steps={steps}
+              tags={tags}
+              statuses={statuses}
+              trackingLinks={trackingLinks}
+              onConfigChange={replaceConfig}
+            />
+          ) : null}
+
+          {step.block_type === 'generic_hold_router' ? (
+            <ConditionBlockSettings
+              step={step}
+              steps={steps}
+              tags={tags}
+              statuses={statuses}
+              trackingLinks={trackingLinks}
+              onConfigChange={replaceConfig}
+            />
           ) : null}
 
           {step.block_type === 'generic_crm_action' ? (
@@ -229,21 +298,44 @@ export default function StepSettingsPanel({
                     ))}
                   </select>
                   {action.type.includes('tag') && action.type !== 'clear_tags' ? (
-                    <input
-                      value={action.tag_id ?? ''}
-                      onChange={(event) =>
-                        patchConfig({
-                          actions: actions.map((item, idx) =>
-                            idx === index ? { ...item, tag_id: event.target.value } : item,
-                          ),
-                        })
-                      }
-                      placeholder="tag_id"
-                      className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-                    />
+                    <div className="grid gap-2">
+                      <select
+                        value={action.tag_id ?? ''}
+                        onChange={(event) =>
+                          patchConfig({
+                            actions: actions.map((item, idx) =>
+                              idx === index ? { ...item, tag_id: event.target.value } : item,
+                            ),
+                          })
+                        }
+                        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                      >
+                        <option value="">Выберите тег</option>
+                        {tags.map((tag) => (
+                          <option key={tag.id} value={tag.id}>
+                            {tag.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex gap-2">
+                        <input
+                          value={newTagName}
+                          onChange={(event) => setNewTagName(event.target.value)}
+                          placeholder="+ Создать тег"
+                          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-xs text-gray-100 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void createTag()}
+                          className="rounded-lg border border-white/10 px-2 text-xs text-gray-100"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
                   ) : null}
                   {action.type === 'set_lead_status' ? (
-                    <input
+                    <select
                       value={action.status ?? ''}
                       onChange={(event) =>
                         patchConfig({
@@ -252,13 +344,19 @@ export default function StepSettingsPanel({
                           ),
                         })
                       }
-                      placeholder="new / in_progress / qualified / lost"
                       className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-                    />
+                    >
+                      <option value="">Выберите статус</option>
+                      {statuses.map((status) => (
+                        <option key={status.id} value={status.code ?? ''}>
+                          {status.name ?? status.code}
+                        </option>
+                      ))}
+                    </select>
                   ) : null}
                   {action.type === 'write_field' ? (
                     <div className="grid gap-2">
-                      <input
+                      <select
                         value={action.field ?? ''}
                         onChange={(event) =>
                           patchConfig({
@@ -267,9 +365,14 @@ export default function StepSettingsPanel({
                             ),
                           })
                         }
-                        placeholder="field"
                         className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-                      />
+                      >
+                        {leadFields.map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         value={action.value ?? ''}
                         onChange={(event) =>

@@ -35,7 +35,7 @@ async def create_tag(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TagOut:
-    _ensure_settings_admin(current_user)
+    _ensure_can_create_tag(current_user)
     return await TagService(db).create_tag(project_id, data)
 
 
@@ -88,6 +88,14 @@ async def remove_tag_from_lead(
         tag_id=tag_id,
         project_id=project_id,
     )
+
+
+def _ensure_can_create_tag(current_user) -> None:
+    if current_user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super_admin/admin/manager can create project tags",
+        )
 
 
 def _ensure_settings_admin(current_user) -> None:

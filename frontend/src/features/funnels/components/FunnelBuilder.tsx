@@ -146,10 +146,10 @@ export default function FunnelBuilder({
     setIsLoadingAnalytics(true)
     try {
       const response = await client.get(
-        `/api/v1/funnels/${funnelId}/versions/${activeVersionId}/analytics/drop-off`,
+        `/funnels/${funnelId}/versions/${activeVersionId}/analytics/drop-off`,
         { params: { project_id: projectId } },
       )
-      setAnalyticsData(response.data)
+      setAnalyticsData(response.data.steps ?? [])
     } catch {
       notify({ tone: 'error', message: 'Не удалось загрузить аналитику.' })
       setAnalyticsData([])
@@ -714,6 +714,7 @@ export default function FunnelBuilder({
           <HoldModeToggle
             funnelId={funnelId}
             versionId={activeVersionId}
+            projectId={projectId}
             isHoldActive={selectedVersion?.is_hold_active ?? false}
             onToggle={() => void loadVersions()}
           />
@@ -726,6 +727,7 @@ export default function FunnelBuilder({
             <HoldModeToggle
               funnelId={funnelId}
               versionId={activeVersionId}
+              projectId={projectId}
               isHoldActive={selectedVersion?.is_hold_active ?? false}
               onToggle={() => void loadVersions()}
             />
@@ -750,6 +752,7 @@ export default function FunnelBuilder({
             </div>
             <InspectorPanel
               selectedStep={selectedStep}
+              projectId={projectId}
               selectedEdge={selectedEdge}
               steps={graph.steps}
               edges={graph.edges}

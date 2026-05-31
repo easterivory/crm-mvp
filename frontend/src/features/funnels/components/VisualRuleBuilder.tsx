@@ -10,6 +10,9 @@ import {
 
 type VisualRuleBuilderProps = {
   rules: ConditionRuleConfig[]
+  tags?: Array<{ id: string; name?: string }>
+  statuses?: Array<{ id: string; code?: string; name?: string }>
+  trackingLinks?: Array<{ id: string; code?: string; title?: string; ref_code?: string }>
   onChange: (rules: ConditionRuleConfig[]) => void
 }
 
@@ -20,13 +23,22 @@ function fieldOptionsForSource(source: string) {
   if (source === 'last_answer') {
     return [['', 'Последний ответ']] as const
   }
+  if (source === 'hold_mode') {
+    return [['', 'Hold-флаг версии']] as const
+  }
   if (source === 'operator_assigned') {
     return [['', 'Назначение']] as const
   }
   return [['', 'ID / код / значение']] as const
 }
 
-export default function VisualRuleBuilder({ rules, onChange }: VisualRuleBuilderProps) {
+export default function VisualRuleBuilder({
+  rules,
+  tags = [],
+  statuses = [],
+  trackingLinks = [],
+  onChange,
+}: VisualRuleBuilderProps) {
   const update = (index: number, patch: Partial<ConditionRuleConfig>) => {
     onChange(rules.map((rule, idx) => (idx === index ? { ...rule, ...patch } : rule)))
   }
@@ -97,11 +109,13 @@ export default function VisualRuleBuilder({ rules, onChange }: VisualRuleBuilder
               </div>
 
               {rule.operator !== 'exists' && rule.operator !== 'empty' ? (
-                <input
-                  value={rule.value}
-                  onChange={(event) => update(index, { value: event.target.value })}
+                <RuleValueInput
+                  rule={rule}
+                  tags={tags}
+                  statuses={statuses}
+                  trackingLinks={trackingLinks}
                   placeholder={`${sourceLabel ?? 'Значение'}...`}
-                  className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                  onChange={(value) => update(index, { value })}
                 />
               ) : null}
 
@@ -128,5 +142,97 @@ export default function VisualRuleBuilder({ rules, onChange }: VisualRuleBuilder
         )
       })}
     </div>
+  )
+}
+
+function RuleValueInput({
+  rule,
+  tags,
+  statuses,
+  trackingLinks,
+  placeholder,
+  onChange,
+}: {
+  rule: ConditionRuleConfig
+  tags: Array<{ id: string; name?: string }>
+  statuses: Array<{ id: string; code?: string; name?: string }>
+  trackingLinks: Array<{ id: string; code?: string; title?: string; ref_code?: string }>
+  placeholder: string
+  onChange: (value: string) => void
+}) {
+  if (rule.source === 'tag') {
+    return (
+      <select
+        value={rule.value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+      >
+        <option value="">Выберите тег</option>
+        {tags.map((tag) => (
+          <option key={tag.id} value={tag.id}>
+            {tag.name}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
+  if (rule.source === 'status') {
+    return (
+      <select
+        value={rule.value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+      >
+        <option value="">Выберите статус</option>
+        {statuses.map((status) => (
+          <option key={status.id} value={status.code ?? ''}>
+            {status.name ?? status.code}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
+  if (rule.source === 'tracking_link') {
+    return (
+      <select
+        value={rule.value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+      >
+        <option value="">Выберите ссылку</option>
+        {trackingLinks.map((link) => {
+          const value = link.ref_code ?? link.code ?? link.id
+          return (
+            <option key={link.id} value={value}>
+              {link.title ?? link.code ?? link.ref_code}
+            </option>
+          )
+        })}
+      </select>
+    )
+  }
+
+  if (rule.source === 'hold_mode' || rule.source === 'operator_assigned') {
+    return (
+      <select
+        value={rule.value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+      >
+        <option value="true">Да</option>
+        <option value="false">Нет</option>
+      </select>
+    )
+  }
+
+  return (
+    <input
+      value={rule.value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+    />
   )
 }

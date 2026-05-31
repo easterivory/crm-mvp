@@ -16,6 +16,7 @@ from app.repositories.lead_repository import LeadRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.message import MessageCreate
 from app.services.funnel_block_registry import LEAD_FIELD_KEYS
+from app.services.lead_scoring_service import LeadScoringService
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class FunnelRuntimeService:
         from app.services.message_service import MessageService
 
         self.message_service = MessageService(db)
+        self.scoring = LeadScoringService(db)
 
     async def get_published_funnel_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         return await self.repo.get_published_for_bot(bot_id)
@@ -227,6 +229,7 @@ class FunnelRuntimeService:
                 return True
 
             await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
+            await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
             runtime_json = self._runtime_with_answer(
                 state.runtime_json,
                 step_id=step.id,
@@ -337,6 +340,7 @@ class FunnelRuntimeService:
                 step_id=step.id,
                 answer=answer,
             )
+            await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
         runtime_json = self._runtime_with_answer(
             state.runtime_json,
             step_id=step.id,
@@ -432,6 +436,8 @@ class FunnelRuntimeService:
                 custom_values[mapping.lead_field_key] = value
 
         await self.repo.update_lead_mapped_fields(lead.id, direct_values, custom_values)
+        if direct_values or custom_values:
+            await self.scoring.update_lead_score(lead.id)
 
     async def move_to_next_step(self, *, chat_id: UUID, edge_id: UUID) -> Optional[FunnelStep]:
         state = await self.repo.get_chat_funnel_state(chat_id)
@@ -582,6 +588,7 @@ class FunnelRuntimeService:
                 entered_step_at=datetime.now(timezone.utc),
                 waiting_for_answer=False,
             )
+            await self._log_step_event(chat_id=chat_id, step=current, event_type="entered")
 
             if current.step_type == "trigger":
                 next_step = await self._move_from_step(
@@ -1165,6 +1172,17 @@ class FunnelRuntimeService:
                 return "false"
             return "fallback"
 
+        if step.block_type == "generic_hold_router":
+            hold_enabled = bool(await self._condition_source_value(chat_id, "hold_mode", None))
+            await self._apply_hold_call_plan(chat_id=chat_id, step=step, hold_enabled=hold_enabled)
+            logger.info(
+                "Hold router evaluated chat_id=%s step_id=%s is_hold_active=%s",
+                chat_id,
+                step.id,
+                hold_enabled,
+            )
+            return "true" if hold_enabled else "false"
+
         raw_conditions = config.get("conditions")
         if not isinstance(raw_conditions, list) or not raw_conditions:
             return "true" if answer else "false"
@@ -1201,6 +1219,11 @@ class FunnelRuntimeService:
 
         if source == "last_answer":
             return (runtime_json or {}).get("last_answer")
+        if source == "hold_mode":
+            if state is None:
+                return False
+            version = await self.repo.get_version(state.funnel_version_id)
+            return bool(version.is_hold_active) if version is not None else False
         if lead is None:
             return None
         if source == "lead_field":
@@ -1243,6 +1266,51 @@ class FunnelRuntimeService:
                 return False
             return left > right if operator == "gt" else left < right
         return str(actual or "").strip().lower() == str(expected or "").strip().lower()
+
+    async def _apply_hold_call_plan(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        hold_enabled: bool,
+    ) -> None:
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if lead is None:
+            return
+        config = step.config_json or {}
+        if config.get("set_call_time") is False:
+            return
+        value = (
+            str(config.get("tomorrow_label") or "Завтра")
+            if hold_enabled
+            else str(config.get("today_label") or "Сегодня")
+        )
+        await self.repo.update_lead_mapped_fields(
+            lead.id,
+            {"call_time_text": value},
+            {},
+        )
+        await self.scoring.update_lead_score(lead.id)
+
+    async def _log_step_event(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        event_type: str,
+    ) -> None:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if state is None or lead is None:
+            return
+        await self.repo.create_step_log(
+            lead_id=lead.id,
+            funnel_id=state.funnel_id,
+            funnel_version_id=state.funnel_version_id,
+            step_id=step.id,
+            step_name=step.title,
+            event_type=event_type,
+        )
 
     @staticmethod
     def _select_edge(edges, answer: Optional[str]):

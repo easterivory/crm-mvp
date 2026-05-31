@@ -75,6 +75,7 @@ export const conditionSources = [
   ['tag', 'Тег'],
   ['status', 'Статус'],
   ['tracking_link', 'Tracking link'],
+  ['hold_mode', 'Hold включён'],
   ['operator_assigned', 'Назначен менеджер'],
 ] as const
 

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.dependencies import get_current_user
 from app.core.database import get_db
 from app.schemas.common import PaginatedResponse
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate
+from app.schemas.project import ProjectCreate, ProjectDashboardHeaderOut, ProjectOut, ProjectUpdate
 from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -43,6 +43,15 @@ async def get_project(
     db: AsyncSession = Depends(get_db),
 ) -> ProjectOut:
     return await ProjectService(db).get_project(project_id, actor=current_user)
+
+
+@router.get("/{project_id}/dashboard-header", response_model=ProjectDashboardHeaderOut)
+async def get_dashboard_header(
+    project_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ProjectDashboardHeaderOut:
+    return await ProjectService(db).dashboard_header(project_id, actor=current_user)
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)

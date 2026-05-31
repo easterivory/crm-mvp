@@ -75,6 +75,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("not_has_tag", "Нет тега"),
         ("lead_status_equals", "По статусу лида"),
         ("tracking_link_equals", "По tracking link"),
+        ("generic_hold_router", "Hold: сегодня/завтра"),
         ("source_equals", "По источнику"),
         ("operator_assigned", "Оператор назначен"),
         ("operator_not_assigned", "Оператор не назначен"),
@@ -384,14 +385,16 @@ class FunnelBlockRegistry:
                 errors.append("Поле для сохранения ответа не поддерживается.")
             if answer_type == "choice" and not self._list(config, "choices", "options", "buttons"):
                 errors.append("Для выбора нужен хотя бы один вариант.")
-        if block_type == "generic_condition":
+        if block_type in {"generic_condition", "generic_hold_router"}:
             mode = str(config.get("mode") or "all").strip()
-            if mode not in {"all", "any", "simple_yes_no"}:
-                errors.append("Режим условия должен быть all, any или simple_yes_no.")
+            if mode not in {"all", "any", "simple_yes_no", "hold_mode"}:
+                errors.append("Режим условия должен быть all, any, simple_yes_no или hold_mode.")
             conditions = config.get("conditions")
-            if not isinstance(conditions, list) or not conditions:
+            if block_type == "generic_condition" and (
+                not isinstance(conditions, list) or not conditions
+            ):
                 errors.append("Добавьте хотя бы одно условие.")
-            else:
+            elif isinstance(conditions, list):
                 for index, condition in enumerate(conditions, start=1):
                     if not isinstance(condition, dict):
                         errors.append(f"Условие #{index} должно быть объектом.")

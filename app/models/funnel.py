@@ -93,6 +93,9 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    is_hold_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     funnel: Mapped[Funnel] = relationship("Funnel", back_populates="versions")
     steps: Mapped[list[FunnelStep]] = relationship(
@@ -335,6 +338,41 @@ class FunnelScheduledJob(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
 
     chat: Mapped[Chat] = relationship("Chat")
     state: Mapped[Optional[ChatFunnelState]] = relationship("ChatFunnelState")
+    funnel: Mapped[Funnel] = relationship("Funnel")
+    version: Mapped[FunnelVersion] = relationship("FunnelVersion")
+    step: Mapped[FunnelStep] = relationship("FunnelStep")
+
+
+class FunnelStepLog(Base, UUIDPrimaryKey, TimestampMixin):
+    """Append-only step events for drop-off analytics."""
+
+    __tablename__ = "funnel_step_logs"
+    __table_args__ = (
+        Index("ix_funnel_step_logs_lead_id", "lead_id"),
+        Index("ix_funnel_step_logs_funnel_version_id", "funnel_version_id"),
+        Index("ix_funnel_step_logs_step_id", "step_id"),
+        Index("ix_funnel_step_logs_event_type", "event_type"),
+        Index("ix_funnel_step_logs_created_at", "created_at"),
+    )
+
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False
+    )
+    funnel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=False
+    )
+    funnel_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_versions.id"), nullable=False
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_steps.id"), nullable=False
+    )
+    step_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="entered", server_default="entered"
+    )
+
+    lead: Mapped[Lead] = relationship("Lead")
     funnel: Mapped[Funnel] = relationship("Funnel")
     version: Mapped[FunnelVersion] = relationship("FunnelVersion")
     step: Mapped[FunnelStep] = relationship("FunnelStep")

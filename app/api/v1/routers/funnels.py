@@ -12,8 +12,10 @@ from app.schemas.funnel import (
     FunnelCopyIn,
     FunnelCopyOut,
     FunnelCreate,
+    FunnelDropOffAnalyticsOut,
     FunnelGraphIn,
     FunnelGraphOut,
+    FunnelHoldModeUpdate,
     FunnelOut,
     FunnelUpdate,
     FunnelValidationOut,
@@ -199,6 +201,43 @@ async def publish_version(
     db: AsyncSession = Depends(get_db),
 ) -> FunnelVersionOut:
     return await FunnelService(db).publish_version(
+        funnel_id=funnel_id,
+        version_id=version_id,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+
+@router.patch("/{funnel_id}/versions/{version_id}/hold", response_model=FunnelVersionOut)
+async def set_hold_mode(
+    funnel_id: UUID,
+    version_id: UUID,
+    data: FunnelHoldModeUpdate,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelVersionOut:
+    return await FunnelService(db).set_hold_mode(
+        funnel_id=funnel_id,
+        version_id=version_id,
+        project_id=project_id,
+        data=data,
+        current_user=current_user,
+    )
+
+
+@router.get(
+    "/{funnel_id}/versions/{version_id}/analytics/drop-off",
+    response_model=FunnelDropOffAnalyticsOut,
+)
+async def get_drop_off_analytics(
+    funnel_id: UUID,
+    version_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelDropOffAnalyticsOut:
+    return await FunnelService(db).get_drop_off_analytics(
         funnel_id=funnel_id,
         version_id=version_id,
         project_id=project_id,

@@ -21,6 +21,7 @@ import { BotSelector } from '../features/bots'
 import { ProjectSelector } from '../features/projects'
 import { t } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
+import DashboardHeaderMetrics from './DashboardHeaderMetrics'
 
 const SIDEBAR_COLLAPSED_KEY = 'crm:sidebarCollapsed'
 
@@ -203,8 +204,9 @@ export default function MainLayout() {
             </div>
           </div>
 
-          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end lg:flex lg:justify-end">
+          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] sm:items-end lg:flex lg:justify-end">
             <ProjectSelector />
+            <DashboardHeaderMetrics />
             <BotSelector />
 
             <button

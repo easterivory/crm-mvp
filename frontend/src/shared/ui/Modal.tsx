@@ -4,7 +4,7 @@ import { X } from 'lucide-react'
 
 type ModalProps = {
   title: string
-  description?: string
+  description?: ReactNode
   children: ReactNode
   onClose: () => void
   maxWidthClassName?: string
@@ -52,7 +52,7 @@ export default function Modal({
               {title}
             </h2>
             {description ? (
-              <p className="mt-1 text-sm text-gray-500">{description}</p>
+              <div className="mt-1 text-sm text-gray-500">{description}</div>
             ) : null}
           </div>
           <button

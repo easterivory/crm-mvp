@@ -87,6 +87,24 @@ export const universalBlocks: UniversalBlock[] = [
     },
   },
   {
+    stepType: 'condition',
+    blockType: 'generic_hold_router',
+    label: 'Hold: сегодня/завтра',
+    defaultTitle: 'Hold-режим',
+    description: 'Проверяет toggle воронки: Hold включён ведёт в ветку завтра, выключен — сегодня.',
+    defaultConfig: {
+      mode: 'hold_mode',
+      set_call_time: true,
+      today_label: 'Сегодня',
+      tomorrow_label: 'Завтра',
+      conditions: [{ id: 'cond_hold', source: 'hold_mode', field: '', operator: 'equals', value: 'true' }],
+      outcomes: [
+        { id: 'true', label: 'Hold включён · завтра', target_step_id: '' },
+        { id: 'false', label: 'Hold выключен · сегодня', target_step_id: '' },
+      ],
+    },
+  },
+  {
     stepType: 'action',
     blockType: 'generic_crm_action',
     label: 'CRM-действие',
@@ -141,6 +159,7 @@ export const blockGroups: BlockMenuGroup[] = [
     accent: 'amber',
     items: [
       universalBlocks.find((item) => item.blockType === 'generic_condition') as UniversalBlock,
+      universalBlocks.find((item) => item.blockType === 'generic_hold_router') as UniversalBlock,
       {
         stepType: 'condition',
         blockType: 'reserved_randomizer',
@@ -245,6 +264,7 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
     title: 'Условие',
     items: [
       { stepType: 'condition', blockType: 'generic_condition', label: 'Универсальное условие', defaultTitle: 'Условие' },
+      { stepType: 'condition', blockType: 'generic_hold_router', label: 'Hold: сегодня/завтра', defaultTitle: 'Hold-режим' },
       { stepType: 'condition', blockType: 'button_equals', label: 'По кнопке', defaultTitle: 'Условие по кнопке' },
       { stepType: 'condition', blockType: 'text_contains', label: 'По тексту', defaultTitle: 'Текст содержит' },
       { stepType: 'condition', blockType: 'field_exists', label: 'Поле заполнено', defaultTitle: 'Поле заполнено' },

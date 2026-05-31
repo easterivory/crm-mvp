@@ -19,10 +19,13 @@ from app.schemas.funnel import (
     FunnelCopyIn,
     FunnelCopyOut,
     FunnelCreate,
+    FunnelDropOffAnalyticsOut,
+    FunnelDropOffStepOut,
     FunnelEdgeOut,
     FunnelFieldMappingOut,
     FunnelGraphIn,
     FunnelGraphOut,
+    FunnelHoldModeUpdate,
     FunnelOut,
     FunnelPushRuleOut,
     FunnelStepIn,
@@ -428,6 +431,60 @@ class FunnelService:
         await self.repo.update_in_project(funnel_id, project_id)
         return FunnelVersionOut.model_validate(published).model_copy(
             update={"is_active_for_bot": True}
+        )
+
+    async def set_hold_mode(
+        self,
+        *,
+        funnel_id: UUID,
+        version_id: UUID,
+        project_id: UUID,
+        data: FunnelHoldModeUpdate,
+        current_user: User,
+    ) -> FunnelVersionOut:
+        self._ensure_write_allowed(current_user)
+        version = await self._get_version_or_404(funnel_id, version_id, project_id)
+        updated = await self.repo.update_version_hold_mode(
+            version.id,
+            is_hold_active=data.is_hold_active,
+        )
+        assert updated is not None
+        return FunnelVersionOut.model_validate(updated)
+
+    async def get_drop_off_analytics(
+        self,
+        *,
+        funnel_id: UUID,
+        version_id: UUID,
+        project_id: UUID,
+        current_user: User,
+    ) -> FunnelDropOffAnalyticsOut:
+        self._ensure_read_allowed(current_user)
+        await self._get_version_or_404(funnel_id, version_id, project_id)
+        rows = await self.repo.get_drop_off_rows(version_id)
+        first_count = int(rows[0]["entered_leads"] or 0) if rows else 0
+        previous_count = first_count
+        steps: list[FunnelDropOffStepOut] = []
+        for row in rows:
+            entered = int(row["entered_leads"] or 0)
+            conversion_from_start = (entered / first_count * 100) if first_count else 0.0
+            conversion_from_previous = (entered / previous_count * 100) if previous_count else 0.0
+            steps.append(
+                FunnelDropOffStepOut(
+                    step_id=row["step_id"],
+                    step_title=row["step_title"],
+                    step_type=row["step_type"],
+                    block_type=row["block_type"],
+                    entered_leads=entered,
+                    conversion_from_start=round(conversion_from_start, 2),
+                    conversion_from_previous=round(conversion_from_previous, 2),
+                )
+            )
+            previous_count = entered
+        return FunnelDropOffAnalyticsOut(
+            funnel_id=funnel_id,
+            version_id=version_id,
+            steps=steps,
         )
 
     async def _activate_version_for_bot(

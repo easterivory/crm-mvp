@@ -1,10 +1,11 @@
 import { LoaderCircle } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 import Modal from './Modal'
 
 type ConfirmDialogProps = {
   title: string
-  description: string
+  description: ReactNode
   confirmLabel: string
   cancelLabel?: string
   isLoading?: boolean

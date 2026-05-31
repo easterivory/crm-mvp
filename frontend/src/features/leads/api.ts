@@ -38,3 +38,23 @@ export async function rejectLead(leadId: string, projectId: string) {
   })
   return data
 }
+
+export async function fetchPartnerIntegrations(projectId: string) {
+  const { data } = await api.get('/partners', {
+    params: { project_id: projectId },
+  })
+  return data as Array<{ id: string; name: string; is_active: boolean }>
+}
+
+export async function submitLeadToPartner(
+  leadId: string,
+  partnerIntegrationId: string,
+  projectId: string,
+) {
+  const { data } = await api.post(
+    '/partners/submit',
+    { lead_id: leadId, partner_integration_id: partnerIntegrationId },
+    { params: { project_id: projectId } },
+  )
+  return data
+}

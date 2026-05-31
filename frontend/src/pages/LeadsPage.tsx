@@ -7,8 +7,10 @@ import LeadCard from '../features/leads/components/LeadCard'
 import {
   fetchLeads,
   fetchLeadStatuses,
+  fetchPartnerIntegrations,
   rejectLead,
   submitLead,
+  submitLeadToPartner,
   type Lead,
   type LeadStatus,
 } from '../features/leads'
@@ -24,6 +26,7 @@ type ProjectTag = {
 }
 
 type PendingAction = { type: 'submit' | 'reject'; lead: Lead } | null
+type PartnerIntegration = { id: string; name: string; is_active: boolean }
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10)
@@ -67,6 +70,9 @@ export default function LeadsPage() {
   const [notice, setNotice] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
+  const [partnerLead, setPartnerLead] = useState<Lead | null>(null)
+  const [partners, setPartners] = useState<PartnerIntegration[]>([])
+  const [selectedPartnerId, setSelectedPartnerId] = useState('')
   const [mutatingLeadId, setMutatingLeadId] = useState<string | null>(null)
 
   const activeLeadCount = useMemo(
@@ -124,9 +130,28 @@ export default function LeadsPage() {
     }
   }, [dateFrom, dateTo, loadTags, search, selectedBotIds, selectedProjectId, statusFilter, tagFilter])
 
+  const loadPartners = useCallback(async () => {
+    if (!selectedProjectId) {
+      setPartners([])
+      return
+    }
+    try {
+      const items = await fetchPartnerIntegrations(selectedProjectId)
+      const activeItems = items.filter((item) => item.is_active)
+      setPartners(activeItems)
+      setSelectedPartnerId((current) => current || activeItems[0]?.id || '')
+    } catch {
+      setPartners([])
+    }
+  }, [selectedProjectId])
+
   useEffect(() => {
     void loadPage()
   }, [loadPage])
+
+  useEffect(() => {
+    void loadPartners()
+  }, [loadPartners])
 
   const handleConfirmAction = async () => {
     if (!pendingAction || !selectedProjectId || mutatingLeadId) {
@@ -150,6 +175,25 @@ export default function LeadsPage() {
       await loadPage()
     } catch (err) {
       setError(getErrorMessage(err))
+    } finally {
+      setMutatingLeadId(null)
+    }
+  }
+
+  const handlePartnerSubmit = async () => {
+    if (!partnerLead || !selectedProjectId || !selectedPartnerId || mutatingLeadId) {
+      return
+    }
+    setMutatingLeadId(partnerLead.id)
+    setError('')
+    setNotice('')
+    try {
+      await submitLeadToPartner(partnerLead.id, selectedPartnerId, selectedProjectId)
+      setNotice('Лид поставлен в очередь отправки в CRM партнёра.')
+      setPartnerLead(null)
+      await loadPage()
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось поставить лида в очередь партнёра.'))
     } finally {
       setMutatingLeadId(null)
     }
@@ -278,6 +322,7 @@ export default function LeadsPage() {
                 isMutating={mutatingLeadId === lead.id}
                 onSubmit={(item) => setPendingAction({ type: 'submit', lead: item })}
                 onReject={(item) => setPendingAction({ type: 'reject', lead: item })}
+                onSubmitToPartner={partners.length > 0 ? (item) => setPartnerLead(item) : undefined}
               />
             ))}
           </div>
@@ -297,6 +342,33 @@ export default function LeadsPage() {
           isLoading={mutatingLeadId === pendingAction.lead.id}
           onCancel={() => setPendingAction(null)}
           onConfirm={() => void handleConfirmAction()}
+        />
+      ) : null}
+
+      {partnerLead ? (
+        <ConfirmDialog
+          title="Подать в CRM партнёра?"
+          description={
+            <div className="space-y-3">
+              <p>Лид будет поставлен в очередь postback-воркера. Статус изменится на Submitted после успешного ответа партнёра.</p>
+              <select
+                value={selectedPartnerId}
+                onChange={(event) => setSelectedPartnerId(event.target.value)}
+                className="h-10 w-full rounded-xl border border-white/10 bg-background px-3 text-sm text-gray-100 outline-none"
+              >
+                {partners.map((partner) => (
+                  <option key={partner.id} value={partner.id}>
+                    {partner.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          }
+          confirmLabel="Поставить в очередь"
+          tone="primary"
+          isLoading={mutatingLeadId === partnerLead.id}
+          onCancel={() => setPartnerLead(null)}
+          onConfirm={() => void handlePartnerSubmit()}
         />
       ) : null}
     </section>

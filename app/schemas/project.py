@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -44,6 +45,14 @@ class ProjectRead(OrmBase):
 
 class ProjectOut(ProjectRead):
     pass
+
+
+class ProjectDashboardHeaderOut(BaseModel):
+    date: date
+    leads_today: int
+    chats_today: int
+    spend_today: Decimal
+    cpl_today: Decimal
 
 
 ProjectListResponse = PaginatedResponse[ProjectRead]

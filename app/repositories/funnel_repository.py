@@ -15,6 +15,7 @@ from app.models.funnel import (
     FunnelFieldMapping,
     FunnelPushRule,
     FunnelScheduledJob,
+    FunnelStepLog,
     FunnelStep,
     FunnelVersion,
 )
@@ -353,6 +354,21 @@ class FunnelRepository(BaseRepository[Funnel]):
         values["published_at"] = published_at
         result = await self.db.execute(
             update(FunnelVersion).where(FunnelVersion.id == version_id).values(**values)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_version(version_id)
+
+    async def update_version_hold_mode(
+        self,
+        version_id: UUID,
+        *,
+        is_hold_active: bool,
+    ) -> Optional[FunnelVersion]:
+        result = await self.db.execute(
+            update(FunnelVersion)
+            .where(FunnelVersion.id == version_id)
+            .values(is_hold_active=is_hold_active, updated_at=func.now())
         )
         if result.rowcount == 0:
             return None
@@ -718,6 +734,57 @@ class FunnelRepository(BaseRepository[Funnel]):
         for row in result.mappings().all():
             contexts[row["chat_id"]] = dict(row)
         return contexts
+
+    async def create_step_log(
+        self,
+        *,
+        lead_id: UUID,
+        funnel_id: UUID,
+        funnel_version_id: UUID,
+        step_id: UUID,
+        step_name: str,
+        event_type: str,
+    ) -> FunnelStepLog:
+        log = FunnelStepLog(
+            lead_id=lead_id,
+            funnel_id=funnel_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step_id,
+            step_name=step_name,
+            event_type=event_type,
+        )
+        self.db.add(log)
+        await self.db.flush()
+        return log
+
+    async def get_drop_off_rows(self, funnel_version_id: UUID) -> list[dict]:
+        result = await self.db.execute(
+            select(
+                FunnelStep.id.label("step_id"),
+                FunnelStep.title.label("step_title"),
+                FunnelStep.step_type.label("step_type"),
+                FunnelStep.block_type.label("block_type"),
+                func.count(func.distinct(FunnelStepLog.lead_id)).label("entered_leads"),
+            )
+            .select_from(FunnelStep)
+            .outerjoin(
+                FunnelStepLog,
+                (FunnelStepLog.step_id == FunnelStep.id)
+                & (FunnelStepLog.event_type == "entered"),
+            )
+            .where(FunnelStep.funnel_version_id == funnel_version_id)
+            .group_by(
+                FunnelStep.id,
+                FunnelStep.title,
+                FunnelStep.step_type,
+                FunnelStep.block_type,
+                FunnelStep.position_x,
+                FunnelStep.position_y,
+                FunnelStep.created_at,
+            )
+            .order_by(FunnelStep.position_x.asc(), FunnelStep.position_y.asc(), FunnelStep.created_at.asc())
+        )
+        return [dict(row) for row in result.mappings().all()]
 
     async def get_step(self, step_id: UUID) -> Optional[FunnelStep]:
         result = await self.db.execute(select(FunnelStep).where(FunnelStep.id == step_id))

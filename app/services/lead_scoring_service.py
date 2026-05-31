@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -55,7 +55,9 @@ class LeadScoringService:
         if lead.custom_fields and len(lead.custom_fields) > 0:
             score += 10
 
-        return min(score, 100)
+        score += self._quality_adjustment(lead)
+
+        return max(0, min(score, 100))
 
     async def update_lead_score(self, lead_id: UUID) -> Optional[int]:
         """Calculate and update the lead's score_percent field."""
@@ -66,8 +68,34 @@ class LeadScoringService:
 
         if lead:
             lead.score_percent = score
-            await self.db.commit()
-            await self.db.refresh(lead)
             return score
 
         return None
+
+    @staticmethod
+    def _quality_adjustment(lead: Lead) -> int:
+        values: list[Any] = [
+            lead.name,
+            lead.phone,
+            lead.username,
+            lead.country,
+            lead.call_time_text,
+            lead.has_card,
+            *(lead.custom_fields or {}).values(),
+        ]
+        joined = " ".join(str(value).lower() for value in values if value is not None)
+        adjustment = 0
+        if any(marker in joined for marker in {"до 100", "100$", "$100", "до $100"}):
+            adjustment -= 20
+        if lead.has_card is True or any(
+            marker in joined
+            for marker in {
+                "есть карта",
+                "карта есть",
+                "да, есть",
+                "имею карту",
+                "card yes",
+            }
+        ):
+            adjustment += 30
+        return adjustment

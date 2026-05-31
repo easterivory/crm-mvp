@@ -140,6 +140,20 @@ export async function publishFunnelVersion(
   return data
 }
 
+export async function setFunnelHoldMode(
+  funnelId: string,
+  versionId: string,
+  projectId: string,
+  isHoldActive: boolean,
+): Promise<FunnelVersion> {
+  const { data } = await api.patch<FunnelVersion>(
+    `/funnels/${funnelId}/versions/${versionId}/hold`,
+    { is_hold_active: isHoldActive },
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
 export async function fetchBotActiveFunnel(
   botId: string,
   projectId: string,

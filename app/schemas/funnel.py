@@ -70,11 +70,32 @@ class FunnelVersionOut(OrmBase):
     created_at: datetime
     updated_at: datetime
     published_at: Optional[datetime]
+    is_hold_active: bool = False
     is_active_for_bot: bool = False
 
 
 class FunnelVersionUpdate(BaseModel):
     status: Optional[FunnelVersionStatus] = None
+
+
+class FunnelHoldModeUpdate(BaseModel):
+    is_hold_active: bool
+
+
+class FunnelDropOffStepOut(BaseModel):
+    step_id: uuid.UUID
+    step_title: str
+    step_type: str
+    block_type: str
+    entered_leads: int
+    conversion_from_start: float
+    conversion_from_previous: float
+
+
+class FunnelDropOffAnalyticsOut(BaseModel):
+    funnel_id: uuid.UUID
+    version_id: uuid.UUID
+    steps: list[FunnelDropOffStepOut] = Field(default_factory=list)
 
 
 class FunnelStepIn(BaseModel):
