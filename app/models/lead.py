@@ -56,6 +56,7 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     call_time_text: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     has_card: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    score_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     custom_fields: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,

@@ -48,6 +48,7 @@ from app.schemas.lead import (
     LeadUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.lead_scoring_service import LeadScoringService
 
 
 class LeadService:
@@ -57,6 +58,7 @@ class LeadService:
         self.chat_repo = ChatRepository(db)
         self.tag_repo = TagRepository(db)
         self.audit = AuditService(db)
+        self.scoring = LeadScoringService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
 
@@ -433,6 +435,10 @@ class LeadService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Lead not found",
             )
+
+        # Recalculate lead score after contact update
+        await self.scoring.update_lead_score(lead_id)
+
         return await self._lead_out(lead)
 
     async def _lead_out(self, lead) -> LeadOut:

@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  BarChart3,
   CheckCircle2,
   CopyPlus,
   LoaderCircle,
@@ -10,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useNotificationStore } from '../../../shared/lib'
+import { client } from '../../../api/client'
 import {
   createDraftVersion,
   createDraftFromVersion,
@@ -29,7 +31,9 @@ import {
 } from '../funnelConfig'
 import type { Funnel, FunnelEdge, FunnelGraph, FunnelStep, FunnelVersion } from '../types'
 import BlockLibrary from './BlockLibrary'
+import DropOffChart from './DropOffChart'
 import FunnelCanvas from './FunnelCanvas'
+import HoldModeToggle from './HoldModeToggle'
 import InspectorPanel from './InspectorPanel'
 import PublishReviewModal from './PublishReviewModal'
 
@@ -131,6 +135,43 @@ export default function FunnelBuilder({
   const [isSaving, setIsSaving] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isPublishOpen, setIsPublishOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'editor' | 'analytics'>('editor')
+  const [analyticsData, setAnalyticsData] = useState<any[]>([])
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+
+  const loadAnalytics = useCallback(async () => {
+    if (!activeVersionId || isLoadingAnalytics) {
+      return
+    }
+    setIsLoadingAnalytics(true)
+    try {
+      const response = await client.get(
+        `/api/v1/funnels/${funnelId}/versions/${activeVersionId}/analytics/drop-off`,
+        { params: { project_id: projectId } },
+      )
+      setAnalyticsData(response.data)
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось загрузить аналитику.' })
+      setAnalyticsData([])
+    } finally {
+      setIsLoadingAnalytics(false)
+    }
+  }, [activeVersionId, funnelId, isLoadingAnalytics, notify, projectId])
+
+  useEffect(() => {
+    if (activeTab === 'analytics') {
+      void loadAnalytics()
+    }
+  }, [activeTab, loadAnalytics])
+
+  const loadVersions = async () => {
+    try {
+      const loadedVersions = await fetchVersions(funnelId, projectId)
+      setVersions(loadedVersions)
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось обновить версии.' })
+    }
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -625,6 +666,18 @@ export default function FunnelBuilder({
         <div className="flex shrink-0 flex-wrap gap-2">
           <button
             type="button"
+            onClick={() => setActiveTab(activeTab === 'editor' ? 'analytics' : 'editor')}
+            className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm transition ${
+              activeTab === 'analytics'
+                ? 'border-accent-300/35 bg-accent-300/10 text-accent-50'
+                : 'border-white/10 bg-white/[0.04] text-gray-100 hover:border-white/20'
+            }`}
+          >
+            <BarChart3 size={15} />
+            {activeTab === 'analytics' ? 'Редактор' : 'Аналитика'}
+          </button>
+          <button
+            type="button"
             onClick={() => void validate()}
             disabled={isValidating}
             className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
@@ -656,44 +709,83 @@ export default function FunnelBuilder({
         Редактор воронок удобнее на компьютере.
       </div>
 
-      <div className="grid min-h-0 flex-1 xl:grid-cols-[280px_minmax(0,1fr)_320px] xl:overflow-hidden">
-        <BlockLibrary onAdd={addBlock} />
-        <div className="min-h-0 overflow-hidden">
-          <FunnelCanvas
-            steps={graph.steps}
-            edges={graph.edges}
-            selectedStepId={selectedStepId}
-            selectedEdgeId={selectedEdgeId}
-            onSelectStep={setSelectedStepId}
-            onSelectEdge={setSelectedEdgeId}
-            onMoveStep={(stepId, position) =>
-              updateStep(stepId, { position_x: position.x, position_y: position.y })
-            }
-            onConnect={connectSteps}
-            onDeleteStep={deleteStep}
+      {activeTab === 'analytics' && (
+        <div className="border-b border-white/8 bg-[#0d1324]/95 px-4 py-3">
+          <HoldModeToggle
+            funnelId={funnelId}
+            versionId={activeVersionId}
+            isHoldActive={selectedVersion?.is_hold_active ?? false}
+            onToggle={() => void loadVersions()}
           />
         </div>
-        <InspectorPanel
-          selectedStep={selectedStep}
-          selectedEdge={selectedEdge}
-          steps={graph.steps}
-          edges={graph.edges}
-          fieldMappings={graph.field_mappings}
-          pushRules={graph.push_rules}
-          hasPublishedVersion={Boolean(funnel.published_version_id)}
-          onUpdateStep={updateStep}
-          onDeleteStep={deleteStep}
-          onUpdateEdge={updateEdge}
-          onRemoveEdge={removeEdge}
-          onSelectEdge={setSelectedEdgeId}
-          onFieldMappingsChange={(field_mappings) =>
-            setGraph((current) => (current ? { ...current, field_mappings } : current))
-          }
-          onPushRulesChange={(push_rules) =>
-            setGraph((current) => (current ? { ...current, push_rules } : current))
-          }
-        />
-      </div>
+      )}
+
+      {activeTab === 'editor' ? (
+        <>
+          <div className="border-b border-white/8 bg-[#0d1324]/95 px-4 py-3">
+            <HoldModeToggle
+              funnelId={funnelId}
+              versionId={activeVersionId}
+              isHoldActive={selectedVersion?.is_hold_active ?? false}
+              onToggle={() => void loadVersions()}
+            />
+          </div>
+
+          <div className="grid min-h-0 flex-1 xl:grid-cols-[280px_minmax(0,1fr)_320px] xl:overflow-hidden">
+            <BlockLibrary onAdd={addBlock} />
+            <div className="min-h-0 overflow-hidden">
+              <FunnelCanvas
+                steps={graph.steps}
+                edges={graph.edges}
+                selectedStepId={selectedStepId}
+                selectedEdgeId={selectedEdgeId}
+                onSelectStep={setSelectedStepId}
+                onSelectEdge={setSelectedEdgeId}
+                onMoveStep={(stepId, position) =>
+                  updateStep(stepId, { position_x: position.x, position_y: position.y })
+                }
+                onConnect={connectSteps}
+                onDeleteStep={deleteStep}
+              />
+            </div>
+            <InspectorPanel
+              selectedStep={selectedStep}
+              selectedEdge={selectedEdge}
+              steps={graph.steps}
+              edges={graph.edges}
+              fieldMappings={graph.field_mappings}
+              pushRules={graph.push_rules}
+              hasPublishedVersion={Boolean(funnel.published_version_id)}
+              onUpdateStep={updateStep}
+              onDeleteStep={deleteStep}
+              onUpdateEdge={updateEdge}
+              onRemoveEdge={removeEdge}
+              onSelectEdge={setSelectedEdgeId}
+              onFieldMappingsChange={(field_mappings) =>
+                setGraph((current) => (current ? { ...current, field_mappings } : current))
+              }
+              onPushRulesChange={(push_rules) =>
+                setGraph((current) => (current ? { ...current, push_rules } : current))
+              }
+            />
+          </div>
+        </>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-6">
+          {isLoadingAnalytics ? (
+            <div className="flex h-full items-center justify-center text-sm text-gray-400">
+              <LoaderCircle size={18} className="mr-2 animate-spin" />
+              Загрузка аналитики
+            </div>
+          ) : analyticsData.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-sm text-gray-400">
+              Нет данных для отображения
+            </div>
+          ) : (
+            <DropOffChart data={analyticsData} />
+          )}
+        </div>
+      )}
 
       {isPublishOpen ? (
         <PublishReviewModal

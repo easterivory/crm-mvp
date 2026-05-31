@@ -68,6 +68,7 @@ class LeadOut(OrmBase):
     country: Optional[str]
     call_time_text: Optional[str]
     has_card: Optional[bool]
+    score_percent: Optional[int]
     custom_fields: dict = Field(default_factory=dict)
     updated_at: datetime
     created_at: datetime

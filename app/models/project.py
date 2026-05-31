@@ -51,3 +51,6 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
     audit_logs: Mapped[list[AuditLog]] = relationship("AuditLog", back_populates="project")
     alerts: Mapped[list[Alert]] = relationship("Alert", back_populates="project")
     daily_stats: Mapped[list[DailyStats]] = relationship("DailyStats", back_populates="project")
+    partner_integrations: Mapped[list[PartnerIntegration]] = relationship(
+        "PartnerIntegration", back_populates="project"
+    )

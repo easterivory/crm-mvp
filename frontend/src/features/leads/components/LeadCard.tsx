@@ -6,6 +6,7 @@ import {
   Send,
   Tag,
   Trash2,
+  TrendingUp,
   UserRound,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -17,6 +18,7 @@ type LeadCardProps = {
   isMutating: boolean
   onSubmit: (lead: Lead) => void
   onReject: (lead: Lead) => void
+  onSubmitToPartner?: (lead: Lead) => void
 }
 
 function formatDate(value: string | null | undefined) {
@@ -52,6 +54,7 @@ export default function LeadCard({
   isMutating,
   onSubmit,
   onReject,
+  onSubmitToPartner,
 }: LeadCardProps) {
   const title =
     lead.contact_name ||
@@ -89,6 +92,13 @@ export default function LeadCard({
           label="Трекинг"
           value={empty(lead.tracking_code ?? lead.tracking_ref_code)}
         />
+        {lead.score_percent !== null && lead.score_percent !== undefined && (
+          <Info
+            icon={<TrendingUp size={15} />}
+            label="Качество лида"
+            value={`${lead.score_percent}%`}
+          />
+        )}
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -116,6 +126,17 @@ export default function LeadCard({
           <Send size={16} />
           Отправить
         </button>
+        {onSubmitToPartner && (
+          <button
+            type="button"
+            onClick={() => onSubmitToPartner(lead)}
+            disabled={isMutating}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <TrendingUp size={16} />
+            Подать в CRM партнёра
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onReject(lead)}

@@ -11,6 +11,7 @@ export type Lead = {
   status_id: string
   phone: string | null
   username: string | null
+  score_percent: number | null
   updated_at: string
   created_at: string
   is_deleted: boolean
