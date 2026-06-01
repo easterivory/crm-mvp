@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,11 +14,25 @@ from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
 class Broadcast(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     __tablename__ = "broadcasts"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','scheduled','processing','paused','completed','cancelled')",
+            name="ck_broadcasts_status",
+        ),
+        CheckConstraint(
+            "media_type IS NULL OR media_type IN ('text','photo','video','voice','video_note','document')",
+            name="ck_broadcasts_media_type",
+        ),
+        CheckConstraint("total_recipients >= 0", name="ck_broadcasts_total_recipients_nonnegative"),
+        CheckConstraint("sent_count >= 0", name="ck_broadcasts_sent_count_nonnegative"),
+        CheckConstraint("failed_count >= 0", name="ck_broadcasts_failed_count_nonnegative"),
         Index("ix_broadcasts_project_id", "project_id"),
         Index("ix_broadcasts_bot_id", "bot_id"),
         Index("ix_broadcasts_status", "status"),
         Index("ix_broadcasts_scheduled_at", "scheduled_at"),
         Index("ix_broadcasts_created_by_user_id", "created_by_user_id"),
+        Index("ix_broadcasts_snippet_id", "snippet_id"),
+        Index("ix_broadcasts_trigger_funnel_id", "trigger_funnel_id"),
+        Index("ix_broadcasts_project_status", "project_id", "status"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -41,6 +55,9 @@ class Broadcast(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         server_default=text("'{}'::jsonb"),
     )
     audience_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total_recipients: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     schedule_type: Mapped[str] = mapped_column(String(20), nullable=False, default="now", server_default="now")
     scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     timezone_mode: Mapped[str] = mapped_column(
@@ -58,12 +75,28 @@ class Broadcast(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
+    snippet_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("project_snippets.id"), nullable=True
+    )
+    media_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    file_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    trigger_funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=True
+    )
+    stop_on_reply: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     project: Mapped[Project] = relationship("Project")
     bot: Mapped[Optional[Bot]] = relationship("Bot")
     created_by: Mapped[Optional[User]] = relationship("User")
+    snippet: Mapped[Optional[ProjectSnippet]] = relationship("ProjectSnippet")
+    trigger_funnel: Mapped[Optional[Funnel]] = relationship("Funnel")
     recipients: Mapped[list[BroadcastRecipient]] = relationship(
         "BroadcastRecipient",
         back_populates="broadcast",
@@ -146,6 +179,10 @@ class BroadcastTemplate(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
 class BroadcastUpload(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "broadcast_uploads"
     __table_args__ = (
+        CheckConstraint(
+            "media_type IN ('photo','video','document','voice','video_note')",
+            name="ck_broadcast_uploads_media_type",
+        ),
         Index("ix_broadcast_uploads_project_id", "project_id"),
         Index("ix_broadcast_uploads_created_by_user_id", "created_by_user_id"),
         Index("ix_broadcast_uploads_status", "status"),

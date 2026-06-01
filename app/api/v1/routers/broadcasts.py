@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
@@ -21,6 +21,7 @@ from app.schemas.broadcast import (
 )
 from app.schemas.common import PaginatedResponse
 from app.services.broadcast_service import BroadcastService
+from app.workers.broadcast_worker import enqueue_broadcast_job
 
 router = APIRouter(prefix="/broadcasts", tags=["broadcasts"])
 
@@ -57,6 +58,7 @@ async def create_broadcast(
 @router.post("/uploads", response_model=BroadcastUploadOut, status_code=status.HTTP_201_CREATED)
 async def upload_broadcast_media(
     file: UploadFile = File(...),
+    media_type: str | None = Form(default=None),
     project_id: UUID = Depends(get_current_project_id),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -65,6 +67,7 @@ async def upload_broadcast_media(
         actor=current_user,
         project_id=project_id,
         file=file,
+        media_type=media_type,
     )
 
 
@@ -135,13 +138,24 @@ async def get_broadcast(
     return await BroadcastService(db).get_broadcast(broadcast_id, project_id)
 
 
-@router.get("/{broadcast_id}/report", response_model=BroadcastReport)
+@router.get("/{broadcast_id}/report", response_model=None)
 async def get_broadcast_report(
     broadcast_id: UUID,
+    format: str = Query(default="json", pattern="^(json|csv)$"),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
-) -> BroadcastReport:
-    return await BroadcastService(db).report(broadcast_id, project_id)
+) -> BroadcastReport | Response:
+    service = BroadcastService(db)
+    if format == "csv":
+        csv_body = await service.error_csv(broadcast_id, project_id)
+        return Response(
+            content=csv_body,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="broadcast-{broadcast_id}-errors.csv"'
+            },
+        )
+    return await service.report(broadcast_id, project_id)
 
 
 @router.patch("/{broadcast_id}", response_model=BroadcastOut)
@@ -205,12 +219,15 @@ async def send_broadcast_now(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BroadcastActionResponse:
-    return await BroadcastService(db).send_now(
+    result = await BroadcastService(db).send_now(
         broadcast_id=broadcast_id,
         actor=current_user,
         project_id=project_id,
         data=data,
     )
+    await db.commit()
+    await enqueue_broadcast_job(result.broadcast.id, project_id)
+    return result
 
 
 @router.post("/{broadcast_id}/cancel", response_model=BroadcastOut)
@@ -248,8 +265,11 @@ async def resume_broadcast(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BroadcastOut:
-    return await BroadcastService(db).resume(
+    result = await BroadcastService(db).resume(
         broadcast_id=broadcast_id,
         actor=current_user,
         project_id=project_id,
     )
+    await db.commit()
+    await enqueue_broadcast_job(result.id, project_id)
+    return result

@@ -238,8 +238,8 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         result = await self.db.execute(
             select(Broadcast)
             .where(
-                Broadcast.status.in_(("sending", "scheduled")),
-                (Broadcast.status == "sending")
+                Broadcast.status.in_(("processing", "scheduled")),
+                (Broadcast.status == "processing")
                 | ((Broadcast.status == "scheduled") & (Broadcast.scheduled_at <= now)),
             )
             .order_by(Broadcast.scheduled_at.asc().nullsfirst(), Broadcast.created_at.asc())
@@ -292,6 +292,45 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             )
         )
 
+    async def increment_progress_counts(
+        self,
+        broadcast_id: UUID,
+        project_id: UUID,
+        *,
+        sent_delta: int = 0,
+        failed_delta: int = 0,
+    ) -> Optional[Broadcast]:
+        values = {}
+        if sent_delta:
+            values["sent_count"] = Broadcast.sent_count + sent_delta
+        if failed_delta:
+            values["failed_count"] = Broadcast.failed_count + failed_delta
+        if not values:
+            return await self.get_in_project(broadcast_id, project_id)
+
+        await self.db.execute(
+            update(Broadcast)
+            .where(Broadcast.id == broadcast_id, Broadcast.project_id == project_id)
+            .values(**values)
+        )
+        return await self.get_in_project(broadcast_id, project_id)
+
+    async def sync_progress_counts(
+        self,
+        broadcast_id: UUID,
+        project_id: UUID,
+    ) -> Optional[Broadcast]:
+        counts = await self.status_counts(broadcast_id)
+        await self.db.execute(
+            update(Broadcast)
+            .where(Broadcast.id == broadcast_id, Broadcast.project_id == project_id)
+            .values(
+                sent_count=counts.get("sent", 0),
+                failed_count=counts.get("failed", 0),
+            )
+        )
+        return await self.get_in_project(broadcast_id, project_id)
+
     async def mark_pending_skipped(self, broadcast_id: UUID, reason: str) -> None:
         await self.db.execute(
             update(BroadcastRecipient)
@@ -339,6 +378,42 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             .limit(limit)
         )
         return [str(item) for item in result.scalars().all() if item]
+
+    async def delivery_error_rows(self, broadcast_id: UUID) -> list[tuple[str, str, str]]:
+        result = await self.db.execute(
+            select(
+                Chat.external_user_id,
+                BroadcastRecipient.status,
+                BroadcastRecipient.last_error,
+            )
+            .join(Chat, Chat.id == BroadcastRecipient.chat_id)
+            .where(
+                BroadcastRecipient.broadcast_id == broadcast_id,
+                BroadcastRecipient.status.in_(("failed", "skipped")),
+            )
+            .order_by(BroadcastRecipient.created_at.asc(), BroadcastRecipient.id.asc())
+        )
+        return [
+            (str(user_id), str(status), str(error or ""))
+            for user_id, status, error in result.all()
+        ]
+
+    async def has_client_reply_after(
+        self,
+        broadcast_id: UUID,
+        since: datetime,
+    ) -> bool:
+        result = await self.db.execute(
+            select(func.count(Chat.id))
+            .join(BroadcastRecipient, BroadcastRecipient.chat_id == Chat.id)
+            .where(
+                BroadcastRecipient.broadcast_id == broadcast_id,
+                Chat.last_client_message_at.is_not(None),
+                Chat.last_client_message_at > since,
+            )
+            .limit(1)
+        )
+        return result.scalar_one() > 0
 
     async def get_recipient_context(self, recipient: BroadcastRecipient):
         result = await self.db.execute(

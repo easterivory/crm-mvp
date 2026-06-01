@@ -9,12 +9,10 @@ from app.schemas.common import OrmBase
 
 BroadcastStatus = Literal[
     "draft",
-    "audience_ready",
     "scheduled",
-    "sending",
+    "processing",
     "paused",
-    "sent",
-    "failed",
+    "completed",
     "cancelled",
 ]
 RecipientStatus = Literal["pending", "sent", "failed", "skipped"]
@@ -35,7 +33,7 @@ class BroadcastUploadOut(BaseModel):
     file_name: str
     mime_type: str
     file_size: int
-    media_type: Literal["photo", "video", "document"]
+    media_type: Literal["photo", "video", "voice", "video_note", "document"]
     status: str
     expires_at: Optional[datetime] = None
 
@@ -88,6 +86,11 @@ class BroadcastBase(BaseModel):
     schedule_type: ScheduleType = "now"
     scheduled_at: Optional[datetime] = None
     timezone_mode: TimezoneMode = "project"
+    snippet_id: Optional[uuid.UUID] = None
+    media_type: Optional[Literal["text", "photo", "video", "voice", "video_note", "document"]] = None
+    file_id: Optional[str] = None
+    trigger_funnel_id: Optional[uuid.UUID] = None
+    stop_on_reply: bool = False
 
 
 class BroadcastCreate(BroadcastBase):
@@ -102,6 +105,11 @@ class BroadcastUpdate(BaseModel):
     schedule_type: Optional[ScheduleType] = None
     scheduled_at: Optional[datetime] = None
     timezone_mode: Optional[TimezoneMode] = None
+    snippet_id: Optional[uuid.UUID] = None
+    media_type: Optional[Literal["text", "photo", "video", "voice", "video_note", "document"]] = None
+    file_id: Optional[str] = None
+    trigger_funnel_id: Optional[uuid.UUID] = None
+    stop_on_reply: Optional[bool] = None
 
 
 class BroadcastScheduleRequest(BaseModel):
@@ -135,12 +143,20 @@ class BroadcastOut(OrmBase):
     content_json: dict[str, Any]
     audience_filter_json: dict[str, Any]
     audience_count: int
+    total_recipients: int = 0
+    sent_count: int = 0
+    failed_count: int = 0
     schedule_type: str
     scheduled_at: Optional[datetime]
     timezone_mode: str
     status: BroadcastStatus
     created_by_user_id: Optional[uuid.UUID]
     created_by_name: Optional[str] = None
+    snippet_id: Optional[uuid.UUID] = None
+    media_type: Optional[str] = None
+    file_id: Optional[str] = None
+    trigger_funnel_id: Optional[uuid.UUID] = None
+    stop_on_reply: bool = False
     started_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
@@ -153,7 +169,10 @@ class BroadcastActionResponse(BaseModel):
 
 
 class BroadcastReport(BaseModel):
+    status: BroadcastStatus = "draft"
     total_recipients: int = 0
+    sent_count: int = 0
+    failed_count: int = 0
     pending: int = 0
     sent: int = 0
     failed: int = 0

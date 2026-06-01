@@ -16,12 +16,10 @@ type BroadcastListProps = {
 
 const statusLabels: Record<string, string> = {
   draft: 'Черновик',
-  audience_ready: 'Аудитория готова',
   scheduled: 'Запланирована',
-  sending: 'Отправляется',
+  processing: 'Отправляется',
   paused: 'Пауза',
-  sent: 'Отправлена',
-  failed: 'Ошибка',
+  completed: 'Завершена',
   cancelled: 'Отменена',
 }
 
@@ -107,7 +105,7 @@ export default function BroadcastList({
               <Copy size={14} />
               Дублировать
             </button>
-            {['scheduled', 'sending'].includes(broadcast.status) ? (
+            {['scheduled', 'processing'].includes(broadcast.status) ? (
               <button
                 type="button"
                 onClick={() => onCancel(broadcast)}
@@ -117,7 +115,7 @@ export default function BroadcastList({
                 Отменить
               </button>
             ) : null}
-            {broadcast.status === 'sending' ? (
+            {broadcast.status === 'processing' ? (
               <button
                 type="button"
                 onClick={() => onPause(broadcast)}

@@ -8,6 +8,7 @@ alembic==1.13.1
 
 # Redis
 redis[asyncio]==5.0.4
+arq==0.26.1
 
 # Pydantic / Settings
 pydantic==2.7.1

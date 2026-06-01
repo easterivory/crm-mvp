@@ -556,25 +556,49 @@ export default function ChatsPage() {
     [botById],
   )
 
-  useEffect(() => {
-    const chatIdFromUrl = searchParams.get('chat_id')
-    if (chatIdFromUrl && chatIdFromUrl !== selectedChatId) {
-      setSelectedChatId(chatIdFromUrl)
-    }
-  }, [searchParams, selectedChatId])
+  const syncChatSearchParams = useCallback(
+    (filters: ChatFiltersState, chatId: string | null) => {
+      const params = writeChatFilters(filters)
+      if (chatId) {
+        params.set('chat_id', chatId)
+      }
+      setSearchParams(params, { replace: true })
+    },
+    [setSearchParams],
+  )
+
+  const handleSelectChat = useCallback(
+    (chatId: string) => {
+      selectedChatIdRef.current = chatId
+      setSelectedChatId(chatId)
+      syncChatSearchParams(chatFilters, chatId)
+    },
+    [chatFilters, syncChatSearchParams],
+  )
+
+  const handleClearSelectedChat = useCallback(() => {
+    selectedChatIdRef.current = null
+    setSelectedChatId(null)
+    syncChatSearchParams(chatFilters, null)
+  }, [chatFilters, syncChatSearchParams])
 
   useEffect(() => {
-    const params = writeChatFilters(chatFilters)
-    if (selectedChatId) {
-      params.set('chat_id', selectedChatId)
+    const chatIdFromUrl = searchParams.get('chat_id')
+    if (chatIdFromUrl && chatIdFromUrl !== selectedChatIdRef.current) {
+      selectedChatIdRef.current = chatIdFromUrl
+      setSelectedChatId(chatIdFromUrl)
     }
-    setSearchParams(params, { replace: true })
-  }, [chatFilters, selectedChatId, setSearchParams])
+  }, [searchParams])
+
+  useEffect(() => {
+    syncChatSearchParams(chatFilters, selectedChatId)
+  }, [chatFilters, selectedChatId, syncChatSearchParams])
 
   const loadChats = useCallback(async () => {
     if (!selectedProjectId) {
       setChats([])
       setTotal(0)
+      selectedChatIdRef.current = null
       setSelectedChatId(null)
       setIsChatsLoading(false)
       return
@@ -646,7 +670,9 @@ export default function ChatsPage() {
         if (current) {
           return current
         }
-        return data.items[0]?.id ?? null
+        const nextChatId = data.items[0]?.id ?? null
+        selectedChatIdRef.current = nextChatId
+        return nextChatId
       })
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
@@ -852,15 +878,20 @@ export default function ChatsPage() {
     }
     setChatFilters(EMPTY_CHAT_FILTERS)
     setSelectedPresetId('')
+    selectedChatIdRef.current = null
     setSelectedChatId(null)
     setMessages([])
     setAuditLogs([])
-  }, [selectedProjectId])
+    syncChatSearchParams(EMPTY_CHAT_FILTERS, null)
+  }, [selectedProjectId, syncChatSearchParams])
 
   useEffect(() => {
     if (!selectedChatId) {
       setMessages([])
       setAuditLogs([])
+      return undefined
+    }
+    if (selectedChat && selectedChat.project_id !== selectedProjectId) {
       return undefined
     }
 
@@ -872,7 +903,7 @@ export default function ChatsPage() {
     }, 7000)
 
     return () => window.clearInterval(timer)
-  }, [loadMessages, selectedChatId])
+  }, [loadMessages, selectedChat?.project_id, selectedChatId, selectedProjectId])
 
   useEffect(() => {
     if (selectedChatId && !selectedChat && selectedProjectId) {
@@ -1064,7 +1095,7 @@ export default function ChatsPage() {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setChats((current) => current.filter((chat) => chat.id !== selectedChatId))
-      setSelectedChatId(null)
+      handleClearSelectedChat()
       setMessages([])
       setAuditLogs([])
       setIsResetConfirmOpen(false)
@@ -1074,7 +1105,7 @@ export default function ChatsPage() {
         message: 'Диалог сброшен. Если пользователь напишет снова, он начнёт путь заново.',
       })
       await loadChats()
-      setSelectedChatId(null)
+      handleClearSelectedChat()
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
@@ -1234,7 +1265,7 @@ export default function ChatsPage() {
           onResetFilters={() => setChatFilters(EMPTY_CHAT_FILTERS)}
           onRefresh={() => void loadChats()}
           onSavePreset={(name, isShared) => void handleSavePreset(name, isShared)}
-          onSelectChat={setSelectedChatId}
+          onSelectChat={handleSelectChat}
           onUpdatePreset={(presetId) => void handleUpdatePreset(presetId)}
           selectedPresetId={selectedPresetId}
         />
@@ -1267,7 +1298,7 @@ export default function ChatsPage() {
               <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setSelectedChatId(null)}
+                  onClick={handleClearSelectedChat}
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 xl:hidden"
                   title="К списку чатов"
                 >

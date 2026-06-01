@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -50,6 +52,12 @@ ALLOWED_BROADCAST_MEDIA: dict[str, str] = {
     "image/png": "photo",
     "image/webp": "photo",
     "video/mp4": "video",
+    "video/quicktime": "video",
+    "audio/ogg": "voice",
+    "audio/mpeg": "voice",
+    "audio/mp4": "voice",
+    "audio/webm": "voice",
+    "audio/wav": "voice",
     "application/pdf": "document",
     "text/plain": "document",
     "application/msword": "document",
@@ -99,17 +107,31 @@ class BroadcastService:
     async def report(self, broadcast_id: UUID, project_id: UUID) -> BroadcastReport:
         broadcast = await self._get_or_404(broadcast_id, project_id)
         counts = await self.repo.status_counts(broadcast.id)
+        sent_count = counts.get("sent", 0)
+        failed_count = counts.get("failed", 0)
         return BroadcastReport(
-            total_recipients=sum(counts.values()),
+            status=broadcast.status,
+            total_recipients=broadcast.total_recipients or sum(counts.values()),
+            sent_count=sent_count,
+            failed_count=failed_count,
             pending=counts.get("pending", 0),
-            sent=counts.get("sent", 0),
-            failed=counts.get("failed", 0),
+            sent=sent_count,
+            failed=failed_count,
             skipped=counts.get("skipped", 0),
-            cancelled=0,
+            cancelled=counts.get("skipped", 0) if broadcast.status == "cancelled" else 0,
             started_at=broadcast.started_at,
             finished_at=broadcast.sent_at,
             error_examples=await self.repo.error_examples(broadcast.id),
         )
+
+    async def error_csv(self, broadcast_id: UUID, project_id: UUID) -> str:
+        await self._get_or_404(broadcast_id, project_id)
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=";")
+        writer.writerow(["telegram_user_id", "status", "error"])
+        for user_id, status, error in await self.repo.delivery_error_rows(broadcast_id):
+            writer.writerow([user_id, status, error])
+        return output.getvalue()
 
     async def list_templates(
         self,
@@ -201,6 +223,7 @@ class BroadcastService:
         actor: User,
         project_id: UUID,
         file: UploadFile,
+        media_type: str | None = None,
     ) -> BroadcastUploadOut:
         self._ensure_can_manage(actor)
         file_name = os.path.basename(file.filename or "upload")
@@ -209,11 +232,11 @@ class BroadcastService:
             raise HTTPException(status_code=422, detail="Этот тип файла нельзя загружать.")
 
         mime_type = file.content_type or "application/octet-stream"
-        media_type = ALLOWED_BROADCAST_MEDIA.get(mime_type)
-        if media_type is None:
+        resolved_media_type = self._resolve_upload_media_type(mime_type, media_type)
+        if resolved_media_type is None:
             raise HTTPException(status_code=422, detail="Неподдерживаемый тип файла.")
 
-        max_size = self._max_upload_size(media_type)
+        max_size = self._max_upload_size(resolved_media_type)
         storage_root = Path(settings.BROADCAST_UPLOAD_STORAGE_PATH)
         storage_root.mkdir(parents=True, exist_ok=True)
         project_dir = storage_root / str(project_id)
@@ -236,7 +259,7 @@ class BroadcastService:
                 file_name=file_name,
                 mime_type=mime_type,
                 file_size=size,
-                media_type=media_type,
+                media_type=resolved_media_type,
                 storage_path="",
                 expires_at=expires_at,
             )
@@ -294,6 +317,11 @@ class BroadcastService:
             schedule_type=data.schedule_type,
             scheduled_at=data.scheduled_at,
             timezone_mode=data.timezone_mode,
+            snippet_id=data.snippet_id,
+            media_type=data.media_type,
+            file_id=data.file_id,
+            trigger_funnel_id=data.trigger_funnel_id,
+            stop_on_reply=data.stop_on_reply,
             status="draft",
             created_by_user_id=actor.id,
         )
@@ -316,13 +344,13 @@ class BroadcastService:
     ) -> BroadcastOut:
         self._ensure_can_manage(actor)
         broadcast = await self._get_or_404(broadcast_id, project_id)
-        if broadcast.status not in {"draft", "audience_ready", "scheduled"}:
+        if broadcast.status not in {"draft", "scheduled"}:
             raise HTTPException(status_code=422, detail="Broadcast cannot be edited in current status")
         values = data.model_dump(exclude_unset=True)
         if "bot_id" in values and values["bot_id"] is not None:
             await self._ensure_bot(project_id, values["bot_id"])
         if values:
-            values["status"] = "draft" if broadcast.status == "audience_ready" else broadcast.status
+            values["status"] = broadcast.status
             broadcast = await self.repo.update_in_project(broadcast_id, project_id, **values)
         return BroadcastOut.model_validate(broadcast)
 
@@ -370,11 +398,15 @@ class BroadcastService:
         updated = await self.repo.update_in_project(
             broadcast.id,
             project_id,
-            status="sending",
+            status="processing",
             schedule_type="now",
             scheduled_at=None,
             audience_count=audience.count,
+            total_recipients=audience.count,
+            sent_count=0,
+            failed_count=0,
             started_at=datetime.now(timezone.utc),
+            sent_at=None,
         )
         await self._audit(
             project_id=project_id,
@@ -410,6 +442,11 @@ class BroadcastService:
             scheduled_at=data.scheduled_at,
             timezone_mode=data.timezone_mode,
             audience_count=audience.count,
+            total_recipients=audience.count,
+            sent_count=0,
+            failed_count=0,
+            started_at=None,
+            sent_at=None,
         )
         await self._audit(
             project_id=project_id,
@@ -432,7 +469,7 @@ class BroadcastService:
     ) -> BroadcastOut:
         self._ensure_can_manage(actor)
         broadcast = await self._get_or_404(broadcast_id, project_id)
-        if broadcast.status not in {"scheduled", "sending", "paused", "draft", "audience_ready"}:
+        if broadcast.status not in {"scheduled", "processing", "paused", "draft"}:
             raise HTTPException(status_code=422, detail="Broadcast cannot be cancelled")
         updated = await self.repo.update_in_project(
             broadcast_id,
@@ -440,6 +477,7 @@ class BroadcastService:
             status="cancelled",
         )
         await self.repo.mark_pending_skipped(broadcast_id, "Broadcast cancelled")
+        updated = await self.repo.sync_progress_counts(broadcast_id, project_id) or updated
         await self._audit(
             project_id=project_id,
             actor=actor,
@@ -457,9 +495,10 @@ class BroadcastService:
     ) -> BroadcastOut:
         self._ensure_can_manage(actor)
         broadcast = await self._get_or_404(broadcast_id, project_id)
-        if broadcast.status != "sending":
-            raise HTTPException(status_code=422, detail="Only sending broadcasts can be paused")
+        if broadcast.status != "processing":
+            raise HTTPException(status_code=422, detail="Only processing broadcasts can be paused")
         updated = await self.repo.update_in_project(broadcast_id, project_id, status="paused")
+        updated = await self.repo.sync_progress_counts(broadcast_id, project_id) or updated
         await self._audit(project_id=project_id, actor=actor, action="broadcast.paused", entity_id=broadcast_id)
         return BroadcastOut.model_validate(updated)
 
@@ -474,7 +513,12 @@ class BroadcastService:
         broadcast = await self._get_or_404(broadcast_id, project_id)
         if broadcast.status != "paused":
             raise HTTPException(status_code=422, detail="Only paused broadcasts can be resumed")
-        updated = await self.repo.update_in_project(broadcast_id, project_id, status="sending")
+        updated = await self.repo.update_in_project(
+            broadcast_id,
+            project_id,
+            status="processing",
+            started_at=broadcast.started_at or datetime.now(timezone.utc),
+        )
         await self._audit(project_id=project_id, actor=actor, action="broadcast.resumed", entity_id=broadcast_id)
         return BroadcastOut.model_validate(updated)
 
@@ -486,10 +530,10 @@ class BroadcastService:
                 broadcast = await self.repo.update_in_project(
                     broadcast.id,
                     broadcast.project_id,
-                    status="sending",
+                    status="processing",
                     started_at=datetime.now(timezone.utc),
                 )
-            if broadcast is None or broadcast.status != "sending":
+            if broadcast is None or broadcast.status != "processing":
                 continue
             processed += await self._process_broadcast_batch(broadcast)
         return processed
@@ -502,11 +546,12 @@ class BroadcastService:
         )
         if not recipients:
             counts = await self.repo.status_counts(broadcast.id)
-            final_status = "failed" if counts.get("sent", 0) == 0 and counts.get("failed", 0) > 0 else "sent"
             await self.repo.update_in_project(
                 broadcast.id,
                 broadcast.project_id,
-                status=final_status,
+                status="completed",
+                sent_count=counts.get("sent", 0),
+                failed_count=counts.get("failed", 0),
                 sent_at=datetime.now(timezone.utc),
             )
             return 0
@@ -524,6 +569,11 @@ class BroadcastService:
                 chat, lead = context
                 await self._send_to_recipient(broadcast, recipient.chat_id, chat, lead)
                 await self.repo.mark_recipient_sent(recipient.id)
+                await self.repo.increment_progress_counts(
+                    broadcast.id,
+                    broadcast.project_id,
+                    sent_delta=1,
+                )
                 sent += 1
             except Exception as exc:
                 await self.repo.mark_recipient_error(
@@ -531,16 +581,18 @@ class BroadcastService:
                     str(exc),
                     max_attempts=settings.BROADCAST_MAX_ATTEMPTS,
                 )
+                await self.repo.sync_progress_counts(broadcast.id, broadcast.project_id)
             if settings.BROADCAST_SEND_INTERVAL_MS > 0:
                 await asyncio.sleep(settings.BROADCAST_SEND_INTERVAL_MS / 1000)
 
         if await self.repo.count_pending_recipients(broadcast.id) == 0:
             counts = await self.repo.status_counts(broadcast.id)
-            final_status = "failed" if counts.get("sent", 0) == 0 and counts.get("failed", 0) > 0 else "sent"
             await self.repo.update_in_project(
                 broadcast.id,
                 broadcast.project_id,
-                status=final_status,
+                status="completed",
+                sent_count=counts.get("sent", 0),
+                failed_count=counts.get("failed", 0),
                 sent_at=datetime.now(timezone.utc),
             )
         return sent
@@ -642,7 +694,7 @@ class BroadcastService:
         if broadcast.bot_id is None:
             raise HTTPException(status_code=422, detail="Bot is required before sending")
         self._validate_content(broadcast.content_json)
-        if broadcast.status in {"sending", "sent", "cancelled"}:
+        if broadcast.status in {"processing", "paused", "completed", "cancelled"}:
             raise HTTPException(status_code=422, detail="Broadcast cannot be sent in current status")
 
     def _validate_content(self, content: dict[str, Any]) -> None:
@@ -742,6 +794,27 @@ class BroadcastService:
                 file_name=file_name,
                 mime_type=mime_type,
             )
+        elif message_type == MessageType.VOICE:
+            telegram_result = await self.telegram_sender.send_voice(
+                project_id=broadcast.project_id,
+                bot_id=broadcast.bot_id,
+                external_chat_id=chat.external_chat_id,
+                voice=media_file,
+                caption=caption,
+                reply_markup=reply_markup,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        elif message_type == MessageType.VIDEO_NOTE:
+            telegram_result = await self.telegram_sender.send_video_note(
+                project_id=broadcast.project_id,
+                bot_id=broadcast.bot_id,
+                external_chat_id=chat.external_chat_id,
+                video_note=media_file,
+                reply_markup=reply_markup,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
         elif message_type == MessageType.DOCUMENT:
             telegram_result = await self.telegram_sender.send_document(
                 project_id=broadcast.project_id,
@@ -763,7 +836,7 @@ class BroadcastService:
             await self.repo.mark_upload_used(upload_id, broadcast.project_id)
 
         return {
-            "caption": caption or None,
+            "caption": None if message_type == MessageType.VIDEO_NOTE else caption or None,
             "telegram_file_id": self._extract_telegram_file_id(message_type, telegram_result)
             or (str(media.get("telegram_file_id") or "").strip() or None),
             "file_name": file_name,
@@ -784,14 +857,26 @@ class BroadcastService:
     def _content_has_media(content: dict[str, Any]) -> bool:
         return any(
             BroadcastService._broadcast_message_type(message)
-            in {MessageType.PHOTO, MessageType.VIDEO, MessageType.DOCUMENT}
+            in {
+                MessageType.PHOTO,
+                MessageType.VIDEO,
+                MessageType.VOICE,
+                MessageType.VIDEO_NOTE,
+                MessageType.DOCUMENT,
+            }
             for message in BroadcastService._content_messages(content)
         )
 
     @staticmethod
     def _broadcast_message_type(message: dict[str, Any]) -> str:
         message_type = str(message.get("type") or MessageType.TEXT).strip().lower()
-        if message_type in {MessageType.PHOTO, MessageType.VIDEO, MessageType.DOCUMENT}:
+        if message_type in {
+            MessageType.PHOTO,
+            MessageType.VIDEO,
+            MessageType.VOICE,
+            MessageType.VIDEO_NOTE,
+            MessageType.DOCUMENT,
+        }:
             return message_type
         return MessageType.TEXT
 
@@ -899,6 +984,18 @@ class BroadcastService:
         return {"inline_keyboard": rows}
 
     async def _run_after_send_action(self, *, broadcast: Broadcast, chat: Chat) -> None:
+        if broadcast.trigger_funnel_id is not None:
+            await self._start_funnel_for_chat(
+                project_id=broadcast.project_id,
+                bot_id=broadcast.bot_id,
+                chat_id=chat.id,
+                funnel_id=broadcast.trigger_funnel_id,
+                funnel_version_id=None,
+                mode="skip_if_active",
+                source="campaign_trigger",
+                broadcast_id=broadcast.id,
+            )
+            return
         action = (broadcast.content_json or {}).get("after_send_action")
         if not isinstance(action, dict) or action.get("type") != "start_funnel":
             return
@@ -1051,9 +1148,27 @@ class BroadcastService:
     def _max_upload_size(media_type: str) -> int:
         if media_type == "photo":
             return settings.BROADCAST_PHOTO_MAX_BYTES
-        if media_type == "video":
+        if media_type in {"video", "video_note"}:
             return settings.BROADCAST_VIDEO_MAX_BYTES
         return settings.BROADCAST_DOCUMENT_MAX_BYTES
+
+    @staticmethod
+    def _resolve_upload_media_type(mime_type: str, requested_type: str | None) -> str | None:
+        if requested_type is None:
+            return ALLOWED_BROADCAST_MEDIA.get(mime_type)
+
+        normalized = requested_type.strip().lower()
+        if normalized not in {"photo", "video", "voice", "video_note", "document"}:
+            raise HTTPException(status_code=422, detail="Неподдерживаемый способ отправки файла.")
+        if normalized == "document":
+            return normalized
+        if normalized == "photo" and mime_type.startswith("image/"):
+            return normalized
+        if normalized in {"video", "video_note"} and mime_type.startswith("video/"):
+            return normalized
+        if normalized == "voice" and mime_type.startswith("audio/"):
+            return normalized
+        raise HTTPException(status_code=422, detail="Тип файла не соответствует выбранному способу отправки.")
 
     async def _get_or_404(self, broadcast_id: UUID, project_id: UUID) -> Broadcast:
         broadcast = await self.repo.get_in_project(broadcast_id, project_id)

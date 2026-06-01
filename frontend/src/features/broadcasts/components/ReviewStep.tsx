@@ -15,6 +15,23 @@ function rulesCount(filter: AudienceFilter) {
   return filter.include.rules.length + filter.exclude.rules.length
 }
 
+function isMediaType(value: string | undefined) {
+  return value === 'photo' ||
+    value === 'video' ||
+    value === 'voice' ||
+    value === 'video_note' ||
+    value === 'document'
+}
+
+function mediaLabel(value: string | undefined) {
+  if (value === 'photo') return 'Фото'
+  if (value === 'video') return 'Видео'
+  if (value === 'voice') return 'Голосовое'
+  if (value === 'video_note') return 'Кружок'
+  if (value === 'document') return 'Документ'
+  return 'Текст'
+}
+
 export default function ReviewStep({
   content,
   audience,
@@ -29,10 +46,9 @@ export default function ReviewStep({
   const requiresConfirmation = count > 1000
   const firstMessage = content.messages[0]
   const firstLine =
-    firstMessage?.type === 'photo' || firstMessage?.type === 'video' || firstMessage?.type === 'document'
-      ? `${firstMessage.type === 'photo' ? 'Фото' : firstMessage.type === 'video' ? 'Видео' : 'Документ'}: ${firstMessage.media?.file_name || 'файл'}`
+    isMediaType(firstMessage?.type)
+      ? `${mediaLabel(firstMessage?.type)}: ${firstMessage?.media?.file_name || 'файл'}`
       : firstMessage?.text?.split('\n')[0] || 'Нет текста'
-  const startsFunnel = content.after_send_action?.type === 'start_funnel'
 
   return (
     <div className="space-y-4">
@@ -48,11 +64,6 @@ export default function ReviewStep({
           Include: {audienceFilter.include.rules.length} · Exclude: {audienceFilter.exclude.rules.length} · Всего правил: {rulesCount(audienceFilter)}
         </p>
       </div>
-      {startsFunnel ? (
-        <div className="rounded-xl border border-accent-300/20 bg-accent-300/10 p-4 text-sm text-accent-50">
-          После рассылки будет запущена выбранная воронка. Активная воронка бота не изменится.
-        </div>
-      ) : null}
       {requiresConfirmation ? (
         <label className="block rounded-xl border border-amber-300/20 bg-amber-300/10 p-4">
           <span className="mb-2 block text-sm font-medium text-amber-50">

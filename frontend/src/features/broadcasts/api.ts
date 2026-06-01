@@ -9,6 +9,8 @@ import type {
   BroadcastReport,
   BroadcastTemplate,
   BroadcastUpload,
+  BroadcastMediaType,
+  ProjectSnippet,
 } from './types'
 
 export async function fetchBroadcasts(projectId: string) {
@@ -20,6 +22,28 @@ export async function fetchBroadcasts(projectId: string) {
 
 export async function fetchBroadcastReport(broadcastId: string, projectId: string) {
   const { data } = await api.get<BroadcastReport>(`/broadcasts/${broadcastId}/report`, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function downloadBroadcastErrorsCsv(broadcastId: string, projectId: string) {
+  const { data } = await api.get<Blob>(`/broadcasts/${broadcastId}/report`, {
+    params: { project_id: projectId, format: 'csv' },
+    responseType: 'blob',
+  })
+  const url = window.URL.createObjectURL(data)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `broadcast-${broadcastId}-errors.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+}
+
+export async function fetchProjectSnippets(projectId: string) {
+  const { data } = await api.get<ProjectSnippet[]>(`/projects/${projectId}/snippets`, {
     params: { project_id: projectId },
   })
   return data
@@ -62,9 +86,14 @@ export async function deleteBroadcastTemplate(templateId: string, projectId: str
   })
 }
 
-export async function uploadBroadcastMedia(projectId: string, file: File) {
+export async function uploadBroadcastMedia(
+  projectId: string,
+  file: File,
+  mediaType: BroadcastMediaType,
+) {
   const formData = new FormData()
   formData.append('file', file)
+  formData.append('media_type', mediaType)
   const { data } = await api.post<BroadcastUpload>('/broadcasts/uploads', formData, {
     params: { project_id: projectId },
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -81,6 +110,11 @@ export async function createBroadcast(payload: {
   schedule_type?: 'now' | 'scheduled'
   scheduled_at?: string | null
   timezone_mode?: 'project' | 'lead_local' | 'fixed'
+  snippet_id?: string | null
+  media_type?: 'text' | BroadcastMediaType | null
+  file_id?: string | null
+  trigger_funnel_id?: string | null
+  stop_on_reply?: boolean
 }) {
   const { data } = await api.post<Broadcast>('/broadcasts', payload, {
     params: { project_id: payload.project_id },
@@ -99,6 +133,11 @@ export async function updateBroadcast(
     schedule_type: 'now' | 'scheduled'
     scheduled_at: string | null
     timezone_mode: 'project' | 'lead_local' | 'fixed'
+    snippet_id: string | null
+    media_type: 'text' | BroadcastMediaType | null
+    file_id: string | null
+    trigger_funnel_id: string | null
+    stop_on_reply: boolean
   }>,
 ) {
   const { data } = await api.patch<Broadcast>(`/broadcasts/${broadcastId}`, payload, {

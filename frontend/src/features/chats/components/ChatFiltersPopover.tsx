@@ -193,33 +193,36 @@ export default function ChatFiltersPopover({
         className="absolute inset-0 bg-black/45 xl:bg-transparent"
       />
 
-      <div className="absolute inset-x-0 bottom-0 max-h-[88dvh] overflow-y-auto rounded-t-2xl border border-white/10 bg-surface p-4 shadow-2xl xl:bottom-auto xl:left-4 xl:right-4 xl:top-[118px] xl:max-h-[calc(100dvh-170px)] xl:rounded-xl xl:bg-surface/98">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-white">Фильтры</h2>
-            <p className="text-xs text-gray-500">
-              Дата добавления: текущий цикл, затем дата создания.
-            </p>
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-surface shadow-2xl xl:bottom-auto xl:left-4 xl:right-4 xl:top-[118px] xl:max-h-[min(550px,calc(100dvh-140px))] xl:rounded-xl xl:bg-surface/98">
+        <div className="shrink-0 p-4 pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Фильтры</h2>
+              <p className="text-xs text-gray-500">
+                Дата добавления: текущий цикл, затем дата создания.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-gray-300 transition hover:border-accent-300/40"
+              title="Закрыть"
+            >
+              <X size={15} />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-gray-300 transition hover:border-accent-300/40"
-            title="Закрыть"
-          >
-            <X size={15} />
-          </button>
         </div>
 
-        <section className="mb-4 rounded-xl border border-white/8 bg-white/[0.03] p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-gray-400">Шаблоны</span>
-            {isSelectedPresetDirty && selectedPreset ? (
-              <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">
-                изменён
-              </span>
-            ) : null}
-          </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+          <section className="mb-4 rounded-xl border border-white/8 bg-white/[0.03] p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-gray-400">Шаблоны</span>
+              {isSelectedPresetDirty && selectedPreset ? (
+                <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">
+                  изменён
+                </span>
+              ) : null}
+            </div>
 
           <select
             value={selectedPresetId}
@@ -292,7 +295,7 @@ export default function ChatFiltersPopover({
               Общий для проекта
             </label>
           ) : null}
-        </section>
+          </section>
 
         <div className="space-y-4">
           <section className="space-y-2">
@@ -493,38 +496,41 @@ export default function ChatFiltersPopover({
             />
           </label>
         </div>
-
-        <div className="mt-5 grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={() => setDraft(withoutSearch(draft))}
-            className="h-10 rounded-xl border border-white/10 text-sm text-gray-300 transition hover:border-red-300/35 hover:text-red-100"
-          >
-            Очистить
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 rounded-xl border border-white/10 text-sm text-gray-300 transition hover:border-accent-300/40"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={apply}
-            className="h-10 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
-          >
-            Применить
-          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={reset}
-          className="mt-2 h-9 w-full rounded-xl text-xs text-gray-500 transition hover:text-gray-200"
-        >
-          Сбросить всё вместе с поиском
-        </button>
+        <div className="shrink-0 border-t border-white/8 bg-surface/95 p-4">
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => setDraft(withoutSearch(draft))}
+              className="h-10 rounded-xl border border-white/10 text-sm text-gray-300 transition hover:border-red-300/35 hover:text-red-100"
+            >
+              Очистить
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-10 rounded-xl border border-white/10 text-sm text-gray-300 transition hover:border-accent-300/40"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={apply}
+              className="h-10 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
+            >
+              Применить
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={reset}
+            className="mt-2 h-9 w-full rounded-xl text-xs text-gray-500 transition hover:text-gray-200"
+          >
+            Сбросить всё вместе с поиском
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -569,23 +575,23 @@ function SelectableChipGroup({
       ) : (
         <div className="max-h-44 overflow-y-auto rounded-lg border border-white/8 bg-background/25 p-1.5">
           <div className="flex flex-wrap gap-1.5">
-          {options.map((option) => {
-            const isActive = selected.has(option.id)
-            return (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => toggle(option.id)}
-                className={`min-h-8 max-w-full rounded-full border px-3 text-xs font-medium transition ${
-                  isActive
-                    ? 'border-accent-300/45 bg-accent-400/12 text-accent-50'
-                    : 'border-white/10 bg-white/[0.03] text-gray-400 hover:border-accent-300/35 hover:text-gray-100'
-                }`}
-              >
-                <span className="block truncate">{option.label}</span>
-              </button>
-            )
-          })}
+            {options.map((option) => {
+              const isActive = selected.has(option.id)
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => toggle(option.id)}
+                  className={`min-h-8 max-w-full rounded-full border px-3 text-xs font-medium transition ${
+                    isActive
+                      ? 'border-accent-300/45 bg-accent-400/12 text-accent-50'
+                      : 'border-white/10 bg-white/[0.03] text-gray-400 hover:border-accent-300/35 hover:text-gray-100'
+                  }`}
+                >
+                  <span className="block truncate">{option.label}</span>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}

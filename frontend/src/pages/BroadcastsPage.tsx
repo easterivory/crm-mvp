@@ -11,6 +11,7 @@ import {
   fetchBroadcastReport,
   fetchBroadcasts,
   fetchBroadcastTemplates,
+  fetchProjectSnippets,
   pauseBroadcast,
   resumeBroadcast,
   uploadBroadcastMedia,
@@ -24,7 +25,11 @@ import type {
   BroadcastReport,
   BroadcastTemplate,
   BroadcastUpload,
+  BroadcastMediaType,
+  ProjectSnippet,
 } from '../features/broadcasts/types'
+import { fetchChatFilterPresets } from '../features/chats/api'
+import type { ChatFilterPreset } from '../features/chats/types'
 import { fetchFunnels } from '../features/funnels/api'
 import { fetchLeadStatuses } from '../features/leads/api'
 import { fetchTrackingLinks } from '../features/tracking/api'
@@ -67,7 +72,11 @@ function duplicateName(name: string) {
 
 function contentHasMedia(content: BroadcastContent) {
   return content.messages.some((message) =>
-    message.type === 'photo' || message.type === 'video' || message.type === 'document',
+    message.type === 'photo' ||
+    message.type === 'video' ||
+    message.type === 'voice' ||
+    message.type === 'video_note' ||
+    message.type === 'document',
   )
 }
 
@@ -82,6 +91,8 @@ export default function BroadcastsPage() {
   const [users, setUsers] = useState<BroadcastOption[]>([])
   const [funnels, setFunnels] = useState<BroadcastOption[]>([])
   const [templates, setTemplates] = useState<BroadcastTemplate[]>([])
+  const [snippets, setSnippets] = useState<ProjectSnippet[]>([])
+  const [chatFilterPresets, setChatFilterPresets] = useState<ChatFilterPreset[]>([])
   const [reports, setReports] = useState<Record<string, BroadcastReport>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isOptionsLoading, setIsOptionsLoading] = useState(false)
@@ -140,11 +151,23 @@ export default function BroadcastsPage() {
       setUsers([])
       setFunnels([])
       setTemplates([])
+      setSnippets([])
+      setChatFilterPresets([])
       return
     }
     setIsOptionsLoading(true)
     try {
-      const [botItems, tagResponse, statusItems, trackingResponse, userResponse, funnelResponse, templateItems] =
+      const [
+        botItems,
+        tagResponse,
+        statusItems,
+        trackingResponse,
+        userResponse,
+        funnelResponse,
+        templateItems,
+        snippetItems,
+        presetItems,
+      ] =
         await Promise.all([
           fetchBots(selectedProjectId),
           api.get<PaginatedResponse<ProjectTag>>('/tags', {
@@ -165,6 +188,8 @@ export default function BroadcastsPage() {
             status: 'active',
           }),
           fetchBroadcastTemplates(selectedProjectId),
+          fetchProjectSnippets(selectedProjectId),
+          fetchChatFilterPresets(selectedProjectId),
         ])
       setBots(botItems)
       setTags(tagResponse.data.items.map((tag) => ({ id: tag.id, label: tag.name })))
@@ -191,6 +216,8 @@ export default function BroadcastsPage() {
           })),
       )
       setTemplates(templateItems)
+      setSnippets(snippetItems)
+      setChatFilterPresets(presetItems)
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось загрузить справочники.') })
     } finally {
@@ -232,12 +259,15 @@ export default function BroadcastsPage() {
     }
   }
 
-  const handleUploadMedia = async (file: File): Promise<BroadcastUpload> => {
+  const handleUploadMedia = async (
+    file: File,
+    mediaType: BroadcastMediaType,
+  ): Promise<BroadcastUpload> => {
     if (!selectedProjectId) {
       throw new Error('project required')
     }
     try {
-      const upload = await uploadBroadcastMedia(selectedProjectId, file)
+      const upload = await uploadBroadcastMedia(selectedProjectId, file, mediaType)
       notify({ tone: 'success', message: 'Файл загружен.' })
       return upload
     } catch (err) {
@@ -326,6 +356,8 @@ export default function BroadcastsPage() {
         users={users}
         funnels={funnels}
         templates={templates}
+        snippets={snippets}
+        chatFilterPresets={chatFilterPresets}
         onSaveTemplate={handleSaveTemplate}
         onUploadMedia={handleUploadMedia}
         onBack={() => {
