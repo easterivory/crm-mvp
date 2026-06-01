@@ -23,6 +23,58 @@ OLD_BROADCAST_STATUSES = (
 )
 
 
+def _table_exists(table_name: str) -> bool:
+    return table_name in sa.inspect(op.get_bind()).get_table_names()
+
+
+def _check_constraint_exists(table_name: str, constraint_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return constraint_name in {
+        constraint["name"] for constraint in inspector.get_check_constraints(table_name)
+    }
+
+
+def _create_broadcast_uploads_table() -> None:
+    op.create_table(
+        "broadcast_uploads",
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_by_user_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("file_name", sa.String(length=512), nullable=False),
+        sa.Column("mime_type", sa.String(length=255), nullable=False),
+        sa.Column("file_size", sa.Integer(), nullable=False),
+        sa.Column("media_type", sa.String(length=30), nullable=False),
+        sa.Column("storage_path", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(length=30), nullable=False, server_default="uploaded"),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            server_default=sa.text("gen_random_uuid()"),
+            nullable=False,
+        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.CheckConstraint(
+            "media_type IN ('photo','video','document','voice','video_note')",
+            name="ck_broadcast_uploads_media_type",
+        ),
+        sa.CheckConstraint(
+            "status IN ('uploaded','used','expired','deleted')",
+            name="ck_broadcast_uploads_status",
+        ),
+        sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
+        sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_broadcast_uploads_project_id", "broadcast_uploads", ["project_id"])
+    op.create_index(
+        "ix_broadcast_uploads_created_by_user_id",
+        "broadcast_uploads",
+        ["created_by_user_id"],
+    )
+    op.create_index("ix_broadcast_uploads_status", "broadcast_uploads", ["status"])
+    op.create_index("ix_broadcast_uploads_expires_at", "broadcast_uploads", ["expires_at"])
+
+
 def upgrade() -> None:
     op.drop_constraint("ck_broadcasts_status", "broadcasts", type_="check")
     op.execute(
@@ -133,28 +185,34 @@ def upgrade() -> None:
         "failed_count >= 0",
     )
 
-    op.drop_constraint("ck_broadcast_uploads_media_type", "broadcast_uploads", type_="check")
-    op.create_check_constraint(
-        "ck_broadcast_uploads_media_type",
-        "broadcast_uploads",
-        "media_type IN ('photo','video','document','voice','video_note')",
-    )
+    if _table_exists("broadcast_uploads"):
+        if _check_constraint_exists("broadcast_uploads", "ck_broadcast_uploads_media_type"):
+            op.drop_constraint("ck_broadcast_uploads_media_type", "broadcast_uploads", type_="check")
+        op.create_check_constraint(
+            "ck_broadcast_uploads_media_type",
+            "broadcast_uploads",
+            "media_type IN ('photo','video','document','voice','video_note')",
+        )
+    else:
+        _create_broadcast_uploads_table()
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_broadcast_uploads_media_type", "broadcast_uploads", type_="check")
-    op.execute(
-        """
-        UPDATE broadcast_uploads
-        SET media_type = 'document'
-        WHERE media_type IN ('voice','video_note')
-        """
-    )
-    op.create_check_constraint(
-        "ck_broadcast_uploads_media_type",
-        "broadcast_uploads",
-        "media_type IN ('photo','video','document')",
-    )
+    if _table_exists("broadcast_uploads"):
+        if _check_constraint_exists("broadcast_uploads", "ck_broadcast_uploads_media_type"):
+            op.drop_constraint("ck_broadcast_uploads_media_type", "broadcast_uploads", type_="check")
+        op.execute(
+            """
+            UPDATE broadcast_uploads
+            SET media_type = 'document'
+            WHERE media_type IN ('voice','video_note')
+            """
+        )
+        op.create_check_constraint(
+            "ck_broadcast_uploads_media_type",
+            "broadcast_uploads",
+            "media_type IN ('photo','video','document')",
+        )
 
     op.drop_constraint("ck_broadcasts_failed_count_nonnegative", "broadcasts", type_="check")
     op.drop_constraint("ck_broadcasts_sent_count_nonnegative", "broadcasts", type_="check")
