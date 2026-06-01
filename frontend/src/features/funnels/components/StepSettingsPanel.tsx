@@ -47,26 +47,30 @@ export default function StepSettingsPanel({
   const [tags, setTags] = useState<BuilderRef[]>([])
   const [statuses, setStatuses] = useState<BuilderRef[]>([])
   const [trackingLinks, setTrackingLinks] = useState<BuilderRef[]>([])
+  const [partnerIntegrations, setPartnerIntegrations] = useState<BuilderRef[]>([])
   const [newTagName, setNewTagName] = useState('')
 
   useEffect(() => {
     let cancelled = false
     const loadRefs = async () => {
       try {
-        const [tagsResponse, statusesResponse, linksResponse] = await Promise.all([
+        const [tagsResponse, statusesResponse, linksResponse, partnersResponse] = await Promise.all([
           api.get('/tags', { params: { project_id: projectId, limit: 100, offset: 0 } }),
           api.get('/leads/statuses'),
           api.get('/tracking/links', { params: { project_id: projectId, limit: 100, offset: 0 } }),
+          api.get('/partners', { params: { project_id: projectId } }),
         ])
         if (cancelled) return
         setTags(tagsResponse.data.items ?? [])
         setStatuses(statusesResponse.data ?? [])
         setTrackingLinks(linksResponse.data.items ?? [])
+        setPartnerIntegrations(partnersResponse.data ?? [])
       } catch {
         if (!cancelled) {
           setTags([])
           setStatuses([])
           setTrackingLinks([])
+          setPartnerIntegrations([])
         }
       }
     }
@@ -386,6 +390,26 @@ export default function StepSettingsPanel({
                         className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
                       />
                     </div>
+                  ) : null}
+                  {action.type === 'submit_to_partner' ? (
+                    <select
+                      value={action.partner_integration_id ?? ''}
+                      onChange={(event) =>
+                        patchConfig({
+                          actions: actions.map((item, idx) =>
+                            idx === index ? { ...item, partner_integration_id: event.target.value } : item,
+                          ),
+                        })
+                      }
+                      className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                    >
+                      <option value="">Выберите partner CRM</option>
+                      {partnerIntegrations.map((integration) => (
+                        <option key={integration.id} value={integration.id}>
+                          {integration.name}
+                        </option>
+                      ))}
+                    </select>
                   ) : null}
                   <button
                     type="button"

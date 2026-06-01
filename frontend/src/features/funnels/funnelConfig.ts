@@ -39,6 +39,7 @@ export type ActionConfig = {
   field?: string
   value?: string
   operator_id?: string
+  partner_integration_id?: string
   note?: string
 }
 
@@ -97,7 +98,7 @@ export const actionTypes = [
   ['write_field', 'Записать поле'],
   ['assign_operator', 'Назначить оператора'],
   ['add_note', 'Добавить заметку'],
-  ['send_to_crm_placeholder', 'CRM placeholder'],
+  ['submit_to_partner', 'Отправить в partner CRM'],
 ] as const
 
 export function textValue(config: Record<string, unknown>, key: string) {
@@ -220,6 +221,8 @@ export function normalizeActions(raw: unknown): ActionConfig[] {
       field: typeof action.field === 'string' ? action.field : '',
       value: typeof action.value === 'string' ? action.value : '',
       operator_id: typeof action.operator_id === 'string' ? action.operator_id : '',
+      partner_integration_id:
+        typeof action.partner_integration_id === 'string' ? action.partner_integration_id : '',
       note: typeof action.note === 'string' ? action.note : '',
     }
   })

@@ -197,11 +197,6 @@ class ProjectService:
         project_id: UUID,
         actor: User,
     ) -> ProjectDashboardHeaderOut:
-        if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Dashboard header metrics are available only for admins",
-            )
         self._ensure_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:

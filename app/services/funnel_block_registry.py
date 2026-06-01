@@ -99,7 +99,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("mark_lost", "Пометить lost"),
         ("mark_rejected", "Пометить rejected"),
         ("mark_success", "Пометить success"),
-        ("send_to_crm_placeholder", "Заглушка отправки в CRM"),
+        ("submit_to_partner", "Отправить в partner CRM"),
     ],
     "delay": [
         ("generic_delay", "Таймер / ожидание"),
@@ -122,7 +122,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("generic_integration", "Интеграция"),
         ("outgoing_webhook", "Webhook"),
         ("http_request", "HTTP request"),
-        ("external_crm_placeholder", "Внешняя CRM placeholder"),
+        ("external_crm", "Внешняя CRM"),
     ],
     "finish": [
         ("generic_finish", "Завершение"),

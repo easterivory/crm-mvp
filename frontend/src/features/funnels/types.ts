@@ -113,6 +113,22 @@ export type FunnelValidationResult = {
   warnings: FunnelValidationIssue[]
 }
 
+export type FunnelDropOffStep = {
+  step_id: string
+  step_title: string
+  step_type: string
+  block_type: string
+  entered_leads: number
+  conversion_from_start: number
+  conversion_from_previous: number
+}
+
+export type FunnelDropOffAnalytics = {
+  funnel_id: string
+  version_id: string
+  steps: FunnelDropOffStep[]
+}
+
 export type FunnelBlockDefinition = {
   step_type: FunnelStepType | string
   block_type: string

@@ -5,6 +5,7 @@ import { useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
 type HeaderMetrics = {
+  conversion_today: string | number
   leads_today: number
   chats_today: number
   spend_today: string | number
@@ -16,15 +17,20 @@ function formatMoney(value: string | number) {
   return amount.toLocaleString('ru-RU', { maximumFractionDigits: 0 })
 }
 
+function formatPercent(value: string | number) {
+  const amount = Number(value || 0)
+  return `${amount.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
+}
+
 export default function DashboardHeaderMetrics() {
-  const user = useAuthStore((state) => state.user)
   const { selectedProjectId } = useProjectBotSelection()
+  const user = useAuthStore((state) => state.user)
   const [metrics, setMetrics] = useState<HeaderMetrics | null>(null)
 
-  const canView = user?.role_name === 'super_admin' || user?.role_name === 'admin'
+  const isAuthenticated = Boolean(user)
 
   useEffect(() => {
-    if (!canView || !selectedProjectId) {
+    if (!isAuthenticated || !selectedProjectId) {
       setMetrics(null)
       return
     }
@@ -34,7 +40,6 @@ export default function DashboardHeaderMetrics() {
       try {
         const { data } = await api.get<HeaderMetrics>(
           `/projects/${selectedProjectId}/dashboard-header`,
-          { params: { project_id: selectedProjectId } },
         )
         if (!cancelled) {
           setMetrics(data)
@@ -52,18 +57,17 @@ export default function DashboardHeaderMetrics() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [canView, selectedProjectId])
+  }, [isAuthenticated, selectedProjectId])
 
-  if (!canView || !metrics) {
+  if (!isAuthenticated || !metrics) {
     return null
   }
 
   return (
-    <div className="grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1 text-xs text-gray-300">
+    <div className="grid min-w-[260px] grid-cols-3 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1 text-xs text-gray-300">
+      <Metric label="Конверсия" value={formatPercent(metrics.conversion_today)} />
       <Metric label="Лиды" value={metrics.leads_today} />
-      <Metric label="Чаты" value={metrics.chats_today} />
       <Metric label="Кост" value={`$${formatMoney(metrics.spend_today)}`} />
-      <Metric label="CPL" value={`$${formatMoney(metrics.cpl_today)}`} />
     </div>
   )
 }

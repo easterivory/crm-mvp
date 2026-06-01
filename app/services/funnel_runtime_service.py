@@ -13,6 +13,7 @@ from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.message import MessageCreate
 from app.services.funnel_block_registry import LEAD_FIELD_KEYS
@@ -46,6 +47,7 @@ class FunnelRuntimeService:
         self.repo = FunnelRepository(db)
         self.chat_repo = ChatRepository(db)
         self.lead_repo = LeadRepository(db)
+        self.partner_repo = PartnerIntegrationRepository(db)
         self.tag_repo = TagRepository(db)
         from app.services.message_service import MessageService
 
@@ -178,6 +180,20 @@ class FunnelRuntimeService:
             return False
 
         if state.waiting_for_answer or self._is_input_step(step):
+            if await self._should_override_call_time_for_hold(chat_id=chat_id, step=step):
+                next_step = await self._apply_hold_call_time_override(
+                    chat_id=chat_id,
+                    step=step,
+                    state=state,
+                )
+                if next_step is not None:
+                    await self._execute_from_step(
+                        chat_id=chat_id,
+                        step=next_step,
+                        answer=self._hold_call_time_answer(step),
+                    )
+                return True
+
             validation = self._validate_input_answer(step, text)
             if not validation["valid"]:
                 retry_count = self._input_retry_count(state.runtime_json, step.id) + 1
@@ -316,6 +332,23 @@ class FunnelRuntimeService:
         step = await self.repo.get_step(state.current_step_id)
         if step is None:
             return False
+
+        if self._is_input_step(step) and await self._should_override_call_time_for_hold(
+            chat_id=chat_id,
+            step=step,
+        ):
+            next_step = await self._apply_hold_call_time_override(
+                chat_id=chat_id,
+                step=step,
+                state=state,
+            )
+            if next_step is not None:
+                await self._execute_from_step(
+                    chat_id=chat_id,
+                    step=next_step,
+                    answer=self._hold_call_time_answer(step),
+                )
+            return True
 
         payload_step_id, _, _ = self._parse_callback_data(callback_data)
         if payload_step_id is not None and payload_step_id != step.id:
@@ -621,6 +654,17 @@ class FunnelRuntimeService:
                 continue
 
             if self._is_input_step(current):
+                if await self._should_override_call_time_for_hold(chat_id=chat_id, step=current):
+                    next_step = await self._apply_hold_call_time_override(
+                        chat_id=chat_id,
+                        step=current,
+                        state=state,
+                    )
+                    if next_step is None:
+                        return None
+                    current = next_step
+                    continue
+
                 state = await self.repo.get_chat_funnel_state(chat_id)
                 if state is not None:
                     await self.repo.upsert_chat_funnel_state(
@@ -1131,14 +1175,38 @@ class FunnelRuntimeService:
                             lead.project_id,
                             manager_id=UUID(str(manager_id)),
                         )
-                elif action_type in {"add_note", "send_to_crm_placeholder"}:
-                    logger.info(
-                        "CRM action placeholder executed chat_id=%s lead_id=%s step_id=%s type=%s",
-                        chat_id,
-                        lead.id,
-                        step.id,
-                        action_type,
+                elif action_type in {"submit_to_partner", "send_to_crm"}:
+                    integration_id = raw.get("partner_integration_id") or raw.get("integration_id")
+                    if not integration_id:
+                        logger.warning(
+                            "Partner submission action skipped without integration id "
+                            "chat_id=%s lead_id=%s step_id=%s",
+                            chat_id,
+                            lead.id,
+                            step.id,
+                        )
+                        continue
+                    integration = await self.partner_repo.get_in_project(
+                        UUID(str(integration_id)),
+                        lead.project_id,
                     )
+                    if integration is None or not integration.is_active:
+                        logger.warning(
+                            "Partner submission action references unavailable integration "
+                            "chat_id=%s lead_id=%s step_id=%s integration_id=%s",
+                            chat_id,
+                            lead.id,
+                            step.id,
+                            integration_id,
+                        )
+                        continue
+                    await self.partner_repo.create_submission(
+                        lead_id=lead.id,
+                        partner_integration_id=integration.id,
+                        status="pending",
+                    )
+                elif action_type == "add_note":
+                    logger.info("CRM note action recorded chat_id=%s lead_id=%s step_id=%s", chat_id, lead.id, step.id)
                 else:
                     logger.warning(
                         "Unsupported CRM action chat_id=%s step_id=%s type=%s",
@@ -1246,6 +1314,90 @@ class FunnelRuntimeService:
             return lead.manager_id is not None
         return None
 
+    async def _should_override_call_time_for_hold(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+    ) -> bool:
+        if not self._is_call_time_input_step(step):
+            return False
+        return bool(await self._condition_source_value(chat_id, "hold_mode", None))
+
+    async def _apply_hold_call_time_override(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        state: Any,
+    ) -> Optional[FunnelStep]:
+        current_state = await self.repo.get_chat_funnel_state(chat_id) or state
+        answer = self._hold_call_time_answer(step)
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if lead is not None:
+            await self.repo.update_lead_mapped_fields(
+                lead.id,
+                {"call_time_text": answer},
+                {},
+            )
+            await self.scoring.update_lead_score(lead.id)
+
+        await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
+        runtime_json = self._runtime_with_answer(
+            current_state.runtime_json,
+            step_id=step.id,
+            answer=answer,
+        )
+        await self.repo.upsert_chat_funnel_state(
+            chat_id=chat_id,
+            funnel_id=current_state.funnel_id,
+            funnel_version_id=current_state.funnel_version_id,
+            current_step_id=step.id,
+            entered_step_at=current_state.entered_step_at,
+            waiting_for_answer=False,
+            runtime_json=runtime_json,
+        )
+
+        choice = self._choice_for_answer(step, answer)
+        if choice and choice.get("target_step_id"):
+            return await self._move_to_step_id(
+                chat_id=chat_id,
+                target_step_id=choice.get("target_step_id"),
+                from_step=step,
+            )
+        return await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
+
+    def _hold_call_time_answer(self, step: FunnelStep) -> str:
+        config = step.config_json or {}
+        configured = (
+            config.get("hold_answer")
+            or config.get("tomorrow_label")
+            or config.get("tomorrow_value")
+        )
+        if configured:
+            return str(configured).strip() or "На завтра"
+
+        for choice in self._buttons_from_step(step):
+            candidates = [
+                choice.get("label"),
+                choice.get("value"),
+                choice.get("id"),
+            ]
+            if any(self._is_tomorrow_value(candidate) for candidate in candidates):
+                return str(choice.get("label") or choice.get("value") or "На завтра").strip()
+        return "На завтра"
+
+    @staticmethod
+    def _is_call_time_input_step(step: FunnelStep) -> bool:
+        config = step.config_json or {}
+        save_to = str(config.get("save_to") or "").strip()
+        return step.block_type == "ask_call_time" or save_to == "call_time_text"
+
+    @staticmethod
+    def _is_tomorrow_value(value: Any) -> bool:
+        normalized = str(value or "").strip().lower()
+        return "завтр" in normalized or "tomorrow" in normalized
+
     @staticmethod
     def _compare_condition(actual: Any, operator: str, expected: Any) -> bool:
         if operator in {"exists", "field_exists"}:
@@ -1281,7 +1433,7 @@ class FunnelRuntimeService:
         if config.get("set_call_time") is False:
             return
         value = (
-            str(config.get("tomorrow_label") or "Завтра")
+            str(config.get("tomorrow_label") or "На завтра")
             if hold_enabled
             else str(config.get("today_label") or "Сегодня")
         )

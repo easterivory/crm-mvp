@@ -133,7 +133,7 @@ export const universalBlocks: UniversalBlock[] = [
     blockType: 'generic_integration',
     label: 'Интеграция',
     defaultTitle: 'Интеграция',
-    description: 'Webhook/HTTP placeholder без реального external CRM исполнения.',
+    description: 'Выполняет настроенный webhook или HTTP-запрос.',
     defaultConfig: { integration_type: 'webhook', url: '' },
   },
   {
@@ -160,24 +160,6 @@ export const blockGroups: BlockMenuGroup[] = [
     items: [
       universalBlocks.find((item) => item.blockType === 'generic_condition') as UniversalBlock,
       universalBlocks.find((item) => item.blockType === 'generic_hold_router') as UniversalBlock,
-      {
-        stepType: 'condition',
-        blockType: 'reserved_randomizer',
-        label: 'Рандомайзер',
-        defaultTitle: 'Рандомайзер',
-        description: 'Случайно распределяет пользователей по веткам.',
-        disabled: true,
-        badge: 'Скоро',
-      },
-      {
-        stepType: 'condition',
-        blockType: 'reserved_split',
-        label: 'Развилка',
-        defaultTitle: 'Развилка',
-        description: 'Явная ручная развилка на несколько сценариев.',
-        disabled: true,
-        badge: 'Скоро',
-      },
     ],
   },
   {
@@ -186,39 +168,6 @@ export const blockGroups: BlockMenuGroup[] = [
     items: universalBlocks.filter((item) =>
       ['generic_crm_action', 'generic_operator', 'generic_finish'].includes(item.blockType),
     ),
-  },
-  {
-    title: 'Нейросеть',
-    accent: 'violet',
-    items: [
-      {
-        stepType: 'action',
-        blockType: 'reserved_ai_reply',
-        label: 'Сгенерировать ответ',
-        defaultTitle: 'Сгенерировать ответ',
-        description: 'AI-runtime будет подключён позже.',
-        disabled: true,
-        badge: 'Скоро',
-      },
-      {
-        stepType: 'condition',
-        blockType: 'reserved_ai_text_analysis',
-        label: 'Анализ текста',
-        defaultTitle: 'Анализ текста',
-        description: 'Анализ ответа пользователя в будущей версии.',
-        disabled: true,
-        badge: 'Скоро',
-      },
-      {
-        stepType: 'condition',
-        blockType: 'reserved_ai_sentiment',
-        label: 'Определение эмоции',
-        defaultTitle: 'Определение эмоции',
-        description: 'Классификация настроения без runtime на этом этапе.',
-        disabled: true,
-        badge: 'Скоро',
-      },
-    ],
   },
 ]
 
@@ -289,7 +238,7 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
       { stepType: 'action', blockType: 'set_lead_status', label: 'Изменить статус', defaultTitle: 'Изменить статус' },
       { stepType: 'action', blockType: 'assign_operator', label: 'Назначить оператора', defaultTitle: 'Назначить оператора' },
       { stepType: 'action', blockType: 'write_field', label: 'Записать поле', defaultTitle: 'Записать поле' },
-      { stepType: 'action', blockType: 'send_to_crm_placeholder', label: 'Заглушка CRM', defaultTitle: 'Отправка в CRM' },
+      { stepType: 'action', blockType: 'submit_to_partner', label: 'Отправить в partner CRM', defaultTitle: 'Отправка в CRM' },
     ],
   },
   {

@@ -49,6 +49,7 @@ class ProjectOut(ProjectRead):
 
 class ProjectDashboardHeaderOut(BaseModel):
     date: date
+    conversion_today: Decimal
     leads_today: int
     chats_today: int
     spend_today: Decimal

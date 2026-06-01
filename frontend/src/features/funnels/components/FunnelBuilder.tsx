@@ -8,13 +8,13 @@ import {
   Save,
   Send,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useNotificationStore } from '../../../shared/lib'
-import client from '../../../api/client'
 import {
   createDraftVersion,
   createDraftFromVersion,
+  fetchDropOffAnalytics,
   fetchFunnel,
   fetchGraph,
   fetchVersions,
@@ -29,7 +29,14 @@ import {
   normalizeOutcomes,
   syncManagedEdgesForStep,
 } from '../funnelConfig'
-import type { Funnel, FunnelEdge, FunnelGraph, FunnelStep, FunnelVersion } from '../types'
+import type {
+  Funnel,
+  FunnelDropOffStep,
+  FunnelEdge,
+  FunnelGraph,
+  FunnelStep,
+  FunnelVersion,
+} from '../types'
 import BlockLibrary from './BlockLibrary'
 import DropOffChart from './DropOffChart'
 import FunnelCanvas from './FunnelCanvas'
@@ -136,27 +143,27 @@ export default function FunnelBuilder({
   const [isValidating, setIsValidating] = useState(false)
   const [isPublishOpen, setIsPublishOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'editor' | 'analytics'>('editor')
-  const [analyticsData, setAnalyticsData] = useState<any[]>([])
+  const [analyticsData, setAnalyticsData] = useState<FunnelDropOffStep[]>([])
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+  const isLoadingAnalyticsRef = useRef(false)
 
   const loadAnalytics = useCallback(async () => {
-    if (!activeVersionId || isLoadingAnalytics) {
+    if (!activeVersionId || isLoadingAnalyticsRef.current) {
       return
     }
+    isLoadingAnalyticsRef.current = true
     setIsLoadingAnalytics(true)
     try {
-      const response = await client.get(
-        `/funnels/${funnelId}/versions/${activeVersionId}/analytics/drop-off`,
-        { params: { project_id: projectId } },
-      )
-      setAnalyticsData(response.data.steps ?? [])
+      const response = await fetchDropOffAnalytics(funnelId, activeVersionId, projectId)
+      setAnalyticsData(response.steps ?? [])
     } catch {
       notify({ tone: 'error', message: 'Не удалось загрузить аналитику.' })
       setAnalyticsData([])
     } finally {
+      isLoadingAnalyticsRef.current = false
       setIsLoadingAnalytics(false)
     }
-  }, [activeVersionId, funnelId, isLoadingAnalytics, notify, projectId])
+  }, [activeVersionId, funnelId, notify, projectId])
 
   useEffect(() => {
     if (activeTab === 'analytics') {

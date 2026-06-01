@@ -7,6 +7,7 @@ import type {
   Funnel,
   BotActiveFunnel,
   FunnelBlockRegistry,
+  FunnelDropOffAnalytics,
   FunnelGraph,
   FunnelValidationResult,
   FunnelVersion,
@@ -146,9 +147,21 @@ export async function setFunnelHoldMode(
   projectId: string,
   isHoldActive: boolean,
 ): Promise<FunnelVersion> {
-  const { data } = await api.patch<FunnelVersion>(
-    `/funnels/${funnelId}/versions/${versionId}/hold`,
+  const { data } = await api.post<FunnelVersion>(
+    `/funnels/${funnelId}/versions/${versionId}/toggle-hold`,
     { is_hold_active: isHoldActive },
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
+export async function fetchDropOffAnalytics(
+  funnelId: string,
+  versionId: string,
+  projectId: string,
+): Promise<FunnelDropOffAnalytics> {
+  const { data } = await api.get<FunnelDropOffAnalytics>(
+    `/funnels/${funnelId}/versions/${versionId}/analytics/drop-off`,
     { params: { project_id: projectId } },
   )
   return data
