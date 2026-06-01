@@ -188,6 +188,7 @@ export default function MainLayout() {
       ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <DashboardHeaderMetrics />
         <header className="relative z-40 flex shrink-0 flex-col gap-3 border-b border-white/5 bg-background/65 px-3 py-3 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
           <div className="flex min-w-0 items-center gap-3">
             <button
@@ -204,9 +205,8 @@ export default function MainLayout() {
             </div>
           </div>
 
-          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] sm:items-end lg:flex lg:justify-end">
+          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end lg:flex lg:justify-end">
             <ProjectSelector />
-            <DashboardHeaderMetrics />
             <BotSelector />
 
             <button

@@ -5,16 +5,24 @@ import { useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
 type HeaderMetrics = {
+  subscribers_today: number
   conversion_today: string | number
   leads_today: number
   chats_today: number
+  submitted_today: number
+  submitted_percent_today: string | number
   spend_today: string | number
   cpl_today: string | number
+  cost_per_submitted_today: string | number
 }
 
 function formatMoney(value: string | number) {
   const amount = Number(value || 0)
-  return amount.toLocaleString('ru-RU', { maximumFractionDigits: 0 })
+  return amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function formatInteger(value: number) {
+  return Number(value || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })
 }
 
 function formatPercent(value: string | number) {
@@ -64,19 +72,33 @@ export default function DashboardHeaderMetrics() {
   }
 
   return (
-    <div className="grid min-w-[260px] grid-cols-3 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1 text-xs text-gray-300">
-      <Metric label="Конверсия" value={formatPercent(metrics.conversion_today)} />
-      <Metric label="Лиды" value={metrics.leads_today} />
-      <Metric label="Кост" value={`$${formatMoney(metrics.spend_today)}`} />
+    <div className="flex shrink-0 overflow-x-auto border-b border-white/5 bg-[#11182a]/95 px-3 py-2 text-sm text-gray-400 shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] lg:px-6">
+      <div className="flex min-w-max items-center">
+        <Metric label="Подписчиков сегодня" value={formatInteger(metrics.subscribers_today)} />
+        <Metric label="Лидов сегодня" value={formatInteger(metrics.leads_today)} />
+        <Metric label="Конверсия" value={formatPercent(metrics.conversion_today)} valueClassName="text-orange-400" />
+        <Metric label="Подано сегодня" value={formatInteger(metrics.submitted_today)} valueClassName="text-emerald-400" />
+        <Metric label="% поданных" value={formatPercent(metrics.submitted_percent_today)} valueClassName="text-emerald-400" />
+        <Metric label="Стоимость лида/день" value={`$${formatMoney(metrics.cpl_today)}`} />
+        <Metric label="Стоимость поданного" value={`$${formatMoney(metrics.cost_per_submitted_today)}`} />
+      </div>
     </div>
   )
 }
 
-function Metric({ label, value }: { label: string; value: string | number }) {
+function Metric({
+  label,
+  value,
+  valueClassName = 'text-white',
+}: {
+  label: string
+  value: string | number
+  valueClassName?: string
+}) {
   return (
-    <div className="min-w-16 rounded-lg bg-background/50 px-2 py-1.5">
-      <div className="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
-      <div className="truncate font-semibold text-white">{value}</div>
+    <div className="flex shrink-0 items-baseline gap-1.5 border-r border-white/10 px-4 first:pl-0 last:border-r-0 last:pr-0">
+      <span>{label}:</span>
+      <span className={`font-semibold ${valueClassName}`}>{value}</span>
     </div>
   )
 }

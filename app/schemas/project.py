@@ -49,11 +49,15 @@ class ProjectOut(ProjectRead):
 
 class ProjectDashboardHeaderOut(BaseModel):
     date: date
+    subscribers_today: int
     conversion_today: Decimal
     leads_today: int
     chats_today: int
+    submitted_today: int
+    submitted_percent_today: Decimal
     spend_today: Decimal
     cpl_today: Decimal
+    cost_per_submitted_today: Decimal
 
 
 ProjectListResponse = PaginatedResponse[ProjectRead]

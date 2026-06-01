@@ -51,11 +51,14 @@ class MessageType:
 class LeadStatusCode:
     NEW = "new"
     IN_PROGRESS = "in_progress"
+    SUBMITTED = "submitted"
+    APPLIED = "applied"
     QUALIFIED = "qualified"
     LOST = "lost"
 
     # Statuses from which further transitions are not allowed
     TERMINAL: frozenset[str] = frozenset({QUALIFIED, LOST})
+    SUBMITTED_SET: frozenset[str] = frozenset({SUBMITTED, APPLIED, QUALIFIED})
 
 
 class RoleName:

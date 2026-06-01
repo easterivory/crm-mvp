@@ -7,10 +7,9 @@ from uuid import UUID
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import LeadStatusCode
 from app.models.chat import Chat
 from app.models.lead import Lead
-from app.models.lead_status import LeadStatus
+from app.models.partner import LeadSubmission
 from app.models.tracking import TrackingLink, TrackingSpend
 
 
@@ -40,15 +39,15 @@ class ProjectMetricsRepository:
                 Chat.created_at < end_at,
             )
         )
-        qualified_result = await self.db.execute(
-            select(func.count(distinct(Lead.id)))
-            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+        submitted_result = await self.db.execute(
+            select(func.count(distinct(LeadSubmission.lead_id)))
+            .join(Lead, Lead.id == LeadSubmission.lead_id)
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
-                Lead.created_at >= start_at,
-                Lead.created_at < end_at,
-                LeadStatus.code == LeadStatusCode.QUALIFIED,
+                LeadSubmission.status == "success",
+                LeadSubmission.completed_at >= start_at,
+                LeadSubmission.completed_at < end_at,
             )
         )
         spend_result = await self.db.execute(
@@ -61,19 +60,29 @@ class ProjectMetricsRepository:
         )
         leads = int(leads_result.scalar_one() or 0)
         chats = int(chats_result.scalar_one() or 0)
-        qualified = int(qualified_result.scalar_one() or 0)
+        submitted = int(submitted_result.scalar_one() or 0)
         spend = Decimal(spend_result.scalar_one() or 0)
         cpl = spend / Decimal(leads) if leads > 0 else Decimal("0")
         conversion = (
-            Decimal(qualified) / Decimal(leads) * Decimal("100")
+            Decimal(leads) / Decimal(chats) * Decimal("100")
+            if chats > 0
+            else Decimal("0")
+        )
+        submitted_percent = (
+            Decimal(submitted) / Decimal(leads) * Decimal("100")
             if leads > 0
             else Decimal("0")
         )
+        cost_per_submitted = spend / Decimal(submitted) if submitted > 0 else Decimal("0")
         return {
             "date": day,
+            "subscribers_today": chats,
             "conversion_today": conversion,
             "leads_today": leads,
             "chats_today": chats,
+            "submitted_today": submitted,
+            "submitted_percent_today": submitted_percent,
             "spend_today": spend,
             "cpl_today": cpl,
+            "cost_per_submitted_today": cost_per_submitted,
         }

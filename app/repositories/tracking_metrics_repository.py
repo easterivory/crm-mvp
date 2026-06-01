@@ -17,13 +17,7 @@ from app.models.lead_status import LeadStatus
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 
 
-SUBMITTED_STATUS_CODES = frozenset(
-    {
-        "submitted",
-        "applied",
-        LeadStatusCode.QUALIFIED,
-    }
-)
+SUBMITTED_STATUS_CODES = LeadStatusCode.SUBMITTED_SET
 
 
 class TrackingMetricsRepository:
