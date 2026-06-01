@@ -19,6 +19,10 @@ export type Chat = {
   last_message_at: string | null
   last_user_message_at: string | null
   last_manager_reply_at: string | null
+  last_client_message_at: string | null
+  last_operator_message_at: string | null
+  is_read: boolean
+  unanswered_minutes: number
   last_incoming_at: string | null
   last_outgoing_at: string | null
   last_read_at: string | null
@@ -157,6 +161,33 @@ function mediaPreviewLabel(chat: Chat) {
     return 'Анимация'
   }
   return chat.last_message_text || chat.last_message_caption || 'Сообщений пока нет'
+}
+
+function waitingMinutes(chat: Chat) {
+  if (!chat.last_client_message_at) {
+    return null
+  }
+  if (
+    chat.last_operator_message_at &&
+    new Date(chat.last_operator_message_at).getTime() >= new Date(chat.last_client_message_at).getTime()
+  ) {
+    return null
+  }
+
+  const dynamicMinutes = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(chat.last_client_message_at).getTime()) / 60000),
+  )
+  return Math.max(chat.unanswered_minutes || 0, dynamicMinutes)
+}
+
+function formatWaitingMinutes(minutes: number) {
+  if (minutes < 60) {
+    return `${minutes} мин`
+  }
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest > 0 ? `${hours} ч ${rest} мин` : `${hours} ч`
 }
 
 function highlightSnippet(snippet: string, query: string) {
@@ -321,6 +352,8 @@ export default function ChatList({
             : `${senderPrefix(chat.last_message_sender_type)}${mediaPreviewLabel(chat)}`
           const visibleTags = chat.tags.slice(0, 3)
           const hiddenTags = chat.tags.slice(3)
+          const isUnread = chat.is_read === false || chat.unread
+          const waitingForReplyMinutes = waitingMinutes(chat)
 
           return (
             <button
@@ -333,12 +366,17 @@ export default function ChatList({
                   : 'hover:bg-white/[0.035]'
               }`}
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-sm font-semibold text-accent-200 shadow-glow-accent">
-                {getInitials(title) || <UserRound size={18} />}
+              <div className="relative shrink-0">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-sm font-semibold text-accent-200 shadow-glow-accent">
+                  {getInitials(title) || <UserRound size={18} />}
+                </div>
+                {isUnread ? (
+                  <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-surface bg-sky-300 shadow-[0_0_12px_rgba(125,211,252,0.9)]" />
+                ) : null}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm font-semibold text-white">
+                  <p className={`min-w-0 truncate text-sm text-white ${isUnread ? 'font-bold' : 'font-semibold'}`}>
                     {title}
                   </p>
                   <span className="shrink-0 text-xs text-gray-500">
@@ -351,7 +389,7 @@ export default function ChatList({
                   </p>
                 ) : null}
                 <p className={`mt-2 line-clamp-2 text-xs leading-5 ${
-                  hasSearchHit ? 'text-amber-100' : 'text-gray-400'
+                  hasSearchHit ? 'text-amber-100' : isUnread ? 'font-semibold text-gray-200' : 'text-gray-400'
                 }`}>
                   {hasSearchHit ? (
                     <>
@@ -363,14 +401,14 @@ export default function ChatList({
                   )}
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {chat.unread ? (
-                    <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-xs font-medium text-emerald-300">
-                      Новое
+                  {isUnread ? (
+                    <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">
+                      Непрочитано
                     </span>
                   ) : null}
-                  {chat.has_unanswered_incoming ? (
-                    <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-300">
-                      Не отвечено
+                  {waitingForReplyMinutes !== null ? (
+                    <span className="rounded-full bg-orange-400/10 px-2 py-0.5 text-xs font-semibold text-orange-200">
+                      Ждет ответа {formatWaitingMinutes(waitingForReplyMinutes)}
                     </span>
                   ) : null}
                   {chat.is_red ? (

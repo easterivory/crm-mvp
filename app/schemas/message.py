@@ -13,6 +13,7 @@ class MessageCreate(BaseModel):
     message_type: str = Field(default=MessageType.TEXT, max_length=30)
     sender_type: str = Field(..., max_length=20)
     sender_id: Optional[uuid.UUID] = None
+    operator_id: Optional[uuid.UUID] = None
     body: Optional[str] = None
     caption: Optional[str] = None
     telegram_file_id: Optional[str] = Field(None, max_length=512)
@@ -33,6 +34,7 @@ class MessageOut(OrmBase):
     message_type: str
     sender_type: str
     sender_id: Optional[uuid.UUID]
+    operator_id: Optional[uuid.UUID] = None
     body: Optional[str]
     caption: Optional[str] = None
     telegram_file_id: Optional[str] = None

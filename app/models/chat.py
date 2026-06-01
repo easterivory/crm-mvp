@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,13 +44,18 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_last_manager_reply_at", "last_manager_reply_at"),
         Index("ix_chats_last_message_at", "last_message_at"),
         Index("ix_chats_last_read_at", "last_read_at"),
+        Index("ix_chats_last_client_message_at", "last_client_message_at"),
+        Index("ix_chats_last_operator_message_at", "last_operator_message_at"),
+        Index("ix_chats_is_read", "is_read"),
         Index("ix_chats_updated_at", "updated_at"),
         Index("ix_chats_project_last_user_msg", "project_id", "last_user_message_at"),
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
+        Index("ix_chats_project_is_read", "project_id", "is_read"),
         Index("ix_chats_tracking_created_at", "tracking_link_id", "created_at"),
         Index("ix_chats_project_bot_created_at", "project_id", "bot_id", "created_at"),
         Index("ix_chats_reset_at", "reset_at"),
         Index("ix_chats_current_cycle_started_at", "current_cycle_started_at"),
+        CheckConstraint("unanswered_minutes >= 0", name="ck_chats_unanswered_minutes_nonnegative"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -70,6 +75,13 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_user_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_manager_reply_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Production operator workspace SLA state.
+    # Kept alongside legacy fields above until the service layer migrates all reads.
+    last_client_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_operator_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    unanswered_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     # Set explicitly when the manager opens the chat
     last_read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -98,5 +110,11 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     )
     messages: Mapped[list[Message]] = relationship(
         "Message", back_populates="chat", order_by="Message.created_at"
+    )
+    event_logs: Mapped[list[ChatEventLog]] = relationship(
+        "ChatEventLog",
+        back_populates="chat",
+        order_by="ChatEventLog.created_at",
+        cascade="all, delete-orphan",
     )
     lead: Mapped[Optional[Lead]] = relationship("Lead", back_populates="chat", uselist=False)

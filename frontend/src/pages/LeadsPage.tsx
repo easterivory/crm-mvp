@@ -1,6 +1,7 @@
 import { LoaderCircle, RefreshCw, Search, Tag, UsersRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
+import { useNavigate } from 'react-router-dom'
 
 import api from '../api/client'
 import LeadCard from '../features/leads/components/LeadCard'
@@ -56,6 +57,7 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
 }
 
 export default function LeadsPage() {
+  const navigate = useNavigate()
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
   const [leads, setLeads] = useState<Lead[]>([])
   const [statuses, setStatuses] = useState<LeadStatus[]>([])
@@ -199,6 +201,10 @@ export default function LeadsPage() {
     }
   }
 
+  const openLeadChat = (lead: Lead) => {
+    navigate(`/chats?chat_id=${encodeURIComponent(lead.chat_id)}`)
+  }
+
   if (!selectedProjectId) {
     return (
       <section className="flex h-full min-h-0 items-center justify-center overflow-y-auto rounded-xl border border-white/5 bg-surface p-6 text-center shadow-card">
@@ -322,6 +328,7 @@ export default function LeadsPage() {
                 isMutating={mutatingLeadId === lead.id}
                 onSubmit={(item) => setPendingAction({ type: 'submit', lead: item })}
                 onReject={(item) => setPendingAction({ type: 'reject', lead: item })}
+                onOpenChat={openLeadChat}
                 onSubmitToPartner={partners.length > 0 ? (item) => setPartnerLead(item) : undefined}
               />
             ))}
@@ -334,7 +341,7 @@ export default function LeadsPage() {
           title={pendingAction.type === 'submit' ? 'Отправить лид?' : 'Удалить лид?'}
           description={
             pendingAction.type === 'submit'
-              ? 'Сейчас это production-заглушка: лид будет переведён в статус отправленного, без вызова внешней CRM.'
+              ? 'Лид будет переведён в статус отправленного.'
               : 'Лид не будет физически удалён. Он перейдёт в отклонённые и исчезнет из активного списка.'
           }
           confirmLabel={pendingAction.type === 'submit' ? 'Отправить' : 'Удалить'}

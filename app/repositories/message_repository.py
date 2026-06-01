@@ -172,6 +172,43 @@ class MessageRepository(BaseRepository[Message]):
         )
         return result.scalar_one_or_none()
 
+    async def create_message(
+        self,
+        *,
+        chat_id: UUID,
+        external_message_id: str | None,
+        message_type: str,
+        sender_type: str,
+        sender_id: UUID | None,
+        operator_id: UUID | None,
+        body: str | None,
+        caption: str | None,
+        telegram_file_id: str | None,
+        file_unique_id: str | None,
+        file_name: str | None,
+        mime_type: str | None,
+        file_size: int | None,
+        media_group_id: str | None,
+        raw_payload_json: dict | None,
+    ) -> Message:
+        return await self.create(
+            chat_id=chat_id,
+            external_message_id=external_message_id,
+            message_type=message_type,
+            sender_type=sender_type,
+            sender_id=sender_id,
+            operator_id=operator_id,
+            body=body,
+            caption=caption,
+            telegram_file_id=telegram_file_id,
+            file_unique_id=file_unique_id,
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size=file_size,
+            media_group_id=media_group_id,
+            raw_payload_json=raw_payload_json,
+        )
+
     async def get_by_id_in_project(
         self,
         message_id: UUID,

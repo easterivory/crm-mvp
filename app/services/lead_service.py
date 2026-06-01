@@ -378,7 +378,7 @@ class LeadService:
         )
         return [await self._lead_out(lead) for lead in leads], total
 
-    async def submit_lead_stub(
+    async def submit_lead(
         self,
         lead_id: UUID,
         project_id: UUID,
@@ -389,8 +389,8 @@ class LeadService:
             project_id=project_id,
             status_code=LeadStatusCode.QUALIFIED,
             actor_id=actor_id,
-            audit_action=AuditAction.LEAD_SUBMITTED_STUB,
-            audit_meta={"external_crm_integration": "placeholder"},
+            audit_action=AuditAction.LEAD_SUBMITTED,
+            audit_meta={},
         )
         return await self._lead_out(lead)
 

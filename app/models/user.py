@@ -35,6 +35,12 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     sent_messages: Mapped[list[Message]] = relationship(
         "Message", back_populates="sender", foreign_keys="Message.sender_id"
     )
+    operator_messages: Mapped[list[Message]] = relationship(
+        "Message", back_populates="operator", foreign_keys="Message.operator_id"
+    )
+    chat_event_logs: Mapped[list[ChatEventLog]] = relationship(
+        "ChatEventLog", back_populates="user", foreign_keys="ChatEventLog.user_id"
+    )
     audit_actions: Mapped[list[AuditLog]] = relationship("AuditLog", back_populates="actor")
 
     @property

@@ -7,6 +7,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Tag,
   UserRound,
   X,
@@ -126,6 +127,7 @@ export default function LeadSidebar({
   const [users, setUsers] = useState<User[]>([])
   const [tags, setTags] = useState<ProjectTag[]>([])
   const [selectedTagId, setSelectedTagId] = useState('')
+  const [tagSearch, setTagSearch] = useState('')
   const [usernameDraft, setUsernameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
   const [error, setError] = useState('')
@@ -156,6 +158,14 @@ export default function LeadSidebar({
     const attachedTagIds = new Set((lead?.tags ?? []).map((tag) => tag.id))
     return tags.filter((tag) => !attachedTagIds.has(tag.id))
   }, [lead?.tags, tags])
+
+  const filteredAvailableTags = useMemo(() => {
+    const needle = tagSearch.trim().toLowerCase()
+    if (!needle) {
+      return availableTags
+    }
+    return availableTags.filter((tag) => tag.name.toLowerCase().includes(needle))
+  }, [availableTags, tagSearch])
 
   const mappedDetails = useMemo(() => {
     if (!lead) {
@@ -338,6 +348,7 @@ export default function LeadSidebar({
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setSelectedTagId('')
+      setTagSearch('')
       await loadLead()
     } catch (err) {
       setError(getErrorMessage(err))
@@ -492,26 +503,59 @@ export default function LeadSidebar({
                 <p className="text-sm text-gray-500">Тегов пока нет.</p>
               )}
 
-              <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] xl:grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_auto]">
-                <select
-                  value={selectedTagId}
-                  onChange={(event) => setSelectedTagId(event.target.value)}
-                  disabled={isTagsLoading || isTagMutating || availableTags.length === 0}
-                  className="min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <option value="">
-                    {isTagsLoading
-                      ? 'Загрузка тегов...'
-                      : availableTags.length === 0
-                        ? 'Нет доступных тегов'
-                        : 'Выберите тег'}
-                  </option>
-                  {availableTags.map((tag) => (
-                    <option key={tag.id} value={tag.id}>
-                      {tag.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="mt-4 grid gap-2">
+                <div className="rounded-xl border border-white/10 bg-background/70 p-2">
+                  <label className="relative block">
+                    <Search
+                      size={14}
+                      className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500"
+                    />
+                    <input
+                      value={tagSearch}
+                      onChange={(event) => {
+                        setTagSearch(event.target.value)
+                        setSelectedTagId('')
+                      }}
+                      disabled={isTagsLoading || isTagMutating || availableTags.length === 0}
+                      placeholder={
+                        isTagsLoading
+                          ? 'Загрузка тегов...'
+                          : availableTags.length === 0
+                            ? 'Нет доступных тегов'
+                            : 'Найти тег'
+                      }
+                      className="h-9 w-full rounded-lg border border-white/8 bg-white/[0.03] pl-8 pr-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                  </label>
+                  <div className="mt-2 max-h-44 overflow-y-auto pr-1">
+                    {filteredAvailableTags.length > 0 ? (
+                      <div className="space-y-1">
+                        {filteredAvailableTags.map((tag) => {
+                          const isSelected = selectedTagId === tag.id
+                          return (
+                            <button
+                              key={tag.id}
+                              type="button"
+                              onClick={() => setSelectedTagId(isSelected ? '' : tag.id)}
+                              disabled={isTagsLoading || isTagMutating}
+                              className={`flex min-h-9 w-full items-center rounded-lg px-3 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                isSelected
+                                  ? 'bg-accent-300/15 text-accent-50'
+                                  : 'text-gray-300 hover:bg-white/[0.05] hover:text-white'
+                              }`}
+                            >
+                              <span className="truncate">{tag.name}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="px-2 py-3 text-xs text-gray-500">
+                        {availableTags.length === 0 ? 'Нет доступных тегов' : 'Теги не найдены'}
+                      </p>
+                    )}
+                  </div>
+                </div>
                 <button
                   type="button"
                   onClick={() => void handleAddTag()}

@@ -4,13 +4,8 @@
 Project-bound users receive project_id from their authenticated context.
 super_admin users pass project_id as a query parameter for scoped requests.
 
-Endpoints implemented:
-  POST  /leads/{lead_id}/status — change_status
-
-Endpoints stubbed (Phase 3):
-  GET   /leads
-  GET   /leads/{lead_id}
-  PATCH /leads/{lead_id}
+Implemented endpoints cover lead creation, listing, updates, status
+transitions, submit/reject actions, and lead lookup by chat.
 """
 from datetime import date
 from typing import Any, Optional
@@ -189,13 +184,13 @@ async def update_lead(
 
 
 @router.post("/{lead_id}/submit", response_model=LeadOut)
-async def submit_lead_stub(
+async def submit_lead(
     lead_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
-    return await LeadService(db).submit_lead_stub(
+    return await LeadService(db).submit_lead(
         lead_id=lead_id,
         project_id=project_id,
         actor_id=current_user.id,

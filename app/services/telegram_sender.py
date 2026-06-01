@@ -96,7 +96,7 @@ class TelegramSenderService:
         project_id: UUID,
         bot_id: UUID | None,
         external_chat_id: str,
-        photo: str | Path,
+        photo: str | Path | bytes,
         *,
         caption: str | None = None,
         reply_markup: dict | None = None,
@@ -121,7 +121,7 @@ class TelegramSenderService:
         project_id: UUID,
         bot_id: UUID | None,
         external_chat_id: str,
-        video: str | Path,
+        video: str | Path | bytes,
         *,
         caption: str | None = None,
         reply_markup: dict | None = None,
@@ -147,7 +147,7 @@ class TelegramSenderService:
         project_id: UUID,
         bot_id: UUID | None,
         external_chat_id: str,
-        document: str | Path,
+        document: str | Path | bytes,
         *,
         caption: str | None = None,
         reply_markup: dict | None = None,
@@ -168,6 +168,57 @@ class TelegramSenderService:
             timeout=90.0,
         )
 
+    async def send_voice(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        voice: str | Path | bytes,
+        *,
+        caption: str | None = None,
+        reply_markup: dict | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._send_media(
+            method="sendVoice",
+            media_field="voice",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            media=voice,
+            caption=caption,
+            reply_markup=reply_markup,
+            file_name=file_name,
+            mime_type=mime_type,
+            timeout=90.0,
+        )
+
+    async def send_video_note(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        video_note: str | Path | bytes,
+        *,
+        reply_markup: dict | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._send_media(
+            method="sendVideoNote",
+            media_field="video_note",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            media=video_note,
+            reply_markup=reply_markup,
+            file_name=file_name,
+            mime_type=mime_type,
+            timeout=90.0,
+            supports_caption=False,
+        )
+
     async def _send_media(
         self,
         *,
@@ -176,19 +227,20 @@ class TelegramSenderService:
         project_id: UUID,
         bot_id: UUID | None,
         external_chat_id: str,
-        media: str | Path,
+        media: str | Path | bytes,
         caption: str | None = None,
         reply_markup: dict | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
         timeout: float = 30.0,
+        supports_caption: bool = True,
     ) -> dict[str, Any] | None:
         token = await self._get_token(project_id, bot_id)
         if not token:
             return None
 
         url = f"https://api.telegram.org/bot{token}/{method}"
-        caption_text = caption.strip() if isinstance(caption, str) else ""
+        caption_text = caption.strip() if supports_caption and isinstance(caption, str) else ""
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 if isinstance(media, Path):
@@ -206,6 +258,20 @@ class TelegramSenderService:
                             )
                         }
                         response = await client.post(url, data=data, files=files)
+                elif isinstance(media, bytes):
+                    data = {"chat_id": external_chat_id}
+                    if caption_text:
+                        data["caption"] = caption_text
+                    if reply_markup:
+                        data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                    files = {
+                        media_field: (
+                            file_name or f"{media_field}.bin",
+                            media,
+                            mime_type or "application/octet-stream",
+                        )
+                    }
+                    response = await client.post(url, data=data, files=files)
                 else:
                     payload: dict[str, Any] = {"chat_id": external_chat_id, media_field: media}
                     if caption_text:

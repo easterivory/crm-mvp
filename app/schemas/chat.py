@@ -42,6 +42,10 @@ class ChatOut(OrmBase):
     last_message_at: Optional[datetime]
     last_user_message_at: Optional[datetime]
     last_manager_reply_at: Optional[datetime]
+    last_client_message_at: Optional[datetime]
+    last_operator_message_at: Optional[datetime]
+    is_read: bool = True
+    unanswered_minutes: int = 0
     last_read_at: Optional[datetime]
     reset_at: Optional[datetime]
     reset_count: int = 0

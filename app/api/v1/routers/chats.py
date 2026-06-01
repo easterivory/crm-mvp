@@ -4,13 +4,8 @@
 Project-bound users receive project_id from their authenticated context.
 super_admin users pass project_id as a query parameter for scoped requests.
 
-Endpoints implemented:
-  GET  /chats              — list_chats  (filtered, paginated)
-  GET  /chats/{chat_id}    — get_chat
-
-Endpoints stubbed (Phase 3):
-  POST /chats              — create_chat
-  POST /chats/{chat_id}/read — mark_as_read
+Implemented endpoints cover chat listing, retrieval, audit history,
+creation, read state, reset, and saved filter presets.
 """
 from datetime import date
 from typing import Optional
@@ -21,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
+from app.schemas.chat_event_log import ChatEventLogOut
 from app.schemas.chat_filter_preset import (
     ChatFilterPresetCreate,
     ChatFilterPresetOut,
@@ -28,6 +24,7 @@ from app.schemas.chat_filter_preset import (
 )
 from app.schemas.common import PaginatedResponse
 from app.services.chat_filter_preset_service import ChatFilterPresetService
+from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_service import ChatService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -243,7 +240,24 @@ async def get_chat(
     return await ChatService(db).get_chat(chat_id=chat_id, project_id=project_id)
 
 
-# ── Stubs (Phase 3) ────────────────────────────────────────────────────────────
+@router.get("/{chat_id}/audit-logs", response_model=list[ChatEventLogOut])
+async def list_chat_audit_logs(
+    chat_id: UUID,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ChatEventLogOut]:
+    events = await ChatAuditService(db).list_events(
+        chat_id=chat_id,
+        project_id=project_id,
+        actor=current_user,
+        limit=limit,
+        offset=offset,
+    )
+    return [ChatEventLogOut.from_event(event) for event in events]
+
 
 @router.post("", response_model=ChatOut, status_code=status.HTTP_201_CREATED)
 async def create_chat(

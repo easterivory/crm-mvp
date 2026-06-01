@@ -12,10 +12,12 @@ import {
   MessageSquareText,
   Music,
   Paperclip,
+  Search,
   Send,
   UserRound,
   Video,
   X,
+  Zap,
 } from 'lucide-react'
 import {
   FormEvent,
@@ -67,6 +69,7 @@ type Message = {
   message_type: string
   sender_type: 'user' | 'manager' | 'bot' | 'system'
   sender_id: string | null
+  operator_id: string | null
   body: string | null
   caption: string | null
   telegram_file_id: string | null
@@ -78,16 +81,37 @@ type Message = {
   created_at: string
 }
 
-type ChatAttachmentUpload = {
-  upload_id: string
-  chat_id: string
-  project_id: string
+type OutgoingMediaType = 'document' | 'photo' | 'video' | 'voice' | 'video_note'
+
+type ChatAttachmentDraft = {
+  file: File
   file_name: string
   mime_type: string
   file_size: number
-  media_type: 'photo' | 'video' | 'document'
-  status: string
-  expires_at: string | null
+  media_type: OutgoingMediaType
+}
+
+type ProjectSnippet = {
+  id: string
+  project_id: string
+  channel: string
+  name: string
+  type: 'text' | OutgoingMediaType
+  content: string | null
+  file_id: string | null
+  created_at: string
+}
+
+type ChatAuditLog = {
+  id: string
+  chat_id: string
+  user_id: string | null
+  user_name: string | null
+  user_email: string | null
+  event_type: string
+  old_value: string | null
+  new_value: string | null
+  created_at: string
 }
 
 type TrackingLinkOption = {
@@ -113,6 +137,10 @@ type UserOptionRecord = {
   email: string
 }
 
+type TimelineItem =
+  | { kind: 'message'; id: string; created_at: string; message: Message }
+  | { kind: 'audit'; id: string; created_at: string; event: ChatAuditLog }
+
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
 
@@ -129,6 +157,44 @@ const mediaLabels: Record<string, string> = {
   video_note: 'Кружок',
   voice: 'Голосовое',
 }
+
+const attachmentModes: Array<{
+  type: OutgoingMediaType
+  label: string
+  description: string
+  accept: string
+}> = [
+  {
+    type: 'document',
+    label: 'Файл',
+    description: 'Отправить как документ',
+    accept: '*/*',
+  },
+  {
+    type: 'photo',
+    label: 'Фото',
+    description: 'Нативное фото Telegram',
+    accept: 'image/*',
+  },
+  {
+    type: 'video',
+    label: 'Видео',
+    description: 'Нативное видео Telegram',
+    accept: 'video/*',
+  },
+  {
+    type: 'voice',
+    label: 'Голосовое',
+    description: 'Отправить через sendVoice',
+    accept: 'audio/ogg,audio/mpeg,audio/mp4,audio/webm,audio/wav',
+  },
+  {
+    type: 'video_note',
+    label: 'Кружок',
+    description: 'Отправить через sendVideoNote',
+    accept: 'video/mp4,video/quicktime,video/webm',
+  },
+]
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -182,6 +248,56 @@ function getMediaIcon(messageType: string) {
     return Film
   }
   return FileText
+}
+
+function inferAttachmentMediaType(file: File): OutgoingMediaType {
+  if (file.type.startsWith('image/')) {
+    return 'photo'
+  }
+  if (file.type.startsWith('video/')) {
+    return 'video'
+  }
+  if (file.type.startsWith('audio/')) {
+    return 'voice'
+  }
+  return 'document'
+}
+
+function userLabel(user: UserOptionRecord | undefined, fallback: string) {
+  if (!user) {
+    return fallback
+  }
+  return user.name || user.email || fallback
+}
+
+function auditActor(event: ChatAuditLog) {
+  return event.user_name || event.user_email || 'Система'
+}
+
+function auditEventText(event: ChatAuditLog) {
+  const actor = auditActor(event)
+  const oldValue = event.old_value || '—'
+  const newValue = event.new_value || '—'
+
+  if (event.event_type === 'status_change') {
+    return `${actor} изменил статус: ${oldValue} → ${newValue}`
+  }
+  if (event.event_type === 'tag_added') {
+    return `${actor} повесил тег ${newValue}`
+  }
+  if (event.event_type === 'manager_assigned') {
+    return `${actor} назначил менеджера: ${newValue}`
+  }
+  if (event.event_type === 'SLA_breached') {
+    return `${actor}: нарушен SLA ответа`
+  }
+  if (event.event_type === 'note_added') {
+    return `${actor} добавил заметку: ${newValue}`
+  }
+  if (event.new_value || event.old_value) {
+    return `${actor}: ${event.new_value || event.old_value}`
+  }
+  return `${actor}: ${event.event_type}`
 }
 
 function getLifecycleLabel(chat: Chat) {
@@ -316,14 +432,19 @@ export default function ChatsPage() {
   const [chats, setChats] = useState<Chat[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  const [auditLogs, setAuditLogs] = useState<ChatAuditLog[]>([])
+  const [snippets, setSnippets] = useState<ProjectSnippet[]>([])
   const [trackingOptions, setTrackingOptions] = useState<FilterOption[]>([])
   const [tagOptions, setTagOptions] = useState<FilterOption[]>([])
   const [statusOptions, setStatusOptions] = useState<FilterOption[]>([])
   const [userOptions, setUserOptions] = useState<FilterOption[]>([])
+  const [users, setUsers] = useState<UserOptionRecord[]>([])
   const [filterPresets, setFilterPresets] = useState<ChatFilterPreset[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState('')
   const [total, setTotal] = useState(0)
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(() =>
+    searchParams.get('chat_id'),
+  )
   const [chatFilters, setChatFilters] = useState<ChatFiltersState>(() =>
     readChatFilters(searchParams),
   )
@@ -331,11 +452,15 @@ export default function ChatsPage() {
   const [draft, setDraft] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
+  const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
-  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
-  const [attachment, setAttachment] = useState<ChatAttachmentUpload | null>(null)
+  const [attachment, setAttachment] = useState<ChatAttachmentDraft | null>(null)
+  const [attachmentMode, setAttachmentMode] = useState<OutgoingMediaType>('document')
+  const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false)
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null)
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
+  const [isSnippetsOpen, setIsSnippetsOpen] = useState(false)
+  const [snippetSearch, setSnippetSearch] = useState('')
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
@@ -343,6 +468,7 @@ export default function ChatsPage() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const didMountProjectRef = useRef(false)
+  const selectedChatIdRef = useRef<string | null>(selectedChatId)
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
@@ -360,6 +486,40 @@ export default function ChatsPage() {
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
+  const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users])
+  const timelineItems = useMemo<TimelineItem[]>(
+    () =>
+      [
+        ...messages.map((message) => ({
+          kind: 'message' as const,
+          id: message.id,
+          created_at: message.created_at,
+          message,
+        })),
+        ...auditLogs.map((event) => ({
+          kind: 'audit' as const,
+          id: event.id,
+          created_at: event.created_at,
+          event,
+        })),
+      ].sort((left, right) => {
+        const dateDiff = new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+        return dateDiff || left.id.localeCompare(right.id)
+      }),
+    [auditLogs, messages],
+  )
+  const filteredSnippets = useMemo(() => {
+    const needle = snippetSearch.trim().toLowerCase()
+    if (!needle) {
+      return snippets
+    }
+    return snippets.filter((snippet) =>
+      [snippet.name, snippet.content ?? '', mediaLabels[snippet.type] ?? snippet.type]
+        .join(' ')
+        .toLowerCase()
+        .includes(needle),
+    )
+  }, [snippetSearch, snippets])
 
   const botScopeLabel = useMemo(() => {
     if (!selectedProjectId) {
@@ -375,6 +535,10 @@ export default function ChatsPage() {
   }, [selectedBotIds.length, selectedProjectId])
 
   const botById = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots])
+
+  useEffect(() => {
+    selectedChatIdRef.current = selectedChatId
+  }, [selectedChatId])
 
   const getBotLabel = useCallback(
     (chat: Chat) => {
@@ -393,8 +557,19 @@ export default function ChatsPage() {
   )
 
   useEffect(() => {
-    setSearchParams(writeChatFilters(chatFilters), { replace: true })
-  }, [chatFilters, setSearchParams])
+    const chatIdFromUrl = searchParams.get('chat_id')
+    if (chatIdFromUrl && chatIdFromUrl !== selectedChatId) {
+      setSelectedChatId(chatIdFromUrl)
+    }
+  }, [searchParams, selectedChatId])
+
+  useEffect(() => {
+    const params = writeChatFilters(chatFilters)
+    if (selectedChatId) {
+      params.set('chat_id', selectedChatId)
+    }
+    setSearchParams(params, { replace: true })
+  }, [chatFilters, selectedChatId, setSearchParams])
 
   const loadChats = useCallback(async () => {
     if (!selectedProjectId) {
@@ -456,10 +631,19 @@ export default function ChatsPage() {
       }
 
       const { data } = await api.get<PaginatedResponse<Chat>>('/chats', { params })
-      setChats(data.items)
+      setChats((current) => {
+        const currentSelectedChatId = selectedChatIdRef.current
+        const selected = currentSelectedChatId
+          ? current.find((chat) => chat.id === currentSelectedChatId)
+          : null
+        if (selected && !data.items.some((chat) => chat.id === selected.id)) {
+          return [selected, ...data.items]
+        }
+        return data.items
+      })
       setTotal(data.total)
       setSelectedChatId((current) => {
-        if (current && data.items.some((chat) => chat.id === current)) {
+        if (current) {
           return current
         }
         return data.items[0]?.id ?? null
@@ -469,7 +653,7 @@ export default function ChatsPage() {
     } finally {
       setIsChatsLoading(false)
     }
-  }, [debouncedChatFilters, selectedBotIds, selectedProjectId])
+  }, [debouncedChatFilters, notify, selectedBotIds, selectedProjectId])
 
   const loadBots = useCallback(async () => {
     if (!selectedProjectId) {
@@ -489,6 +673,7 @@ export default function ChatsPage() {
       setTagOptions([])
       setStatusOptions([])
       setUserOptions([])
+      setUsers([])
       return
     }
 
@@ -537,11 +722,13 @@ export default function ChatsPage() {
           label: item.name || item.email,
         })),
       )
+      setUsers(usersResponse.data.items)
     } catch {
       setTrackingOptions([])
       setTagOptions([])
       setStatusOptions([])
       setUserOptions([])
+      setUsers([])
     }
   }, [selectedBotIds, selectedProjectId])
 
@@ -564,51 +751,99 @@ export default function ChatsPage() {
     }
   }, [selectedProjectId])
 
+  const loadSnippets = useCallback(async () => {
+    if (!selectedProjectId) {
+      setSnippets([])
+      return
+    }
+
+    setIsSnippetsLoading(true)
+    try {
+      const { data } = await api.get<ProjectSnippet[]>(
+        `/projects/${selectedProjectId}/snippets`,
+      )
+      setSnippets(data)
+    } catch (err) {
+      setSnippets([])
+      if (!axios.isAxiosError(err) || err.response?.status !== 403) {
+        notify({ tone: 'error', message: getErrorMessage(err) })
+      }
+    } finally {
+      setIsSnippetsLoading(false)
+    }
+  }, [notify, selectedProjectId])
+
+  const loadSelectedChat = useCallback(async (chatId: string) => {
+    if (!selectedProjectId) {
+      return
+    }
+
+    try {
+      const { data } = await api.get<Chat>(`/chats/${chatId}`, {
+        params: { project_id: selectedProjectId },
+      })
+      setChats((current) =>
+        current.some((chat) => chat.id === data.id) ? current : [data, ...current],
+      )
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }, [notify, selectedProjectId])
+
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
     if (showLoader) {
       setIsMessagesLoading(true)
     }
 
     try {
-      const { data } = await api.get<PaginatedResponse<Message>>(
-        `/chats/${chatId}/messages`,
-        {
+      const params = {
+        limit: MESSAGE_LIMIT,
+        offset: 0,
+        ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+      }
+      const [messagesResponse, auditResponse] = await Promise.all([
+        api.get<PaginatedResponse<Message>>(`/chats/${chatId}/messages`, { params }),
+        api.get<ChatAuditLog[]>(`/chats/${chatId}/audit-logs`, {
           params: {
             limit: MESSAGE_LIMIT,
             offset: 0,
             ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
           },
-        },
-      )
-      setMessages(data.items)
+        }),
+      ])
+      setMessages(messagesResponse.data.items)
+      setAuditLogs(auditResponse.data)
       await api.post(`/chats/${chatId}/read`, null, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setChats((current) =>
         current.map((chat) =>
-          chat.id === chatId ? { ...chat, unread: false } : chat,
+          chat.id === chatId ? { ...chat, unread: false, is_read: true } : chat,
         ),
       )
     } catch (err) {
-      notify({ tone: 'error', message: getErrorMessage(err) })
+      if (showLoader) {
+        notify({ tone: 'error', message: getErrorMessage(err) })
+      }
     } finally {
       if (showLoader) {
         setIsMessagesLoading(false)
       }
     }
-  }, [selectedProjectId])
+  }, [notify, selectedProjectId])
 
   useEffect(() => {
     void loadChats()
     void loadBots()
     void loadFilterOptions()
     void loadFilterPresets()
+    void loadSnippets()
     const timer = window.setInterval(() => {
       void loadChats()
     }, 15000)
 
     return () => window.clearInterval(timer)
-  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets])
+  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadSnippets])
 
   useEffect(() => {
     if (!didMountProjectRef.current) {
@@ -617,15 +852,20 @@ export default function ChatsPage() {
     }
     setChatFilters(EMPTY_CHAT_FILTERS)
     setSelectedPresetId('')
+    setSelectedChatId(null)
+    setMessages([])
+    setAuditLogs([])
   }, [selectedProjectId])
 
   useEffect(() => {
     if (!selectedChatId) {
       setMessages([])
+      setAuditLogs([])
       return undefined
     }
 
     setMessages([])
+    setAuditLogs([])
     void loadMessages(selectedChatId, true)
     const timer = window.setInterval(() => {
       void loadMessages(selectedChatId)
@@ -635,8 +875,17 @@ export default function ChatsPage() {
   }, [loadMessages, selectedChatId])
 
   useEffect(() => {
+    if (selectedChatId && !selectedChat && selectedProjectId) {
+      void loadSelectedChat(selectedChatId)
+    }
+  }, [loadSelectedChat, selectedChat, selectedChatId, selectedProjectId])
+
+  useEffect(() => {
     setAttachment(null)
     setDraft('')
+    setIsAttachmentMenuOpen(false)
+    setIsSnippetsOpen(false)
+    setSnippetSearch('')
     if (attachmentPreviewUrl) {
       window.URL.revokeObjectURL(attachmentPreviewUrl)
       setAttachmentPreviewUrl(null)
@@ -649,19 +898,19 @@ export default function ChatsPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [messages])
+  }, [timelineItems])
 
   useEffect(() => {
     if (!highlightedMessageId) {
       return undefined
     }
-    const timer = window.setTimeout(() => {
+    const frame = window.requestAnimationFrame(() => {
       document.getElementById(`message-${highlightedMessageId}`)?.scrollIntoView({
         block: 'center',
         behavior: 'smooth',
       })
-    }, 80)
-    return () => window.clearTimeout(timer)
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [highlightedMessageId, messages])
 
   useEffect(() => {
@@ -670,10 +919,7 @@ export default function ChatsPage() {
     }
 
     void loadMessages(selectedChatId)
-    const timer = window.setTimeout(() => {
-      void loadMessages(selectedChatId)
-    }, 800)
-    return () => window.clearTimeout(timer)
+    return undefined
   }, [loadMessages, selectedChat?.last_message_at, selectedChatId])
 
   const sendMessage = async () => {
@@ -685,23 +931,29 @@ export default function ChatsPage() {
     setIsSending(true)
 
     try {
-      const payload = attachment
-        ? {
-            caption: text || null,
-            message_type: attachment.media_type,
-            sender_id: user?.id ?? null,
-            sender_type: 'manager',
-            upload_id: attachment.upload_id,
-          }
-        : {
-            body: text,
-            message_type: 'text',
-            sender_id: user?.id ?? null,
-            sender_type: 'manager',
-          }
-      const { data } = await api.post<Message>(`/chats/${selectedChatId}/messages`, payload, {
-        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
-      })
+      const params = selectedProjectId ? { project_id: selectedProjectId } : undefined
+      const { data } = attachment
+        ? await api.post<Message>(
+            `/chats/${selectedChatId}/messages`,
+            (() => {
+              const formData = new FormData()
+              formData.append('media_type', attachment.media_type)
+              formData.append('file', attachment.file, attachment.file.name)
+              if (text) {
+                formData.append('text', text)
+              }
+              return formData
+            })(),
+            { params },
+          )
+        : await api.post<Message>(
+            `/chats/${selectedChatId}/messages`,
+            {
+              media_type: 'text',
+              text,
+            },
+            { params },
+          )
       setMessages((current) => [...current, data])
       setDraft('')
       clearAttachment()
@@ -713,8 +965,43 @@ export default function ChatsPage() {
     }
   }
 
+  const sendSnippet = async (snippet: ProjectSnippet) => {
+    if (!selectedChatId || isSending) {
+      return
+    }
+    if (snippet.type === 'text') {
+      setDraft(snippet.content ?? '')
+      setIsSnippetsOpen(false)
+      return
+    }
+
+    setIsSending(true)
+    try {
+      const { data } = await api.post<Message>(
+        `/chats/${selectedChatId}/messages`,
+        {
+          snippet_id: snippet.id,
+          ...(draft.trim() ? { text: draft.trim() } : {}),
+        },
+        {
+          params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+        },
+      )
+      setMessages((current) => [...current, data])
+      setDraft('')
+      clearAttachment()
+      setIsSnippetsOpen(false)
+      await loadChats()
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      setIsSending(false)
+    }
+  }
+
   const clearAttachment = () => {
     setAttachment(null)
+    setIsAttachmentMenuOpen(false)
     if (attachmentPreviewUrl) {
       window.URL.revokeObjectURL(attachmentPreviewUrl)
       setAttachmentPreviewUrl(null)
@@ -724,35 +1011,25 @@ export default function ChatsPage() {
     }
   }
 
-  const handleAttachmentSelected = async (file: File | null | undefined) => {
-    if (!file || !selectedChatId || isUploadingAttachment) {
+  const setAttachmentFromFile = (file: File, mediaType: OutgoingMediaType) => {
+    clearAttachment()
+    setAttachment({
+      file,
+      file_name: file.name || mediaLabels[mediaType] || 'attachment',
+      mime_type: file.type || 'application/octet-stream',
+      file_size: file.size,
+      media_type: mediaType,
+    })
+    if (mediaType === 'photo' && file.type.startsWith('image/')) {
+      setAttachmentPreviewUrl(window.URL.createObjectURL(file))
+    }
+  }
+
+  const handleAttachmentSelected = (file: File | null | undefined) => {
+    if (!file || !selectedChatId) {
       return
     }
-    setIsUploadingAttachment(true)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const { data } = await api.post<ChatAttachmentUpload>(
-        `/chats/${selectedChatId}/attachments`,
-        formData,
-        {
-          params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
-          headers: { 'Content-Type': 'multipart/form-data' },
-        },
-      )
-      clearAttachment()
-      setAttachment(data)
-      if (data.media_type === 'photo') {
-        setAttachmentPreviewUrl(window.URL.createObjectURL(file))
-      }
-    } catch (err) {
-      notify({ tone: 'error', message: getErrorMessage(err) || 'Не удалось загрузить вложение.' })
-      if (attachmentInputRef.current) {
-        attachmentInputRef.current.value = ''
-      }
-    } finally {
-      setIsUploadingAttachment(false)
-    }
+    setAttachmentFromFile(file, attachmentMode)
   }
 
   const handleAttachmentDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -760,7 +1037,7 @@ export default function ChatsPage() {
     setIsDraggingAttachment(false)
     const file = event.dataTransfer.files?.[0]
     if (file) {
-      void handleAttachmentSelected(file)
+      setAttachmentFromFile(file, inferAttachmentMediaType(file))
     }
   }
 
@@ -772,7 +1049,7 @@ export default function ChatsPage() {
       return
     }
     event.preventDefault()
-    void handleAttachmentSelected(file)
+    setAttachmentFromFile(file, 'photo')
   }
 
   const handleResetChat = async () => {
@@ -789,6 +1066,7 @@ export default function ChatsPage() {
       setChats((current) => current.filter((chat) => chat.id !== selectedChatId))
       setSelectedChatId(null)
       setMessages([])
+      setAuditLogs([])
       setIsResetConfirmOpen(false)
       setIsLeadOpen(false)
       notify({
@@ -917,6 +1195,16 @@ export default function ChatsPage() {
     void sendMessage()
   }
 
+  const openAttachmentPicker = (mediaType: OutgoingMediaType) => {
+    const mode = attachmentModes.find((item) => item.type === mediaType)
+    setAttachmentMode(mediaType)
+    setIsAttachmentMenuOpen(false)
+    if (attachmentInputRef.current) {
+      attachmentInputRef.current.accept = mode?.accept ?? '*/*'
+      attachmentInputRef.current.click()
+    }
+  }
+
   return (
     <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
       <div
@@ -1019,7 +1307,7 @@ export default function ChatsPage() {
                 </button>
                 <div className="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
                   <CheckCheck size={16} />
-                  <span>{selectedChat.last_read_at ? 'Прочитано' : 'Не прочитано'}</span>
+                  <span>{selectedChat.is_read ? 'Прочитано' : 'Не прочитано'}</span>
                 </div>
               </div>
             </>
@@ -1045,18 +1333,38 @@ export default function ChatsPage() {
             </div>
           ) : null}
 
-          {selectedChat && !isMessagesLoading && messages.length === 0 ? (
+          {selectedChat && !isMessagesLoading && timelineItems.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
               Сообщений пока нет.
             </div>
           ) : null}
 
-          {selectedChat && !isMessagesLoading && messages.length > 0 ? (
+          {selectedChat && !isMessagesLoading && timelineItems.length > 0 ? (
             <div className="space-y-3">
-              {messages.map((message) => {
+              {timelineItems.map((item) => {
+                if (item.kind === 'audit') {
+                  return (
+                    <div key={item.id} className="flex justify-center px-4">
+                      <div className="max-w-[86%] rounded-full border border-white/8 bg-white/[0.045] px-3 py-1.5 text-center text-xs leading-5 text-gray-400">
+                        <span className="text-gray-500">{formatDateTime(item.event.created_at)} · </span>
+                        {auditEventText(item.event)}
+                      </div>
+                    </div>
+                  )
+                }
+                const message = item.message
                 const isOutgoing =
                   message.sender_type === 'manager' || message.sender_type === 'bot'
                 const isBot = message.sender_type === 'bot'
+                const operator = userById.get(message.operator_id ?? message.sender_id ?? '')
+                const operatorName = userLabel(
+                  operator,
+                  message.operator_id === user?.id
+                    ? user.name || user.email || 'CRM'
+                    : message.operator_id
+                      ? 'CRM'
+                      : 'Менеджер',
+                )
 
                 return (
                   <div
@@ -1065,7 +1373,10 @@ export default function ChatsPage() {
                     className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[72%] rounded-2xl border px-3 py-2 shadow-sm transition ${
+                      className={`flex max-w-[72%] flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}
+                    >
+                      <div
+                      className={`w-fit max-w-full rounded-2xl border px-3 py-2 shadow-sm transition ${
                         isOutgoing
                           ? isBot
                             ? 'border-accent-300/25 bg-accent-400/10 text-accent-50 shadow-glow-accent'
@@ -1131,6 +1442,12 @@ export default function ChatsPage() {
                           ) : null}
                         </div>
                       )}
+                      </div>
+                      {message.sender_type === 'manager' ? (
+                        <p className="mt-1 max-w-full truncate px-1 text-[11px] leading-4 text-gray-500">
+                          Отправил: {operatorName}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 )
@@ -1177,23 +1494,119 @@ export default function ChatsPage() {
             <input
               ref={attachmentInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip"
+              accept={attachmentModes.find((mode) => mode.type === attachmentMode)?.accept ?? '*/*'}
               className="hidden"
-              onChange={(event) => void handleAttachmentSelected(event.target.files?.[0])}
+              onChange={(event) => handleAttachmentSelected(event.target.files?.[0])}
             />
-            <button
-              type="button"
-              onClick={() => attachmentInputRef.current?.click()}
-              disabled={!selectedChat || isSending || isUploadingAttachment}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
-              title="Прикрепить файл"
-            >
-              {isUploadingAttachment ? (
-                <LoaderCircle size={18} className="animate-spin" />
-              ) : (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsAttachmentMenuOpen((value) => !value)}
+                disabled={!selectedChat || isSending}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Прикрепить файл"
+              >
                 <Paperclip size={18} />
-              )}
-            </button>
+              </button>
+              {isAttachmentMenuOpen ? (
+                <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-2 shadow-card backdrop-blur-xl">
+                  {attachmentModes.map((mode) => {
+                    const Icon = getMediaIcon(mode.type)
+                    return (
+                      <button
+                        key={mode.type}
+                        type="button"
+                        onClick={() => openAttachmentPicker(mode.type)}
+                        className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-white/[0.05]"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-accent-100">
+                          <Icon size={16} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-white">{mode.label}</span>
+                          <span className="block truncate text-xs text-gray-500">
+                            {mode.description}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </div>
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsSnippetsOpen((value) => !value)}
+                disabled={!selectedChat || isSending || isSnippetsLoading}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Быстрые ответы"
+              >
+                {isSnippetsLoading ? (
+                  <LoaderCircle size={17} className="animate-spin" />
+                ) : (
+                  <Zap size={17} />
+                )}
+                <span className="hidden sm:inline">Шаблоны</span>
+              </button>
+              {isSnippetsOpen ? (
+                <div className="absolute bottom-full left-0 z-30 mb-2 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-3 shadow-card backdrop-blur-xl">
+                  <label className="relative block">
+                    <Search
+                      size={15}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                    />
+                    <input
+                      value={snippetSearch}
+                      onChange={(event) => setSnippetSearch(event.target.value)}
+                      placeholder="Найти заготовку"
+                      className="h-10 w-full rounded-lg border border-white/10 bg-background/70 pl-9 pr-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
+                    />
+                  </label>
+                  <div className="mt-2 max-h-72 overflow-y-auto pr-1">
+                    {filteredSnippets.length > 0 ? (
+                      <div className="space-y-1">
+                        {filteredSnippets.map((snippet) => {
+                          const Icon = getMediaIcon(snippet.type)
+                          return (
+                            <button
+                              key={snippet.id}
+                              type="button"
+                              onClick={() => void sendSnippet(snippet)}
+                              disabled={isSending}
+                              className="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-accent-100">
+                                <Icon size={16} />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-2">
+                                  <span className="truncate text-sm font-semibold text-white">
+                                    {snippet.name}
+                                  </span>
+                                  <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] text-gray-400">
+                                    {mediaLabels[snippet.type] ?? snippet.type}
+                                  </span>
+                                </span>
+                                {snippet.content ? (
+                                  <span className="mt-0.5 line-clamp-2 text-xs leading-5 text-gray-500">
+                                    {snippet.content}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="px-2 py-5 text-center text-sm text-gray-500">
+                        Заготовки не найдены
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
@@ -1207,7 +1620,7 @@ export default function ChatsPage() {
             <button
               type="submit"
               title="Отправить сообщение"
-              disabled={!selectedChat || (!draft.trim() && !attachment) || isSending || isUploadingAttachment}
+              disabled={!selectedChat || (!draft.trim() && !attachment) || isSending}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}

@@ -48,6 +48,24 @@ class MessageType:
     )
 
 
+class ChatEventType:
+    STATUS_CHANGE = "status_change"
+    TAG_ADDED = "tag_added"
+    MANAGER_ASSIGNED = "manager_assigned"
+    SLA_BREACHED = "SLA_breached"
+    NOTE_ADDED = "note_added"
+
+    ALL: frozenset[str] = frozenset(
+        {
+            STATUS_CHANGE,
+            TAG_ADDED,
+            MANAGER_ASSIGNED,
+            SLA_BREACHED,
+            NOTE_ADDED,
+        }
+    )
+
+
 class LeadStatusCode:
     NEW = "new"
     IN_PROGRESS = "in_progress"
@@ -82,7 +100,7 @@ class AuditAction:
     CHAT_RESET = "chat.reset"
     PROJECT_ARCHIVED = "project.archived"
     PROJECT_RESTORED = "project.restored"
-    LEAD_SUBMITTED_STUB = "lead.submitted_stub"
+    LEAD_SUBMITTED = "lead.submitted"
     LEAD_REJECTED = "lead.rejected"
 
 

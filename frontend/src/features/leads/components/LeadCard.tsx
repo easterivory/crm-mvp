@@ -2,6 +2,7 @@ import {
   CalendarDays,
   Clock3,
   Globe2,
+  MessageSquareText,
   Phone,
   Send,
   Tag,
@@ -18,6 +19,7 @@ type LeadCardProps = {
   isMutating: boolean
   onSubmit: (lead: Lead) => void
   onReject: (lead: Lead) => void
+  onOpenChat?: (lead: Lead) => void
   onSubmitToPartner?: (lead: Lead) => void
 }
 
@@ -54,6 +56,7 @@ export default function LeadCard({
   isMutating,
   onSubmit,
   onReject,
+  onOpenChat,
   onSubmitToPartner,
 }: LeadCardProps) {
   const title =
@@ -117,6 +120,17 @@ export default function LeadCard({
       </div>
 
       <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+        {onOpenChat ? (
+          <button
+            type="button"
+            onClick={() => onOpenChat(lead)}
+            disabled={!lead.chat_id}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/35 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 transition hover:border-sky-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <MessageSquareText size={16} />
+            Перейти в чат
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => onSubmit(lead)}

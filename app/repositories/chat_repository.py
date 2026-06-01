@@ -6,32 +6,10 @@ Chat repository.
 is_red / unanswered / unread are NOT stored — they are SQL boolean expressions
 built from timestamp columns and evaluated inside the DB engine.
 
-All three expressions are defined as @staticmethod so they can be reused
-in WHERE, ORDER BY, and count queries without repeating literal SQL.
+All expressions are defined as @staticmethod so they can be reused in WHERE,
+ORDER BY, and count queries without repeating literal SQL.
 
-Sorting contract:  is_red DESC → unanswered DESC → last_message_at DESC NULLS LAST
-
-TODO (do not implement now):
-  - Cursor-based pagination instead of OFFSET for large result sets.
-    OFFSET N forces the DB to scan and discard N rows on every request.
-    A cursor on (is_red, unanswered, last_message_at, id) is significantly
-    faster at high page numbers.
-  - Expression indexes for the three computed flags:
-      is_red:      CREATE INDEX ON chats (project_id, last_user_message_at)
-                   WHERE last_user_message_at IS NOT NULL
-                     AND last_manager_reply_at IS NULL;
-                   (partial index; covers the unanswered sub-condition)
-      unanswered:  CREATE INDEX ON chats (project_id, last_user_message_at)
-                   WHERE last_user_message_at > last_manager_reply_at
-                      OR last_manager_reply_at IS NULL;
-      unread:      CREATE INDEX ON chats (project_id, last_message_at)
-                   WHERE last_message_at > last_read_at
-                      OR last_read_at IS NULL;
-    These partial indexes let the DB skip full-table evaluation of timestamp
-    comparisons when filters are active.
-  - count() optimisation: for very large tables, an exact COUNT is expensive.
-    Consider returning an estimated count (pg_class.reltuples) for the
-    unfiltered case, or caching the total in daily_stats.
+Sorting contract: is_red DESC → unanswered DESC → last_message_at DESC NULLS LAST
 """
 from datetime import datetime, timezone
 from typing import Optional, Sequence
@@ -59,12 +37,24 @@ class ChatRepository(BaseRepository[Chat]):
     @staticmethod
     def _unanswered_expr() -> ColumnElement:
         """
-        True when the user sent at least one message AND the manager has not
-        replied after the last user message.
+        True when the client sent at least one message and an operator has not
+        replied after it. Legacy timestamp columns are used as a fallback while
+        older rows are migrated by normal message flow.
         """
-        return (Chat.last_user_message_at.isnot(None)) & (
-            Chat.last_manager_reply_at.is_(None)
-            | (Chat.last_user_message_at > Chat.last_manager_reply_at)
+        last_client_message_at = func.coalesce(
+            Chat.last_client_message_at,
+            Chat.last_user_message_at,
+        )
+        last_operator_message_at = case(
+            (
+                Chat.last_client_message_at.is_(None),
+                func.coalesce(Chat.last_operator_message_at, Chat.last_manager_reply_at),
+            ),
+            else_=Chat.last_operator_message_at,
+        )
+        return (last_client_message_at.isnot(None)) & (
+            last_operator_message_at.is_(None)
+            | (last_client_message_at > last_operator_message_at)
         )
 
     @staticmethod
@@ -77,22 +67,21 @@ class ChatRepository(BaseRepository[Chat]):
         threshold value is always a bound parameter — no SQL injection risk,
         no string formatting.
         """
+        last_client_message_at = func.coalesce(
+            Chat.last_client_message_at,
+            Chat.last_user_message_at,
+        )
         return ChatRepository._unanswered_expr() & (
-            (func.now() - Chat.last_user_message_at)
+            (func.now() - last_client_message_at)
             > func.make_interval(0, 0, 0, 0, 0, sla_threshold_minutes, 0)
         )
 
     @staticmethod
     def _unread_expr() -> ColumnElement:
         """
-        True when the chat has at least one message (last_message_at IS NOT NULL)
-        that arrived after the manager last opened the chat (or the manager
-        has never opened it, i.e. last_read_at IS NULL).
+        True when the chat has unread client activity for the operator workspace.
         """
-        return (Chat.last_message_at.isnot(None)) & (
-            Chat.last_read_at.is_(None)
-            | (Chat.last_message_at > Chat.last_read_at)
-        )
+        return Chat.is_read.is_(False)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -652,7 +641,16 @@ class ChatRepository(BaseRepository[Chat]):
         }
         if sender_type == SenderType.USER:
             values["last_user_message_at"] = ts
-        elif sender_type in {SenderType.MANAGER, SenderType.BOT}:
+            values["last_client_message_at"] = ts
+            values["is_read"] = False
+            values["unanswered_minutes"] = 0
+        elif sender_type == SenderType.MANAGER:
+            values["last_manager_reply_at"] = ts
+            values["last_operator_message_at"] = ts
+            values["last_read_at"] = ts
+            values["is_read"] = True
+            values["unanswered_minutes"] = 0
+        elif sender_type == SenderType.BOT:
             values["last_manager_reply_at"] = ts
 
         result = await self.db.execute(
@@ -672,7 +670,7 @@ class ChatRepository(BaseRepository[Chat]):
         await self.db.execute(
             update(Chat)
             .where(Chat.id == chat_id, Chat.reset_at.is_(None))
-            .values(last_read_at=now, updated_at=now)
+            .values(last_read_at=now, is_read=True, updated_at=now)
         )
 
     async def reset_chat(self, chat_id: UUID) -> Optional[Chat]:
@@ -692,7 +690,11 @@ class ChatRepository(BaseRepository[Chat]):
                 last_message_at=None,
                 last_user_message_at=None,
                 last_manager_reply_at=None,
+                last_client_message_at=None,
+                last_operator_message_at=None,
                 last_read_at=None,
+                is_read=True,
+                unanswered_minutes=0,
                 updated_at=now,
             )
         )
@@ -723,7 +725,11 @@ class ChatRepository(BaseRepository[Chat]):
                 last_message_at=None,
                 last_user_message_at=None,
                 last_manager_reply_at=None,
+                last_client_message_at=None,
+                last_operator_message_at=None,
                 last_read_at=None,
+                is_read=True,
+                unanswered_minutes=0,
                 updated_at=now,
             )
         )

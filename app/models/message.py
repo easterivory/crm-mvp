@@ -40,6 +40,9 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     sender_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
+    operator_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # NULL for media messages without a caption
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -55,6 +58,9 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     chat: Mapped[Chat] = relationship("Chat", back_populates="messages")
     sender: Mapped[Optional[User]] = relationship(
         "User", back_populates="sent_messages", foreign_keys=[sender_id]
+    )
+    operator: Mapped[Optional[User]] = relationship(
+        "User", back_populates="operator_messages", foreign_keys=[operator_id]
     )
 
     # Partial unique index — declared via DDL in the Alembic migration.

@@ -32,12 +32,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.constants import MessageType, SenderType
+from app.core.constants import MessageType, RoleName, SenderType
 from app.models.message import MessageUpload
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
+from app.repositories.user_repository import UserRepository
 from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import TelegramSenderService
@@ -80,8 +81,113 @@ class MessageService:
         self.message_repo = MessageRepository(db)
         self.chat_repo = ChatRepository(db)
         self.bot_repo = BotRepository(db)
+        self.user_repo = UserRepository(db)
         self.chat_service = ChatService(db)
         self.telegram_sender = TelegramSenderService(db)
+
+    async def send_message_to_client(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        operator_id: UUID,
+        text: str | None = None,
+        media_type: str = MessageType.TEXT,
+        file_id: str | None = None,
+        file_bytes: bytes | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> MessageOut:
+        await self._ensure_operator_can_send(operator_id, project_id)
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found in this project")
+        if chat.bot_id is None:
+            raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
+
+        normalized_type = self._normalize_outgoing_media_type(media_type)
+        if normalized_type not in self._operator_send_media_types() | {MessageType.TEXT}:
+            raise HTTPException(status_code=422, detail=f"Unsupported outgoing media type: {media_type}")
+
+        message_text = (text or "").strip()
+        if normalized_type == MessageType.TEXT:
+            if file_id is not None or file_bytes is not None:
+                raise HTTPException(status_code=422, detail="Text message cannot include media payload.")
+            if not message_text:
+                raise HTTPException(status_code=422, detail="Text message cannot be empty.")
+            result = await self.telegram_sender.send_message(
+                project_id=project_id,
+                bot_id=chat.bot_id,
+                external_chat_id=chat.external_chat_id,
+                text=message_text,
+            )
+            if result is None:
+                raise HTTPException(status_code=502, detail="Telegram не принял текстовое сообщение.")
+            data = MessageCreate(
+                external_message_id=self._telegram_message_id(result),
+                message_type=MessageType.TEXT,
+                sender_type=SenderType.MANAGER,
+                sender_id=operator_id,
+                operator_id=operator_id,
+                body=message_text,
+                raw_payload_json={"telegram_result": result},
+            )
+            message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
+            logger.info(
+                "Operator message sent chat_id=%s operator_id=%s media_type=%s message_id=%s",
+                chat_id,
+                operator_id,
+                normalized_type,
+                message.id,
+            )
+            return message
+
+        if bool(file_id) == bool(file_bytes):
+            raise HTTPException(status_code=422, detail="Media message requires exactly one of file_id or file_bytes.")
+
+        media = file_id or file_bytes
+        assert media is not None
+        result = await self._send_media_to_telegram_by_type(
+            media_type=normalized_type,
+            media=media,
+            project_id=project_id,
+            bot_id=chat.bot_id,
+            external_chat_id=chat.external_chat_id,
+            caption=message_text or None,
+            file_name=file_name,
+            mime_type=mime_type,
+        )
+        if result is None:
+            raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
+
+        telegram_file_id, file_unique_id, telegram_file_size = self._extract_telegram_media_metadata(
+            normalized_type,
+            result,
+        )
+        data = MessageCreate(
+            external_message_id=self._telegram_message_id(result),
+            message_type=normalized_type,
+            sender_type=SenderType.MANAGER,
+            sender_id=operator_id,
+            operator_id=operator_id,
+            body=None,
+            caption=message_text or None,
+            telegram_file_id=telegram_file_id or file_id,
+            file_unique_id=file_unique_id,
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size=telegram_file_size or (len(file_bytes) if file_bytes is not None else None),
+            raw_payload_json={"telegram_result": result},
+        )
+        message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
+        logger.info(
+            "Operator message sent chat_id=%s operator_id=%s media_type=%s message_id=%s",
+            chat_id,
+            operator_id,
+            normalized_type,
+            message.id,
+        )
+        return message
 
     async def create_message(
         self,
@@ -135,9 +241,19 @@ class MessageService:
                     await self.bot_repo.disable_bot_for_chat(chat_id)
                 return MessageOut.model_validate(existing)
 
+        data = self._with_operator_author(data)
+        if data.operator_id is not None:
+            await self._ensure_operator_can_send(data.operator_id, project_id)
+
         upload_id_for_sent_mark = data.upload_id
         if send_to_telegram and self._is_outgoing_media_upload(data):
             data = await self._send_media_upload_to_telegram(
+                project_id=project_id,
+                chat=chat,
+                data=data,
+            )
+        elif send_to_telegram and self._is_outgoing_media_file_id(data):
+            data = await self._send_media_file_id_to_telegram(
                 project_id=project_id,
                 chat=chat,
                 data=data,
@@ -157,12 +273,13 @@ class MessageService:
         message = None
         try:
             async with self.db.begin_nested():
-                message = await self.message_repo.create(
+                message = await self.message_repo.create_message(
                     chat_id=chat_id,
                     external_message_id=data.external_message_id,
                     message_type=data.message_type,
                     sender_type=data.sender_type,
                     sender_id=data.sender_id,
+                    operator_id=data.operator_id,
                     body=data.body,
                     caption=data.caption,
                     telegram_file_id=data.telegram_file_id,
@@ -384,6 +501,51 @@ class MessageService:
             }
         )
 
+    async def _send_media_file_id_to_telegram(
+        self,
+        *,
+        project_id: UUID,
+        chat,
+        data: MessageCreate,
+    ) -> MessageCreate:
+        assert data.telegram_file_id is not None
+        if chat.bot_id is None:
+            raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
+
+        message_type = self._normalize_outgoing_media_type(data.message_type)
+        caption = data.caption or data.body
+        result = await self._send_media_to_telegram_by_type(
+            media_type=message_type,
+            media=data.telegram_file_id,
+            project_id=project_id,
+            bot_id=chat.bot_id,
+            external_chat_id=chat.external_chat_id,
+            caption=caption,
+            file_name=data.file_name,
+            mime_type=data.mime_type,
+        )
+        if result is None:
+            raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
+
+        telegram_file_id, file_unique_id, file_size = self._extract_telegram_media_metadata(
+            message_type,
+            result,
+        )
+        raw_payload_json = dict(data.raw_payload_json or {})
+        raw_payload_json["telegram_result"] = result
+        return data.model_copy(
+            update={
+                "external_message_id": data.external_message_id or self._telegram_message_id(result),
+                "message_type": message_type,
+                "body": None,
+                "caption": caption,
+                "telegram_file_id": telegram_file_id or data.telegram_file_id,
+                "file_unique_id": file_unique_id or data.file_unique_id,
+                "file_size": file_size or data.file_size,
+                "raw_payload_json": raw_payload_json,
+            }
+        )
+
     async def _send_upload_by_type(
         self,
         *,
@@ -394,40 +556,91 @@ class MessageService:
         external_chat_id: str,
         caption: str | None,
     ) -> dict | None:
-        if upload.media_type == MessageType.PHOTO:
+        return await self._send_media_to_telegram_by_type(
+            media_type=upload.media_type,
+            media=path,
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            caption=caption,
+            file_name=upload.file_name,
+            mime_type=upload.mime_type,
+        )
+
+    async def _send_media_to_telegram_by_type(
+        self,
+        *,
+        media_type: str,
+        media: str | Path | bytes,
+        project_id: UUID,
+        bot_id: UUID,
+        external_chat_id: str,
+        caption: str | None,
+        file_name: str | None,
+        mime_type: str | None,
+    ) -> dict | None:
+        if media_type == MessageType.PHOTO:
             return await self.telegram_sender.send_photo(
                 project_id=project_id,
                 bot_id=bot_id,
                 external_chat_id=external_chat_id,
-                photo=path,
+                photo=media,
                 caption=caption,
-                file_name=upload.file_name,
-                mime_type=upload.mime_type,
+                file_name=file_name,
+                mime_type=mime_type,
             )
-        if upload.media_type == MessageType.VIDEO:
+        if media_type == MessageType.VIDEO:
             return await self.telegram_sender.send_video(
                 project_id=project_id,
                 bot_id=bot_id,
                 external_chat_id=external_chat_id,
-                video=path,
+                video=media,
                 caption=caption,
-                file_name=upload.file_name,
-                mime_type=upload.mime_type,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        if media_type == MessageType.VOICE:
+            return await self.telegram_sender.send_voice(
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                voice=media,
+                caption=caption,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        if media_type == MessageType.VIDEO_NOTE:
+            return await self.telegram_sender.send_video_note(
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                video_note=media,
+                file_name=file_name,
+                mime_type=mime_type,
             )
         return await self.telegram_sender.send_document(
             project_id=project_id,
             bot_id=bot_id,
             external_chat_id=external_chat_id,
-            document=path,
+            document=media,
             caption=caption,
-            file_name=upload.file_name,
-            mime_type=upload.mime_type,
+            file_name=file_name,
+            mime_type=mime_type,
         )
 
     @staticmethod
     def _is_outgoing_media_upload(data: MessageCreate) -> bool:
         return (
             data.upload_id is not None
+            and data.sender_type in {SenderType.MANAGER, SenderType.BOT}
+            and MessageService._is_outgoing_media_type(data.message_type)
+        )
+
+    @staticmethod
+    def _is_outgoing_media_file_id(data: MessageCreate) -> bool:
+        return (
+            data.upload_id is None
+            and bool(data.telegram_file_id)
             and data.sender_type in {SenderType.MANAGER, SenderType.BOT}
             and MessageService._is_outgoing_media_type(data.message_type)
         )
@@ -442,15 +655,55 @@ class MessageService:
 
     @staticmethod
     def _is_outgoing_media_type(message_type: str) -> bool:
-        return MessageService._normalize_outgoing_media_type(message_type) in {
+        return MessageService._normalize_outgoing_media_type(message_type) in MessageService._operator_send_media_types()
+
+    @staticmethod
+    def _operator_send_media_types() -> set[str]:
+        return {
             MessageType.PHOTO,
             MessageType.VIDEO,
+            MessageType.VOICE,
+            MessageType.VIDEO_NOTE,
             MessageType.DOCUMENT,
         }
 
     @staticmethod
     def _normalize_outgoing_media_type(message_type: str) -> str:
         return MessageType.DOCUMENT if message_type == MessageType.FILE else message_type
+
+    @staticmethod
+    def _telegram_message_id(result: dict) -> str | None:
+        message_id = result.get("message_id")
+        return str(message_id) if message_id is not None else None
+
+    async def _ensure_operator_can_send(self, operator_id: UUID, project_id: UUID) -> None:
+        operator = await self.user_repo.get_by_id(operator_id)
+        if operator is None or operator.is_deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
+        if operator.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER, RoleName.OPERATOR}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot send chat messages")
+        if operator.role_name != RoleName.SUPER_ADMIN and operator.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operator is not a member of this project",
+            )
+
+    @staticmethod
+    def _with_operator_author(data: MessageCreate) -> MessageCreate:
+        if data.operator_id is not None and data.sender_type != SenderType.MANAGER:
+            raise HTTPException(status_code=422, detail="operator_id is only valid for manager messages.")
+        if data.sender_type != SenderType.MANAGER:
+            return data
+
+        operator_id = data.operator_id or data.sender_id
+        if operator_id is None:
+            raise HTTPException(status_code=422, detail="Manager message requires operator_id.")
+        return data.model_copy(
+            update={
+                "operator_id": operator_id,
+                "sender_id": data.sender_id or operator_id,
+            }
+        )
 
     @staticmethod
     def _extract_telegram_media_metadata(

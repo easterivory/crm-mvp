@@ -567,7 +567,8 @@ function SelectableChipGroup({
           {emptyLabel ?? 'Нет вариантов'}
         </p>
       ) : (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="max-h-44 overflow-y-auto rounded-lg border border-white/8 bg-background/25 p-1.5">
+          <div className="flex flex-wrap gap-1.5">
           {options.map((option) => {
             const isActive = selected.has(option.id)
             return (
@@ -585,6 +586,7 @@ function SelectableChipGroup({
               </button>
             )
           })}
+          </div>
         </div>
       )}
     </section>
