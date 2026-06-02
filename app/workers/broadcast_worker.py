@@ -215,25 +215,28 @@ class BroadcastDeliveryWorker:
         broadcast: Broadcast,
         recipient: BroadcastRecipient,
     ) -> bool:
+        broadcast_id = broadcast.id
+        project_id = broadcast.project_id
         recipient_id = recipient.id
+        recipient_chat_id = recipient.chat_id
         try:
             context = await self.repo.get_recipient_context(recipient)
             if context is None:
                 raise RuntimeError("Chat not found")
             chat, lead = context
-            await self.service._send_to_recipient(broadcast, recipient.chat_id, chat, lead)
+            await self.service._send_to_recipient(broadcast, recipient_chat_id, chat, lead)
             await self.repo.mark_recipient_sent(recipient_id)
             await self.repo.increment_progress_counts(
-                broadcast.id,
-                broadcast.project_id,
+                broadcast_id,
+                project_id,
                 sent_delta=1,
             )
             await self.db.commit()
             logger.info(
                 "Broadcast recipient delivered broadcast_id=%s recipient_id=%s chat_id=%s",
-                broadcast.id,
+                broadcast_id,
                 recipient_id,
-                recipient.chat_id,
+                recipient_chat_id,
             )
             return True
         except Exception as exc:
@@ -241,14 +244,14 @@ class BroadcastDeliveryWorker:
             error = self._error_message(exc)
             await self.repo.mark_recipient_failed(recipient_id, error)
             await self.repo.increment_progress_counts(
-                broadcast.id,
-                broadcast.project_id,
+                broadcast_id,
+                project_id,
                 failed_delta=1,
             )
             await self.db.commit()
             logger.warning(
                 "Broadcast recipient failed broadcast_id=%s recipient_id=%s error=%s",
-                broadcast.id,
+                broadcast_id,
                 recipient_id,
                 error,
             )
