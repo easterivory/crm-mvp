@@ -9,9 +9,22 @@ import type {
   FunnelBlockRegistry,
   FunnelDropOffAnalytics,
   FunnelGraph,
+  FunnelGraphValidatePayload,
+  FunnelGraphValidationResult,
   FunnelValidationResult,
   FunnelVersion,
 } from './types'
+
+export type FunnelUser = {
+  id: string
+  email: string
+  name: string
+  project_id: string | null
+  role_id: string
+  role_name: string | null
+  created_at: string
+  is_deleted: boolean
+}
 
 export async function fetchFunnels(params: {
   projectId: string
@@ -128,6 +141,19 @@ export async function validateFunnelVersion(
   return data
 }
 
+export async function validateFunnelGraph(
+  funnelId: string,
+  projectId: string,
+  payload: FunnelGraphValidatePayload,
+): Promise<FunnelGraphValidationResult> {
+  const { data } = await api.post<FunnelGraphValidationResult>(
+    `/funnels/${funnelId}/validate`,
+    payload,
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
 export async function publishFunnelVersion(
   funnelId: string,
   versionId: string,
@@ -135,6 +161,19 @@ export async function publishFunnelVersion(
 ): Promise<FunnelVersion> {
   const { data } = await api.post<FunnelVersion>(
     `/funnels/${funnelId}/versions/${versionId}/publish`,
+    null,
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
+export async function rollbackFunnelVersion(
+  funnelId: string,
+  versionId: string,
+  projectId: string,
+): Promise<FunnelVersion> {
+  const { data } = await api.post<FunnelVersion>(
+    `/funnels/${funnelId}/versions/${versionId}/rollback`,
     null,
     { params: { project_id: projectId } },
   )
@@ -205,4 +244,15 @@ export async function copyFunnel(
 export async function fetchBlockRegistry(): Promise<FunnelBlockRegistry> {
   const { data } = await api.get<FunnelBlockRegistry>('/funnels/block-registry')
   return data
+}
+
+export async function fetchFunnelUsers(projectId: string): Promise<FunnelUser[]> {
+  const { data } = await api.get<PaginatedResponse<FunnelUser>>('/users', {
+    params: {
+      project_id: projectId,
+      limit: 100,
+      offset: 0,
+    },
+  })
+  return data.items
 }

@@ -1,6 +1,6 @@
 import api from '../../api/client'
 
-import type { ChatFilterPreset, ChatFiltersState } from './types'
+import type { ChatFilterPreset, ChatFiltersState, FunnelRuntimeLog } from './types'
 
 export async function fetchChatFilterPresets(projectId: string) {
   const { data } = await api.get<ChatFilterPreset[]>('/chats/filter-presets', {
@@ -36,4 +36,14 @@ export async function updateChatFilterPreset(
 
 export async function deleteChatFilterPreset(presetId: string) {
   await api.delete(`/chats/filter-presets/${presetId}`)
+}
+
+export async function fetchFunnelTrace(
+  chatId: string,
+  projectId: string,
+): Promise<FunnelRuntimeLog[]> {
+  const { data } = await api.get<FunnelRuntimeLog[]>(`/chats/${chatId}/funnel-trace`, {
+    params: { project_id: projectId },
+  })
+  return data
 }

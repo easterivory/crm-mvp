@@ -42,6 +42,15 @@ export type ChatFilterPreset = {
   updated_at: string
 }
 
+export type FunnelRuntimeLog = {
+  step_id: string
+  step_key: string
+  step_title: string
+  status: 'success' | 'failed'
+  error_message: string | null
+  created_at: string
+}
+
 export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   q: '',
   datePreset: '',

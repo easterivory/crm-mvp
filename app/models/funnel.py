@@ -73,6 +73,7 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         ),
         Index("ix_funnel_versions_funnel_id", "funnel_id"),
         Index("ix_funnel_versions_status", "status"),
+        Index("ix_funnel_versions_created_by_id", "created_by_id"),
         Index("ix_funnel_versions_published_at", "published_at"),
         Index(
             "uq_funnel_versions_one_published_per_funnel",
@@ -92,6 +93,10 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    change_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     is_hold_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
@@ -339,6 +344,40 @@ class FunnelScheduledJob(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     chat: Mapped[Chat] = relationship("Chat")
     state: Mapped[Optional[ChatFunnelState]] = relationship("ChatFunnelState")
     funnel: Mapped[Funnel] = relationship("Funnel")
+    version: Mapped[FunnelVersion] = relationship("FunnelVersion")
+    step: Mapped[FunnelStep] = relationship("FunnelStep")
+
+
+class FunnelRuntimeLog(Base, UUIDPrimaryKey, TimestampMixin):
+    """Append-only per-chat funnel runtime trace for operator debugging."""
+
+    __tablename__ = "funnel_runtime_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('success', 'failed')",
+            name="ck_funnel_runtime_logs_status",
+        ),
+        Index("ix_funnel_runtime_logs_chat_id", "chat_id"),
+        Index("ix_funnel_runtime_logs_funnel_version_id", "funnel_version_id"),
+        Index("ix_funnel_runtime_logs_step_id", "step_id"),
+        Index("ix_funnel_runtime_logs_status", "status"),
+        Index("ix_funnel_runtime_logs_created_at", "created_at"),
+        Index("ix_funnel_runtime_logs_chat_created_at", "chat_id", "created_at"),
+    )
+
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chats.id"), nullable=False
+    )
+    funnel_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_versions.id"), nullable=False
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnel_steps.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    chat: Mapped[Chat] = relationship("Chat")
     version: Mapped[FunnelVersion] = relationship("FunnelVersion")
     step: Mapped[FunnelStep] = relationship("FunnelStep")
 

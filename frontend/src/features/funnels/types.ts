@@ -33,6 +33,8 @@ export type FunnelVersion = {
   version_number: number
   status: FunnelVersionStatus
   created_by_user_id: string | null
+  created_by_id: string | null
+  change_log: string | null
   created_at: string
   updated_at: string
   published_at: string | null
@@ -111,6 +113,17 @@ export type FunnelValidationResult = {
   can_publish: boolean
   errors: FunnelValidationIssue[]
   warnings: FunnelValidationIssue[]
+}
+
+export type FunnelGraphValidationResult = {
+  is_valid: boolean
+  errors: string[]
+  warnings: string[]
+}
+
+export type FunnelGraphValidatePayload = {
+  nodes: Array<Record<string, unknown>>
+  edges: Array<Record<string, unknown>>
 }
 
 export type FunnelDropOffStep = {

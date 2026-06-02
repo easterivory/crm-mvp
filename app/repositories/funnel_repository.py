@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.orm import selectinload
 
 from app.models.bot import Bot
 from app.models.chat import Chat
@@ -14,6 +15,7 @@ from app.models.funnel import (
     FunnelEdge,
     FunnelFieldMapping,
     FunnelPushRule,
+    FunnelRuntimeLog,
     FunnelScheduledJob,
     FunnelStepLog,
     FunnelStep,
@@ -337,6 +339,7 @@ class FunnelRepository(BaseRepository[Funnel]):
             version_number=version_number,
             status=status,
             created_by_user_id=created_by_user_id,
+            created_by_id=created_by_user_id,
         )
         self.db.add(version)
         await self.db.flush()
@@ -756,6 +759,52 @@ class FunnelRepository(BaseRepository[Funnel]):
         self.db.add(log)
         await self.db.flush()
         return log
+
+    async def create_runtime_log(
+        self,
+        *,
+        chat_id: UUID,
+        funnel_version_id: UUID,
+        step_id: UUID,
+        status: str,
+        error_message: Optional[str] = None,
+    ) -> FunnelRuntimeLog:
+        log = FunnelRuntimeLog(
+            chat_id=chat_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step_id,
+            status=status,
+            error_message=error_message[:4000] if error_message else None,
+        )
+        self.db.add(log)
+        await self.db.flush()
+        return log
+
+    async def list_runtime_logs_by_chat(
+        self,
+        *,
+        chat_id: UUID,
+        limit: int = 200,
+    ) -> list[FunnelRuntimeLog]:
+        result = await self.db.execute(
+            select(FunnelRuntimeLog)
+            .options(selectinload(FunnelRuntimeLog.step))
+            .where(FunnelRuntimeLog.chat_id == chat_id)
+            .order_by(FunnelRuntimeLog.created_at.asc(), FunnelRuntimeLog.id.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_active_chat_ids_for_funnel(self, funnel_id: UUID) -> list[UUID]:
+        result = await self.db.execute(
+            select(ChatFunnelState.chat_id)
+            .where(
+                ChatFunnelState.funnel_id == funnel_id,
+                ChatFunnelState.completed_at.is_(None),
+            )
+            .order_by(ChatFunnelState.updated_at.desc())
+        )
+        return list(result.scalars().all())
 
     async def get_drop_off_rows(self, funnel_version_id: UUID) -> list[dict]:
         result = await self.db.execute(

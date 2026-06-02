@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import FunnelTraceWidget from '../features/chats/components/FunnelTraceWidget'
 import { useProjectBotSelection } from '../shared/lib'
 
 type Lead = {
@@ -705,6 +706,8 @@ export default function LeadSidebar({
                 </div>
               </div>
             </div>
+
+            <FunnelTraceWidget chatId={activeChatId} projectId={selectedProjectId} />
 
             {onResetRequest ? (
               <div className="rounded-xl border border-red-300/10 bg-red-500/[0.035] p-4">

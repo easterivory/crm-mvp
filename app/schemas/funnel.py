@@ -67,6 +67,8 @@ class FunnelVersionOut(OrmBase):
     version_number: int
     status: FunnelVersionStatus
     created_by_user_id: Optional[uuid.UUID]
+    created_by_id: Optional[uuid.UUID] = None
+    change_log: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     published_at: Optional[datetime]
@@ -250,6 +252,38 @@ class FunnelValidationOut(BaseModel):
     can_publish: bool
     errors: list[FunnelValidationIssue] = Field(default_factory=list)
     warnings: list[FunnelValidationIssue] = Field(default_factory=list)
+
+
+class FunnelGraphValidateIn(BaseModel):
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FunnelGraphValidationOut(BaseModel):
+    is_valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class FunnelRuntimeLogOut(BaseModel):
+    step_id: uuid.UUID
+    step_key: str
+    step_title: str
+    status: Literal["success", "failed"]
+    error_message: Optional[str] = None
+    created_at: datetime
+
+    @classmethod
+    def from_runtime_log(cls, log: Any) -> "FunnelRuntimeLogOut":
+        step = getattr(log, "step", None)
+        return cls(
+            step_id=log.step_id,
+            step_key=getattr(step, "key", str(log.step_id)),
+            step_title=getattr(step, "title", "Неизвестный шаг"),
+            status=log.status,
+            error_message=log.error_message,
+            created_at=log.created_at,
+        )
 
 
 class FunnelBlockDefinitionOut(BaseModel):

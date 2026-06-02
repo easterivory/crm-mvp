@@ -15,6 +15,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.core.constants import RoleName
+from app.models.user import User
+from app.repositories.funnel_repository import FunnelRepository
 from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
 from app.schemas.chat_event_log import ChatEventLogOut
 from app.schemas.chat_filter_preset import (
@@ -23,11 +26,27 @@ from app.schemas.chat_filter_preset import (
     ChatFilterPresetUpdate,
 )
 from app.schemas.common import PaginatedResponse
+from app.schemas.funnel import FunnelRuntimeLogOut
 from app.services.chat_filter_preset_service import ChatFilterPresetService
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_service import ChatService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
+
+CHAT_TRACE_ROLES = {
+    RoleName.SUPER_ADMIN,
+    RoleName.ADMIN,
+    RoleName.MANAGER,
+    RoleName.OPERATOR,
+}
+
+
+def _ensure_chat_trace_access(current_user: User) -> None:
+    if current_user.role_name not in CHAT_TRACE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operator, manager, admin or super_admin can view funnel trace",
+        )
 
 
 @router.get("", response_model=PaginatedResponse[ChatOut])
@@ -257,6 +276,23 @@ async def list_chat_audit_logs(
         offset=offset,
     )
     return [ChatEventLogOut.from_event(event) for event in events]
+
+
+@router.get("/{chat_id}/funnel-trace", response_model=list[FunnelRuntimeLogOut])
+async def get_funnel_trace(
+    chat_id: UUID,
+    limit: int = Query(default=200, ge=1, le=500),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[FunnelRuntimeLogOut]:
+    _ensure_chat_trace_access(current_user)
+    await ChatService(db).get_chat(chat_id=chat_id, project_id=project_id)
+    logs = await FunnelRepository(db).list_runtime_logs_by_chat(
+        chat_id=chat_id,
+        limit=limit,
+    )
+    return [FunnelRuntimeLogOut.from_runtime_log(log) for log in logs]
 
 
 @router.post("", response_model=ChatOut, status_code=status.HTTP_201_CREATED)

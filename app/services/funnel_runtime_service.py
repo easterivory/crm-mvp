@@ -111,6 +111,7 @@ class FunnelRuntimeService:
             waiting_for_answer=False,
             runtime_json={},
         )
+        await self._log_runtime_step(chat_id=chat_id, step=trigger, status="success")
         logger.info(
             "Starting active funnel chat_id=%s funnel_id=%s funnel_version_id=%s trigger_step_id=%s",
             chat_id,
@@ -502,6 +503,7 @@ class FunnelRuntimeService:
             waiting_for_answer=False,
             completed_at=completed_at,
         )
+        await self._log_runtime_step(chat_id=chat_id, step=next_step, status="success")
         return next_step
 
     async def find_stuck_chats_for_push_rules(self):
@@ -696,7 +698,9 @@ class FunnelRuntimeService:
                 continue
 
             if current.step_type == "action":
-                await self._execute_crm_actions(chat_id=chat_id, step=current)
+                action_ok = await self._execute_crm_actions(chat_id=chat_id, step=current)
+                if not action_ok:
+                    return current
                 next_step = await self._move_from_step(
                     chat_id=chat_id,
                     step=current,
@@ -1014,6 +1018,7 @@ class FunnelRuntimeService:
             entered_step_at=datetime.now(timezone.utc),
             waiting_for_answer=False,
         )
+        await self._log_runtime_step(chat_id=chat_id, step=next_step, status="success")
         return next_step
 
     async def _move_condition_outcome(
@@ -1131,11 +1136,11 @@ class FunnelRuntimeService:
             return "rejected"
         return None
 
-    async def _execute_crm_actions(self, *, chat_id: UUID, step: FunnelStep) -> None:
+    async def _execute_crm_actions(self, *, chat_id: UUID, step: FunnelStep) -> bool:
         lead = await self.repo.get_lead_by_chat(chat_id)
         if lead is None:
             logger.warning("CRM action has no lead chat_id=%s step_id=%s", chat_id, step.id)
-            return
+            return True
         config = step.config_json or {}
         raw_actions = config.get("actions")
         if not isinstance(raw_actions, list):
@@ -1178,6 +1183,12 @@ class FunnelRuntimeService:
                 elif action_type in {"submit_to_partner", "send_to_crm"}:
                     integration_id = raw.get("partner_integration_id") or raw.get("integration_id")
                     if not integration_id:
+                        await self._log_runtime_step(
+                            chat_id=chat_id,
+                            step=step,
+                            status="failed",
+                            error_message="Ошибка CRM-действия: не указана интеграция партнёра",
+                        )
                         logger.warning(
                             "Partner submission action skipped without integration id "
                             "chat_id=%s lead_id=%s step_id=%s",
@@ -1185,12 +1196,21 @@ class FunnelRuntimeService:
                             lead.id,
                             step.id,
                         )
-                        continue
+                        return False
                     integration = await self.partner_repo.get_in_project(
                         UUID(str(integration_id)),
                         lead.project_id,
                     )
                     if integration is None or not integration.is_active:
+                        await self._log_runtime_step(
+                            chat_id=chat_id,
+                            step=step,
+                            status="failed",
+                            error_message=(
+                                "Ошибка CRM-действия: партнёрская интеграция "
+                                f"{integration_id} недоступна или выключена"
+                            ),
+                        )
                         logger.warning(
                             "Partner submission action references unavailable integration "
                             "chat_id=%s lead_id=%s step_id=%s integration_id=%s",
@@ -1199,7 +1219,7 @@ class FunnelRuntimeService:
                             step.id,
                             integration_id,
                         )
-                        continue
+                        return False
                     await self.partner_repo.create_submission(
                         lead_id=lead.id,
                         partner_integration_id=integration.id,
@@ -1214,7 +1234,13 @@ class FunnelRuntimeService:
                         step.id,
                         action_type,
                     )
-            except Exception:
+            except Exception as exc:
+                await self._log_runtime_step(
+                    chat_id=chat_id,
+                    step=step,
+                    status="failed",
+                    error_message=f"Ошибка CRM-действия {action_type}: {exc}",
+                )
                 logger.exception(
                     "CRM action failed chat_id=%s lead_id=%s step_id=%s type=%s",
                     chat_id,
@@ -1222,6 +1248,8 @@ class FunnelRuntimeService:
                     step.id,
                     action_type,
                 )
+                return False
+        return True
 
     async def _evaluate_condition_outcome(
         self,
@@ -1462,6 +1490,24 @@ class FunnelRuntimeService:
             step_id=step.id,
             step_name=step.title,
             event_type=event_type,
+        )
+
+    async def _log_runtime_step(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        status: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        funnel_version_id = state.funnel_version_id if state is not None else step.funnel_version_id
+        await self.repo.create_runtime_log(
+            chat_id=chat_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step.id,
+            status=status,
+            error_message=error_message,
         )
 
     @staticmethod

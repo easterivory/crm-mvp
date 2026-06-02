@@ -3,33 +3,102 @@ import { useEffect, useState } from 'react'
 
 import { Modal } from '../../../shared/ui'
 import { useNotificationStore } from '../../../shared/lib'
-import { publishFunnelVersion, validateFunnelVersion } from '../api'
-import type { FunnelValidationResult } from '../types'
+import { publishFunnelVersion, validateFunnelGraph, validateFunnelVersion } from '../api'
+import type {
+  FunnelGraph,
+  FunnelGraphValidatePayload,
+  FunnelGraphValidationResult,
+  FunnelValidationIssue,
+  FunnelValidationResult,
+} from '../types'
 
 type PublishReviewModalProps = {
   funnelId: string
   versionId: string
   projectId: string
+  graph: FunnelGraph
   onClose: () => void
   onPublished: () => void
+}
+
+type PublishValidationState = {
+  graph: FunnelGraphValidationResult
+  version: FunnelValidationResult | null
+}
+
+function buildGraphValidationPayload(graph: FunnelGraph): FunnelGraphValidatePayload {
+  return {
+    nodes: graph.steps.map((step) => ({
+      id: step.id,
+      type: step.step_type,
+      step_type: step.step_type,
+      block_type: step.block_type,
+      title: step.title,
+      data: {
+        id: step.id,
+        step_type: step.step_type,
+        block_type: step.block_type,
+        title: step.title,
+        label: step.title,
+        config_json: step.config_json,
+      },
+    })),
+    edges: graph.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.from_step_id,
+      target: edge.to_step_id,
+      from_step_id: edge.from_step_id,
+      to_step_id: edge.to_step_id,
+      data: edge.condition_json ?? {},
+    })),
+  }
+}
+
+function issueKey(issue: FunnelValidationIssue, index: number) {
+  return `${issue.code}:${issue.step_id ?? issue.edge_id ?? index}`
 }
 
 export default function PublishReviewModal({
   funnelId,
   versionId,
   projectId,
+  graph,
   onClose,
   onPublished,
 }: PublishReviewModalProps) {
-  const [validation, setValidation] = useState<FunnelValidationResult | null>(null)
+  const [validation, setValidation] = useState<PublishValidationState | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPublishing, setIsPublishing] = useState(false)
   const notify = useNotificationStore((state) => state.notify)
 
+  const graphErrors = validation?.graph.errors ?? []
+  const graphWarnings = validation?.graph.warnings ?? []
+  const versionErrors = validation?.version?.errors ?? []
+  const versionWarnings = validation?.version?.warnings ?? []
+  const canPublish = Boolean(
+    validation?.graph.is_valid &&
+      graphErrors.length === 0 &&
+      (validation.version?.can_publish ?? false),
+  )
+
   useEffect(() => {
     let isMounted = true
     setIsLoading(true)
-    validateFunnelVersion(funnelId, versionId, projectId)
+    const runValidation = async () => {
+      const graphValidation = await validateFunnelGraph(
+        funnelId,
+        projectId,
+        buildGraphValidationPayload(graph),
+      )
+      const versionValidation = graphValidation.is_valid
+        ? await validateFunnelVersion(funnelId, versionId, projectId)
+        : null
+      return {
+        graph: graphValidation,
+        version: versionValidation,
+      }
+    }
+    runValidation()
       .then((data) => {
         if (isMounted) {
           setValidation(data)
@@ -48,10 +117,10 @@ export default function PublishReviewModal({
     return () => {
       isMounted = false
     }
-  }, [funnelId, notify, projectId, versionId])
+  }, [funnelId, graph, notify, projectId, versionId])
 
   const publish = async () => {
-    if (!validation?.can_publish || isPublishing) {
+    if (!canPublish || isPublishing) {
       return
     }
     setIsPublishing(true)
@@ -84,30 +153,62 @@ export default function PublishReviewModal({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border border-red-300/20 bg-red-500/10 p-3">
               <p className="text-sm font-semibold text-red-100">
-                Ошибки: {validation.errors.length}
+                Ошибки: {graphErrors.length + versionErrors.length}
               </p>
             </div>
             <div className="rounded-lg border border-amber-300/20 bg-amber-500/10 p-3">
               <p className="text-sm font-semibold text-amber-100">
-                Предупреждения: {validation.warnings.length}
+                Предупреждения: {graphWarnings.length + versionWarnings.length}
               </p>
             </div>
           </div>
 
-          {[...validation.errors, ...validation.warnings].length > 0 ? (
+          {graphErrors.length + graphWarnings.length + versionErrors.length + versionWarnings.length > 0 ? (
             <div className="max-h-72 space-y-2 overflow-y-auto">
-              {[...validation.errors, ...validation.warnings].map((issue, index) => (
+              {graphErrors.map((message, index) => (
                 <div
-                  key={`${issue.code}:${index}`}
-                  className={`rounded-lg border p-3 text-sm ${
-                    issue.severity === 'error'
-                      ? 'border-red-300/20 bg-red-500/10 text-red-50'
-                      : 'border-amber-300/20 bg-amber-500/10 text-amber-50'
-                  }`}
+                  key={`graph-error:${index}:${message}`}
+                  className="rounded-lg border border-red-300/20 bg-red-500/10 p-3 text-sm text-red-50"
                 >
                   <div className="flex items-center gap-2 font-medium">
                     <TriangleAlert size={15} />
-                    {issue.severity === 'error' ? 'Ошибка' : 'Предупреждение'}
+                    Критическая ошибка графа
+                  </div>
+                  <p className="mt-1 leading-5 opacity-90">{message}</p>
+                </div>
+              ))}
+              {versionErrors.map((issue, index) => (
+                <div
+                  key={issueKey(issue, index)}
+                  className="rounded-lg border border-red-300/20 bg-red-500/10 p-3 text-sm text-red-50"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <TriangleAlert size={15} />
+                    Ошибка конфигурации
+                  </div>
+                  <p className="mt-1 leading-5 opacity-90">{issue.message}</p>
+                </div>
+              ))}
+              {graphWarnings.map((message, index) => (
+                <div
+                  key={`graph-warning:${index}:${message}`}
+                  className="rounded-lg border border-amber-300/20 bg-amber-500/10 p-3 text-sm text-amber-50"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <TriangleAlert size={15} />
+                    Предупреждение графа
+                  </div>
+                  <p className="mt-1 leading-5 opacity-90">{message}</p>
+                </div>
+              ))}
+              {versionWarnings.map((issue, index) => (
+                <div
+                  key={issueKey(issue, index)}
+                  className="rounded-lg border border-amber-300/20 bg-amber-500/10 p-3 text-sm text-amber-50"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <TriangleAlert size={15} />
+                    Предупреждение конфигурации
                   </div>
                   <p className="mt-1 leading-5 opacity-90">{issue.message}</p>
                 </div>
@@ -130,7 +231,7 @@ export default function PublishReviewModal({
             <button
               type="button"
               onClick={() => void publish()}
-              disabled={!validation.can_publish || isPublishing}
+              disabled={!canPublish || isPublishing}
               className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isPublishing ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}

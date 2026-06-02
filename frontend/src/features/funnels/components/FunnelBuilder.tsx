@@ -3,6 +3,8 @@ import {
   BarChart3,
   CheckCircle2,
   CopyPlus,
+  GitBranch,
+  History,
   LoaderCircle,
   PlayCircle,
   Save,
@@ -16,11 +18,14 @@ import {
   createDraftFromVersion,
   fetchDropOffAnalytics,
   fetchFunnel,
+  fetchFunnelUsers,
   fetchGraph,
   fetchVersions,
+  rollbackFunnelVersion,
   saveGraph,
   setBotActiveFunnel,
   validateFunnelVersion,
+  type FunnelUser,
 } from '../api'
 import type { BlockMenuItem } from '../blockCatalog'
 import {
@@ -43,6 +48,7 @@ import FunnelCanvas from './FunnelCanvas'
 import HoldModeToggle from './HoldModeToggle'
 import InspectorPanel from './InspectorPanel'
 import PublishReviewModal from './PublishReviewModal'
+import VersionHistoryPanel from './VersionHistoryPanel'
 
 type FunnelBuilderProps = {
   funnelId: string
@@ -136,15 +142,17 @@ export default function FunnelBuilder({
   const [graph, setGraph] = useState<FunnelGraph | null>(null)
   const [activeVersionId, setActiveVersionId] = useState(versionId ?? null)
   const [versions, setVersions] = useState<FunnelVersion[]>([])
+  const [versionUsers, setVersionUsers] = useState<FunnelUser[]>([])
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isPublishOpen, setIsPublishOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'editor' | 'analytics'>('editor')
+  const [activeTab, setActiveTab] = useState<'editor' | 'analytics' | 'versions'>('editor')
   const [analyticsData, setAnalyticsData] = useState<FunnelDropOffStep[]>([])
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+  const [isRollingBackVersionId, setIsRollingBackVersionId] = useState<string | null>(null)
   const isLoadingAnalyticsRef = useRef(false)
 
   const loadAnalytics = useCallback(async () => {
@@ -179,6 +187,24 @@ export default function FunnelBuilder({
       notify({ tone: 'error', message: 'Не удалось обновить версии.' })
     }
   }
+
+  useEffect(() => {
+    let isMounted = true
+    fetchFunnelUsers(projectId)
+      .then((users) => {
+        if (isMounted) {
+          setVersionUsers(users)
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setVersionUsers([])
+        }
+      })
+    return () => {
+      isMounted = false
+    }
+  }, [projectId])
 
   useEffect(() => {
     let isMounted = true
@@ -550,6 +576,34 @@ export default function FunnelBuilder({
     }
   }
 
+  const rollbackToVersion = async (targetVersionId: string) => {
+    const targetVersion = versions.find((version) => version.id === targetVersionId)
+    if (isRollingBackVersionId || targetVersion?.is_active_for_bot) {
+      return
+    }
+    setIsRollingBackVersionId(targetVersionId)
+    try {
+      const rolledBackVersion = await rollbackFunnelVersion(funnelId, targetVersionId, projectId)
+      const [loadedFunnel, loadedGraph, loadedVersions] = await Promise.all([
+        fetchFunnel(funnelId, projectId),
+        fetchGraph(funnelId, rolledBackVersion.id, projectId),
+        fetchVersions(funnelId, projectId),
+      ])
+      setFunnel(loadedFunnel)
+      setVersions(loadedVersions)
+      setActiveVersionId(rolledBackVersion.id)
+      onVersionReady(rolledBackVersion.id)
+      setGraph(graphWithDefaults(loadedGraph))
+      setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
+      setSelectedEdgeId(null)
+      notify({ tone: 'success', message: `Активирована версия v${rolledBackVersion.version_number}.` })
+    } catch {
+      notify({ tone: 'error', message: 'Не удалось откатить воронку к выбранной версии.' })
+    } finally {
+      setIsRollingBackVersionId(null)
+    }
+  }
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isSave = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's'
@@ -671,18 +725,28 @@ export default function FunnelBuilder({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setActiveTab(activeTab === 'editor' ? 'analytics' : 'editor')}
-            className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm transition ${
-              activeTab === 'analytics'
-                ? 'border-accent-300/35 bg-accent-300/10 text-accent-50'
-                : 'border-white/10 bg-white/[0.04] text-gray-100 hover:border-white/20'
-            }`}
-          >
-            <BarChart3 size={15} />
-            {activeTab === 'analytics' ? 'Редактор' : 'Аналитика'}
-          </button>
+          {[
+            { key: 'editor' as const, label: 'Редактор', icon: GitBranch },
+            { key: 'analytics' as const, label: 'Аналитика', icon: BarChart3 },
+            { key: 'versions' as const, label: 'История версий', icon: History },
+          ].map((tab) => {
+            const Icon = tab.icon
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm transition ${
+                  activeTab === tab.key
+                    ? 'border-accent-300/35 bg-accent-300/10 text-accent-50'
+                    : 'border-white/10 bg-white/[0.04] text-gray-100 hover:border-white/20'
+                }`}
+              >
+                <Icon size={15} />
+                {tab.label}
+              </button>
+            )
+          })}
           <button
             type="button"
             onClick={() => void validate()}
@@ -780,7 +844,7 @@ export default function FunnelBuilder({
             />
           </div>
         </>
-      ) : (
+      ) : activeTab === 'analytics' ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-6">
           {isLoadingAnalytics ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-400">
@@ -795,6 +859,15 @@ export default function FunnelBuilder({
             <DropOffChart data={analyticsData} />
           )}
         </div>
+      ) : (
+        <VersionHistoryPanel
+          versions={versions}
+          users={versionUsers}
+          activeVersionId={activeVersionId}
+          isRollingBackVersionId={isRollingBackVersionId}
+          onOpenVersion={(nextVersionId) => void switchVersion(nextVersionId)}
+          onRollback={(targetVersionId) => void rollbackToVersion(targetVersionId)}
+        />
       )}
 
       {isPublishOpen ? (
@@ -802,6 +875,7 @@ export default function FunnelBuilder({
           funnelId={funnelId}
           versionId={activeVersionId}
           projectId={projectId}
+          graph={graph}
           onClose={() => setIsPublishOpen(false)}
           onPublished={handlePublished}
         />

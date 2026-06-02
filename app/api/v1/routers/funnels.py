@@ -1,10 +1,11 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.core.constants import RoleName
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
@@ -13,6 +14,8 @@ from app.schemas.funnel import (
     FunnelCopyOut,
     FunnelCreate,
     FunnelDropOffAnalyticsOut,
+    FunnelGraphValidateIn,
+    FunnelGraphValidationOut,
     FunnelGraphIn,
     FunnelGraphOut,
     FunnelHoldModeUpdate,
@@ -24,8 +27,19 @@ from app.schemas.funnel import (
 )
 from app.services.funnel_block_registry import FunnelBlockRegistry
 from app.services.funnel_service import FunnelService
+from app.services.funnel_validator import FunnelGraphValidator
 
 router = APIRouter(prefix="/funnels", tags=["funnels"])
+
+FUNNEL_MANAGER_ROLES = {RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER}
+
+
+def _ensure_funnel_manager(current_user: User) -> None:
+    if current_user.role_name not in FUNNEL_MANAGER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin, super_admin or manager can manage funnel versions",
+        )
 
 
 @router.get("/block-registry", response_model=FunnelBlockRegistryOut)
@@ -109,6 +123,24 @@ async def archive_funnel(
         project_id=project_id,
         current_user=current_user,
     )
+
+
+@router.post("/{funnel_id}/validate", response_model=FunnelGraphValidationOut)
+async def validate_graph(
+    funnel_id: UUID,
+    data: FunnelGraphValidateIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelGraphValidationOut:
+    _ensure_funnel_manager(current_user)
+    await FunnelService(db).get_funnel(
+        funnel_id=funnel_id,
+        project_id=project_id,
+        current_user=current_user,
+    )
+    result = FunnelGraphValidator().validate_graph(nodes=data.nodes, edges=data.edges)
+    return FunnelGraphValidationOut(**result)
 
 
 @router.get("/{funnel_id}/versions", response_model=list[FunnelVersionOut])
@@ -201,6 +233,26 @@ async def publish_version(
     db: AsyncSession = Depends(get_db),
 ) -> FunnelVersionOut:
     return await FunnelService(db).publish_version(
+        funnel_id=funnel_id,
+        version_id=version_id,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+
+@router.post(
+    "/{funnel_id}/versions/{version_id}/rollback",
+    response_model=FunnelVersionOut,
+)
+async def rollback_version(
+    funnel_id: UUID,
+    version_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelVersionOut:
+    _ensure_funnel_manager(current_user)
+    return await FunnelService(db).rollback_to_version(
         funnel_id=funnel_id,
         version_id=version_id,
         project_id=project_id,

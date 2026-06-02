@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -7,7 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import RoleName
+from app.core.constants import ChatEventType, RoleName
 from app.models.funnel import Funnel, FunnelVersion
 from app.models.user import User
 from app.repositories.funnel_repository import FunnelRepository
@@ -40,6 +41,11 @@ from app.services.funnel_block_registry import (
     LEAD_FIELD_KEYS,
     FunnelBlockRegistry,
 )
+from app.services.chat_audit_service import ChatAuditService
+from app.services.funnel_validator import FunnelGraphValidator
+
+
+logger = logging.getLogger(__name__)
 
 
 class FunnelService:
@@ -47,6 +53,7 @@ class FunnelService:
         self.db = db
         self.repo = FunnelRepository(db)
         self.registry = FunnelBlockRegistry()
+        self.graph_validator = FunnelGraphValidator()
 
     async def list_funnels(
         self,
@@ -433,6 +440,69 @@ class FunnelService:
             update={"is_active_for_bot": True}
         )
 
+    async def rollback_to_version(
+        self,
+        *,
+        funnel_id: UUID,
+        version_id: UUID,
+        project_id: UUID,
+        current_user: User,
+    ) -> FunnelVersionOut:
+        self._ensure_write_allowed(current_user)
+        version = await self._get_version_or_404(funnel_id, version_id, project_id)
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
+
+        validation = self._validate_graph_payload(
+            await self._graph_in_from_db(version.id),
+            strict_config=True,
+        )
+        if validation.errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[issue.model_dump(mode="json") for issue in validation.errors],
+            )
+
+        _, active_version = await self.repo.get_active_funnel_for_bot(
+            funnel.bot_id,
+            project_id,
+        )
+        if active_version is not None and active_version.id == version.id:
+            return FunnelVersionOut.model_validate(version).model_copy(
+                update={"is_active_for_bot": True}
+            )
+
+        await self.repo.archive_published_versions_for_bot(
+            bot_id=funnel.bot_id,
+            exclude_version_id=version.id,
+        )
+        await self.repo.archive_published_versions(
+            funnel_id=funnel.id,
+            exclude_version_id=version.id,
+        )
+        published = await self.repo.update_version_status(
+            version.id,
+            "published",
+            published_at=datetime.now(timezone.utc),
+        )
+        assert published is not None
+        await self.repo.set_active_funnel_for_bot(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+            funnel_id=funnel.id,
+            version_id=published.id,
+        )
+        await self.repo.update_in_project(funnel.id, project_id)
+        await self._log_rollback_audit(
+            funnel=funnel,
+            previous_version=active_version,
+            new_version=published,
+            project_id=project_id,
+            current_user_id=current_user.id,
+        )
+        return FunnelVersionOut.model_validate(published).model_copy(
+            update={"is_active_for_bot": True}
+        )
+
     async def set_hold_mode(
         self,
         *,
@@ -508,6 +578,44 @@ class FunnelService:
             funnel_id=funnel.id,
             version_id=version.id,
         )
+
+    async def _log_rollback_audit(
+        self,
+        *,
+        funnel: Funnel,
+        previous_version: Optional[FunnelVersion],
+        new_version: FunnelVersion,
+        project_id: UUID,
+        current_user_id: UUID,
+    ) -> None:
+        chat_ids = await self.repo.list_active_chat_ids_for_funnel(funnel.id)
+        if not chat_ids:
+            return
+        previous_label = (
+            f"v{previous_version.version_number}"
+            if previous_version is not None
+            else "нет активной версии"
+        )
+        new_label = f"v{new_version.version_number}"
+        message = f"Откат воронки «{funnel.name}»: {previous_label} -> {new_label}"
+        audit_service = ChatAuditService(self.db)
+        for chat_id in chat_ids:
+            try:
+                await audit_service.log_event(
+                    chat_id=chat_id,
+                    user_id=current_user_id,
+                    event_type=ChatEventType.NOTE_ADDED,
+                    old_value=previous_label,
+                    new_value=message,
+                    project_id=project_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to write funnel rollback chat audit chat_id=%s funnel_id=%s",
+                    chat_id,
+                    funnel.id,
+                    exc_info=True,
+                )
 
     async def copy_funnel(
         self,
@@ -880,11 +988,84 @@ class FunnelService:
                     )
                 )
 
+        algorithmic_validation = self.graph_validator.validate_graph(
+            self._algorithmic_nodes(graph),
+            self._algorithmic_edges(graph),
+        )
+        for message in algorithmic_validation["errors"]:
+            if self._duplicates_existing_graph_issue(message, errors):
+                continue
+            errors.append(
+                self._issue(
+                    self._algorithmic_issue_code(message),
+                    message,
+                    "error",
+                )
+            )
+        for message in algorithmic_validation["warnings"]:
+            if self._duplicates_existing_graph_issue(message, warnings):
+                continue
+            warnings.append(
+                self._issue(
+                    "graph_warning",
+                    message,
+                    "warning",
+                )
+            )
+
         return FunnelValidationOut(
             can_publish=not errors,
             errors=errors,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _algorithmic_nodes(graph: FunnelGraphIn) -> list[dict]:
+        return [
+            {
+                "id": str(step.id),
+                "title": step.title,
+                "step_type": step.step_type,
+                "block_type": step.block_type,
+                "config_json": step.config_json,
+            }
+            for step in graph.steps
+            if step.id is not None
+        ]
+
+    @staticmethod
+    def _algorithmic_edges(graph: FunnelGraphIn) -> list[dict]:
+        return [
+            {
+                "id": str(edge.id) if edge.id is not None else None,
+                "from_step_id": str(edge.from_step_id),
+                "to_step_id": str(edge.to_step_id),
+            }
+            for edge in graph.edges
+        ]
+
+    @staticmethod
+    def _algorithmic_issue_code(message: str) -> str:
+        normalized = message.lower()
+        if "цикл" in normalized:
+            return "infinite_loop_without_delay"
+        if "тупиков" in normalized:
+            return "dead_end_step"
+        if "недостижим" in normalized:
+            return "unreachable_step"
+        return "graph_validation_error"
+
+    @staticmethod
+    def _duplicates_existing_graph_issue(
+        message: str,
+        issues: list[FunnelValidationIssue],
+    ) -> bool:
+        normalized = message.lower()
+        if "недостижим" in normalized and any(issue.code == "orphan_step" for issue in issues):
+            return True
+        if "старт" in normalized and any(issue.code == "missing_trigger" for issue in issues):
+            return True
+        return any(issue.message == message for issue in issues)
 
     @staticmethod
     def _reachable(start_ids: list[UUID], adjacency: dict[UUID, list[UUID]]) -> set[UUID]:
