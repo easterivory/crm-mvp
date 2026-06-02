@@ -8,13 +8,12 @@ import LeadCard from '../features/leads/components/LeadCard'
 import {
   fetchLeads,
   fetchLeadStatuses,
-  fetchPartnerIntegrations,
   rejectLead,
   submitLead,
-  submitLeadToPartner,
   type Lead,
   type LeadStatus,
 } from '../features/leads'
+import { fetchPartnerIntegrations, LeadSubmissionDrawer, type PartnerIntegration } from '../features/partners'
 import { useProjectBotSelection } from '../shared/lib'
 import type { PaginatedResponse } from '../shared/types'
 import { ConfirmDialog, EmptyState } from '../shared/ui'
@@ -27,7 +26,6 @@ type ProjectTag = {
 }
 
 type PendingAction = { type: 'submit' | 'reject'; lead: Lead } | null
-type PartnerIntegration = { id: string; name: string; is_active: boolean }
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10)
@@ -138,10 +136,12 @@ export default function LeadsPage() {
       return
     }
     try {
-      const items = await fetchPartnerIntegrations(selectedProjectId)
-      const activeItems = items.filter((item) => item.is_active)
+      const response = await fetchPartnerIntegrations(selectedProjectId)
+      const activeItems = response.items.filter((item) => item.is_active)
       setPartners(activeItems)
-      setSelectedPartnerId((current) => current || activeItems[0]?.id || '')
+      setSelectedPartnerId((current) =>
+        activeItems.some((item) => item.id === current) ? current : activeItems[0]?.id || '',
+      )
     } catch {
       setPartners([])
     }
@@ -167,7 +167,7 @@ export default function LeadsPage() {
     try {
       if (pendingAction.type === 'submit') {
         await submitLead(pendingAction.lead.id, selectedProjectId)
-        setNotice('Лид переведён в статус отправленного. Внешняя CRM будет подключена позже.')
+        setNotice('Лид переведён в статус отправленного.')
       } else {
         await rejectLead(pendingAction.lead.id, selectedProjectId)
         setNotice('Лид архивирован как отклонённый.')
@@ -177,25 +177,6 @@ export default function LeadsPage() {
       await loadPage()
     } catch (err) {
       setError(getErrorMessage(err))
-    } finally {
-      setMutatingLeadId(null)
-    }
-  }
-
-  const handlePartnerSubmit = async () => {
-    if (!partnerLead || !selectedProjectId || !selectedPartnerId || mutatingLeadId) {
-      return
-    }
-    setMutatingLeadId(partnerLead.id)
-    setError('')
-    setNotice('')
-    try {
-      await submitLeadToPartner(partnerLead.id, selectedPartnerId, selectedProjectId)
-      setNotice('Лид поставлен в очередь отправки в CRM партнёра.')
-      setPartnerLead(null)
-      await loadPage()
-    } catch (err) {
-      setError(getErrorMessage(err, 'Не удалось поставить лида в очередь партнёра.'))
     } finally {
       setMutatingLeadId(null)
     }
@@ -353,29 +334,16 @@ export default function LeadsPage() {
       ) : null}
 
       {partnerLead ? (
-        <ConfirmDialog
-          title="Подать в CRM партнёра?"
-          description={
-            <div className="space-y-3">
-              <p>Лид будет поставлен в очередь postback-воркера. Статус изменится на Submitted после успешного ответа партнёра.</p>
-              <select
-                value={selectedPartnerId}
-                onChange={(event) => setSelectedPartnerId(event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/10 bg-background px-3 text-sm text-gray-100 outline-none"
-              >
-                {partners.map((partner) => (
-                  <option key={partner.id} value={partner.id}>
-                    {partner.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          }
-          confirmLabel="Поставить в очередь"
-          tone="primary"
-          isLoading={mutatingLeadId === partnerLead.id}
-          onCancel={() => setPartnerLead(null)}
-          onConfirm={() => void handlePartnerSubmit()}
+        <LeadSubmissionDrawer
+          lead={partnerLead}
+          partners={partners}
+          projectId={selectedProjectId}
+          initialPartnerId={selectedPartnerId}
+          onClose={() => setPartnerLead(null)}
+          onSubmitted={() => {
+            setNotice('Лид обработан postback-воркером.')
+            void loadPage()
+          }}
         />
       ) : null}
     </section>

@@ -15,11 +15,12 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import PartnersSettings from '../features/partners/components/PartnersSettings'
 import { useProjectBotSelection } from '../shared/lib'
 import { Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
-type TabKey = 'project' | 'team' | 'statuses' | 'tags'
+type TabKey = 'project' | 'team' | 'statuses' | 'tags' | 'partners'
 
 type PaginatedResponse<T> = {
   items: T[]
@@ -73,6 +74,7 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'team', label: 'Команда' },
   { key: 'statuses', label: 'Статусы' },
   { key: 'tags', label: 'Теги' },
+  { key: 'partners', label: 'Партнёры' },
 ]
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
@@ -158,6 +160,9 @@ export default function SettingsPage() {
           return canManageStaff
         }
         if (tab.key === 'project') {
+          return canManageProject
+        }
+        if (tab.key === 'partners') {
           return canManageProject
         }
         return true
@@ -1204,6 +1209,10 @@ export default function SettingsPage() {
               </button>
             </form>
           </div>
+        ) : null}
+
+        {!isLoading && activeTab === 'partners' ? (
+          <PartnersSettings projectId={activeProjectId} />
         ) : null}
       </div>
 

@@ -45,7 +45,7 @@ class ProjectMetricsRepository:
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
-                LeadSubmission.status == "success",
+                LeadSubmission.status.in_(("success", "completed")),
                 LeadSubmission.completed_at >= start_at,
                 LeadSubmission.completed_at < end_at,
             )

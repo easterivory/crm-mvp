@@ -60,6 +60,7 @@ export default function LeadCard({
   onSubmitToPartner,
 }: LeadCardProps) {
   const title =
+    lead.name ||
     lead.contact_name ||
     (lead.username ? `@${lead.username}` : null) ||
     `Telegram ${lead.external_chat_id ?? lead.id.slice(0, 8)}`
@@ -86,10 +87,10 @@ export default function LeadCard({
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Info icon={<Phone size={15} />} label="Телефон" value={empty(lead.phone)} />
-        <Info icon={<Clock3 size={15} />} label="Время созвона" value="Не указано" />
+        <Info icon={<Clock3 size={15} />} label="Время созвона" value={empty(lead.call_time_text)} />
         <Info icon={<CalendarDays size={15} />} label="Создан" value={formatDate(lead.created_at)} />
         <Info icon={<UserRound size={15} />} label="Менеджер" value={empty(lead.manager_name)} />
-        <Info icon={<Globe2 size={15} />} label="Страна" value="Не указано" />
+        <Info icon={<Globe2 size={15} />} label="Страна" value={empty(lead.country)} />
         <Info
           icon={<Tag size={15} />}
           label="Трекинг"

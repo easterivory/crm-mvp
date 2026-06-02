@@ -9,9 +9,15 @@ export type Lead = {
   chat_id: string
   manager_id: string | null
   status_id: string
+  name: string | null
   phone: string | null
   username: string | null
+  age: number | null
+  country: string | null
+  call_time_text: string | null
+  has_card: boolean | null
   score_percent: number | null
+  custom_fields?: Record<string, unknown> | null
   updated_at: string
   created_at: string
   is_deleted: boolean

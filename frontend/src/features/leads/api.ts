@@ -40,10 +40,10 @@ export async function rejectLead(leadId: string, projectId: string) {
 }
 
 export async function fetchPartnerIntegrations(projectId: string) {
-  const { data } = await api.get('/partners', {
-    params: { project_id: projectId },
+  const { data } = await api.get<PaginatedResponse<{ id: string; name: string; is_active: boolean }>>('/partners', {
+    params: { project_id: projectId, limit: 100, offset: 0 },
   })
-  return data as Array<{ id: string; name: string; is_active: boolean }>
+  return data.items
 }
 
 export async function submitLeadToPartner(

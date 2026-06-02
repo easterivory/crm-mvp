@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
@@ -14,7 +15,14 @@ from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
 class PartnerIntegration(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     """Partner CRM integration for lead postbacks."""
     __tablename__ = "partner_integrations"
-    __table_args__ = (Index("ix_partner_integrations_project_id", "project_id"),)
+    __table_args__ = (
+        CheckConstraint(
+            "auth_type IN ('header', 'query_param', 'bearer')",
+            name="ck_partner_integrations_auth_type",
+        ),
+        Index("ix_partner_integrations_project_id", "project_id"),
+        Index("ix_partner_integrations_project_active", "project_id", "is_active"),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
@@ -22,6 +30,39 @@ class PartnerIntegration(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     postback_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     auth_token: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    auth_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="header", server_default="header"
+    )
+    auth_config: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    field_mapping: Mapped[dict[str, str]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    required_fields: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    response_mapping: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    retry_config: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     project: Mapped[Project] = relationship("Project", back_populates="partner_integrations")
@@ -37,6 +78,7 @@ class LeadSubmission(Base, UUIDPrimaryKey):
         Index("ix_lead_submissions_lead_id", "lead_id"),
         Index("ix_lead_submissions_partner_integration_id", "partner_integration_id"),
         Index("ix_lead_submissions_status", "status"),
+        Index("ix_lead_submissions_partner_status", "partner_status"),
     )
 
     lead_id: Mapped[uuid.UUID] = mapped_column(
@@ -51,6 +93,10 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     request_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     response_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    partner_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    partner_status_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )

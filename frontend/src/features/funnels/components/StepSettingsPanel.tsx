@@ -64,7 +64,7 @@ export default function StepSettingsPanel({
         setTags(tagsResponse.data.items ?? [])
         setStatuses(statusesResponse.data ?? [])
         setTrackingLinks(linksResponse.data.items ?? [])
-        setPartnerIntegrations(partnersResponse.data ?? [])
+        setPartnerIntegrations(partnersResponse.data.items ?? partnersResponse.data ?? [])
       } catch {
         if (!cancelled) {
           setTags([])

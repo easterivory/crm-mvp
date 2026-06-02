@@ -27,7 +27,9 @@ from app.schemas.lead import (
     LeadStatusUpdate,
     LeadUpdate,
 )
+from app.schemas.partner import LeadSubmissionPreviewOut
 from app.services.lead_service import LeadService
+from app.services.partner_service import PartnerService
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -155,6 +157,22 @@ async def get_lead_by_chat(
     return await LeadService(db).get_lead_by_chat(
         chat_id=chat_id,
         project_id=project_id,
+    )
+
+
+@router.get("/{lead_id}/submission-preview", response_model=LeadSubmissionPreviewOut)
+async def get_lead_submission_preview(
+    lead_id: UUID,
+    partner_id: UUID = Query(...),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadSubmissionPreviewOut:
+    return await PartnerService(db).build_submission_preview(
+        lead_id=lead_id,
+        partner_id=partner_id,
+        project_id=project_id,
+        actor=current_user,
     )
 
 
