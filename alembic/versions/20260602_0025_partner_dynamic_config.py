@@ -34,7 +34,8 @@ DEFAULT_RETRY_CONFIG = {
 
 
 def _jsonb_default(value: object) -> sa.TextClause:
-    return sa.text(f"'{json.dumps(value, separators=(',', ':'))}'::jsonb")
+    json_value = json.dumps(value, separators=(",", ":")).replace(":", r"\:")
+    return sa.text(f"'{json_value}'::jsonb")
 
 
 def upgrade() -> None:
