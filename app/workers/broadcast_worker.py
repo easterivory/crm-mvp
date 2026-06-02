@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -329,6 +329,19 @@ async def enqueue_broadcast_job(broadcast_id: UUID, project_id: UUID) -> str | N
             str(project_id),
             _job_id=f"broadcast:{broadcast_id}",
         )
+        if job is None:
+            fallback_job_id = f"broadcast:{broadcast_id}:{uuid4().hex}"
+            logger.warning(
+                "Broadcast ARQ job id already exists; enqueueing fallback job_id=%s broadcast_id=%s",
+                fallback_job_id,
+                broadcast_id,
+            )
+            job = await redis.enqueue_job(
+                "process_broadcast",
+                str(broadcast_id),
+                str(project_id),
+                _job_id=fallback_job_id,
+            )
         return job.job_id if job is not None else None
     finally:
         await redis.close()

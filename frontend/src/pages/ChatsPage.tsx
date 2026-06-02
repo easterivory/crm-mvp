@@ -571,11 +571,9 @@ export default function ChatsPage() {
     (chatId: string) => {
       selectedChatIdRef.current = chatId
       setSelectedChatId(chatId)
-      const params = writeChatFilters(chatFilters)
-      params.set('chat_id', chatId)
-      setSearchParams(params)
+      syncChatSearchParams(chatFilters, chatId)
     },
-    [chatFilters, setSearchParams],
+    [chatFilters, syncChatSearchParams],
   )
 
   const handleClearSelectedChat = useCallback(() => {
@@ -668,20 +666,24 @@ export default function ChatsPage() {
         return data.items
       })
       setTotal(data.total)
-      setSelectedChatId((current) => {
-        if (current) {
-          return current
-        }
+      if (!selectedChatIdRef.current) {
         const nextChatId = data.items[0]?.id ?? null
         selectedChatIdRef.current = nextChatId
-        return nextChatId
-      })
+        setSelectedChatId(nextChatId)
+        syncChatSearchParams(debouncedChatFilters, nextChatId)
+      }
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsChatsLoading(false)
     }
-  }, [debouncedChatFilters, notify, selectedBotIds, selectedProjectId])
+  }, [
+    debouncedChatFilters,
+    notify,
+    selectedBotIds,
+    selectedProjectId,
+    syncChatSearchParams,
+  ])
 
   const loadBots = useCallback(async () => {
     if (!selectedProjectId) {

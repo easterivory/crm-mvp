@@ -25,13 +25,6 @@ export async function fetchLeadStatuses() {
   return data
 }
 
-export async function submitLead(leadId: string, projectId: string) {
-  const { data } = await api.post<Lead>(`/leads/${leadId}/submit`, null, {
-    params: { project_id: projectId },
-  })
-  return data
-}
-
 export async function rejectLead(leadId: string, projectId: string) {
   const { data } = await api.post<Lead>(`/leads/${leadId}/reject`, null, {
     params: { project_id: projectId },

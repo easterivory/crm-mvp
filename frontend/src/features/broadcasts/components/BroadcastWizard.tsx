@@ -531,8 +531,8 @@ export default function BroadcastWizard({
           {step === 1 ? (
             <div className="space-y-4">
               <section className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
-                <div className="flex w-full items-center justify-between gap-2">
-                  <div className="min-w-0">
+                <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-[220px] flex-1">
                     <h2 className="text-sm font-semibold text-white">Сохранённые фильтры чатов</h2>
                     <p className="text-xs text-gray-500">Быстрый выбор сегмента из рабочей области операторов.</p>
                   </div>
