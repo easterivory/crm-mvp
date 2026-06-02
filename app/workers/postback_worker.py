@@ -8,6 +8,7 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.database import get_db_session
 from app.services.postback_service import PostbackService
+from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
 
 try:
     from arq.connections import RedisSettings
@@ -78,5 +79,5 @@ def _redis_settings_from_url() -> Any:
 
 class WorkerSettings:
     """ARQ compatibility settings."""
-    functions = [send_lead_postback]
+    functions = [send_lead_postback, process_broadcast, process_due_broadcasts]
     redis_settings = _redis_settings_from_url()

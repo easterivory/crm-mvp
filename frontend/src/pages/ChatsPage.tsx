@@ -571,9 +571,11 @@ export default function ChatsPage() {
     (chatId: string) => {
       selectedChatIdRef.current = chatId
       setSelectedChatId(chatId)
-      syncChatSearchParams(chatFilters, chatId)
+      const params = writeChatFilters(chatFilters)
+      params.set('chat_id', chatId)
+      setSearchParams(params)
     },
-    [chatFilters, syncChatSearchParams],
+    [chatFilters, setSearchParams],
   )
 
   const handleClearSelectedChat = useCallback(() => {

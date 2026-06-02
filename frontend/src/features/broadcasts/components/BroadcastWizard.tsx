@@ -531,12 +531,12 @@ export default function BroadcastWizard({
           {step === 1 ? (
             <div className="space-y-4">
               <section className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
+                <div className="flex w-full items-center justify-between gap-2">
+                  <div className="min-w-0">
                     <h2 className="text-sm font-semibold text-white">Сохранённые фильтры чатов</h2>
                     <p className="text-xs text-gray-500">Быстрый выбор сегмента из рабочей области операторов.</p>
                   </div>
-                  <div className={`rounded-full border px-3 py-1 text-sm font-semibold ${
+                  <div className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-sm font-semibold ${
                     isAudienceStale
                       ? 'border-amber-300/25 bg-amber-400/10 text-amber-100'
                       : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-100 animate-pulse'

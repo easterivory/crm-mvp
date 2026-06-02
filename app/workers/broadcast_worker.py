@@ -378,4 +378,4 @@ async def process_due_broadcasts(ctx: dict) -> dict[str, Any]:
 class WorkerSettings:
     """ARQ compatibility settings."""
     functions = [process_broadcast, process_due_broadcasts]
-    redis_settings = None
+    redis_settings = _redis_settings_from_url()

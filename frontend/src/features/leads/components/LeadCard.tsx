@@ -4,7 +4,6 @@ import {
   Globe2,
   MessageSquareText,
   Phone,
-  Send,
   Tag,
   Trash2,
   TrendingUp,
@@ -17,7 +16,6 @@ import type { Lead } from '../types'
 type LeadCardProps = {
   lead: Lead
   isMutating: boolean
-  onSubmit: (lead: Lead) => void
   onReject: (lead: Lead) => void
   onOpenChat?: (lead: Lead) => void
   onSubmitToPartner?: (lead: Lead) => void
@@ -54,7 +52,6 @@ function botLabel(lead: Lead) {
 export default function LeadCard({
   lead,
   isMutating,
-  onSubmit,
   onReject,
   onOpenChat,
   onSubmitToPartner,
@@ -132,15 +129,6 @@ export default function LeadCard({
             Перейти в чат
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() => onSubmit(lead)}
-          disabled={isMutating || lead.status_code === 'qualified'}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Send size={16} />
-          Отправить
-        </button>
         {onSubmitToPartner && (
           <button
             type="button"

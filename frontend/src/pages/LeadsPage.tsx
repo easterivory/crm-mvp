@@ -9,7 +9,6 @@ import {
   fetchLeads,
   fetchLeadStatuses,
   rejectLead,
-  submitLead,
   type Lead,
   type LeadStatus,
 } from '../features/leads'
@@ -25,7 +24,7 @@ type ProjectTag = {
   created_at: string
 }
 
-type PendingAction = { type: 'submit' | 'reject'; lead: Lead } | null
+type PendingAction = { type: 'reject'; lead: Lead } | null
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10)
@@ -165,13 +164,8 @@ export default function LeadsPage() {
     setNotice('')
 
     try {
-      if (pendingAction.type === 'submit') {
-        await submitLead(pendingAction.lead.id, selectedProjectId)
-        setNotice('Лид переведён в статус отправленного.')
-      } else {
-        await rejectLead(pendingAction.lead.id, selectedProjectId)
-        setNotice('Лид архивирован как отклонённый.')
-      }
+      await rejectLead(pendingAction.lead.id, selectedProjectId)
+      setNotice('Лид архивирован как отклонённый.')
 
       setPendingAction(null)
       await loadPage()
@@ -307,7 +301,6 @@ export default function LeadsPage() {
                 key={lead.id}
                 lead={lead}
                 isMutating={mutatingLeadId === lead.id}
-                onSubmit={(item) => setPendingAction({ type: 'submit', lead: item })}
                 onReject={(item) => setPendingAction({ type: 'reject', lead: item })}
                 onOpenChat={openLeadChat}
                 onSubmitToPartner={partners.length > 0 ? (item) => setPartnerLead(item) : undefined}
@@ -319,14 +312,10 @@ export default function LeadsPage() {
 
       {pendingAction ? (
         <ConfirmDialog
-          title={pendingAction.type === 'submit' ? 'Отправить лид?' : 'Удалить лид?'}
-          description={
-            pendingAction.type === 'submit'
-              ? 'Лид будет переведён в статус отправленного.'
-              : 'Лид не будет физически удалён. Он перейдёт в отклонённые и исчезнет из активного списка.'
-          }
-          confirmLabel={pendingAction.type === 'submit' ? 'Отправить' : 'Удалить'}
-          tone={pendingAction.type === 'reject' ? 'danger' : 'primary'}
+          title="Удалить лид?"
+          description="Лид не будет физически удалён. Он перейдёт в отклонённые и исчезнет из активного списка."
+          confirmLabel="Удалить"
+          tone="danger"
           isLoading={mutatingLeadId === pendingAction.lead.id}
           onCancel={() => setPendingAction(null)}
           onConfirm={() => void handleConfirmAction()}
