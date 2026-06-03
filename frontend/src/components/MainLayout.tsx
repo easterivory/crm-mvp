@@ -31,6 +31,7 @@ const navItems = [
   { label: t('broadcasts'), path: '/broadcasts', icon: Megaphone },
   { label: t('bots'), path: '/bots', icon: Bot },
   { label: t('leads'), path: '/leads', icon: UsersRound },
+  { label: t('analytics'), path: '/analytics', icon: BarChart3 },
   { label: t('tracking'), path: '/tracking', icon: BarChart3 },
   { label: t('settings'), path: '/settings', icon: Settings },
 ]

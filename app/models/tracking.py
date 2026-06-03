@@ -29,6 +29,7 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_tracking_links_code", "code"),
         Index("ix_tracking_links_is_active", "is_active"),
         Index("ix_tracking_links_target_step_id", "target_step_id"),
+        Index("ix_tracking_links_buyer_id", "buyer_id"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -56,6 +57,9 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     )
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    buyer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     cost_model: Mapped[TrackingCostModel] = mapped_column(
         SAEnum(
@@ -90,7 +94,15 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         "BotStep",
         foreign_keys=[target_step_id],
     )
-    created_by_user: Mapped[Optional[User]] = relationship("User")
+    created_by_user: Mapped[Optional[User]] = relationship(
+        "User",
+        foreign_keys=[created_by_user_id],
+    )
+    buyer: Mapped[Optional[User]] = relationship(
+        "User",
+        back_populates="buyer_tracking_links",
+        foreign_keys=[buyer_id],
+    )
     chats: Mapped[list[Chat]] = relationship("Chat", back_populates="tracking_link")
     events: Mapped[list[TrackingEvent]] = relationship(
         "TrackingEvent",

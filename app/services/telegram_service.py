@@ -672,6 +672,8 @@ class TelegramService:
             return None
 
         ref_code = parts[1].strip().split(maxsplit=1)[0]
+        if ref_code.startswith("ref_"):
+            ref_code = ref_code.removeprefix("ref_")
         return ref_code or None
 
     @staticmethod

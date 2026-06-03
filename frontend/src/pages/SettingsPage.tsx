@@ -15,12 +15,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import BuyersSettings from '../features/buyers/components/BuyersSettings'
 import PartnersSettings from '../features/partners/components/PartnersSettings'
 import { useProjectBotSelection } from '../shared/lib'
 import { Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
-type TabKey = 'project' | 'team' | 'statuses' | 'tags' | 'partners'
+type TabKey = 'project' | 'team' | 'buyers' | 'statuses' | 'tags' | 'partners'
 
 type PaginatedResponse<T> = {
   items: T[]
@@ -72,6 +73,7 @@ type ProjectTag = {
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'project', label: 'Проект' },
   { key: 'team', label: 'Команда' },
+  { key: 'buyers', label: 'Баеры' },
   { key: 'statuses', label: 'Статусы' },
   { key: 'tags', label: 'Теги' },
   { key: 'partners', label: 'Партнёры' },
@@ -157,6 +159,9 @@ export default function SettingsPage() {
     () =>
       tabs.filter((tab) => {
         if (tab.key === 'team') {
+          return canManageStaff
+        }
+        if (tab.key === 'buyers') {
           return canManageStaff
         }
         if (tab.key === 'project') {
@@ -934,6 +939,10 @@ export default function SettingsPage() {
               </form>
             ) : null}
           </div>
+        ) : null}
+
+        {!isLoading && activeTab === 'buyers' ? (
+          <BuyersSettings projectId={activeProjectId} />
         ) : null}
 
         {!isLoading && activeTab === 'statuses' ? (

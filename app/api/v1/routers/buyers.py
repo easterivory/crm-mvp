@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.core.config import settings
+from app.core.constants import RoleName
+from app.core.security import hash_password
+from app.models.project import Project
+from app.models.role import Role
+from app.models.user import User
+from app.schemas.buyer import BuyerCreate, BuyerInviteOut, BuyerUserOut
+
+router = APIRouter(prefix="/buyers", tags=["buyers"])
+
+
+@router.post("", response_model=BuyerInviteOut, status_code=status.HTTP_201_CREATED)
+async def create_buyer(
+    data: BuyerCreate,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BuyerInviteOut:
+    _ensure_admin(current_user)
+    await _ensure_project_active(db, project_id)
+
+    email = str(data.email).strip().lower()
+    existing = await db.execute(select(User.id).where(func.lower(User.email) == email))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User with this email already exists",
+        )
+
+    role = await _get_manager_role(db)
+    username = _buyer_bot_username_or_error()
+
+    user: User | None = None
+    invite_token: UUID | None = None
+    for _ in range(3):
+        invite_token = uuid4()
+        try:
+            async with db.begin_nested():
+                user = User(
+                    email=email,
+                    name=data.name.strip(),
+                    password_hash=hash_password(data.password),
+                    role_id=role.id,
+                    project_id=project_id,
+                    buyer_invite_token=invite_token,
+                )
+                user.role = role
+                db.add(user)
+                await db.flush()
+                await db.refresh(user)
+            break
+        except IntegrityError:
+            user = None
+            invite_token = None
+
+    if user is None or invite_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not create buyer invite",
+        )
+
+    return BuyerInviteOut(
+        buyer=BuyerUserOut.model_validate(user),
+        invite_token=invite_token,
+        invite_link=f"https://t.me/{username}?start=act_{invite_token}",
+    )
+
+
+def _ensure_admin(user: User) -> None:
+    if user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin/super_admin can manage buyers",
+        )
+
+
+async def _ensure_project_active(db: AsyncSession, project_id: UUID) -> None:
+    result = await db.execute(
+        select(Project.id).where(
+            Project.id == project_id,
+            Project.is_deleted.is_(False),
+            Project.status == "active",
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Project does not exist or is archived",
+        )
+
+
+async def _get_manager_role(db: AsyncSession) -> Role:
+    result = await db.execute(select(Role).where(Role.name == RoleName.MANAGER))
+    role = result.scalar_one_or_none()
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Manager role is not configured",
+        )
+    return role
+
+
+def _buyer_bot_username_or_error() -> str:
+    username = (settings.BUYER_BOT_USERNAME or "").strip().removeprefix("@")
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BUYER_BOT_USERNAME is not configured",
+        )
+    return username

@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     # X-Telegram-Bot-Api-Secret-Token header. Leave empty to disable.
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
 
+    # Buyer Telegram bot
+    BUYER_BOT_TOKEN: Optional[str] = None
+    BUYER_BOT_USERNAME: Optional[str] = None
+    BUYER_BOT_INTERNAL_TOKEN: Optional[str] = None
+    CLIENT_BOT_USERNAME: Optional[str] = None
+    BUYER_BOT_POLL_TIMEOUT_SECONDS: int = 25
+    BUYER_BOT_FSM_TTL_SECONDS: int = 3600
+
     # Broadcast worker
     BROADCAST_BATCH_SIZE: int = 25
     BROADCAST_SEND_INTERVAL_MS: int = 75

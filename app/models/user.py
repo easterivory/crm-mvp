@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import BigInteger, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,18 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    buyer_telegram_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    buyer_invite_token: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
 
     # Relationships
     project: Mapped[Optional[Project]] = relationship("Project", back_populates="users")
@@ -42,6 +54,11 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
         "ChatEventLog", back_populates="user", foreign_keys="ChatEventLog.user_id"
     )
     audit_actions: Mapped[list[AuditLog]] = relationship("AuditLog", back_populates="actor")
+    buyer_tracking_links: Mapped[list[TrackingLink]] = relationship(
+        "TrackingLink",
+        back_populates="buyer",
+        foreign_keys="TrackingLink.buyer_id",
+    )
 
     @property
     def role_name(self) -> str | None:
