@@ -29,6 +29,7 @@ DIRECT_LEAD_FIELDS = {
     "age",
     "country",
     "call_time_text",
+    "preferred_call_time",
     "has_card",
 }
 

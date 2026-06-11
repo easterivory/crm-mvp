@@ -1,6 +1,8 @@
 """
 BotService - project-scoped Telegram bot management.
 """
+import csv
+import io
 import logging
 from typing import Any, Optional
 from uuid import UUID
@@ -92,6 +94,7 @@ class BotService:
             name=name,
             telegram_token=token,
             **identity_values,
+            **self._bot_profile_values(data),
         )
         await self._set_webhook_for_token(token=token, bot_id=bot.id)
         return await self.get_bot(bot_id=bot.id, project_id=project.id)
@@ -101,12 +104,16 @@ class BotService:
         bot_id: UUID,
         project_id: UUID,
         data: BotUpdate,
+        actor: User | None = None,
     ) -> BotOut:
         bot = await self._get_bot_or_404(bot_id, project_id)
         values = data.model_dump(exclude_unset=True)
 
         if "name" in values:
             values["name"] = self._normalize_required(values["name"], "name")
+        for field_name in ("crm_description", "telegram_description", "telegram_about"):
+            if field_name in values:
+                values[field_name] = self._normalize_optional(values[field_name])
         values.pop("bot_username", None)
         if "telegram_token" in values and values["telegram_token"] is None:
             values.pop("telegram_token")
@@ -135,15 +142,157 @@ class BotService:
         if not values:
             return BotOut.model_validate(bot)
 
+        previous_values = self._bot_snapshot(bot)
         updated = await self.bot_repo.update_in_project(bot_id, project_id, **values)
         if updated is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        if actor is not None:
+            await self._log_bot_setting_updates(
+                bot_id=bot_id,
+                actor=actor,
+                previous_values=previous_values,
+                values=values,
+            )
 
         if new_token and old_token and old_token != new_token:
             await self._delete_webhook_safely(old_token)
             return await self.get_bot(bot_id=bot_id, project_id=project_id)
 
         return BotOut.model_validate(updated)
+
+    async def update_bot_profile_on_telegram(
+        self,
+        bot_id: UUID,
+        actor: User | None = None,
+    ) -> dict[str, Any]:
+        bot = await self._get_active_bot_or_404(bot_id)
+        token = self._normalize_optional(bot.telegram_token)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Bot telegram_token is required to update Telegram profile",
+            )
+
+        self._validate_bot_profile_texts(bot.telegram_description, bot.telegram_about)
+        responses: dict[str, Any] = {}
+        try:
+            responses["setMyDescription"] = await self.telegram_sender.set_bot_description(
+                token,
+                bot.telegram_description,
+            )
+            responses["setMyShortDescription"] = await self.telegram_sender.set_bot_about_text(
+                token,
+                bot.telegram_about,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Telegram bot profile request failed: {exc}",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Telegram returned a non-JSON response",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        if actor is not None:
+            await self.log_bot_config_change(
+                bot_id=bot_id,
+                user_id=actor.id,
+                action_type="update_settings",
+                description="Оператор синхронизировал описание Telegram-бота.",
+            )
+        return responses
+
+    async def set_bot_profile_photo(
+        self,
+        bot_id: UUID,
+        photo_bytes: bytes,
+        *,
+        actor: User | None = None,
+        file_name: str = "bot_profile.jpg",
+        mime_type: str = "image/jpeg",
+    ) -> dict[str, Any]:
+        bot = await self._get_active_bot_or_404(bot_id)
+        token = self._normalize_optional(bot.telegram_token)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Bot telegram_token is required to update Telegram profile photo",
+            )
+
+        try:
+            payload = await self.telegram_sender.set_bot_profile_photo(
+                token,
+                photo_bytes,
+                file_name=file_name,
+                mime_type=mime_type,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Telegram setMyProfilePhoto request failed: {exc}",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Telegram returned a non-JSON response",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+        if actor is not None:
+            await self.log_bot_config_change(
+                bot_id=bot_id,
+                user_id=actor.id,
+                action_type="avatar_changed",
+                description="Оператор обновил аватар Telegram-бота.",
+            )
+        return payload
+
+    async def export_bot_audit_logs_to_csv(self, bot_id: UUID) -> bytes:
+        await self._get_active_bot_or_404(bot_id)
+        logs = await self.bot_repo.list_config_audit_logs(bot_id)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Дата", "Оператор", "Действие", "Детали"])
+        for log in logs:
+            operator = "Система"
+            if log.user is not None:
+                operator = log.user.name or log.user.email
+            writer.writerow(
+                [
+                    log.created_at.isoformat(),
+                    operator,
+                    log.action_type,
+                    log.description,
+                ]
+            )
+        return output.getvalue().encode("utf-8-sig")
+
+    async def log_bot_config_change(
+        self,
+        *,
+        bot_id: UUID,
+        user_id: UUID | None,
+        action_type: str,
+        description: str,
+    ) -> None:
+        action = self._normalize_required(action_type, "action_type")
+        details = self._normalize_required(description, "description")
+        await self.bot_repo.create_config_audit_log(
+            bot_id=bot_id,
+            user_id=user_id,
+            action_type=action,
+            description=details,
+        )
 
     async def delete_bot(self, bot_id: UUID, project_id: UUID) -> None:
         deleted = await self.bot_repo.soft_delete_from_project(bot_id, project_id)
@@ -299,6 +448,12 @@ class BotService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
         return bot
 
+    async def _get_active_bot_or_404(self, bot_id: UUID):
+        bot = await self.bot_repo.get_active(bot_id)
+        if bot is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        return bot
+
     async def _resolve_project_for_create(self, project_id: Optional[UUID]):
         if project_id is None:
             # Temporary backwards compatibility for legacy callers that create
@@ -445,6 +600,74 @@ class BotService:
     def _is_invalid_token_error(message: str) -> bool:
         normalized = message.strip().lower()
         return "not found" in normalized or "unauthorized" in normalized
+
+    @staticmethod
+    def _bot_profile_values(data: BotCreate) -> dict[str, str | None]:
+        return {
+            "crm_description": BotService._normalize_optional(data.crm_description),
+            "telegram_description": BotService._normalize_optional(data.telegram_description),
+            "telegram_about": BotService._normalize_optional(data.telegram_about),
+        }
+
+    async def _log_bot_setting_updates(
+        self,
+        *,
+        bot_id: UUID,
+        actor: User,
+        previous_values: dict[str, str | None],
+        values: dict[str, Any],
+    ) -> None:
+        descriptions: list[str] = []
+        if "name" in values and self._changed(previous_values.get("name"), values["name"]):
+            descriptions.append(f"Оператор изменил имя бота на: {values['name']}")
+        if "telegram_token" in values:
+            descriptions.append("Оператор обновил Telegram token бота.")
+        if "crm_description" in values and self._changed(previous_values.get("crm_description"), values["crm_description"]):
+            descriptions.append("Оператор обновил CRM-описание бота.")
+        if "telegram_description" in values and self._changed(
+            previous_values.get("telegram_description"),
+            values["telegram_description"],
+        ):
+            descriptions.append("Оператор обновил приветственное описание Telegram-бота.")
+        if "telegram_about" in values and self._changed(previous_values.get("telegram_about"), values["telegram_about"]):
+            descriptions.append("Оператор обновил текст «О боте» в Telegram.")
+
+        for description in descriptions:
+            await self.log_bot_config_change(
+                bot_id=bot_id,
+                user_id=actor.id,
+                action_type="update_settings",
+                description=description,
+            )
+
+    @staticmethod
+    def _validate_bot_profile_texts(
+        telegram_description: str | None,
+        telegram_about: str | None,
+    ) -> None:
+        if telegram_description is not None and len(telegram_description) > 512:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="telegram_description must not exceed 512 characters",
+            )
+        if telegram_about is not None and len(telegram_about) > 120:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="telegram_about must not exceed 120 characters",
+            )
+
+    @staticmethod
+    def _changed(left: str | None, right: str | None) -> bool:
+        return (left or "") != (right or "")
+
+    @staticmethod
+    def _bot_snapshot(bot) -> dict[str, str | None]:
+        return {
+            "name": bot.name,
+            "crm_description": bot.crm_description,
+            "telegram_description": bot.telegram_description,
+            "telegram_about": bot.telegram_about,
+        }
 
     @staticmethod
     def _normalize_required(value: str | None, field_name: str) -> str:

@@ -32,7 +32,9 @@ class Broadcast(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_broadcasts_created_by_user_id", "created_by_user_id"),
         Index("ix_broadcasts_snippet_id", "snippet_id"),
         Index("ix_broadcasts_trigger_funnel_id", "trigger_funnel_id"),
+        Index("ix_broadcasts_is_deleted", "is_deleted"),
         Index("ix_broadcasts_project_status", "project_id", "status"),
+        Index("ix_broadcasts_project_is_deleted", "project_id", "is_deleted"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -58,6 +60,12 @@ class Broadcast(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     total_recipients: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     schedule_type: Mapped[str] = mapped_column(String(20), nullable=False, default="now", server_default="now")
     scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     timezone_mode: Mapped[str] = mapped_column(

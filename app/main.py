@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.routers import (
     analytics,
     assignments,
+    auth,
     bots,
     broadcasts,
     buyers,
@@ -56,6 +57,7 @@ app.include_router(health.router)
 _v1_prefix = "/api/v1"
 
 app.include_router(projects.router, prefix=_v1_prefix)
+app.include_router(auth.router, prefix=_v1_prefix)
 app.include_router(users.router, prefix=_v1_prefix)
 app.include_router(buyers.router, prefix=_v1_prefix)
 app.include_router(chats.router, prefix=_v1_prefix)
@@ -66,6 +68,7 @@ app.include_router(messages.attachments_router, prefix=_v1_prefix)
 app.include_router(leads.router, prefix=_v1_prefix)
 app.include_router(assignments.router, prefix=_v1_prefix)
 app.include_router(tags.router, prefix=_v1_prefix)
+app.include_router(tags.project_router, prefix=_v1_prefix)
 app.include_router(snippets.router, prefix=_v1_prefix)
 app.include_router(partners.router, prefix=f"{_v1_prefix}/partners")
 app.include_router(bots.router, prefix=_v1_prefix)

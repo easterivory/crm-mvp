@@ -15,17 +15,11 @@ returns None. The caller must handle None as a 409 Conflict.
 
 This avoids lost updates without requiring application-level distributed locks.
 
-TODO (do not implement now):
-  - Cursor-based pagination instead of OFFSET for list_by_project().
-    High-offset queries are slow; a cursor on (created_at, id) is O(1).
-  - Heavy count optimisation: COUNT(*) on large leads tables is expensive.
-    Consider caching totals in daily_stats or using pg_class.reltuples for
-    the unfiltered case as an estimated count.
-  - Cache lead_statuses reference table in Redis (or in-process LRU).
-    The table is tiny and almost never changes — every status change currently
-    issues two SELECT queries (get_status x2). An LRU with a 60-second TTL
-    would eliminate the vast majority of these reads.
-  - Consider a dedicated LeadStatusRepository if status management grows.
+Implementation notes
+--------------------
+list_by_project() intentionally uses OFFSET pagination because the UI still
+requests explicit offsets. Status lookups stay in this repository while the
+reference table remains part of the lead domain boundary.
 """
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
@@ -233,6 +227,7 @@ class LeadRepository(BaseRepository[Lead]):
                 Chat.tracking_link_id,
                 Chat.contact_name,
                 Chat.external_chat_id,
+                Chat.external_user_id,
                 Chat.current_cycle_started_at,
                 Bot.name.label("bot_name"),
                 Bot.bot_username,
@@ -381,6 +376,7 @@ class LeadRepository(BaseRepository[Lead]):
                     "age": None,
                     "country": None,
                     "call_time_text": None,
+                    "preferred_call_time": None,
                     "has_card": None,
                     "custom_fields": {},
                 }
@@ -429,6 +425,7 @@ class LeadRepository(BaseRepository[Lead]):
                 age=None,
                 country=None,
                 call_time_text=None,
+                preferred_call_time=None,
                 has_card=None,
                 custom_fields={},
                 updated_at=func.now(),

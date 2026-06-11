@@ -47,6 +47,17 @@ class UserRepository(BaseRepository[User]):
         )
         return result.scalars().first()
 
+    async def get_by_telegram_id(self, telegram_id: int) -> Optional[User]:
+        result = await self.db.execute(
+            select(User)
+            .options(self._with_role())
+            .where(
+                User.telegram_id == telegram_id,
+                User.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_role_by_id(self, role_id: UUID) -> Optional[Role]:
         result = await self.db.execute(select(Role).where(Role.id == role_id))
         return result.scalar_one_or_none()

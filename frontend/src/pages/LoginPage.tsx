@@ -1,25 +1,90 @@
-import { LoaderCircle, LockKeyhole, Mail } from 'lucide-react'
-import { FormEvent, useEffect, useState } from 'react'
+import { LoaderCircle, LockKeyhole, Mail, Send } from 'lucide-react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
-import { useAuthStore } from '../store/authStore'
+import { useAuthStore, type TelegramAuthPayload } from '../store/authStore'
+
+type TelegramLoginUser = TelegramAuthPayload & {
+  id?: number | string
+  first_name?: string
+  last_name?: string
+  username?: string
+  photo_url?: string
+  auth_date?: number | string
+  hash?: string
+}
+
+declare global {
+  interface Window {
+    onTelegramAuth?: (user: TelegramLoginUser) => void
+  }
+}
+
+const telegramBotUsername = (
+  import.meta.env.VITE_TELEGRAM_LOGIN_BOT_USERNAME ||
+  import.meta.env.VITE_BUYER_BOT_USERNAME ||
+  ''
+).replace(/^@/, '')
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const login = useAuthStore((state) => state.login)
+  const loginWithTelegram = useAuthStore((state) => state.loginWithTelegram)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const telegramWidgetRef = useRef<HTMLDivElement | null>(null)
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isTelegramLoading, setIsTelegramLoading] = useState(false)
 
   useEffect(() => {
     if (isAuthenticated) {
       navigate('/chats', { replace: true })
     }
   }, [isAuthenticated, navigate])
+
+  useEffect(() => {
+    window.onTelegramAuth = (user: TelegramLoginUser) => {
+      setError('')
+      setIsTelegramLoading(true)
+      void loginWithTelegram(user)
+        .then(() => navigate('/chats', { replace: true }))
+        .catch((err) => {
+          setError(extractAuthError(err))
+        })
+        .finally(() => setIsTelegramLoading(false))
+    }
+
+    return () => {
+      delete window.onTelegramAuth
+    }
+  }, [loginWithTelegram, navigate])
+
+  useEffect(() => {
+    if (!telegramBotUsername || !telegramWidgetRef.current) {
+      return
+    }
+
+    const widgetContainer = telegramWidgetRef.current
+    widgetContainer.innerHTML = ''
+
+    const script = document.createElement('script')
+    script.src = 'https://telegram.org/js/telegram-widget.js?22'
+    script.async = true
+    script.setAttribute('data-telegram-login', telegramBotUsername)
+    script.setAttribute('data-size', 'large')
+    script.setAttribute('data-radius', '12')
+    script.setAttribute('data-request-access', 'write')
+    script.setAttribute('data-onauth', 'onTelegramAuth(user)')
+    widgetContainer.appendChild(script)
+
+    return () => {
+      widgetContainer.innerHTML = ''
+    }
+  }, [])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -30,18 +95,7 @@ export default function LoginPage() {
       await login(email, password)
       navigate('/chats', { replace: true })
     } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const detail = err.response?.data?.detail
-        if (typeof detail === 'string' && detail.length > 0) {
-          setError(detail)
-        } else if (err.code === 'ERR_NETWORK') {
-          setError('API недоступен. Проверьте backend или контейнер.')
-        } else {
-          setError('Не удалось войти. Попробуйте снова.')
-        }
-      } else {
-        setError('Не удалось войти. Попробуйте снова.')
-      }
+      setError(extractAuthError(err))
     } finally {
       setIsLoading(false)
     }
@@ -97,7 +151,49 @@ export default function LoginPage() {
             {isLoading ? 'Входим...' : 'Войти'}
           </button>
         </form>
+
+        <div className="my-6 flex items-center gap-3 text-xs uppercase tracking-[0.18em] text-zinc-600">
+          <span className="h-px flex-1 bg-zinc-800" />
+          <span>или</span>
+          <span className="h-px flex-1 bg-zinc-800" />
+        </div>
+
+        <div className="flex min-h-12 items-center justify-center">
+          {telegramBotUsername ? (
+            <div className={isTelegramLoading ? 'pointer-events-none opacity-60' : ''} ref={telegramWidgetRef} />
+          ) : (
+            <button
+              type="button"
+              disabled
+              title="Telegram Login bot username is not configured"
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-400/20 bg-sky-500/10 px-4 text-sm font-semibold text-sky-100 opacity-60"
+            >
+              <Send size={16} />
+              Войти через Telegram
+            </button>
+          )}
+        </div>
+        {isTelegramLoading ? (
+          <div className="mt-3 flex items-center justify-center gap-2 text-sm text-zinc-500">
+            <LoaderCircle size={15} className="animate-spin" />
+            Проверяем Telegram
+          </div>
+        ) : null}
       </div>
     </div>
   )
+}
+
+function extractAuthError(err: unknown) {
+  if (axios.isAxiosError(err)) {
+    const detail = err.response?.data?.detail
+    if (typeof detail === 'string' && detail.length > 0) {
+      return detail
+    }
+    if (err.code === 'ERR_NETWORK') {
+      return 'API недоступен. Проверьте backend или контейнер.'
+    }
+  }
+
+  return 'Не удалось войти. Попробуйте снова.'
 }

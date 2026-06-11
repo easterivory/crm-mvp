@@ -863,6 +863,10 @@ class FunnelRepository(BaseRepository[Funnel]):
         custom_values: dict,
     ) -> None:
         values = dict(direct_values)
+        if "call_time_text" in values and "preferred_call_time" not in values:
+            values["preferred_call_time"] = values["call_time_text"]
+        if "preferred_call_time" in values and "call_time_text" not in values:
+            values["call_time_text"] = values["preferred_call_time"]
         if custom_values:
             lead = await self.get_lead_by_id(lead_id)
             existing = dict(lead.custom_fields or {}) if lead is not None else {}

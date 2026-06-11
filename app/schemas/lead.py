@@ -19,6 +19,7 @@ class LeadUpdate(BaseModel):
     age: Optional[int] = Field(None, ge=0, le=150)
     country: Optional[str] = Field(None, max_length=100)
     call_time_text: Optional[str] = Field(None, max_length=255)
+    preferred_call_time: Optional[str] = Field(None, max_length=255)
     has_card: Optional[bool] = None
 
 
@@ -53,6 +54,7 @@ class LeadStatusOut(OrmBase):
 class LeadTagOut(OrmBase):
     id: uuid.UUID
     name: str
+    color: str
 
 
 class LeadOut(OrmBase):
@@ -67,6 +69,7 @@ class LeadOut(OrmBase):
     age: Optional[int]
     country: Optional[str]
     call_time_text: Optional[str]
+    preferred_call_time: Optional[str]
     has_card: Optional[bool]
     score_percent: Optional[int]
     custom_fields: dict = Field(default_factory=dict)
@@ -83,6 +86,7 @@ class LeadOut(OrmBase):
     tracking_title: Optional[str] = None
     contact_name: Optional[str] = None
     external_chat_id: Optional[str] = None
+    external_user_id: Optional[str] = None
     manager_name: Optional[str] = None
     status_code: Optional[str] = None
     status_name: Optional[str] = None

@@ -6,6 +6,7 @@ import type {
   Broadcast,
   BroadcastActionResponse,
   BroadcastContent,
+  BroadcastDeliveryAnalytics,
   BroadcastReport,
   BroadcastTemplate,
   BroadcastUpload,
@@ -22,6 +23,13 @@ export async function fetchBroadcasts(projectId: string) {
 
 export async function fetchBroadcastReport(broadcastId: string, projectId: string) {
   const { data } = await api.get<BroadcastReport>(`/broadcasts/${broadcastId}/report`, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function fetchBroadcastDetailedAnalytics(broadcastId: string, projectId: string) {
+  const { data } = await api.get<BroadcastDeliveryAnalytics>(`/broadcasts/${broadcastId}/detailed-analytics`, {
     params: { project_id: projectId },
   })
   return data
@@ -144,6 +152,12 @@ export async function updateBroadcast(
     params: { project_id: projectId },
   })
   return data
+}
+
+export async function deleteBroadcast(broadcastId: string, projectId: string) {
+  await api.delete(`/broadcasts/${broadcastId}`, {
+    params: { project_id: projectId },
+  })
 }
 
 export async function previewAudience(payload: {

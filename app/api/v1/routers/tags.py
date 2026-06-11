@@ -11,6 +11,7 @@ from app.schemas.tag import TagCreate, TagOut, TagUpdate
 from app.services.tag_service import TagService
 
 router = APIRouter(prefix="/tags", tags=["tags"])
+project_router = APIRouter(prefix="/projects/{project_id}/tags", tags=["tags"])
 
 
 @router.get("", response_model=PaginatedResponse[TagOut])
@@ -48,6 +49,20 @@ async def update_tag(
     db: AsyncSession = Depends(get_db),
 ) -> TagOut:
     _ensure_settings_admin(current_user)
+    return await TagService(db).update_tag(tag_id, project_id, data)
+
+
+@project_router.patch("/{tag_id}", response_model=TagOut)
+async def update_project_tag(
+    project_id: UUID,
+    tag_id: UUID,
+    data: TagUpdate,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TagOut:
+    _ensure_project_member(current_user, project_id)
+    if data.name is not None:
+        _ensure_settings_admin(current_user)
     return await TagService(db).update_tag(tag_id, project_id, data)
 
 
@@ -103,4 +118,17 @@ def _ensure_settings_admin(current_user) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only super_admin/admin can manage project tags",
+        )
+
+
+def _ensure_project_member(current_user, project_id: UUID) -> None:
+    if current_user.role_name not in RoleName.ALL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only CRM staff can manage project tags",
+        )
+    if current_user.role_name != RoleName.SUPER_ADMIN and current_user.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not a member of this project",
         )

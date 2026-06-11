@@ -190,6 +190,17 @@ function formatWaitingMinutes(minutes: number) {
   return rest > 0 ? `${hours} ч ${rest} мин` : `${hours} ч`
 }
 
+function withAlpha(hex: string | null | undefined, alpha: number) {
+  const value = hex?.trim()
+  if (!value || !/^#[0-9A-Fa-f]{6}$/.test(value)) {
+    return `rgba(255,255,255,${alpha})`
+  }
+  const red = Number.parseInt(value.slice(1, 3), 16)
+  const green = Number.parseInt(value.slice(3, 5), 16)
+  const blue = Number.parseInt(value.slice(5, 7), 16)
+  return `rgba(${red},${green},${blue},${alpha})`
+}
+
 function highlightSnippet(snippet: string, query: string) {
   const normalizedQuery = query.trim()
   if (!normalizedQuery) {
@@ -430,7 +441,11 @@ export default function ChatList({
                     {visibleTags.map((tag) => (
                       <span
                         key={tag.id}
-                        className="max-w-[96px] truncate rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-gray-300"
+                        className="max-w-[96px] truncate rounded-full border px-2 py-0.5 text-xs text-gray-100"
+                        style={{
+                          backgroundColor: withAlpha(tag.color, 0.13),
+                          borderColor: withAlpha(tag.color, 0.55),
+                        }}
                         title={tag.name}
                       >
                         {tag.name}

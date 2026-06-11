@@ -29,8 +29,10 @@ from app.schemas.broadcast import (
     AudiencePreviewResponse,
     BroadcastActionResponse,
     BroadcastCreate,
+    BroadcastDeliveryAnalytics,
     BroadcastOut,
     BroadcastReport,
+    BroadcastRecipientDeliveryOut,
     BroadcastScheduleRequest,
     BroadcastTemplateCreate,
     BroadcastTemplateOut,
@@ -124,6 +126,73 @@ class BroadcastService:
             error_examples=await self.repo.error_examples(broadcast.id),
         )
 
+    async def delivery_analytics(
+        self,
+        broadcast_id: UUID,
+        project_id: UUID,
+    ) -> BroadcastDeliveryAnalytics:
+        broadcast = await self._get_or_404(broadcast_id, project_id)
+        rows = await self.repo.delivery_analytics_rows(broadcast.id)
+        recipients: list[BroadcastRecipientDeliveryOut] = []
+        delivered = 0
+        read = 0
+        replied = 0
+        pending = 0
+        failed = 0
+        skipped = 0
+
+        for recipient, chat, lead_name in rows:
+            is_delivered = recipient.status == "sent"
+            is_read = bool(is_delivered and chat.is_read)
+            has_reply = bool(
+                is_delivered
+                and recipient.sent_at is not None
+                and chat.last_client_message_at is not None
+                and chat.last_client_message_at > recipient.sent_at
+            )
+            if is_delivered:
+                delivered += 1
+            elif recipient.status == "pending":
+                pending += 1
+            elif recipient.status == "failed":
+                failed += 1
+            elif recipient.status == "skipped":
+                skipped += 1
+            if is_read:
+                read += 1
+            if has_reply:
+                replied += 1
+
+            recipients.append(
+                BroadcastRecipientDeliveryOut(
+                    id=recipient.id,
+                    chat_id=recipient.chat_id,
+                    lead_id=recipient.lead_id,
+                    external_chat_id=chat.external_chat_id,
+                    external_user_id=chat.external_user_id,
+                    lead_name=lead_name,
+                    status=recipient.status,
+                    attempts=recipient.attempts,
+                    last_error=recipient.last_error,
+                    sent_at=recipient.sent_at,
+                    is_read=is_read,
+                    replied=has_reply,
+                    last_client_message_at=chat.last_client_message_at,
+                )
+            )
+
+        return BroadcastDeliveryAnalytics(
+            broadcast_id=broadcast.id,
+            total_recipients=broadcast.total_recipients or len(recipients),
+            delivered=delivered,
+            read=read,
+            replied=replied,
+            pending=pending,
+            failed=failed,
+            skipped=skipped,
+            recipients=recipients,
+        )
+
     async def error_csv(self, broadcast_id: UUID, project_id: UUID) -> str:
         await self._get_or_404(broadcast_id, project_id)
         output = io.StringIO()
@@ -155,7 +224,7 @@ class BroadcastService:
             raise HTTPException(status_code=422, detail="project_id does not match current project")
         self._validate_content(data.content_json)
         if self._content_has_media(data.content_json):
-            raise HTTPException(status_code=422, detail="Шаблоны с медиа будут добавлены позже.")
+            raise HTTPException(status_code=422, detail="Шаблоны поддерживают только текстовый контент.")
         template = await self.repo.create_template(
             project_id=project_id,
             name=data.name,
@@ -187,7 +256,7 @@ class BroadcastService:
         if "content_json" in values:
             self._validate_content(values["content_json"])
             if self._content_has_media(values["content_json"]):
-                raise HTTPException(status_code=422, detail="Шаблоны с медиа будут добавлены позже.")
+                raise HTTPException(status_code=422, detail="Шаблоны поддерживают только текстовый контент.")
         template = await self.repo.update_template_in_project(template_id, project_id, **values)
         assert template is not None
         await self._audit(
@@ -215,6 +284,25 @@ class BroadcastService:
             actor=actor,
             action="broadcast_template.deleted",
             entity_id=template_id,
+        )
+
+    async def delete_broadcast(
+        self,
+        *,
+        broadcast_id: UUID,
+        actor: User,
+        project_id: UUID,
+    ) -> None:
+        self._ensure_can_manage(actor)
+        deleted = await self.repo.soft_delete_in_project(broadcast_id, project_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Broadcast not found")
+        await self.repo.mark_pending_skipped(broadcast_id, "Broadcast archived")
+        await self._audit(
+            project_id=project_id,
+            actor=actor,
+            action="broadcast.archived",
+            entity_id=broadcast_id,
         )
 
     async def upload_media(

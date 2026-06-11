@@ -13,6 +13,7 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8)
     role_id: uuid.UUID
     project_id: Optional[uuid.UUID] = None
+    telegram_id: Optional[int] = Field(None, gt=0)
 
 
 class UserPasswordChange(BaseModel):
@@ -23,6 +24,7 @@ class UserUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     role_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
+    telegram_id: Optional[int] = Field(None, gt=0)
 
 
 class UserOut(OrmBase):
@@ -31,6 +33,7 @@ class UserOut(OrmBase):
     name: str
     project_id: Optional[uuid.UUID]
     role_id: uuid.UUID
+    telegram_id: Optional[int] = None
     role_name: Optional[str] = None
     created_at: datetime
     is_deleted: bool

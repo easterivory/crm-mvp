@@ -1,6 +1,7 @@
 export type LeadTag = {
   id: string
   name: string
+  color: string
 }
 
 export type Lead = {
@@ -15,6 +16,7 @@ export type Lead = {
   age: number | null
   country: string | null
   call_time_text: string | null
+  preferred_call_time: string | null
   has_card: boolean | null
   score_percent: number | null
   custom_fields?: Record<string, unknown> | null
@@ -31,6 +33,7 @@ export type Lead = {
   tracking_title?: string | null
   contact_name?: string | null
   external_chat_id?: string | null
+  external_user_id?: string | null
   manager_name?: string | null
   status_code?: string | null
   status_name?: string | null

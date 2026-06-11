@@ -73,16 +73,19 @@ class TagRepository(BaseRepository[Tag]):
         await self.db.execute(delete(Tag).where(Tag.id == tag_id))
         return True
 
-    async def update_name_in_project(
+    async def update_in_project(
         self,
         tag_id: UUID,
         project_id: UUID,
-        name: str,
+        **values,
     ) -> Optional[Tag]:
+        if not values:
+            return await self.get_by_id_in_project(tag_id, project_id)
+
         result = await self.db.execute(
             update(Tag)
             .where(Tag.id == tag_id, Tag.project_id == project_id)
-            .values(name=name)
+            .values(**values)
         )
         if result.rowcount == 0:
             return None

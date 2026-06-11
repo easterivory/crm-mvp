@@ -143,6 +143,6 @@ class AssignmentService:
         tags = await self.tag_repo.list_for_lead(lead.id)
         return LeadOut.model_validate(lead).model_copy(
             update={
-                "tags": [LeadTagOut(id=tag.id, name=tag.name) for tag in tags],
+                "tags": [LeadTagOut(id=tag.id, name=tag.name, color=tag.color) for tag in tags],
             }
         )

@@ -32,7 +32,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AuditAction, EntityType, LeadStatusCode
+from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode
 
 logger = logging.getLogger(__name__)
 from app.repositories.chat_repository import ChatRepository
@@ -48,6 +48,7 @@ from app.schemas.lead import (
     LeadUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.chat_audit_service import ChatAuditService
 from app.services.lead_scoring_service import LeadScoringService
 
 
@@ -58,6 +59,7 @@ class LeadService:
         self.chat_repo = ChatRepository(db)
         self.tag_repo = TagRepository(db)
         self.audit = AuditService(db)
+        self.chat_audit = ChatAuditService(db)
         self.scoring = LeadScoringService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
@@ -417,17 +419,31 @@ class LeadService:
         data: LeadUpdate,
         actor_id: UUID,
     ) -> LeadOut:
+        lead = await self.lead_repo.get_active(lead_id, project_id)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+
+        old_name = lead.name
+        old_call_time = lead.preferred_call_time or lead.call_time_text
         values = data.model_dump(exclude_unset=True)
-        for field_name in ("name", "country", "call_time_text"):
+        requested_fields = set(values)
+        for field_name in ("name", "country", "call_time_text", "preferred_call_time"):
             if field_name in values:
                 values[field_name] = self._normalize_optional(values[field_name])
+        if "preferred_call_time" in values and "call_time_text" not in values:
+            values["call_time_text"] = values["preferred_call_time"]
+        if "call_time_text" in values and "preferred_call_time" not in values:
+            values["preferred_call_time"] = values["call_time_text"]
         if "phone" in values:
             values["phone"] = self._normalize_optional(values["phone"])
         if "username" in values:
             values["username"] = self._normalize_optional(values["username"])
 
         if not values:
-            return await self.get_lead(lead_id, project_id)
+            return await self._lead_out(lead)
 
         lead = await self.lead_repo.update_contact(lead_id, project_id, **values)
         if lead is None:
@@ -438,6 +454,14 @@ class LeadService:
 
         # Recalculate lead score after contact update
         await self.scoring.update_lead_score(lead_id)
+        await self._log_contact_updates(
+            lead=lead,
+            project_id=project_id,
+            actor_id=actor_id,
+            old_name=old_name,
+            old_call_time=old_call_time,
+            requested_fields=requested_fields,
+        )
 
         return await self._lead_out(lead)
 
@@ -447,7 +471,7 @@ class LeadService:
         return LeadOut.model_validate(lead).model_copy(
             update={
                 "tags": [
-                    LeadTagOut(id=tag.id, name=tag.name)
+                    LeadTagOut(id=tag.id, name=tag.name, color=tag.color)
                     for tag in tags
                 ],
                 **context,
@@ -535,6 +559,44 @@ class LeadService:
             return None
         normalized = value.strip()
         return normalized or None
+
+    async def _log_contact_updates(
+        self,
+        *,
+        lead,
+        project_id: UUID,
+        actor_id: UUID,
+        old_name: str | None,
+        old_call_time: str | None,
+        requested_fields: set[str],
+    ) -> None:
+        if "name" in requested_fields and self._changed(old_name, lead.name):
+            await self.chat_audit.log_event(
+                chat_id=lead.chat_id,
+                project_id=project_id,
+                user_id=actor_id,
+                event_type=ChatEventType.LEAD_UPDATED,
+                old_value=old_name,
+                new_value=f"обновил ФИО лида: {lead.name or 'не указано'}",
+            )
+
+        if (
+            {"preferred_call_time", "call_time_text"} & requested_fields
+            and self._changed(old_call_time, lead.preferred_call_time or lead.call_time_text)
+        ):
+            new_call_time = lead.preferred_call_time or lead.call_time_text
+            await self.chat_audit.log_event(
+                chat_id=lead.chat_id,
+                project_id=project_id,
+                user_id=actor_id,
+                event_type=ChatEventType.LEAD_UPDATED,
+                old_value=old_call_time,
+                new_value=f"изменил удобное время звонка на: {new_call_time or 'не указано'}",
+            )
+
+    @staticmethod
+    def _changed(left: str | None, right: str | None) -> bool:
+        return (left or "") != (right or "")
 
     @staticmethod
     def _normalize_status_code(code: str) -> str:

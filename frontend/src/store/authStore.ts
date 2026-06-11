@@ -18,11 +18,14 @@ type LoginPayload = {
   password: string
 }
 
+export type TelegramAuthPayload = Record<string, unknown>
+
 type AuthState = {
   token: string | null
   user: User | null
   isAuthenticated: boolean
   login: (email: string, password: string) => Promise<void>
+  loginWithTelegram: (authData: TelegramAuthPayload) => Promise<void>
   logout: () => void
   fetchMe: () => Promise<void>
 }
@@ -55,6 +58,16 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: async (email: string, password: string) => {
     const payload: LoginPayload = { email, password }
     const { data } = await api.post<{ access_token: string }>('/users/login', payload)
+
+    localStorage.setItem(TOKEN_KEY, data.access_token)
+
+    set({ token: data.access_token, isAuthenticated: true })
+
+    await useAuthStore.getState().fetchMe()
+  },
+
+  loginWithTelegram: async (authData: TelegramAuthPayload) => {
+    const { data } = await api.post<{ access_token: string }>('/auth/telegram-login', authData)
 
     localStorage.setItem(TOKEN_KEY, data.access_token)
 

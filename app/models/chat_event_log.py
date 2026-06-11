@@ -16,7 +16,7 @@ class ChatEventLog(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "chat_event_logs"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('status_change','tag_added','manager_assigned','SLA_breached','note_added')",
+            "event_type IN ('status_change','tag_added','manager_assigned','SLA_breached','note_added','lead_updated')",
             name="ck_chat_event_logs_event_type",
         ),
         Index("ix_chat_event_logs_chat_id", "chat_id"),

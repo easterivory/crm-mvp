@@ -24,6 +24,12 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     buyer_telegram_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
         nullable=True,
@@ -52,6 +58,11 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     )
     chat_event_logs: Mapped[list[ChatEventLog]] = relationship(
         "ChatEventLog", back_populates="user", foreign_keys="ChatEventLog.user_id"
+    )
+    bot_config_audit_logs: Mapped[list[BotConfigAuditLog]] = relationship(
+        "BotConfigAuditLog",
+        back_populates="user",
+        foreign_keys="BotConfigAuditLog.user_id",
     )
     audit_actions: Mapped[list[AuditLog]] = relationship("AuditLog", back_populates="actor")
     buyer_tracking_links: Mapped[list[TrackingLink]] = relationship(

@@ -15,6 +15,9 @@ class BotCreate(BaseModel):
     telegram_token: str = Field(..., max_length=255)
     # Ignored by BotService. Kept only so old clients do not fail validation.
     bot_username: Optional[str] = Field(None, max_length=255)
+    crm_description: Optional[str] = Field(None, max_length=4096)
+    telegram_description: Optional[str] = Field(None, max_length=512)
+    telegram_about: Optional[str] = Field(None, max_length=120)
 
 
 class BotUpdate(BaseModel):
@@ -22,6 +25,9 @@ class BotUpdate(BaseModel):
     telegram_token: Optional[str] = Field(None, max_length=255)
     # Ignored by BotService. Telegram getMe is the source of truth.
     bot_username: Optional[str] = Field(None, max_length=255)
+    crm_description: Optional[str] = Field(None, max_length=4096)
+    telegram_description: Optional[str] = Field(None, max_length=512)
+    telegram_about: Optional[str] = Field(None, max_length=120)
 
 
 class BotOut(OrmBase):
@@ -32,6 +38,9 @@ class BotOut(OrmBase):
     telegram_bot_id: Optional[int] = None
     telegram_first_name: Optional[str] = None
     bot_username: Optional[str]
+    crm_description: Optional[str] = None
+    telegram_description: Optional[str] = None
+    telegram_about: Optional[str] = None
     active_funnel_id: Optional[uuid.UUID] = None
     active_funnel_version_id: Optional[uuid.UUID] = None
     created_at: datetime

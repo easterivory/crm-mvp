@@ -8,6 +8,8 @@ import {
   cancelBroadcast,
   createBroadcastTemplate,
   createBroadcast,
+  deleteBroadcast,
+  fetchBroadcastDetailedAnalytics,
   fetchBroadcastReport,
   fetchBroadcasts,
   fetchBroadcastTemplates,
@@ -21,6 +23,7 @@ import BroadcastWizard from '../features/broadcasts/components/BroadcastWizard'
 import type {
   Broadcast,
   BroadcastContent,
+  BroadcastDeliveryAnalytics,
   BroadcastOption,
   BroadcastReport,
   BroadcastTemplate,
@@ -94,6 +97,9 @@ export default function BroadcastsPage() {
   const [snippets, setSnippets] = useState<ProjectSnippet[]>([])
   const [chatFilterPresets, setChatFilterPresets] = useState<ChatFilterPreset[]>([])
   const [reports, setReports] = useState<Record<string, BroadcastReport>>({})
+  const [detailedAnalytics, setDetailedAnalytics] = useState<Record<string, BroadcastDeliveryAnalytics>>({})
+  const [expandedAnalyticsIds, setExpandedAnalyticsIds] = useState<Set<string>>(() => new Set())
+  const [loadingAnalyticsIds, setLoadingAnalyticsIds] = useState<Set<string>>(() => new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [isOptionsLoading, setIsOptionsLoading] = useState(false)
   const [editingBroadcast, setEditingBroadcast] = useState<Broadcast | null>(null)
@@ -115,6 +121,10 @@ export default function BroadcastsPage() {
   const loadBroadcasts = useCallback(async () => {
     if (!selectedProjectId) {
       setBroadcasts([])
+      setReports({})
+      setDetailedAnalytics({})
+      setExpandedAnalyticsIds(new Set())
+      setLoadingAnalyticsIds(new Set())
       return
     }
     setIsLoading(true)
@@ -243,7 +253,7 @@ export default function BroadcastsPage() {
   const handleSaveTemplate = async (templateName: string, content: BroadcastContent) => {
     if (!selectedProjectId) return
     if (contentHasMedia(content)) {
-      notify({ tone: 'error', message: 'Шаблоны с медиа будут добавлены позже.' })
+      notify({ tone: 'error', message: 'Шаблоны поддерживают только текстовый контент.' })
       return
     }
     try {
@@ -331,6 +341,68 @@ export default function BroadcastsPage() {
     }
   }
 
+  const handleDelete = async (broadcast: Broadcast) => {
+    if (!selectedProjectId || !window.confirm('Удалить рассылку из списка?')) return
+    try {
+      await deleteBroadcast(broadcast.id, selectedProjectId)
+      setBroadcasts((items) => items.filter((item) => item.id !== broadcast.id))
+      setReports((items) => {
+        const next = { ...items }
+        delete next[broadcast.id]
+        return next
+      })
+      setDetailedAnalytics((items) => {
+        const next = { ...items }
+        delete next[broadcast.id]
+        return next
+      })
+      setExpandedAnalyticsIds((items) => {
+        const next = new Set(items)
+        next.delete(broadcast.id)
+        return next
+      })
+      notify({ tone: 'success', message: 'Рассылка удалена из списка.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось удалить рассылку.') })
+    }
+  }
+
+  const handleToggleDetailedAnalytics = async (broadcast: Broadcast) => {
+    if (!selectedProjectId) return
+    const willExpand = !expandedAnalyticsIds.has(broadcast.id)
+    setExpandedAnalyticsIds((items) => {
+      const next = new Set(items)
+      if (willExpand) {
+        next.add(broadcast.id)
+      } else {
+        next.delete(broadcast.id)
+      }
+      return next
+    })
+    if (!willExpand || detailedAnalytics[broadcast.id]) {
+      return
+    }
+
+    setLoadingAnalyticsIds((items) => new Set(items).add(broadcast.id))
+    try {
+      const analytics = await fetchBroadcastDetailedAnalytics(broadcast.id, selectedProjectId)
+      setDetailedAnalytics((items) => ({ ...items, [broadcast.id]: analytics }))
+    } catch (err) {
+      setExpandedAnalyticsIds((items) => {
+        const next = new Set(items)
+        next.delete(broadcast.id)
+        return next
+      })
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось загрузить аналитику доставки.') })
+    } finally {
+      setLoadingAnalyticsIds((items) => {
+        const next = new Set(items)
+        next.delete(broadcast.id)
+        return next
+      })
+    }
+  }
+
   if (!selectedProjectId) {
     return (
       <section className="flex h-full min-h-0 items-center justify-center overflow-y-auto rounded-xl border border-white/5 bg-surface p-6 text-center shadow-card">
@@ -407,6 +479,9 @@ export default function BroadcastsPage() {
             broadcasts={broadcasts}
             botLabelById={botLabelById}
             reports={reports}
+            detailedAnalytics={detailedAnalytics}
+            expandedAnalyticsIds={expandedAnalyticsIds}
+            loadingAnalyticsIds={loadingAnalyticsIds}
             onOpen={(broadcast) => {
               setEditingBroadcast(broadcast)
               setIsWizardOpen(true)
@@ -415,6 +490,8 @@ export default function BroadcastsPage() {
             onCancel={(broadcast) => void handleCancel(broadcast)}
             onPause={(broadcast) => void handlePause(broadcast)}
             onResume={(broadcast) => void handleResume(broadcast)}
+            onDelete={(broadcast) => void handleDelete(broadcast)}
+            onToggleDetailedAnalytics={(broadcast) => void handleToggleDetailedAnalytics(broadcast)}
             onRefreshReport={(broadcast) => {
               void fetchBroadcastReport(broadcast.id, selectedProjectId).then((report) =>
                 setReports((items) => ({ ...items, [broadcast.id]: report })),

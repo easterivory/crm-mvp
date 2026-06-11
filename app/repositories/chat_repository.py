@@ -576,7 +576,7 @@ class ChatRepository(BaseRepository[Chat]):
         if not chat_ids:
             return {}
         result = await self.db.execute(
-            select(Lead.chat_id, Tag.id, Tag.name)
+            select(Lead.chat_id, Tag.id, Tag.name, Tag.color)
             .join(LeadTag, LeadTag.lead_id == Lead.id)
             .join(Tag, Tag.id == LeadTag.tag_id)
             .where(
@@ -586,9 +586,9 @@ class ChatRepository(BaseRepository[Chat]):
             .order_by(Tag.name.asc())
         )
         tags_by_chat: dict[UUID, list[dict]] = {}
-        for chat_id, tag_id, tag_name in result.all():
+        for chat_id, tag_id, tag_name, tag_color in result.all():
             tags_by_chat.setdefault(chat_id, []).append(
-                {"id": tag_id, "name": tag_name, "color": None}
+                {"id": tag_id, "name": tag_name, "color": tag_color}
             )
         return tags_by_chat
 

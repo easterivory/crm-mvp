@@ -1,6 +1,8 @@
 import {
   CalendarDays,
+  Check,
   Clock3,
+  Copy,
   Globe2,
   MessageSquareText,
   Phone,
@@ -9,7 +11,7 @@ import {
   TrendingUp,
   UserRound,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import type { Lead } from '../types'
 
@@ -39,6 +41,17 @@ function empty(value?: string | null) {
   return value && value.trim() ? value : 'Не указано'
 }
 
+function withAlpha(hex: string | null | undefined, alpha: number) {
+  const value = hex?.trim()
+  if (!value || !/^#[0-9A-Fa-f]{6}$/.test(value)) {
+    return `rgba(255,255,255,${alpha})`
+  }
+  const red = Number.parseInt(value.slice(1, 3), 16)
+  const green = Number.parseInt(value.slice(3, 5), 16)
+  const blue = Number.parseInt(value.slice(5, 7), 16)
+  return `rgba(${red},${green},${blue},${alpha})`
+}
+
 function botLabel(lead: Lead) {
   if (!lead.bot_name && !lead.bot_username) {
     return 'Бот не указан'
@@ -56,11 +69,23 @@ export default function LeadCard({
   onOpenChat,
   onSubmitToPartner,
 }: LeadCardProps) {
+  const [copiedField, setCopiedField] = useState<string | null>(null)
   const title =
     lead.name ||
     lead.contact_name ||
     (lead.username ? `@${lead.username}` : null) ||
     `Telegram ${lead.external_chat_id ?? lead.id.slice(0, 8)}`
+
+  const handleCopy = async (key: string, value: string | null | undefined) => {
+    if (!value) {
+      return
+    }
+    await navigator.clipboard.writeText(value)
+    setCopiedField(key)
+    window.setTimeout(() => {
+      setCopiedField((current) => (current === key ? null : current))
+    }, 1400)
+  }
 
   return (
     <article className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
@@ -84,7 +109,11 @@ export default function LeadCard({
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Info icon={<Phone size={15} />} label="Телефон" value={empty(lead.phone)} />
-        <Info icon={<Clock3 size={15} />} label="Время созвона" value={empty(lead.call_time_text)} />
+        <Info
+          icon={<Clock3 size={15} />}
+          label="Время созвона"
+          value={empty(lead.preferred_call_time ?? lead.call_time_text)}
+        />
         <Info icon={<CalendarDays size={15} />} label="Создан" value={formatDate(lead.created_at)} />
         <Info icon={<UserRound size={15} />} label="Менеджер" value={empty(lead.manager_name)} />
         <Info icon={<Globe2 size={15} />} label="Страна" value={empty(lead.country)} />
@@ -100,6 +129,18 @@ export default function LeadCard({
             value={`${lead.score_percent}%`}
           />
         )}
+        <CopyInfo
+          label="Chat ID"
+          value={lead.chat_id}
+          isCopied={copiedField === 'chat_id'}
+          onCopy={() => void handleCopy('chat_id', lead.chat_id)}
+        />
+        <CopyInfo
+          label="Telegram ID"
+          value={lead.external_user_id ?? lead.external_chat_id ?? null}
+          isCopied={copiedField === 'telegram_id'}
+          onCopy={() => void handleCopy('telegram_id', lead.external_user_id ?? lead.external_chat_id)}
+        />
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -107,7 +148,11 @@ export default function LeadCard({
           lead.tags.map((tag) => (
             <span
               key={tag.id}
-              className="rounded-full bg-accent-500/10 px-2 py-1 text-xs font-medium text-accent-100"
+              className="rounded-full border px-2 py-1 text-xs font-medium text-gray-50"
+              style={{
+                backgroundColor: withAlpha(tag.color, 0.14),
+                borderColor: withAlpha(tag.color, 0.55),
+              }}
             >
               {tag.name}
             </span>
@@ -151,6 +196,36 @@ export default function LeadCard({
         </button>
       </div>
     </article>
+  )
+}
+
+function CopyInfo({
+  label,
+  value,
+  isCopied,
+  onCopy,
+}: {
+  label: string
+  value: string | null
+  isCopied: boolean
+  onCopy: () => void
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+      <div className="mb-1 flex items-center justify-between gap-2 text-xs text-gray-500">
+        <span>{label}</span>
+        <button
+          type="button"
+          onClick={onCopy}
+          disabled={!value}
+          title={`Скопировать ${label}`}
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/10 text-gray-300 transition hover:border-accent-300/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {isCopied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      </div>
+      <p className="truncate text-sm font-medium text-white">{value || 'Не указано'}</p>
+    </div>
   )
 }
 

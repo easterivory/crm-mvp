@@ -1,7 +1,7 @@
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
@@ -100,12 +100,62 @@ async def update_bot(
     bot_id: UUID,
     data: BotUpdate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
-    return await BotService(db).update_bot(
+    service = BotService(db)
+    updated = await service.update_bot(
         bot_id=bot_id,
         project_id=project_id,
         data=data,
+        actor=current_user,
+    )
+    if {"telegram_description", "telegram_about"} & data.model_fields_set:
+        await service.update_bot_profile_on_telegram(bot_id, actor=current_user)
+    return updated
+
+
+@router.post("/bots/{bot_id}/avatar", status_code=status.HTTP_200_OK)
+async def upload_bot_avatar(
+    bot_id: UUID,
+    file: UploadFile = File(...),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    if file.content_type not in {"image/jpeg", "image/jpg"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Telegram bot profile photo must be a JPEG image",
+        )
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Avatar file is empty",
+        )
+    await BotService(db).set_bot_profile_photo(
+        bot_id=bot_id,
+        photo_bytes=file_bytes,
+        actor=current_user,
+        file_name=file.filename or "bot_profile.jpg",
+        mime_type=file.content_type or "image/jpeg",
+    )
+    return {"ok": True}
+
+
+@router.get("/bots/{bot_id}/audit-logs/export", response_class=Response)
+async def export_bot_audit_logs(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    await BotService(db).get_bot(bot_id=bot_id, project_id=project_id)
+    csv_bytes = await BotService(db).export_bot_audit_logs_to_csv(bot_id)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="bot_audit_logs.csv"'},
     )
 
 

@@ -46,7 +46,7 @@ class LeadScoringService:
         if lead.country:
             score += 10
 
-        if lead.call_time_text:
+        if lead.preferred_call_time or lead.call_time_text:
             score += 10
 
         if lead.has_card is True:
@@ -79,6 +79,7 @@ class LeadScoringService:
             lead.phone,
             lead.username,
             lead.country,
+            lead.preferred_call_time,
             lead.call_time_text,
             lead.has_card,
             *(lead.custom_fields or {}).values(),

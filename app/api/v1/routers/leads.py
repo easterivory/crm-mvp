@@ -76,8 +76,6 @@ async def change_status(
     )
 
 
-# ── Stubs (Phase 3) ────────────────────────────────────────────────────────────
-
 @router.get("", response_model=PaginatedResponse[LeadOut])
 async def list_leads(
     limit: int = Query(default=50, ge=1, le=100),

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +38,9 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     telegram_bot_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     telegram_first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     bot_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    crm_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    telegram_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    telegram_about: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     active_funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=True
     )
@@ -56,10 +59,43 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
         back_populates="bot",
     )
     chats: Mapped[list[Chat]] = relationship("Chat", back_populates="bot")
+    config_audit_logs: Mapped[list[BotConfigAuditLog]] = relationship(
+        "BotConfigAuditLog",
+        back_populates="bot",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def has_telegram_token(self) -> bool:
         return bool(self.telegram_token)
+
+
+class BotConfigAuditLog(Base, UUIDPrimaryKey, TimestampMixin):
+    """Admin-visible history of bot profile and runtime configuration changes."""
+
+    __tablename__ = "bot_config_audit_logs"
+    __table_args__ = (
+        Index("ix_bot_config_audit_logs_bot_id", "bot_id"),
+        Index("ix_bot_config_audit_logs_user_id", "user_id"),
+        Index("ix_bot_config_audit_logs_action_type", "action_type"),
+        Index("ix_bot_config_audit_logs_created_at", "created_at"),
+    )
+
+    bot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bots.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+
+    bot: Mapped[Bot] = relationship("Bot", back_populates="config_audit_logs")
+    user: Mapped[Optional[User]] = relationship("User", back_populates="bot_config_audit_logs")
 
 
 class BotVersion(Base, UUIDPrimaryKey, TimestampMixin):

@@ -146,6 +146,7 @@ class BroadcastOut(OrmBase):
     total_recipients: int = 0
     sent_count: int = 0
     failed_count: int = 0
+    is_deleted: bool = False
     schedule_type: str
     scheduled_at: Optional[datetime]
     timezone_mode: str
@@ -181,6 +182,34 @@ class BroadcastReport(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     error_examples: list[str] = Field(default_factory=list)
+
+
+class BroadcastRecipientDeliveryOut(BaseModel):
+    id: uuid.UUID
+    chat_id: uuid.UUID
+    lead_id: Optional[uuid.UUID] = None
+    external_chat_id: str
+    external_user_id: str
+    lead_name: Optional[str] = None
+    status: RecipientStatus
+    attempts: int = 0
+    last_error: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    is_read: bool = False
+    replied: bool = False
+    last_client_message_at: Optional[datetime] = None
+
+
+class BroadcastDeliveryAnalytics(BaseModel):
+    broadcast_id: uuid.UUID
+    total_recipients: int = 0
+    delivered: int = 0
+    read: int = 0
+    replied: int = 0
+    pending: int = 0
+    failed: int = 0
+    skipped: int = 0
+    recipients: list[BroadcastRecipientDeliveryOut] = Field(default_factory=list)
 
 
 class BroadcastTemplateBase(BaseModel):

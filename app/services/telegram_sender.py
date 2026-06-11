@@ -14,6 +14,11 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.bot_repository import BotRepository
+from app.utils.video_processor import (
+    VideoProcessingError,
+    crop_video_file_to_square,
+    crop_video_to_square,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +210,45 @@ class TelegramSenderService:
         file_name: str | None = None,
         mime_type: str | None = None,
     ) -> dict[str, Any] | None:
+        if isinstance(video_note, (bytes, Path)):
+            try:
+                cropped_video = (
+                    await crop_video_to_square(video_note)
+                    if isinstance(video_note, bytes)
+                    else await crop_video_file_to_square(video_note)
+                )
+                return await self._send_media(
+                    method="sendVideoNote",
+                    media_field="video_note",
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                    media=cropped_video,
+                    reply_markup=reply_markup,
+                    file_name=self._video_note_file_name(file_name),
+                    mime_type="video/mp4",
+                    timeout=90.0,
+                    supports_caption=False,
+                )
+            except VideoProcessingError as exc:
+                logger.error(
+                    "Telegram video_note crop failed; falling back to sendVideo: "
+                    "project_id=%s chat_id=%s file_name=%s error=%s",
+                    project_id,
+                    external_chat_id,
+                    file_name,
+                    exc,
+                )
+                return await self.send_video(
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                    video=video_note,
+                    reply_markup=reply_markup,
+                    file_name=file_name,
+                    mime_type=mime_type,
+                )
+
         return await self._send_media(
             method="sendVideoNote",
             media_field="video_note",
@@ -218,6 +262,13 @@ class TelegramSenderService:
             timeout=90.0,
             supports_caption=False,
         )
+
+    @staticmethod
+    def _video_note_file_name(file_name: str | None) -> str:
+        if not file_name:
+            return "video_note.mp4"
+        stem = Path(file_name).stem.strip()
+        return f"{stem or 'video_note'}.mp4"
 
     async def _send_media(
         self,
@@ -408,6 +459,40 @@ class TelegramSenderService:
             raise RuntimeError("Telegram getWebhookInfo response does not contain webhook metadata")
         return result
 
+    async def set_bot_description(self, token: str, description: str | None) -> dict:
+        return await self._post_bot_api(
+            token=token,
+            method="setMyDescription",
+            json_payload={"description": description or ""},
+        )
+
+    async def set_bot_about_text(self, token: str, about_text: str | None) -> dict:
+        return await self._post_bot_api(
+            token=token,
+            method="setMyShortDescription",
+            json_payload={"short_description": about_text or ""},
+        )
+
+    async def set_bot_profile_photo(
+        self,
+        token: str,
+        photo_bytes: bytes,
+        *,
+        file_name: str = "bot_profile.jpg",
+        mime_type: str = "image/jpeg",
+    ) -> dict:
+        if not photo_bytes:
+            raise RuntimeError("Telegram bot profile photo is empty")
+
+        attach_name = "bot_profile_photo"
+        return await self._post_bot_api(
+            token=token,
+            method="setMyProfilePhoto",
+            data={"photo": json.dumps({"type": "static", "photo": f"attach://{attach_name}"})},
+            files={attach_name: (file_name, photo_bytes, mime_type)},
+            timeout=30.0,
+        )
+
     async def answer_callback_query(self, token: str, callback_query_id: str) -> None:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
@@ -417,3 +502,27 @@ class TelegramSenderService:
                 )
         except httpx.HTTPError:
             logger.debug("Telegram answerCallbackQuery failed", exc_info=True)
+
+    async def _post_bot_api(
+        self,
+        *,
+        token: str,
+        method: str,
+        json_payload: dict[str, Any] | None = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        timeout: float = 10.0,
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"https://api.telegram.org/bot{token}/{method}",
+                json=json_payload,
+                data=data,
+                files=files,
+            )
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(payload.get("description") or f"Telegram rejected {method}")
+
+        return payload

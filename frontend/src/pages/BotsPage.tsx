@@ -1,6 +1,8 @@
 import {
   Bot as BotIcon,
   Check,
+  Download,
+  ImagePlus,
   LoaderCircle,
   Pencil,
   PlugZap,
@@ -14,22 +16,15 @@ import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
 import api from '../api/client'
+import {
+  downloadBotAuditLogs,
+  updateBot,
+  uploadBotAvatar,
+  type Bot as BotRecord,
+} from '../features/bots'
 import { useProjectBotSelection } from '../shared/lib'
 import type { PaginatedResponse } from '../shared/types'
 import { useAuthStore } from '../store/authStore'
-
-type BotRecord = {
-  id: string
-  project_id: string
-  name: string
-  has_telegram_token: boolean
-  telegram_bot_id: number | null
-  telegram_first_name: string | null
-  bot_username: string | null
-  created_at: string
-  updated_at: string
-  is_deleted: boolean
-}
 
 function getErrorMessage(err: unknown, fallback = 'Запрос не выполнен.') {
   if (axios.isAxiosError(err)) {
@@ -48,6 +43,24 @@ function getErrorMessage(err: unknown, fallback = 'Запрос не выпол�
   return fallback
 }
 
+function normalizeOptionalText(value: string) {
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function BotDescriptionRow({ label, value }: { label: string; value: string | null }) {
+  if (!value) {
+    return null
+  }
+
+  return (
+    <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-600">{label}</div>
+      <p className="line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-gray-300">{value}</p>
+    </div>
+  )
+}
+
 export default function BotsPage() {
   const navigate = useNavigate()
   const currentUser = useAuthStore((state) => state.user)
@@ -64,8 +77,13 @@ export default function BotsPage() {
   const [editingBotId, setEditingBotId] = useState<string | null>(null)
   const [editingBotName, setEditingBotName] = useState('')
   const [editingBotToken, setEditingBotToken] = useState('')
+  const [editingCrmDescription, setEditingCrmDescription] = useState('')
+  const [editingTelegramAbout, setEditingTelegramAbout] = useState('')
+  const [editingTelegramDescription, setEditingTelegramDescription] = useState('')
   const [savingBotId, setSavingBotId] = useState<string | null>(null)
   const [syncingBotId, setSyncingBotId] = useState<string | null>(null)
+  const [avatarUploadingBotId, setAvatarUploadingBotId] = useState<string | null>(null)
+  const [auditExportingBotId, setAuditExportingBotId] = useState<string | null>(null)
 
   const [botName, setBotName] = useState('')
   const [botToken, setBotToken] = useState('')
@@ -168,12 +186,18 @@ export default function BotsPage() {
     setEditingBotId(bot.id)
     setEditingBotName(bot.name)
     setEditingBotToken('')
+    setEditingCrmDescription(bot.crm_description ?? '')
+    setEditingTelegramAbout(bot.telegram_about ?? '')
+    setEditingTelegramDescription(bot.telegram_description ?? '')
   }
 
   const cancelEditBot = () => {
     setEditingBotId(null)
     setEditingBotName('')
     setEditingBotToken('')
+    setEditingCrmDescription('')
+    setEditingTelegramAbout('')
+    setEditingTelegramDescription('')
   }
 
   const handleSaveBot = async (botId: string) => {
@@ -186,19 +210,58 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await api.patch<BotRecord>(`/bots/${botId}`, {
+      await updateBot(botId, {
         name: editingBotName.trim(),
+        crm_description: normalizeOptionalText(editingCrmDescription),
+        telegram_about: normalizeOptionalText(editingTelegramAbout),
+        telegram_description: normalizeOptionalText(editingTelegramDescription),
         ...(editingBotToken.trim() ? { telegram_token: editingBotToken.trim() } : {}),
-      }, {
-        params: activeProjectId ? { project_id: activeProjectId } : undefined,
-      })
+      }, activeProjectId)
       cancelEditBot()
       await loadBots()
-      setNotice('Бот обновлён. Если token менялся, identity и webhook пересинхронизированы.')
+      setNotice('Бот обновлён, профиль Telegram синхронизирован.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось обновить бота.'))
     } finally {
       setSavingBotId(null)
+    }
+  }
+
+  const handleUploadAvatar = async (botId: string, file: File | null | undefined) => {
+    if (!file || avatarUploadingBotId) {
+      return
+    }
+
+    setAvatarUploadingBotId(botId)
+    setError('')
+    setNotice('')
+
+    try {
+      await uploadBotAvatar(botId, file, activeProjectId)
+      setNotice('Аватарка бота обновлена в Telegram.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось загрузить аватарку.'))
+    } finally {
+      setAvatarUploadingBotId(null)
+    }
+  }
+
+  const handleDownloadAuditLogs = async (botId: string) => {
+    if (auditExportingBotId) {
+      return
+    }
+
+    setAuditExportingBotId(botId)
+    setError('')
+    setNotice('')
+
+    try {
+      await downloadBotAuditLogs(botId, activeProjectId)
+      setNotice('CSV с логами настроек скачан.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось скачать логи настроек.'))
+    } finally {
+      setAuditExportingBotId(null)
     }
   }
 
@@ -335,6 +398,39 @@ export default function BotsPage() {
                       placeholder="Новый token, необязательно"
                       className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                     />
+                    <label className="grid gap-1">
+                      <span className="text-xs font-medium text-gray-500">CRM-описание</span>
+                      <textarea
+                        value={editingCrmDescription}
+                        onChange={(event) => setEditingCrmDescription(event.target.value)}
+                        maxLength={4096}
+                        rows={3}
+                        className="min-h-[84px] resize-y rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
+                        placeholder="Внутреннее описание для операторов"
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-xs font-medium text-gray-500">Короткое описание Telegram</span>
+                      <textarea
+                        value={editingTelegramAbout}
+                        onChange={(event) => setEditingTelegramAbout(event.target.value)}
+                        maxLength={120}
+                        rows={2}
+                        className="min-h-[68px] resize-y rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
+                        placeholder="Текст в блоке «О боте»"
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-xs font-medium text-gray-500">Приветственное описание Telegram</span>
+                      <textarea
+                        value={editingTelegramDescription}
+                        onChange={(event) => setEditingTelegramDescription(event.target.value)}
+                        maxLength={512}
+                        rows={3}
+                        className="min-h-[84px] resize-y rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
+                        placeholder="Описание до старта бота"
+                      />
+                    </label>
                   </div>
                 ) : (
                   <div className="min-w-0">
@@ -350,6 +446,11 @@ export default function BotsPage() {
                     <p className="mt-2 text-xs text-gray-500">
                       Token: {bot.has_telegram_token ? 'добавлен' : 'не добавлен'}
                     </p>
+                    <div className="mt-4 grid gap-2 text-sm">
+                      <BotDescriptionRow label="CRM" value={bot.crm_description} />
+                      <BotDescriptionRow label="About" value={bot.telegram_about} />
+                      <BotDescriptionRow label="Description" value={bot.telegram_description} />
+                    </div>
                   </div>
                 )}
 
@@ -406,6 +507,34 @@ export default function BotsPage() {
                       >
                         <Pencil size={15} />
                         Изменить
+                      </button>
+                      <label
+                        title="Загрузить JPEG-аватар"
+                        className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 ${
+                          avatarUploadingBotId === bot.id ? 'pointer-events-none opacity-50' : ''
+                        }`}
+                      >
+                        {avatarUploadingBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <ImagePlus size={15} />}
+                        Аватар
+                        <input
+                          type="file"
+                          accept="image/jpeg"
+                          className="hidden"
+                          onChange={(event) => {
+                            void handleUploadAvatar(bot.id, event.currentTarget.files?.[0])
+                            event.currentTarget.value = ''
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        title="Скачать логи изменений настроек бота"
+                        onClick={() => void handleDownloadAuditLogs(bot.id)}
+                        disabled={auditExportingBotId === bot.id}
+                        className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {auditExportingBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />}
+                        CSV
                       </button>
                       <button
                         type="button"

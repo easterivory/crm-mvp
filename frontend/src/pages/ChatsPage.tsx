@@ -227,6 +227,18 @@ function getErrorMessage(err: unknown) {
   return 'Запрос не выполнен. Попробуйте снова.'
 }
 
+function isRequestCanceled(err: unknown) {
+  return axios.isCancel(err) || (axios.isAxiosError(err) && err.code === 'ERR_CANCELED')
+}
+
+function paramsEqual(left: URLSearchParams, right: URLSearchParams) {
+  return left.toString() === right.toString()
+}
+
+function filtersEqual(left: ChatFiltersState, right: ChatFiltersState) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
 function getMediaLabel(message: Message) {
   return mediaLabels[message.message_type] ?? message.message_type
 }
@@ -293,6 +305,9 @@ function auditEventText(event: ChatAuditLog) {
   }
   if (event.event_type === 'note_added') {
     return `${actor} добавил заметку: ${newValue}`
+  }
+  if (event.event_type === 'lead_updated') {
+    return `${actor} ${newValue}`
   }
   if (event.new_value || event.old_value) {
     return `${actor}: ${event.new_value || event.old_value}`
@@ -469,6 +484,11 @@ export default function ChatsPage() {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const didMountProjectRef = useRef(false)
   const selectedChatIdRef = useRef<string | null>(selectedChatId)
+  const searchParamsRef = useRef(searchParams)
+  const chatsRef = useRef<Chat[]>([])
+  const chatsAbortRef = useRef<AbortController | null>(null)
+  const messagesAbortRef = useRef<AbortController | null>(null)
+  const selectedChatAbortRef = useRef<AbortController | null>(null)
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
@@ -540,6 +560,14 @@ export default function ChatsPage() {
     selectedChatIdRef.current = selectedChatId
   }, [selectedChatId])
 
+  useEffect(() => {
+    searchParamsRef.current = searchParams
+  }, [searchParams])
+
+  useEffect(() => {
+    chatsRef.current = chats
+  }, [chats])
+
   const getBotLabel = useCallback(
     (chat: Chat) => {
       if (!chat.bot_id) {
@@ -562,6 +590,10 @@ export default function ChatsPage() {
       if (chatId) {
         params.set('chat_id', chatId)
       }
+      if (paramsEqual(params, searchParamsRef.current)) {
+        return
+      }
+      searchParamsRef.current = params
       setSearchParams(params, { replace: true })
     },
     [setSearchParams],
@@ -584,10 +616,13 @@ export default function ChatsPage() {
 
   useEffect(() => {
     const chatIdFromUrl = searchParams.get('chat_id')
-    if (chatIdFromUrl && chatIdFromUrl !== selectedChatIdRef.current) {
+    if (chatIdFromUrl !== selectedChatIdRef.current) {
       selectedChatIdRef.current = chatIdFromUrl
       setSelectedChatId(chatIdFromUrl)
     }
+
+    const filtersFromUrl = readChatFilters(searchParams)
+    setChatFilters((current) => (filtersEqual(current, filtersFromUrl) ? current : filtersFromUrl))
   }, [searchParams])
 
   useEffect(() => {
@@ -604,6 +639,9 @@ export default function ChatsPage() {
       return
     }
 
+    chatsAbortRef.current?.abort()
+    const controller = new AbortController()
+    chatsAbortRef.current = controller
     setIsChatsLoading(true)
 
     try {
@@ -654,7 +692,13 @@ export default function ChatsPage() {
         params.funnel_state = debouncedChatFilters.funnelState
       }
 
-      const { data } = await api.get<PaginatedResponse<Chat>>('/chats', { params })
+      const { data } = await api.get<PaginatedResponse<Chat>>('/chats', {
+        params,
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted) {
+        return
+      }
       setChats((current) => {
         const currentSelectedChatId = selectedChatIdRef.current
         const selected = currentSelectedChatId
@@ -671,11 +715,26 @@ export default function ChatsPage() {
         selectedChatIdRef.current = nextChatId
         setSelectedChatId(nextChatId)
         syncChatSearchParams(debouncedChatFilters, nextChatId)
+      } else if (!data.items.some((chat) => chat.id === selectedChatIdRef.current)) {
+        const selected = chatsRef.current.find((chat) => chat.id === selectedChatIdRef.current)
+        if (!selected) {
+          selectedChatIdRef.current = null
+          setSelectedChatId(null)
+          setMessages([])
+          setAuditLogs([])
+          syncChatSearchParams(debouncedChatFilters, null)
+        }
       }
     } catch (err) {
+      if (isRequestCanceled(err)) {
+        return
+      }
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
-      setIsChatsLoading(false)
+      if (chatsAbortRef.current === controller) {
+        chatsAbortRef.current = null
+        setIsChatsLoading(false)
+      }
     }
   }, [
     debouncedChatFilters,
@@ -808,19 +867,36 @@ export default function ChatsPage() {
       return
     }
 
+    selectedChatAbortRef.current?.abort()
+    const controller = new AbortController()
+    selectedChatAbortRef.current = controller
     try {
       const { data } = await api.get<Chat>(`/chats/${chatId}`, {
         params: { project_id: selectedProjectId },
+        signal: controller.signal,
       })
+      if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
+        return
+      }
       setChats((current) =>
         current.some((chat) => chat.id === data.id) ? current : [data, ...current],
       )
     } catch (err) {
+      if (isRequestCanceled(err)) {
+        return
+      }
       notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      if (selectedChatAbortRef.current === controller) {
+        selectedChatAbortRef.current = null
+      }
     }
   }, [notify, selectedProjectId])
 
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
+    messagesAbortRef.current?.abort()
+    const controller = new AbortController()
+    messagesAbortRef.current = controller
     if (showLoader) {
       setIsMessagesLoading(true)
     }
@@ -832,31 +908,49 @@ export default function ChatsPage() {
         ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
       }
       const [messagesResponse, auditResponse] = await Promise.all([
-        api.get<PaginatedResponse<Message>>(`/chats/${chatId}/messages`, { params }),
+        api.get<PaginatedResponse<Message>>(`/chats/${chatId}/messages`, {
+          params,
+          signal: controller.signal,
+        }),
         api.get<ChatAuditLog[]>(`/chats/${chatId}/audit-logs`, {
           params: {
             limit: MESSAGE_LIMIT,
             offset: 0,
             ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
           },
+          signal: controller.signal,
         }),
       ])
+      if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
+        return
+      }
       setMessages(messagesResponse.data.items)
       setAuditLogs(auditResponse.data)
       await api.post(`/chats/${chatId}/read`, null, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+        signal: controller.signal,
       })
+      if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
+        return
+      }
       setChats((current) =>
         current.map((chat) =>
           chat.id === chatId ? { ...chat, unread: false, is_read: true } : chat,
         ),
       )
     } catch (err) {
+      if (isRequestCanceled(err)) {
+        return
+      }
       if (showLoader) {
         notify({ tone: 'error', message: getErrorMessage(err) })
       }
     } finally {
-      if (showLoader) {
+      const isCurrentRequest = messagesAbortRef.current === controller
+      if (isCurrentRequest) {
+        messagesAbortRef.current = null
+      }
+      if (showLoader && isCurrentRequest) {
         setIsMessagesLoading(false)
       }
     }
@@ -872,7 +966,10 @@ export default function ChatsPage() {
       void loadChats()
     }, 15000)
 
-    return () => window.clearInterval(timer)
+    return () => {
+      window.clearInterval(timer)
+      chatsAbortRef.current?.abort()
+    }
   }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadSnippets])
 
   useEffect(() => {
@@ -906,7 +1003,10 @@ export default function ChatsPage() {
       void loadMessages(selectedChatId)
     }, 7000)
 
-    return () => window.clearInterval(timer)
+    return () => {
+      window.clearInterval(timer)
+      messagesAbortRef.current?.abort()
+    }
   }, [loadMessages, selectedChat?.project_id, selectedChatId, selectedProjectId])
 
   useEffect(() => {
@@ -1525,7 +1625,7 @@ export default function ChatsPage() {
               </button>
             </div>
           ) : null}
-          <div className="flex items-end gap-3">
+          <div className="flex min-h-[52px] items-end gap-2 rounded-xl border border-white/10 bg-background/70 p-2 transition focus-within:border-accent-300/45 focus-within:ring-2 focus-within:ring-accent-400/25">
             <input
               ref={attachmentInputRef}
               type="file"
@@ -1538,7 +1638,7 @@ export default function ChatsPage() {
                 type="button"
                 onClick={() => setIsAttachmentMenuOpen((value) => !value)}
                 disabled={!selectedChat || isSending}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Прикрепить файл"
               >
                 <Paperclip size={18} />
@@ -1574,7 +1674,7 @@ export default function ChatsPage() {
                 type="button"
                 onClick={() => setIsSnippetsOpen((value) => !value)}
                 disabled={!selectedChat || isSending || isSnippetsLoading}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Быстрые ответы"
               >
                 {isSnippetsLoading ? (
@@ -1582,7 +1682,6 @@ export default function ChatsPage() {
                 ) : (
                   <Zap size={17} />
                 )}
-                <span className="hidden sm:inline">Шаблоны</span>
               </button>
               {isSnippetsOpen ? (
                 <div className="absolute bottom-full left-0 z-30 mb-2 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-3 shadow-card backdrop-blur-xl">
@@ -1647,16 +1746,16 @@ export default function ChatsPage() {
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               onPaste={handleComposerPaste}
-              className="max-h-32 min-h-[44px] flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 disabled:bg-background/40"
+              className="max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-lg border-0 bg-transparent px-2 py-2 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 disabled:text-gray-500"
               placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
               disabled={!selectedChat || isSending}
-              rows={2}
+              rows={1}
             />
             <button
               type="submit"
               title="Отправить сообщение"
               disabled={!selectedChat || (!draft.trim() && !attachment) || isSending}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
             </button>

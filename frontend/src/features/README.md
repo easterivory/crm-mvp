@@ -66,7 +66,7 @@ Feature-модули — основной формат для новых кру�
 
 - `frontend/src/features/leads` содержит `api.ts`, `types.ts`, `hooks.ts`, `components/`.
 - Leads page читает `selectedProjectId` и `selectedBotIds` из общего scope.
-- `Отправить` вызывает backend status-заглушку без внешнего CRM API.
+- `Отправить` обновляет статус лида через backend lead API.
 - `Удалить` означает reject/archive, не physical delete.
 
 ## Chat Reset UI

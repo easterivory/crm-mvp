@@ -23,7 +23,10 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         result = await self.db.execute(
             select(Broadcast)
             .options(selectinload(Broadcast.created_by))
-            .where(Broadcast.project_id == project_id)
+            .where(
+                Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
+            )
             .order_by(Broadcast.created_at.desc())
             .limit(limit)
             .offset(offset)
@@ -32,7 +35,10 @@ class BroadcastRepository(BaseRepository[Broadcast]):
 
     async def count_by_project(self, project_id: UUID) -> int:
         result = await self.db.execute(
-            select(func.count(Broadcast.id)).where(Broadcast.project_id == project_id)
+            select(func.count(Broadcast.id)).where(
+                Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
+            )
         )
         return result.scalar_one()
 
@@ -47,6 +53,7 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             .where(
                 Broadcast.id == broadcast_id,
                 Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
             )
         )
         return result.scalar_one_or_none()
@@ -59,10 +66,26 @@ class BroadcastRepository(BaseRepository[Broadcast]):
     ) -> Optional[Broadcast]:
         await self.db.execute(
             update(Broadcast)
-            .where(Broadcast.id == broadcast_id, Broadcast.project_id == project_id)
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
+            )
             .values(**values)
         )
         return await self.get_in_project(broadcast_id, project_id)
+
+    async def soft_delete_in_project(self, broadcast_id: UUID, project_id: UUID) -> bool:
+        result = await self.db.execute(
+            update(Broadcast)
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
+            )
+            .values(is_deleted=True, status="cancelled")
+        )
+        return result.rowcount > 0
 
     async def replace_recipients(
         self,
@@ -239,6 +262,7 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             select(Broadcast)
             .where(
                 Broadcast.status.in_(("processing", "scheduled")),
+                Broadcast.is_deleted.is_(False),
                 (Broadcast.status == "processing")
                 | ((Broadcast.status == "scheduled") & (Broadcast.scheduled_at <= now)),
             )
@@ -310,7 +334,11 @@ class BroadcastRepository(BaseRepository[Broadcast]):
 
         await self.db.execute(
             update(Broadcast)
-            .where(Broadcast.id == broadcast_id, Broadcast.project_id == project_id)
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
+            )
             .values(**values)
         )
         return await self.get_in_project(broadcast_id, project_id)
@@ -323,7 +351,11 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         counts = await self.status_counts(broadcast_id)
         await self.db.execute(
             update(Broadcast)
-            .where(Broadcast.id == broadcast_id, Broadcast.project_id == project_id)
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.project_id == project_id,
+                Broadcast.is_deleted.is_(False),
+            )
             .values(
                 sent_count=counts.get("sent", 0),
                 failed_count=counts.get("failed", 0),
@@ -397,6 +429,19 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             (str(user_id), str(status), str(error or ""))
             for user_id, status, error in result.all()
         ]
+
+    async def delivery_analytics_rows(
+        self,
+        broadcast_id: UUID,
+    ) -> list[tuple[BroadcastRecipient, Chat, str | None]]:
+        result = await self.db.execute(
+            select(BroadcastRecipient, Chat, Lead.name)
+            .join(Chat, Chat.id == BroadcastRecipient.chat_id)
+            .outerjoin(Lead, Lead.id == BroadcastRecipient.lead_id)
+            .where(BroadcastRecipient.broadcast_id == broadcast_id)
+            .order_by(BroadcastRecipient.created_at.asc(), BroadcastRecipient.id.asc())
+        )
+        return list(result.all())
 
     async def has_client_reply_after(
         self,

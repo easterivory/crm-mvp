@@ -25,6 +25,7 @@ LEAD_FIELD_KEYS = [
     "age",
     "country",
     "call_time_text",
+    "preferred_call_time",
     "call_date",
     "call_time_from",
     "call_time_to",

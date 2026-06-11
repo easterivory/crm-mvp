@@ -54,6 +54,7 @@ class ChatEventType:
     MANAGER_ASSIGNED = "manager_assigned"
     SLA_BREACHED = "SLA_breached"
     NOTE_ADDED = "note_added"
+    LEAD_UPDATED = "lead_updated"
 
     ALL: frozenset[str] = frozenset(
         {
@@ -62,6 +63,7 @@ class ChatEventType:
             MANAGER_ASSIGNED,
             SLA_BREACHED,
             NOTE_ADDED,
+            LEAD_UPDATED,
         }
     )
 

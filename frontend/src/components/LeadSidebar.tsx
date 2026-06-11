@@ -1,7 +1,11 @@
 import {
   AtSign,
   CalendarDays,
+  Check,
+  Clock3,
+  Copy,
   LoaderCircle,
+  Palette,
   Phone,
   Plus,
   RefreshCw,
@@ -31,12 +35,15 @@ type Lead = {
   age: number | null
   country: string | null
   call_time_text: string | null
+  preferred_call_time: string | null
   has_card: boolean | null
   custom_fields?: Record<string, unknown>
   updated_at: string
   created_at: string
   is_deleted: boolean
-  tags?: Array<{ id: string; name: string }>
+  tags?: Array<{ id: string; name: string; color: string }>
+  external_chat_id?: string | null
+  external_user_id?: string | null
 }
 
 type LeadStatus = {
@@ -62,6 +69,7 @@ type ProjectTag = {
   id: string
   project_id: string
   name: string
+  color: string
   created_at: string
 }
 
@@ -80,6 +88,40 @@ type LeadSidebarProps = {
   currentUserId: string | null
   onResetRequest?: () => void
   onLeadStatusChanged?: () => void
+}
+
+const TAG_COLOR_PALETTE = [
+  '#BFDBFE',
+  '#C7D2FE',
+  '#DDD6FE',
+  '#FBCFE8',
+  '#FECACA',
+  '#FED7AA',
+  '#FDE68A',
+  '#D9F99D',
+  '#BBF7D0',
+  '#A7F3D0',
+  '#BAE6FD',
+  '#E9D5FF',
+]
+
+function withAlpha(hex: string | null | undefined, alpha: number) {
+  const value = hex?.trim()
+  if (!value || !/^#[0-9A-Fa-f]{6}$/.test(value)) {
+    return `rgba(255,255,255,${alpha})`
+  }
+  const red = Number.parseInt(value.slice(1, 3), 16)
+  const green = Number.parseInt(value.slice(3, 5), 16)
+  const blue = Number.parseInt(value.slice(5, 7), 16)
+  return `rgba(${red},${green},${blue},${alpha})`
+}
+
+function tagStyle(color: string | null | undefined) {
+  return {
+    backgroundColor: withAlpha(color, 0.14),
+    borderColor: withAlpha(color, 0.6),
+    color: '#F8FAFC',
+  }
 }
 
 function formatDateTime(value: string | null) {
@@ -129,8 +171,12 @@ export default function LeadSidebar({
   const [tags, setTags] = useState<ProjectTag[]>([])
   const [selectedTagId, setSelectedTagId] = useState('')
   const [tagSearch, setTagSearch] = useState('')
+  const [nameDraft, setNameDraft] = useState('')
   const [usernameDraft, setUsernameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
+  const [preferredCallTimeDraft, setPreferredCallTimeDraft] = useState('')
+  const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [editingTagColorId, setEditingTagColorId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSavingContact, setIsSavingContact] = useState(false)
@@ -151,8 +197,10 @@ export default function LeadSidebar({
 
   const isContactDirty = Boolean(
     lead &&
-      (usernameDraft.trim() !== (lead.username ?? '') ||
-        phoneDraft.trim() !== (lead.phone ?? '')),
+      (nameDraft.trim() !== (lead.name ?? '') ||
+        usernameDraft.trim() !== (lead.username ?? '') ||
+        phoneDraft.trim() !== (lead.phone ?? '') ||
+        preferredCallTimeDraft.trim() !== (lead.preferred_call_time ?? lead.call_time_text ?? '')),
   )
 
   const availableTags = useMemo(() => {
@@ -173,11 +221,8 @@ export default function LeadSidebar({
       return []
     }
     return [
-      ['Имя', lead.name],
-      ['Телефон', lead.phone],
       ['Возраст', lead.age ? String(lead.age) : null],
       ['Страна', lead.country],
-      ['Удобное время', lead.call_time_text],
       ['Карта', lead.has_card === null ? null : lead.has_card ? 'Есть' : 'Нет'],
     ].filter(([, value]) => Boolean(value))
   }, [lead])
@@ -228,8 +273,10 @@ export default function LeadSidebar({
   const loadLead = useCallback(async () => {
     if (!activeChatId) {
       setLead(null)
+      setNameDraft('')
       setUsernameDraft('')
       setPhoneDraft('')
+      setPreferredCallTimeDraft('')
       setError('')
       return
     }
@@ -242,12 +289,16 @@ export default function LeadSidebar({
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
+      setNameDraft(data.name ?? '')
       setUsernameDraft(data.username ?? '')
       setPhoneDraft(data.phone ?? '')
+      setPreferredCallTimeDraft(data.preferred_call_time ?? data.call_time_text ?? '')
     } catch (err) {
       setLead(null)
+      setNameDraft('')
       setUsernameDraft('')
       setPhoneDraft('')
+      setPreferredCallTimeDraft('')
       setError(getErrorMessage(err))
     } finally {
       setIsLoading(false)
@@ -298,15 +349,22 @@ export default function LeadSidebar({
     try {
       const username = usernameDraft.trim()
       const phone = phoneDraft.trim()
+      const name = nameDraft.trim()
+      const preferredCallTime = preferredCallTimeDraft.trim()
       const { data } = await api.patch<Lead>(`/leads/${lead.id}`, {
+        name: name || null,
         username: username || null,
         phone: phone || null,
+        preferred_call_time: preferredCallTime || null,
       }, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
+      setNameDraft(data.name ?? '')
       setUsernameDraft(data.username ?? '')
       setPhoneDraft(data.phone ?? '')
+      setPreferredCallTimeDraft(data.preferred_call_time ?? data.call_time_text ?? '')
+      onLeadStatusChanged?.()
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -378,6 +436,55 @@ export default function LeadSidebar({
     }
   }
 
+  const handleTagColorChange = async (tagId: string, color: string) => {
+    if (!selectedProjectId || isTagMutating) {
+      return
+    }
+
+    setIsTagMutating(true)
+    setError('')
+
+    try {
+      const { data } = await api.patch<ProjectTag>(
+        `/projects/${selectedProjectId}/tags/${tagId}`,
+        { color },
+      )
+      setTags((current) => current.map((tag) => (tag.id === tagId ? data : tag)))
+      setLead((current) =>
+        current
+          ? {
+              ...current,
+              tags: (current.tags ?? []).map((tag) =>
+                tag.id === tagId ? { ...tag, color: data.color } : tag,
+              ),
+            }
+          : current,
+      )
+      setEditingTagColorId(null)
+      onLeadStatusChanged?.()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsTagMutating(false)
+    }
+  }
+
+  const handleCopy = async (key: string, value: string | null | undefined) => {
+    if (!value) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopiedField(key)
+      window.setTimeout(() => {
+        setCopiedField((current) => (current === key ? null : current))
+      }, 1400)
+    } catch {
+      setError('Не удалось скопировать значение.')
+    }
+  }
+
   return (
     <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card">
       <div className="flex min-h-[73px] items-center justify-between gap-3 border-b border-white/5 px-5">
@@ -431,10 +538,25 @@ export default function LeadSidebar({
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-white">
-                    {lead.username ? `@${lead.username}` : 'Telegram лид'}
+                    {lead.name || lead.username || 'Telegram лид'}
                   </p>
                   <p className="text-xs text-gray-500">ID лида {lead.id.slice(0, 8)}</p>
                 </div>
+              </div>
+
+              <div className="mb-4 grid gap-2">
+                <CopyRow
+                  label="Chat ID"
+                  value={lead.chat_id}
+                  isCopied={copiedField === 'chat_id'}
+                  onCopy={() => void handleCopy('chat_id', lead.chat_id)}
+                />
+                <CopyRow
+                  label="Telegram ID"
+                  value={lead.external_user_id ?? lead.external_chat_id ?? null}
+                  isCopied={copiedField === 'telegram_id'}
+                  onCopy={() => void handleCopy('telegram_id', lead.external_user_id ?? lead.external_chat_id)}
+                />
               </div>
 
               <label className="block">
@@ -483,20 +605,47 @@ export default function LeadSidebar({
               {lead.tags && lead.tags.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {lead.tags.map((tag) => (
-                    <span
-                      key={tag.id}
-                      className="inline-flex items-center gap-1 rounded-full border border-accent-300/20 bg-accent-300/10 px-2 py-1 text-xs font-medium text-accent-50"
-                    >
-                      {tag.name}
+                    <span key={tag.id} className="relative inline-flex">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingTagColorId((current) => (current === tag.id ? null : tag.id))
+                        }
+                        disabled={isTagMutating}
+                        className="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium transition hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-50"
+                        style={tagStyle(tag.color)}
+                        title="Изменить цвет тега"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full border border-white/30"
+                          style={{ backgroundColor: tag.color }}
+                        />
+                        <span className="max-w-[120px] truncate">{tag.name}</span>
+                        <Palette size={12} className="opacity-70" />
+                      </button>
                       <button
                         type="button"
                         title="Убрать тег"
                         onClick={() => void handleRemoveTag(tag.id)}
                         disabled={isTagMutating}
-                        className="rounded-full text-accent-50/70 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        className="-ml-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-background/90 text-gray-300 transition hover:border-red-300/40 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <X size={12} />
                       </button>
+                      {editingTagColorId === tag.id ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 grid w-40 grid-cols-6 gap-1 rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-card backdrop-blur-xl">
+                          {TAG_COLOR_PALETTE.map((color) => (
+                            <button
+                              key={color}
+                              type="button"
+                              title={color}
+                              onClick={() => void handleTagColorChange(tag.id, color)}
+                              className="h-5 w-5 rounded-full border border-white/20 transition hover:scale-110"
+                              style={{ backgroundColor: color }}
+                            />
+                          ))}
+                        </div>
+                      ) : null}
                     </span>
                   ))}
                 </div>
@@ -545,6 +694,10 @@ export default function LeadSidebar({
                                   : 'text-gray-300 hover:bg-white/[0.05] hover:text-white'
                               }`}
                             >
+                              <span
+                                className="mr-2 h-2.5 w-2.5 shrink-0 rounded-full border border-white/25"
+                                style={{ backgroundColor: tag.color }}
+                              />
                               <span className="truncate">{tag.name}</span>
                             </button>
                           )
@@ -616,7 +769,7 @@ export default function LeadSidebar({
               </div>
             </div>
 
-            <div className="space-y-3">
+                <div className="space-y-3">
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-sm font-medium text-white">Контакты</p>
@@ -634,17 +787,32 @@ export default function LeadSidebar({
                     Сохранить
                   </button>
                 </div>
-              <div className="space-y-3">
+	                <div className="space-y-3">
                   <label className="block">
                     <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
                       <UserRound size={14} />
-                      Имя
+                      ФИО
                     </span>
                     <input
-                      value={lead.name ?? ''}
-                      disabled
-                      placeholder="Будет заполнено из воронки"
-                      className="w-full rounded-xl border border-white/10 bg-background/40 px-3 py-2 text-sm text-gray-400 outline-none placeholder:text-gray-600"
+                      value={nameDraft}
+                      onChange={(event) => setNameDraft(event.target.value)}
+                      maxLength={255}
+                      placeholder="ФИО клиента"
+                      className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
+                      <Clock3 size={14} />
+                      Удобное время звонка
+                    </span>
+                    <input
+                      value={preferredCallTimeDraft}
+                      onChange={(event) => setPreferredCallTimeDraft(event.target.value)}
+                      maxLength={255}
+                      placeholder="Например: понедельник 15:00"
+                      className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                     />
                   </label>
 
@@ -729,5 +897,35 @@ export default function LeadSidebar({
         ) : null}
       </div>
     </aside>
+  )
+}
+
+function CopyRow({
+  label,
+  value,
+  isCopied,
+  onCopy,
+}: {
+  label: string
+  value: string | null
+  isCopied: boolean
+  onCopy: () => void
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/5 bg-background/45 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-medium uppercase text-gray-500">{label}</p>
+        <p className="truncate text-xs text-gray-200">{value || 'Не указан'}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onCopy}
+        disabled={!value}
+        title={`Скопировать ${label}`}
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {isCopied ? <Check size={14} /> : <Copy size={14} />}
+      </button>
+    </div>
   )
 }

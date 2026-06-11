@@ -9,8 +9,9 @@ from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import func, select, update
+from sqlalchemy.orm import selectinload
 
-from app.models.bot import Bot, BotStep, BotVersion, ChatBotState
+from app.models.bot import Bot, BotConfigAuditLog, BotStep, BotVersion, ChatBotState
 from app.repositories.base import BaseRepository
 
 
@@ -107,6 +108,34 @@ class BotRepository(BaseRepository[Bot]):
             .values(**values)
         )
         return await self.get_by_id_in_project(bot_id, project_id)
+
+    async def create_config_audit_log(
+        self,
+        *,
+        bot_id: UUID,
+        user_id: UUID | None,
+        action_type: str,
+        description: str,
+    ) -> BotConfigAuditLog:
+        log = BotConfigAuditLog(
+            bot_id=bot_id,
+            user_id=user_id,
+            action_type=action_type,
+            description=description,
+        )
+        self.db.add(log)
+        await self.db.flush()
+        await self.db.refresh(log)
+        return log
+
+    async def list_config_audit_logs(self, bot_id: UUID) -> list[BotConfigAuditLog]:
+        result = await self.db.execute(
+            select(BotConfigAuditLog)
+            .options(selectinload(BotConfigAuditLog.user))
+            .where(BotConfigAuditLog.bot_id == bot_id)
+            .order_by(BotConfigAuditLog.created_at.asc(), BotConfigAuditLog.id.asc())
+        )
+        return list(result.scalars().all())
 
     async def soft_delete_from_project(self, bot_id: UUID, project_id: UUID) -> bool:
         result = await self.db.execute(

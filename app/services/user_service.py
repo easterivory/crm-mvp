@@ -76,6 +76,13 @@ class UserService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="User with this email already exists",
             )
+        if data.telegram_id is not None:
+            existing_by_telegram = await self.user_repo.get_by_telegram_id(data.telegram_id)
+            if existing_by_telegram is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="User with this Telegram ID already exists",
+                )
 
         role = await self.user_repo.get_role_by_id(data.role_id)
         if role is None:
@@ -129,6 +136,7 @@ class UserService:
                     password_hash=hash_password(data.password),
                     role_id=data.role_id,
                     project_id=project_id,
+                    telegram_id=data.telegram_id,
                 )
                 user.role = role
         except IntegrityError:
@@ -138,6 +146,13 @@ class UserService:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="User with this email already exists",
                 )
+            if data.telegram_id is not None:
+                existing_by_telegram = await self.user_repo.get_by_telegram_id(data.telegram_id)
+                if existing_by_telegram is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="User with this Telegram ID already exists",
+                    )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not create user",
@@ -180,6 +195,14 @@ class UserService:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Admin can assign only manager/operator roles",
+                )
+
+        if "telegram_id" in values and values["telegram_id"] is not None:
+            existing_by_telegram = await self.user_repo.get_by_telegram_id(values["telegram_id"])
+            if existing_by_telegram is not None and existing_by_telegram.id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="User with this Telegram ID already exists",
                 )
 
         next_role_id = values.get("role_id", target.role_id)

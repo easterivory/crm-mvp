@@ -9,6 +9,7 @@ from app.schemas.broadcast import (
     AudiencePreviewResponse,
     BroadcastActionResponse,
     BroadcastCreate,
+    BroadcastDeliveryAnalytics,
     BroadcastOut,
     BroadcastReport,
     BroadcastScheduleRequest,
@@ -136,6 +137,32 @@ async def get_broadcast(
     db: AsyncSession = Depends(get_db),
 ) -> BroadcastOut:
     return await BroadcastService(db).get_broadcast(broadcast_id, project_id)
+
+
+@router.delete("/{broadcast_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_broadcast(
+    broadcast_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await BroadcastService(db).delete_broadcast(
+        broadcast_id=broadcast_id,
+        actor=current_user,
+        project_id=project_id,
+    )
+
+
+@router.get("/{broadcast_id}/detailed-analytics", response_model=BroadcastDeliveryAnalytics)
+async def get_broadcast_detailed_analytics(
+    broadcast_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> BroadcastDeliveryAnalytics:
+    return await BroadcastService(db).delivery_analytics(
+        broadcast_id=broadcast_id,
+        project_id=project_id,
+    )
 
 
 @router.get("/{broadcast_id}/report", response_model=None)

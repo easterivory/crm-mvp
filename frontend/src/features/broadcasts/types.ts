@@ -21,6 +21,7 @@ export type Broadcast = {
   scheduled_at: string | null
   timezone_mode: 'project' | 'lead_local' | 'fixed'
   status: BroadcastStatus
+  is_deleted: boolean
   created_by_user_id: string | null
   created_by_name?: string | null
   snippet_id?: string | null
@@ -122,6 +123,34 @@ export type BroadcastReport = {
   started_at: string | null
   finished_at: string | null
   error_examples: string[]
+}
+
+export type BroadcastRecipientDelivery = {
+  id: string
+  chat_id: string
+  lead_id: string | null
+  external_chat_id: string
+  external_user_id: string
+  lead_name: string | null
+  status: string
+  attempts: number
+  last_error: string | null
+  sent_at: string | null
+  is_read: boolean
+  replied: boolean
+  last_client_message_at: string | null
+}
+
+export type BroadcastDeliveryAnalytics = {
+  broadcast_id: string
+  total_recipients: number
+  delivered: number
+  read: number
+  replied: number
+  failed: number
+  pending: number
+  skipped: number
+  recipients: BroadcastRecipientDelivery[]
 }
 
 export type BroadcastTemplate = {

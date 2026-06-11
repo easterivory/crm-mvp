@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
+from app.models.tag import random_tag_color
 
 
 class TagService:
@@ -34,6 +35,7 @@ class TagService:
 
     async def create_tag(self, project_id: UUID, data: TagCreate) -> TagOut:
         name = self._normalize_name(data.name)
+        color = self._normalize_color(data.color) or random_tag_color()
 
         existing = await self.tag_repo.get_by_name(project_id, name)
         if existing is not None:
@@ -44,7 +46,7 @@ class TagService:
 
         try:
             async with self.db.begin_nested():
-                tag = await self.tag_repo.create(project_id=project_id, name=name)
+                tag = await self.tag_repo.create(project_id=project_id, name=name, color=color)
         except IntegrityError:
             existing = await self.tag_repo.get_by_name(project_id, name)
             if existing is not None:
@@ -73,16 +75,24 @@ class TagService:
         project_id: UUID,
         data: TagUpdate,
     ) -> TagOut:
-        name = self._normalize_name(data.name)
-        existing = await self.tag_repo.get_by_name(project_id, name)
-        if existing is not None and existing.id != tag_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Tag with this name already exists in this project",
-            )
+        values = data.model_dump(exclude_unset=True)
+        updates: dict[str, str] = {}
+
+        if "name" in values and values["name"] is not None:
+            name = self._normalize_name(values["name"])
+            existing = await self.tag_repo.get_by_name(project_id, name)
+            if existing is not None and existing.id != tag_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Tag with this name already exists in this project",
+                )
+            updates["name"] = name
+
+        if "color" in values and values["color"] is not None:
+            updates["color"] = self._normalize_color(values["color"]) or random_tag_color()
 
         try:
-            tag = await self.tag_repo.update_name_in_project(tag_id, project_id, name)
+            tag = await self.tag_repo.update_in_project(tag_id, project_id, **updates)
         except IntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -164,3 +174,9 @@ class TagService:
                 detail="Tag name must not be empty",
             )
         return normalized
+
+    @staticmethod
+    def _normalize_color(color: str | None) -> str | None:
+        if color is None:
+            return None
+        return color.strip().upper()

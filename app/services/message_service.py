@@ -53,6 +53,7 @@ ALLOWED_CHAT_MEDIA: dict[str, str] = {
     "image/webp": MessageType.PHOTO,
     "video/mp4": MessageType.VIDEO,
     "video/quicktime": MessageType.VIDEO,
+    "video/webm": MessageType.VIDEO,
     "application/pdf": MessageType.DOCUMENT,
     "text/plain": MessageType.DOCUMENT,
     "application/msword": MessageType.DOCUMENT,
@@ -160,13 +161,14 @@ class MessageService:
         if result is None:
             raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
 
+        actual_media_type = self._actual_telegram_media_type(normalized_type, result)
         telegram_file_id, file_unique_id, telegram_file_size = self._extract_telegram_media_metadata(
-            normalized_type,
+            actual_media_type,
             result,
         )
         data = MessageCreate(
             external_message_id=self._telegram_message_id(result),
-            message_type=normalized_type,
+            message_type=actual_media_type,
             sender_type=SenderType.MANAGER,
             sender_id=operator_id,
             operator_id=operator_id,
@@ -478,15 +480,16 @@ class MessageService:
             await self.message_repo.mark_upload_failed(upload.id, project_id)
             raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
 
+        actual_media_type = self._actual_telegram_media_type(upload.media_type, result)
         telegram_file_id, file_unique_id, file_size = self._extract_telegram_media_metadata(
-            upload.media_type,
+            actual_media_type,
             result,
         )
         return data.model_copy(
             update={
                 "external_message_id": data.external_message_id
                 or (str(result.get("message_id")) if result.get("message_id") is not None else None),
-                "message_type": upload.media_type,
+                "message_type": actual_media_type,
                 "body": None,
                 "caption": caption,
                 "telegram_file_id": telegram_file_id,
@@ -527,8 +530,9 @@ class MessageService:
         if result is None:
             raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
 
+        actual_media_type = self._actual_telegram_media_type(message_type, result)
         telegram_file_id, file_unique_id, file_size = self._extract_telegram_media_metadata(
-            message_type,
+            actual_media_type,
             result,
         )
         raw_payload_json = dict(data.raw_payload_json or {})
@@ -536,7 +540,7 @@ class MessageService:
         return data.model_copy(
             update={
                 "external_message_id": data.external_message_id or self._telegram_message_id(result),
-                "message_type": message_type,
+                "message_type": actual_media_type,
                 "body": None,
                 "caption": caption,
                 "telegram_file_id": telegram_file_id or data.telegram_file_id,
@@ -727,6 +731,12 @@ class MessageService:
             payload.get("file_unique_id"),
             int(file_size) if isinstance(file_size, int) else None,
         )
+
+    @staticmethod
+    def _actual_telegram_media_type(requested_type: str, result: dict) -> str:
+        if requested_type == MessageType.VIDEO_NOTE and isinstance(result.get(MessageType.VIDEO), dict):
+            return MessageType.VIDEO
+        return requested_type
 
     @staticmethod
     def _max_upload_size(media_type: str) -> int:

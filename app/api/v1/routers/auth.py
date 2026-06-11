@@ -1,0 +1,61 @@
+import json
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.security import create_access_token
+from app.repositories.user_repository import UserRepository
+from app.schemas.user import TokenOut
+from app.services.auth_service import AuthService
+
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/telegram-login", response_model=TokenOut)
+async def telegram_login(
+    auth_data: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+) -> TokenOut:
+    if not AuthService.verify_telegram_auth(auth_data):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Telegram signature",
+        )
+
+    telegram_id = _extract_telegram_id(auth_data)
+    if telegram_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Telegram ID is missing",
+        )
+
+    user = await UserRepository(db).get_by_telegram_id(telegram_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User with this Telegram account is not registered in CRM",
+        )
+
+    return TokenOut(access_token=create_access_token(subject=user.id))
+
+
+def _extract_telegram_id(auth_data: dict[str, Any]) -> int | None:
+    raw_id = auth_data.get("id")
+    raw_user = auth_data.get("user")
+    if raw_id is None and isinstance(raw_user, str):
+        try:
+            raw_user = json.loads(raw_user)
+        except json.JSONDecodeError:
+            raw_user = None
+    if raw_id is None and isinstance(raw_user, dict):
+        raw_id = raw_user.get("id")
+    if raw_id is None:
+        return None
+    try:
+        telegram_id = int(str(raw_id))
+    except (TypeError, ValueError):
+        return None
+    return telegram_id if telegram_id > 0 else None
