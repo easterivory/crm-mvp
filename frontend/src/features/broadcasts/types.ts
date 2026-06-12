@@ -141,6 +141,20 @@ export type BroadcastRecipientDelivery = {
   last_client_message_at: string | null
 }
 
+export type BroadcastErrorLogRow = {
+  id: string
+  chat_id: string
+  lead_id: string | null
+  external_chat_id: string
+  external_user_id: string
+  lead_name: string | null
+  status: string
+  attempts: number
+  error: string
+  created_at: string
+  sent_at: string | null
+}
+
 export type BroadcastDeliveryAnalytics = {
   broadcast_id: string
   total_recipients: number

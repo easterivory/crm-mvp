@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import RoleName
@@ -128,11 +129,18 @@ class PartnerService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Partner integration is not active",
             )
-        submission = await self.repo.create_submission(
-            lead_id=lead.id,
-            partner_integration_id=integration.id,
-            status="pending",
-        )
+        try:
+            async with self.db.begin_nested():
+                submission = await self.repo.create_submission(
+                    lead_id=lead.id,
+                    partner_integration_id=integration.id,
+                    status="pending",
+                )
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Lead was already submitted to this partner",
+            ) from exc
         return LeadSubmissionOut.model_validate(submission)
 
     async def list_lead_submissions(

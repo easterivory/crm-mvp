@@ -1,6 +1,6 @@
 import api from '../../api/client'
 import type { PaginatedResponse } from '../../shared/types'
-import type { Lead, LeadListParams, LeadStatus } from './types'
+import type { DuplicateLeadDetail, Lead, LeadListParams, LeadStatus } from './types'
 
 export async function fetchLeads(params: LeadListParams) {
   const { data } = await api.get<PaginatedResponse<Lead>>('/leads', {
@@ -12,6 +12,12 @@ export async function fetchLeads(params: LeadListParams) {
       date_to: params.date_to || undefined,
       tag_ids: params.tag_ids?.length ? params.tag_ids.join(',') : undefined,
       search: params.search?.trim() || undefined,
+      q: params.q?.trim() || undefined,
+      is_trash: params.is_trash ?? false,
+      partner_id: params.partner_id || undefined,
+      age_from: params.age_from ?? undefined,
+      age_to: params.age_to ?? undefined,
+      country: params.country?.trim() || undefined,
       limit: params.limit ?? 50,
       offset: params.offset ?? 0,
     },
@@ -25,8 +31,34 @@ export async function fetchLeadStatuses() {
   return data
 }
 
+export async function fetchLeadDuplicates(
+  leadId: string,
+  projectId: string,
+  signal?: AbortSignal,
+) {
+  const { data } = await api.get<DuplicateLeadDetail[]>(`/leads/${leadId}/duplicates`, {
+    params: { project_id: projectId },
+    signal,
+  })
+  return data
+}
+
 export async function rejectLead(leadId: string, projectId: string) {
   const { data } = await api.post<Lead>(`/leads/${leadId}/reject`, null, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function trashLead(leadId: string, projectId: string) {
+  const { data } = await api.post<Lead>(`/leads/${leadId}/trash`, null, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function restoreLead(leadId: string, projectId: string) {
+  const { data } = await api.post<Lead>(`/leads/${leadId}/restore`, null, {
     params: { project_id: projectId },
   })
   return data

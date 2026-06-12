@@ -30,6 +30,7 @@ from app.schemas.broadcast import (
     BroadcastActionResponse,
     BroadcastCreate,
     BroadcastDeliveryAnalytics,
+    BroadcastErrorLogRow,
     BroadcastOut,
     BroadcastReport,
     BroadcastRecipientDeliveryOut,
@@ -193,6 +194,31 @@ class BroadcastService:
             recipients=recipients,
         )
 
+    async def error_log(
+        self,
+        broadcast_id: UUID,
+        project_id: UUID,
+        limit: int = 200,
+    ) -> list[BroadcastErrorLogRow]:
+        broadcast = await self._get_or_404(broadcast_id, project_id)
+        rows = await self.repo.error_log_rows(broadcast.id, limit=limit)
+        return [
+            BroadcastErrorLogRow(
+                id=recipient.id,
+                chat_id=recipient.chat_id,
+                lead_id=recipient.lead_id,
+                external_chat_id=chat.external_chat_id,
+                external_user_id=chat.external_user_id,
+                lead_name=lead_name,
+                status=recipient.status,
+                attempts=recipient.attempts,
+                error=recipient.last_error or "",
+                created_at=recipient.created_at,
+                sent_at=recipient.sent_at,
+            )
+            for recipient, chat, lead_name in rows
+        ]
+
     async def error_csv(self, broadcast_id: UUID, project_id: UUID) -> str:
         await self._get_or_404(broadcast_id, project_id)
         output = io.StringIO()
@@ -304,6 +330,33 @@ class BroadcastService:
             action="broadcast.archived",
             entity_id=broadcast_id,
         )
+
+    async def permanently_delete_broadcast(
+        self,
+        *,
+        broadcast_id: UUID,
+        actor: User,
+        project_id: UUID,
+    ) -> None:
+        self._ensure_can_manage(actor)
+        broadcast = await self.repo.get_any_in_project(broadcast_id, project_id)
+        if broadcast is None:
+            raise HTTPException(status_code=404, detail="Broadcast not found")
+        if broadcast.status in {"scheduled", "processing", "paused"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cancel or finish broadcast before permanent deletion",
+            )
+        await self._audit(
+            project_id=project_id,
+            actor=actor,
+            action="broadcast.permanently_deleted",
+            entity_id=broadcast_id,
+            meta={"name": broadcast.name, "status": broadcast.status},
+        )
+        deleted = await self.repo.hard_delete_in_project(broadcast_id, project_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Broadcast not found")
 
     async def upload_media(
         self,

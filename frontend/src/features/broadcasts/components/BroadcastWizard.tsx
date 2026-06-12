@@ -17,6 +17,7 @@ import {
   cancelBroadcast,
   createBroadcast,
   downloadBroadcastErrorsCsv,
+  fetchBroadcastErrorLog,
   fetchBroadcastReport,
   pauseBroadcast,
   previewAudience,
@@ -33,6 +34,7 @@ import {
   type AudienceRule,
   type Broadcast,
   type BroadcastContent,
+  type BroadcastErrorLogRow,
   type BroadcastMediaType,
   type BroadcastOption,
   type BroadcastReport,
@@ -878,11 +880,33 @@ function BroadcastMonitor({
   onResume: () => void
   onCancel: () => void
 }) {
+  const [errorLog, setErrorLog] = useState<BroadcastErrorLogRow[]>([])
+  const [isErrorLogLoading, setIsErrorLogLoading] = useState(false)
   const total = report?.total_recipients || broadcast.total_recipients || broadcast.audience_count || 0
   const sent = report?.sent_count ?? broadcast.sent_count ?? 0
   const failed = report?.failed_count ?? broadcast.failed_count ?? 0
   const done = sent + failed
   const progress = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
+
+  const loadErrorLog = useCallback(async () => {
+    setIsErrorLogLoading(true)
+    try {
+      setErrorLog(await fetchBroadcastErrorLog(broadcast.id, projectId))
+    } catch {
+      setErrorLog([])
+    } finally {
+      setIsErrorLogLoading(false)
+    }
+  }, [broadcast.id, projectId])
+
+  useEffect(() => {
+    void loadErrorLog()
+  }, [loadErrorLog])
+
+  const handleRefresh = () => {
+    onRefresh()
+    void loadErrorLog()
+  }
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/8 bg-[#0d1324]/95 shadow-card">
@@ -903,7 +927,7 @@ function BroadcastMonitor({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={onRefresh}
+            onClick={handleRefresh}
             className="h-9 rounded-xl border border-white/10 px-3 text-sm text-gray-100"
           >
             Обновить
@@ -947,6 +971,50 @@ function BroadcastMonitor({
             <p className="text-sm text-red-100/80">Ошибки доставки</p>
             <p className="mt-2 text-3xl font-semibold text-red-100">{failed}</p>
           </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
+            <h2 className="text-sm font-semibold text-white">Содержимое рассылки</h2>
+            <div className="mt-4">
+              <PhonePreview content={broadcast.content_json} mediaPreviewUrls={{}} />
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-red-300/15 bg-red-400/10 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-red-100">Лог ошибок в CRM</h2>
+                <p className="mt-1 text-xs text-red-100/65">Полный список доступен без выгрузки CSV.</p>
+              </div>
+              {isErrorLogLoading ? (
+                <LoaderCircle size={16} className="animate-spin text-red-100" />
+              ) : (
+                <span className="rounded-full border border-red-200/20 bg-red-500/15 px-2 py-1 text-xs text-red-100">
+                  {errorLog.length}
+                </span>
+              )}
+            </div>
+            {errorLog.length > 0 ? (
+              <div className="mt-4 max-h-96 overflow-y-auto rounded-xl border border-red-200/10 bg-black/10">
+                {errorLog.map((row) => (
+                  <div key={row.id} className="border-b border-red-200/10 px-3 py-2 text-xs last:border-b-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-red-50">
+                      <span className="min-w-0 truncate">
+                        {row.lead_name || row.external_user_id || row.external_chat_id}
+                      </span>
+                      <span className="text-red-100/70">{row.status} · попыток: {row.attempts}</span>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap break-words leading-5 text-red-100/75">
+                      {row.error}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-red-100/70">Ошибок доставки нет.</p>
+            )}
+          </section>
         </div>
 
         {report?.error_examples.length ? (

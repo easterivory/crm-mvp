@@ -17,6 +17,7 @@ from app.models.partner import LeadSubmission, PartnerIntegration
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.services.chat_audit_service import ChatAuditService
+from app.services.lead_identity_service import LeadIdentityService
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class PostbackService:
         self.repo = PartnerIntegrationRepository(db)
         self.lead_repo = LeadRepository(db)
         self.audit_service = ChatAuditService(db)
+        self.identity_service = LeadIdentityService(db)
 
     def build_payload(self, lead: Lead, integration: PartnerIntegration) -> dict[str, Any]:
         mapping = integration.field_mapping or {}
@@ -319,6 +321,33 @@ class PostbackService:
             self._mark_failed(submission, "Partner integration is not active")
             await self.db.flush()
             return
+        conflict = await self.identity_service.find_partner_submission_conflict(
+            lead_id=lead.id,
+            project_id=lead.project_id,
+            partner_integration=integration,
+        )
+        if conflict is not None:
+            duplicate = conflict.duplicate
+            blocking = conflict.blocking_submission
+            self._mark_failed(
+                submission,
+                (
+                    "Duplicate conflict: matching lead "
+                    f"{duplicate.lead_id} in project '{duplicate.project_name}' "
+                    f"was already submitted to advertiser '{conflict.partner_name}' "
+                    f"with status '{blocking.status}'"
+                ),
+            )
+            await self.db.flush()
+            logger.warning(
+                "Postback duplicate conflict lead_id=%s duplicate_lead_id=%s "
+                "partner=%s match_type=%s",
+                lead.id,
+                duplicate.lead_id,
+                conflict.partner_name,
+                duplicate.match_type,
+            )
+            return
 
         try:
             payload = self.build_payload(lead, integration)
@@ -405,6 +434,11 @@ class PostbackService:
         }
         submission.status = parsed["status"]
         submission.error_message = parsed.get("error_message")
+        submission.partner_feedback = self._feedback_text(
+            parsed.get("error_message")
+            or parsed.get("partner_status")
+            or response.text
+        )
         submission.partner_status = parsed.get("partner_status")
         if submission.partner_status:
             submission.partner_status_updated_at = datetime.now(timezone.utc)
@@ -744,4 +778,12 @@ class PostbackService:
     def _mark_failed(submission: LeadSubmission, error: str) -> None:
         submission.status = PostbackService.FAILED_STATUS
         submission.error_message = error[:1000]
+        submission.partner_feedback = error[:2000]
         submission.completed_at = datetime.now(timezone.utc)
+
+    @staticmethod
+    def _feedback_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text[:2000] if text else None

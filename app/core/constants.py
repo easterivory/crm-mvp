@@ -99,6 +99,8 @@ class AuditAction:
     LEAD_MANAGER_REMOVED = "lead.manager_removed"
     LEAD_TAG_ADDED = "lead.tag_added"
     LEAD_TAG_REMOVED = "lead.tag_removed"
+    LEAD_TRASHED = "lead.trashed"
+    LEAD_RESTORED = "lead.restored"
     CHAT_RESET = "chat.reset"
     PROJECT_ARCHIVED = "project.archived"
     PROJECT_RESTORED = "project.restored"

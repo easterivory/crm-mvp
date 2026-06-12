@@ -138,8 +138,8 @@ type UserOptionRecord = {
 }
 
 type TimelineItem =
-  | { kind: 'message'; id: string; created_at: string; message: Message }
-  | { kind: 'audit'; id: string; created_at: string; event: ChatAuditLog }
+  | { kind: 'message'; id: string; created_at: string; sequence: number; message: Message }
+  | { kind: 'audit'; id: string; created_at: string; sequence: number; event: ChatAuditLog }
 
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
@@ -229,6 +229,33 @@ function getErrorMessage(err: unknown) {
 
 function isRequestCanceled(err: unknown) {
   return axios.isCancel(err) || (axios.isAxiosError(err) && err.code === 'ERR_CANCELED')
+}
+
+function externalMessageOrder(value: string | null) {
+  const normalized = value?.trim() ?? ''
+  if (/^\d+$/.test(normalized)) {
+    return Number.parseInt(normalized, 10)
+  }
+  return Number.MAX_SAFE_INTEGER
+}
+
+function compareTimelineDate(
+  leftCreatedAt: string,
+  rightCreatedAt: string,
+  leftFallback: string,
+  rightFallback: string,
+) {
+  const dateDiff = new Date(leftCreatedAt).getTime() - new Date(rightCreatedAt).getTime()
+  return dateDiff || leftFallback.localeCompare(rightFallback)
+}
+
+function sortMessagesByDate(items: Message[]) {
+  return [...items].sort((left, right) => {
+    const dateDiff = new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+    const externalDiff =
+      externalMessageOrder(left.external_message_id) - externalMessageOrder(right.external_message_id)
+    return dateDiff || externalDiff || left.id.localeCompare(right.id)
+  })
 }
 
 function paramsEqual(left: URLSearchParams, right: URLSearchParams) {
@@ -510,21 +537,27 @@ export default function ChatsPage() {
   const timelineItems = useMemo<TimelineItem[]>(
     () =>
       [
-        ...messages.map((message) => ({
+        ...messages.map((message, index) => ({
           kind: 'message' as const,
           id: message.id,
           created_at: message.created_at,
+          sequence: index,
           message,
         })),
-        ...auditLogs.map((event) => ({
+        ...auditLogs.map((event, index) => ({
           kind: 'audit' as const,
           id: event.id,
           created_at: event.created_at,
+          sequence: messages.length + index,
           event,
         })),
       ].sort((left, right) => {
-        const dateDiff = new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
-        return dateDiff || left.id.localeCompare(right.id)
+        return compareTimelineDate(
+          left.created_at,
+          right.created_at,
+          `${left.sequence}:${left.id}`,
+          `${right.sequence}:${right.id}`,
+        )
       }),
     [auditLogs, messages],
   )
@@ -894,6 +927,10 @@ export default function ChatsPage() {
   }, [notify, selectedProjectId])
 
   const loadMessages = useCallback(async (chatId: string, showLoader = false) => {
+    if (!showLoader && messagesAbortRef.current) {
+      return
+    }
+
     messagesAbortRef.current?.abort()
     const controller = new AbortController()
     messagesAbortRef.current = controller
@@ -924,7 +961,7 @@ export default function ChatsPage() {
       if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
         return
       }
-      setMessages(messagesResponse.data.items)
+      setMessages(sortMessagesByDate(messagesResponse.data.items))
       setAuditLogs(auditResponse.data)
       await api.post(`/chats/${chatId}/read`, null, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
@@ -988,8 +1025,10 @@ export default function ChatsPage() {
 
   useEffect(() => {
     if (!selectedChatId) {
+      messagesAbortRef.current?.abort()
       setMessages([])
       setAuditLogs([])
+      setIsMessagesLoading(false)
       return undefined
     }
     if (selectedChat && selectedChat.project_id !== selectedProjectId) {
@@ -1048,15 +1087,6 @@ export default function ChatsPage() {
     return () => window.cancelAnimationFrame(frame)
   }, [highlightedMessageId, messages])
 
-  useEffect(() => {
-    if (!selectedChatId || !selectedChat?.last_message_at) {
-      return undefined
-    }
-
-    void loadMessages(selectedChatId)
-    return undefined
-  }, [loadMessages, selectedChat?.last_message_at, selectedChatId])
-
   const sendMessage = async () => {
     const text = draft.trim()
     if (!selectedChatId || (!text && !attachment) || isSending) {
@@ -1089,7 +1119,7 @@ export default function ChatsPage() {
             },
             { params },
           )
-      setMessages((current) => [...current, data])
+      setMessages((current) => sortMessagesByDate([...current, data]))
       setDraft('')
       clearAttachment()
       await loadChats()
@@ -1122,7 +1152,7 @@ export default function ChatsPage() {
           params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
         },
       )
-      setMessages((current) => [...current, data])
+      setMessages((current) => sortMessagesByDate([...current, data]))
       setDraft('')
       clearAttachment()
       setIsSnippetsOpen(false)

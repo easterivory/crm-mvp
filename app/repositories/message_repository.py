@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import case, extract, func, select, update
+from sqlalchemy import extract, func, select, update
 from sqlalchemy.orm import aliased
 
 from app.core.constants import SenderType
@@ -24,19 +24,29 @@ class MessageRepository(BaseRepository[Message]):
         stmt = select(Message).where(Message.chat_id == chat_id)
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
-        sender_order = case(
-            (Message.sender_type == SenderType.USER, 0),
-            (Message.sender_type == SenderType.BOT, 1),
-            (Message.sender_type == SenderType.MANAGER, 2),
-            else_=3,
-        )
         stmt = (
-            stmt.order_by(Message.created_at.asc(), sender_order.asc(), Message.id.asc())
+            stmt.order_by(Message.created_at.desc(), Message.id.desc())
             .limit(limit)
             .offset(offset)
         )
         result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        rows = list(result.scalars().all())
+        return sorted(rows, key=self._chronological_message_key)
+
+    @staticmethod
+    def _chronological_message_key(message: Message) -> tuple:
+        return (
+            message.created_at,
+            *MessageRepository._external_message_order(message.external_message_id),
+            str(message.id),
+        )
+
+    @staticmethod
+    def _external_message_order(value: str | None) -> tuple[int, int, str]:
+        raw_value = (value or "").strip()
+        if raw_value.isdigit():
+            return (0, int(raw_value), "")
+        return (1, 0, raw_value)
 
     async def count_by_chat(
         self,

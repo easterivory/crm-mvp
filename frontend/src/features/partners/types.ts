@@ -92,6 +92,7 @@ export type LeadSubmission = {
   request_payload: Record<string, unknown> | null
   response_payload: Record<string, unknown> | null
   error_message: string | null
+  partner_feedback: string | null
   partner_status: string | null
   partner_status_updated_at: string | null
   submitted_at: string

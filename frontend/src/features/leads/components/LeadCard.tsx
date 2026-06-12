@@ -9,16 +9,21 @@ import {
   Tag,
   Trash2,
   TrendingUp,
+  Undo2,
   UserRound,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
+import DuplicateWarning from './DuplicateWarning'
 import type { Lead } from '../types'
 
 type LeadCardProps = {
   lead: Lead
+  projectId: string
   isMutating: boolean
-  onReject: (lead: Lead) => void
+  isTrashView?: boolean
+  onTrash?: (lead: Lead) => void
+  onRestore?: (lead: Lead) => void
   onOpenChat?: (lead: Lead) => void
   onSubmitToPartner?: (lead: Lead) => void
 }
@@ -64,8 +69,11 @@ function botLabel(lead: Lead) {
 
 export default function LeadCard({
   lead,
+  projectId,
   isMutating,
-  onReject,
+  isTrashView = false,
+  onTrash,
+  onRestore,
   onOpenChat,
   onSubmitToPartner,
 }: LeadCardProps) {
@@ -106,6 +114,8 @@ export default function LeadCard({
           {lead.status_name ?? lead.status_code ?? 'Статус не указан'}
         </span>
       </div>
+
+      <DuplicateWarning leadId={lead.id} projectId={projectId} className="mt-4" />
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Info icon={<Phone size={15} />} label="Телефон" value={empty(lead.phone)} />
@@ -162,39 +172,55 @@ export default function LeadCard({
         )}
       </div>
 
-      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
-        {onOpenChat ? (
+      {isTrashView ? (
+        <div className="mt-5">
           <button
             type="button"
-            onClick={() => onOpenChat(lead)}
-            disabled={!lead.chat_id}
-            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/35 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 transition hover:border-sky-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => onRestore?.(lead)}
+            disabled={isMutating || !onRestore}
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <MessageSquareText size={16} />
-            Перейти в чат
+            <Undo2 size={17} />
+            Восстановить лида
           </button>
-        ) : null}
-        {onSubmitToPartner && (
-          <button
-            type="button"
-            onClick={() => onSubmitToPartner(lead)}
-            disabled={isMutating}
-            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <TrendingUp size={16} />
-            Подать в CRM партнёра
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => onReject(lead)}
-          disabled={isMutating || lead.status_code === 'lost'}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-4 text-sm font-semibold text-red-100 transition hover:border-red-300/60 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Trash2 size={16} />
-          Удалить
-        </button>
-      </div>
+        </div>
+      ) : (
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          {onOpenChat ? (
+            <button
+              type="button"
+              onClick={() => onOpenChat(lead)}
+              disabled={!lead.chat_id}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/35 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 transition hover:border-sky-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <MessageSquareText size={16} />
+              Перейти в чат
+            </button>
+          ) : null}
+          {onSubmitToPartner && (
+            <button
+              type="button"
+              onClick={() => onSubmitToPartner(lead)}
+              disabled={isMutating}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <TrendingUp size={16} />
+              Подать в CRM партнёра
+            </button>
+          )}
+          {onTrash ? (
+            <button
+              type="button"
+              onClick={() => onTrash(lead)}
+              disabled={isMutating}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-4 text-sm font-semibold text-red-100 transition hover:border-red-300/60 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 size={16} />
+              В корзину
+            </button>
+          ) : null}
+        </div>
+      )}
     </article>
   )
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +34,9 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_leads_project_status", "project_id", "status_id"),
         Index("ix_leads_project_manager", "project_id", "manager_id"),
         Index("ix_leads_project_created_at", "project_id", "created_at"),
+        Index("ix_leads_phone", "phone"),
+        Index("ix_leads_is_trash", "is_trash"),
+        Index("ix_leads_project_is_trash", "project_id", "is_trash"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -56,6 +59,12 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     call_time_text: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     preferred_call_time: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_trash: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     has_card: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     score_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     custom_fields: Mapped[dict] = mapped_column(
@@ -90,3 +99,15 @@ class LeadTag(Base, TimestampMixin):
 
     lead: Mapped[Lead] = relationship("Lead", back_populates="lead_tags")
     tag: Mapped[Tag] = relationship("Tag", back_populates="lead_tags")
+
+
+Index(
+    "ix_leads_phone_digits",
+    func.regexp_replace(func.coalesce(Lead.phone, ""), r"\D", "", "g"),
+    postgresql_where=Lead.phone.isnot(None),
+)
+Index(
+    "ix_leads_username_lower",
+    func.lower(func.replace(func.coalesce(Lead.username, ""), "@", "")),
+    postgresql_where=Lead.username.isnot(None),
+)

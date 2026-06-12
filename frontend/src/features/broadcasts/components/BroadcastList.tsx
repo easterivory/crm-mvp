@@ -14,21 +14,29 @@ import {
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
-import type { Broadcast, BroadcastDeliveryAnalytics, BroadcastReport } from '../types'
+import type {
+  Broadcast,
+  BroadcastDeliveryAnalytics,
+  BroadcastErrorLogRow,
+  BroadcastReport,
+} from '../types'
 
 type BroadcastListProps = {
   broadcasts: Broadcast[]
   botLabelById: Map<string, string>
   reports: Record<string, BroadcastReport>
   detailedAnalytics: Record<string, BroadcastDeliveryAnalytics>
+  errorLogs: Record<string, BroadcastErrorLogRow[]>
   expandedAnalyticsIds: Set<string>
   loadingAnalyticsIds: Set<string>
+  loadingErrorLogIds: Set<string>
   onOpen: (broadcast: Broadcast) => void
   onDuplicate: (broadcast: Broadcast) => void
   onCancel: (broadcast: Broadcast) => void
   onPause: (broadcast: Broadcast) => void
   onResume: (broadcast: Broadcast) => void
   onDelete: (broadcast: Broadcast) => void
+  onPermanentDelete: (broadcast: Broadcast) => void
   onToggleDetailedAnalytics: (broadcast: Broadcast) => void
   onRefreshReport: (broadcast: Broadcast) => void
 }
@@ -69,6 +77,40 @@ function DeliveryIconMetric({
   )
 }
 
+function mediaTypeLabel(type: string | undefined) {
+  if (type === 'photo') return 'Фото'
+  if (type === 'video') return 'Видео'
+  if (type === 'voice') return 'Голосовое'
+  if (type === 'video_note') return 'Кружок'
+  if (type === 'document') return 'Документ'
+  return 'Текст'
+}
+
+function broadcastContentLines(broadcast: Broadcast) {
+  const messages = broadcast.content_json.messages ?? []
+  if (messages.length === 0) {
+    return ['Контент не задан']
+  }
+
+  return messages.map((message, index) => {
+    const type = mediaTypeLabel(message.type)
+    const text = (message.type === 'text' ? message.text : message.caption)?.trim()
+    const fileName = message.media?.file_name?.trim()
+    const buttonsCount = message.buttons?.length ?? 0
+    const fragments = [
+      `${index + 1}. ${type}`,
+      fileName || null,
+      text || null,
+      buttonsCount > 0 ? `кнопок: ${buttonsCount}` : null,
+    ].filter(Boolean)
+    return fragments.join(' · ')
+  })
+}
+
+function canHardDeleteBroadcast(broadcast: Broadcast) {
+  return !['scheduled', 'processing', 'paused'].includes(broadcast.status)
+}
+
 function AnalyticsMetric({
   label,
   value,
@@ -97,14 +139,17 @@ export default function BroadcastList({
   botLabelById,
   reports,
   detailedAnalytics,
+  errorLogs,
   expandedAnalyticsIds,
   loadingAnalyticsIds,
+  loadingErrorLogIds,
   onOpen,
   onDuplicate,
   onCancel,
   onPause,
   onResume,
   onDelete,
+  onPermanentDelete,
   onToggleDetailedAnalytics,
   onRefreshReport,
 }: BroadcastListProps) {
@@ -124,8 +169,10 @@ export default function BroadcastList({
         const done = (report?.sent ?? 0) + (report?.failed ?? 0) + (report?.skipped ?? 0)
         const progress = total ? Math.min(100, Math.round((done / total) * 100)) : 0
         const analytics = detailedAnalytics[broadcast.id]
+        const broadcastErrors = errorLogs[broadcast.id] ?? []
         const isAnalyticsExpanded = expandedAnalyticsIds.has(broadcast.id)
         const isAnalyticsLoading = loadingAnalyticsIds.has(broadcast.id)
+        const isErrorLogLoading = loadingErrorLogIds.has(broadcast.id)
         const detailedTotal = analytics?.total_recipients ?? total
         return (
         <article key={broadcast.id} className="rounded-xl border border-white/8 bg-surface/90 p-4 shadow-card">
@@ -152,6 +199,18 @@ export default function BroadcastList({
             {broadcast.sent_at ? <span>Отправлено: {new Date(broadcast.sent_at).toLocaleString()}</span> : null}
             <span>Автор: {broadcast.created_by_name || 'не указан'}</span>
             <span>Создано: {new Date(broadcast.created_at).toLocaleString()}</span>
+          </div>
+          <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.025] p-3">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-600">
+              Содержимое рассылки
+            </p>
+            <div className="space-y-1.5">
+              {broadcastContentLines(broadcast).map((line, index) => (
+                <p key={`${broadcast.id}-content-${index}`} className="line-clamp-2 text-sm leading-5 text-gray-300">
+                  {line}
+                </p>
+              ))}
+            </div>
           </div>
           {report ? (
             <div className="mt-4 rounded-xl border border-white/8 bg-white/[0.03] p-3">
@@ -226,6 +285,49 @@ export default function BroadcastList({
                       ))}
                     </div>
                   ) : null}
+                  <div className="mt-3 rounded-xl border border-red-300/15 bg-red-500/5 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-red-100">Лог ошибок доставки</p>
+                        <p className="text-xs text-red-100/60">
+                          JSON-лог по получателям, CSV остается доступен для выгрузки.
+                        </p>
+                      </div>
+                      {isErrorLogLoading ? (
+                        <LoaderCircle size={16} className="animate-spin text-red-100/70" />
+                      ) : (
+                        <span className="rounded-full border border-red-200/15 bg-red-500/10 px-2 py-1 text-xs text-red-100">
+                          {broadcastErrors.length}
+                        </span>
+                      )}
+                    </div>
+                    {broadcastErrors.length > 0 ? (
+                      <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-red-200/10">
+                        {broadcastErrors.map((row) => (
+                          <div
+                            key={row.id}
+                            className="border-b border-red-200/10 px-3 py-2 text-xs last:border-b-0"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-red-50">
+                              <span className="min-w-0 truncate">
+                                {row.lead_name || row.external_user_id || row.external_chat_id}
+                              </span>
+                              <span className="shrink-0 text-red-100/70">
+                                {row.status} · попыток: {row.attempts}
+                              </span>
+                            </div>
+                            <p className="mt-1 whitespace-pre-wrap break-words leading-5 text-red-100/75">
+                              {row.error}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-red-100/55">
+                        Ошибок доставки нет.
+                      </p>
+                    )}
+                  </div>
                 </>
               ) : (
                 <div className="py-6 text-center text-sm text-gray-500">Нет данных доставки.</div>
@@ -306,8 +408,18 @@ export default function BroadcastList({
               className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-300/20 px-3 text-sm text-red-200 transition hover:border-red-300/40"
             >
               <Trash2 size={14} />
-              Удалить
+              Удалить из списка
             </button>
+            {canHardDeleteBroadcast(broadcast) ? (
+              <button
+                type="button"
+                onClick={() => onPermanentDelete(broadcast)}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-400/40 bg-red-500/10 px-3 text-sm font-semibold text-red-100 transition hover:border-red-300/70"
+              >
+                <Trash2 size={14} />
+                Удалить из базы
+              </button>
+            ) : null}
           </div>
         </article>
       )})}

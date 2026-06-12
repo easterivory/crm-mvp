@@ -200,6 +200,20 @@ class BroadcastRecipientDeliveryOut(BaseModel):
     last_client_message_at: Optional[datetime] = None
 
 
+class BroadcastErrorLogRow(BaseModel):
+    id: uuid.UUID
+    chat_id: uuid.UUID
+    lead_id: Optional[uuid.UUID] = None
+    external_chat_id: str
+    external_user_id: str
+    lead_name: Optional[str] = None
+    status: RecipientStatus
+    attempts: int = 0
+    error: str
+    created_at: datetime
+    sent_at: Optional[datetime] = None
+
+
 class BroadcastDeliveryAnalytics(BaseModel):
     broadcast_id: uuid.UUID
     total_recipients: int = 0

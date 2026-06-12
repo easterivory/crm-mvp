@@ -21,6 +21,7 @@ import axios from 'axios'
 
 import api from '../api/client'
 import FunnelTraceWidget from '../features/chats/components/FunnelTraceWidget'
+import DuplicateWarning from '../features/leads/components/DuplicateWarning'
 import { useProjectBotSelection } from '../shared/lib'
 
 type Lead = {
@@ -531,6 +532,11 @@ export default function LeadSidebar({
 
         {lead && !isLoading ? (
           <div className="space-y-5">
+            <DuplicateWarning
+              leadId={lead.id}
+              projectId={selectedProjectId ?? lead.project_id}
+            />
+
             <div className="rounded-xl border border-white/5 bg-white/[0.035] p-4">
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-accent-200 shadow-glow-accent">

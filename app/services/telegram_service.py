@@ -779,7 +779,11 @@ class TelegramService:
         SAVEPOINT pattern mirrors _find_or_create_chat().
         """
         # Fast path: lead already exists for this chat
-        existing = await self.lead_repo.get_by_chat(chat_id, project_id)
+        existing = (
+            await self.lead_repo.get_any_by_chat(chat_id, project_id)
+            if reset_existing
+            else await self.lead_repo.get_by_chat(chat_id, project_id)
+        )
         if existing is not None:
             if reset_existing:
                 username = (

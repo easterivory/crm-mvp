@@ -225,6 +225,7 @@ class LeadSubmissionOut(OrmBase):
     request_payload: Optional[dict]
     response_payload: Optional[dict]
     error_message: Optional[str]
+    partner_feedback: Optional[str]
     partner_status: Optional[str]
     partner_status_updated_at: Optional[datetime]
     submitted_at: datetime

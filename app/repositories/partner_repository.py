@@ -115,6 +115,7 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
                 Lead.id == lead_id,
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
+                Lead.is_trash.is_(False),
             )
         )
         return result.scalar_one_or_none()
@@ -148,6 +149,7 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
                 LeadSubmission.lead_id == lead_id,
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
+                Lead.is_trash.is_(False),
             )
             .order_by(LeadSubmission.submitted_at.desc())
         )

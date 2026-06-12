@@ -29,7 +29,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AuditAction, EntityType, LeadStatusCode
+from app.core.constants import AuditAction, EntityType
 from app.models.chat import Chat
 from app.models.message import Message
 from app.repositories.bot_repository import BotRepository
@@ -270,16 +270,10 @@ class ChatService:
                 detail="Chat not found",
             )
 
-        lead = await self.lead_repo.get_by_chat(chat_id, project_id)
+        lead = await self.lead_repo.get_existing_by_chat(chat_id, project_id)
         if lead is not None:
             await self.lead_repo.clear_tags(lead.id)
-            await self.lead_repo.set_status_by_code(
-                lead.id,
-                project_id,
-                LeadStatusCode.LOST,
-                reset_contact=True,
-                reset_manager=True,
-            )
+            lead = await self.lead_repo.mark_deleted_for_chat(chat_id, project_id)
 
         await self.bot_repo.reset_chat_state(chat_id)
         await FunnelRuntimeService(self.db).reset_chat_state(chat_id)

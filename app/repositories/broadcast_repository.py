@@ -58,6 +58,21 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         )
         return result.scalar_one_or_none()
 
+    async def get_any_in_project(
+        self,
+        broadcast_id: UUID,
+        project_id: UUID,
+    ) -> Optional[Broadcast]:
+        result = await self.db.execute(
+            select(Broadcast)
+            .options(selectinload(Broadcast.created_by))
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.project_id == project_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def update_in_project(
         self,
         broadcast_id: UUID,
@@ -84,6 +99,18 @@ class BroadcastRepository(BaseRepository[Broadcast]):
                 Broadcast.is_deleted.is_(False),
             )
             .values(is_deleted=True, status="cancelled")
+        )
+        return result.rowcount > 0
+
+    async def hard_delete_in_project(self, broadcast_id: UUID, project_id: UUID) -> bool:
+        await self.db.execute(
+            delete(BroadcastRecipient).where(BroadcastRecipient.broadcast_id == broadcast_id)
+        )
+        result = await self.db.execute(
+            delete(Broadcast).where(
+                Broadcast.id == broadcast_id,
+                Broadcast.project_id == project_id,
+            )
         )
         return result.rowcount > 0
 
@@ -429,6 +456,24 @@ class BroadcastRepository(BaseRepository[Broadcast]):
             (str(user_id), str(status), str(error or ""))
             for user_id, status, error in result.all()
         ]
+
+    async def error_log_rows(
+        self,
+        broadcast_id: UUID,
+        limit: int = 200,
+    ) -> list[tuple[BroadcastRecipient, Chat, str | None]]:
+        result = await self.db.execute(
+            select(BroadcastRecipient, Chat, Lead.name)
+            .join(Chat, Chat.id == BroadcastRecipient.chat_id)
+            .outerjoin(Lead, Lead.id == BroadcastRecipient.lead_id)
+            .where(
+                BroadcastRecipient.broadcast_id == broadcast_id,
+                BroadcastRecipient.last_error.is_not(None),
+            )
+            .order_by(BroadcastRecipient.created_at.desc(), BroadcastRecipient.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
 
     async def delivery_analytics_rows(
         self,

@@ -27,7 +27,9 @@ from app.schemas.lead import (
     LeadStatusUpdate,
     LeadUpdate,
 )
+from app.schemas.lead_identity import DuplicateLeadDetail
 from app.schemas.partner import LeadSubmissionPreviewOut
+from app.services.lead_identity_service import LeadIdentityService
 from app.services.lead_service import LeadService
 from app.services.partner_service import PartnerService
 
@@ -88,9 +90,21 @@ async def list_leads(
     date_to: Optional[date] = Query(default=None),
     tag_ids: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    is_trash: bool = Query(default=False),
+    partner_id: Optional[UUID] = Query(default=None),
+    age_from: Optional[int] = Query(default=None, ge=0, le=150),
+    age_to: Optional[int] = Query(default=None, ge=0, le=150),
+    country: Optional[str] = Query(default=None, max_length=100),
+    q: Optional[str] = Query(default=None, max_length=255),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[LeadOut]:
+    if age_from is not None and age_to is not None and age_from > age_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="age_from must be less than or equal to age_to",
+        )
+
     items, total = await LeadService(db).list_leads(
         project_id=project_id,
         status_id=status_id,
@@ -101,6 +115,12 @@ async def list_leads(
         date_to=date_to,
         tag_ids=_parse_uuid_csv(tag_ids, "tag_ids"),
         search=search,
+        q=q,
+        is_trash=is_trash,
+        partner_id=partner_id,
+        age_from=age_from,
+        age_to=age_to,
+        country=country,
         limit=limit,
         offset=offset,
     )
@@ -174,6 +194,20 @@ async def get_lead_submission_preview(
     )
 
 
+@router.get("/{lead_id}/duplicates", response_model=list[DuplicateLeadDetail])
+async def get_lead_duplicates(
+    lead_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[DuplicateLeadDetail]:
+    _ensure_lead_operator(current_user)
+    return await LeadIdentityService(db).find_duplicates(
+        lead_id=lead_id,
+        project_id=project_id,
+    )
+
+
 @router.get("/{lead_id}", response_model=LeadOut)
 async def get_lead(
     lead_id: UUID,
@@ -195,6 +229,36 @@ async def update_lead(
         lead_id=lead_id,
         project_id=project_id,
         data=data,
+        actor_id=current_user.id,
+    )
+
+
+@router.post("/{lead_id}/trash", response_model=LeadOut)
+async def trash_lead(
+    lead_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadOut:
+    _ensure_lead_operator(current_user)
+    return await LeadService(db).trash_lead(
+        lead_id=lead_id,
+        project_id=project_id,
+        actor_id=current_user.id,
+    )
+
+
+@router.post("/{lead_id}/restore", response_model=LeadOut)
+async def restore_lead(
+    lead_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadOut:
+    _ensure_lead_operator(current_user)
+    return await LeadService(db).restore_lead(
+        lead_id=lead_id,
+        project_id=project_id,
         actor_id=current_user.id,
     )
 
@@ -251,4 +315,17 @@ def _ensure_settings_admin(current_user: Any) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only super_admin/admin can manage lead settings",
+        )
+
+
+def _ensure_lead_operator(current_user: Any) -> None:
+    if current_user.role_name not in {
+        RoleName.SUPER_ADMIN,
+        RoleName.ADMIN,
+        RoleName.MANAGER,
+        RoleName.OPERATOR,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current user cannot change lead lifecycle",
         )

@@ -76,6 +76,7 @@ class LeadOut(OrmBase):
     updated_at: datetime
     created_at: datetime
     is_deleted: bool
+    is_trash: bool
     tags: list[LeadTagOut] = Field(default_factory=list)
     bot_id: Optional[uuid.UUID] = None
     bot_name: Optional[str] = None

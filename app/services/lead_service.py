@@ -351,8 +351,14 @@ class LeadService:
         date_to: Optional[date],
         tag_ids: list[UUID],
         search: Optional[str],
-        limit: int,
-        offset: int,
+        q: Optional[str] = None,
+        is_trash: bool = False,
+        partner_id: Optional[UUID] = None,
+        age_from: Optional[int] = None,
+        age_to: Optional[int] = None,
+        country: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> tuple[list[LeadOut], int]:
         leads = await self.lead_repo.list_by_project(
             project_id=project_id,
@@ -364,6 +370,12 @@ class LeadService:
             date_to=date_to,
             tag_ids=tag_ids,
             search=search,
+            q=q,
+            is_trash=is_trash,
+            partner_id=partner_id,
+            age_from=age_from,
+            age_to=age_to,
+            country=country,
             limit=limit,
             offset=offset,
         )
@@ -377,8 +389,76 @@ class LeadService:
             date_to=date_to,
             tag_ids=tag_ids,
             search=search,
+            q=q,
+            is_trash=is_trash,
+            partner_id=partner_id,
+            age_from=age_from,
+            age_to=age_to,
+            country=country,
         )
         return [await self._lead_out(lead) for lead in leads], total
+
+    async def trash_lead(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> LeadOut:
+        lead = await self.lead_repo.get_existing_by_id(lead_id, project_id)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+        if lead.is_trash:
+            return await self._lead_out(lead)
+
+        updated = await self.lead_repo.set_trash(lead_id, project_id, is_trash=True)
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.LEAD_TRASHED,
+            entity_type=EntityType.LEAD,
+            entity_id=lead_id,
+            actor_id=actor_id,
+            meta={"from_is_trash": False, "to_is_trash": True},
+        )
+        return await self._lead_out(updated)
+
+    async def restore_lead(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> LeadOut:
+        lead = await self.lead_repo.get_existing_by_id(lead_id, project_id)
+        if lead is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+        if not lead.is_trash:
+            return await self._lead_out(lead)
+
+        updated = await self.lead_repo.set_trash(lead_id, project_id, is_trash=False)
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lead not found",
+            )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.LEAD_RESTORED,
+            entity_type=EntityType.LEAD,
+            entity_id=lead_id,
+            actor_id=actor_id,
+            meta={"from_is_trash": True, "to_is_trash": False},
+        )
+        return await self._lead_out(updated)
 
     async def submit_lead(
         self,

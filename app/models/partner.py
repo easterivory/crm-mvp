@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -75,6 +85,11 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     """Tracks lead submissions to partner CRMs."""
     __tablename__ = "lead_submissions"
     __table_args__ = (
+        UniqueConstraint(
+            "lead_id",
+            "partner_integration_id",
+            name="uq_lead_submissions_lead_partner",
+        ),
         Index("ix_lead_submissions_lead_id", "lead_id"),
         Index("ix_lead_submissions_partner_integration_id", "partner_integration_id"),
         Index("ix_lead_submissions_status", "status"),
@@ -93,6 +108,7 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     request_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     response_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    partner_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     partner_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     partner_status_updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

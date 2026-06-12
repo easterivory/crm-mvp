@@ -1,4 +1,4 @@
-import { LoaderCircle, RefreshCw, Search, Tag, UsersRound } from 'lucide-react'
+import { Filter, LoaderCircle, RefreshCw, Search, Tag, Trash2, UsersRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
@@ -8,7 +8,8 @@ import LeadCard from '../features/leads/components/LeadCard'
 import {
   fetchLeads,
   fetchLeadStatuses,
-  rejectLead,
+  restoreLead,
+  trashLead,
   type Lead,
   type LeadStatus,
 } from '../features/leads'
@@ -24,7 +25,8 @@ type ProjectTag = {
   created_at: string
 }
 
-type PendingAction = { type: 'reject'; lead: Lead } | null
+type PendingAction = { type: 'trash'; lead: Lead } | null
+type LeadTab = 'active' | 'trash'
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10)
@@ -53,6 +55,15 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
   return fallback
 }
 
+function parseOptionalNumber(value: string) {
+  const normalized = value.trim()
+  if (!normalized) {
+    return undefined
+  }
+  const parsed = Number.parseInt(normalized, 10)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 export default function LeadsPage() {
   const navigate = useNavigate()
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
@@ -63,6 +74,12 @@ export default function LeadsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [activeTab, setActiveTab] = useState<LeadTab>('active')
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false)
+  const [partnerFilter, setPartnerFilter] = useState('')
+  const [ageFrom, setAgeFrom] = useState('')
+  const [ageTo, setAgeTo] = useState('')
+  const [countryFilter, setCountryFilter] = useState('')
   const [dateFrom, setDateFrom] = useState(daysAgoIso(30))
   const [dateTo, setDateTo] = useState(todayIso())
   const [error, setError] = useState('')
@@ -80,6 +97,8 @@ export default function LeadsPage() {
         .length,
     [leads],
   )
+
+  const isTrashTab = activeTab === 'trash'
 
   const loadTags = useCallback(async () => {
     if (!selectedProjectId) {
@@ -112,7 +131,12 @@ export default function LeadsPage() {
           tag_ids: tagFilter ? [tagFilter] : [],
           date_from: dateFrom,
           date_to: dateTo,
-          search,
+          q: search,
+          is_trash: isTrashTab,
+          partner_id: partnerFilter || undefined,
+          age_from: parseOptionalNumber(ageFrom),
+          age_to: parseOptionalNumber(ageTo),
+          country: countryFilter,
           limit: 100,
           offset: 0,
         }),
@@ -127,7 +151,21 @@ export default function LeadsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [dateFrom, dateTo, loadTags, search, selectedBotIds, selectedProjectId, statusFilter, tagFilter])
+  }, [
+    ageFrom,
+    ageTo,
+    countryFilter,
+    dateFrom,
+    dateTo,
+    isTrashTab,
+    loadTags,
+    partnerFilter,
+    search,
+    selectedBotIds,
+    selectedProjectId,
+    statusFilter,
+    tagFilter,
+  ])
 
   const loadPartners = useCallback(async () => {
     if (!selectedProjectId) {
@@ -164,11 +202,12 @@ export default function LeadsPage() {
     setNotice('')
 
     try {
-      await rejectLead(pendingAction.lead.id, selectedProjectId)
-      setNotice('Лид архивирован как отклонённый.')
+      await trashLead(pendingAction.lead.id, selectedProjectId)
+      setNotice('Лид перемещён в корзину.')
 
       setPendingAction(null)
-      await loadPage()
+      setLeads((items) => items.filter((item) => item.id !== pendingAction.lead.id))
+      setTotal((value) => Math.max(0, value - 1))
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -178,6 +217,27 @@ export default function LeadsPage() {
 
   const openLeadChat = (lead: Lead) => {
     navigate(`/chats?chat_id=${encodeURIComponent(lead.chat_id)}`)
+  }
+
+  const handleRestore = async (lead: Lead) => {
+    if (!selectedProjectId || mutatingLeadId) {
+      return
+    }
+
+    setMutatingLeadId(lead.id)
+    setError('')
+    setNotice('')
+
+    try {
+      await restoreLead(lead.id, selectedProjectId)
+      setNotice('Лид восстановлен.')
+      setLeads((items) => items.filter((item) => item.id !== lead.id))
+      setTotal((value) => Math.max(0, value - 1))
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось восстановить лида.'))
+    } finally {
+      setMutatingLeadId(null)
+    }
   }
 
   if (!selectedProjectId) {
@@ -204,18 +264,52 @@ export default function LeadsPage() {
             </p>
             <h1 className="mt-1 text-2xl font-semibold text-white">Карточки лидов</h1>
             <p className="mt-1 text-sm text-gray-500">
-              {statusFilter ? `${total} найдено` : `${activeLeadCount} активных`}
+              {isTrashTab ? `${total} в корзине` : statusFilter ? `${total} найдено` : `${activeLeadCount} активных`}
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void loadPage()}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white"
-          >
-            {isLoading ? <LoaderCircle size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            Обновить
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('active')}
+              className={`inline-flex h-10 items-center justify-center rounded-xl border px-4 text-sm font-semibold transition ${
+                !isTrashTab
+                  ? 'border-accent-300/50 bg-accent-500/15 text-accent-100'
+                  : 'border-white/10 bg-white/[0.04] text-gray-300 hover:border-white/20'
+              }`}
+            >
+              Активные лиды
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('trash')}
+              className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${
+                isTrashTab
+                  ? 'border-amber-300/50 bg-amber-500/15 text-amber-100'
+                  : 'border-white/10 bg-white/[0.04] text-gray-300 hover:border-white/20'
+              }`}
+            >
+              <Trash2 size={15} />
+              Корзина / Треш
+            </button>
+            <button
+              type="button"
+              title="Фильтры"
+              onClick={() => setIsFiltersOpen((value) => !value)}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+            >
+              <Filter size={16} />
+              Фильтры
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadPage()}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+            >
+              {isLoading ? <LoaderCircle size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              Обновить
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_180px_180px_180px_180px]">
@@ -265,6 +359,47 @@ export default function LeadsPage() {
             className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
           />
         </div>
+
+        {isFiltersOpen ? (
+          <div className="mt-3 grid gap-3 rounded-xl border border-white/5 bg-white/[0.025] p-3 md:grid-cols-2 xl:grid-cols-4">
+            <select
+              value={partnerFilter}
+              onChange={(event) => setPartnerFilter(event.target.value)}
+              className="h-10 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
+            >
+              <option value="">Все партнёры</option>
+              {partners.map((partner) => (
+                <option key={partner.id} value={partner.id}>
+                  {partner.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={0}
+              max={150}
+              value={ageFrom}
+              onChange={(event) => setAgeFrom(event.target.value)}
+              placeholder="Возраст от"
+              className="h-10 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/60"
+            />
+            <input
+              type="number"
+              min={0}
+              max={150}
+              value={ageTo}
+              onChange={(event) => setAgeTo(event.target.value)}
+              placeholder="Возраст до"
+              className="h-10 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/60"
+            />
+            <input
+              value={countryFilter}
+              onChange={(event) => setCountryFilter(event.target.value)}
+              placeholder="Страна"
+              className="h-10 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/60"
+            />
+          </div>
+        ) : null}
       </header>
 
       {error ? (
@@ -289,8 +424,8 @@ export default function LeadsPage() {
         {!isLoading && leads.length === 0 ? (
           <EmptyState
             icon={<Tag size={30} />}
-            title="Лидов пока нет"
-            description="Попробуйте изменить фильтры или дождаться новых обращений из Telegram."
+            title={isTrashTab ? 'Корзина пуста' : 'Лидов пока нет'}
+            description={isTrashTab ? 'Здесь появятся лиды, перемещённые в корзину.' : 'Попробуйте изменить фильтры или дождаться новых обращений из Telegram.'}
           />
         ) : null}
 
@@ -300,10 +435,13 @@ export default function LeadsPage() {
               <LeadCard
                 key={lead.id}
                 lead={lead}
+                projectId={selectedProjectId}
                 isMutating={mutatingLeadId === lead.id}
-                onReject={(item) => setPendingAction({ type: 'reject', lead: item })}
-                onOpenChat={openLeadChat}
-                onSubmitToPartner={partners.length > 0 ? (item) => setPartnerLead(item) : undefined}
+                isTrashView={isTrashTab}
+                onTrash={(item) => setPendingAction({ type: 'trash', lead: item })}
+                onRestore={(item) => void handleRestore(item)}
+                onOpenChat={isTrashTab ? undefined : openLeadChat}
+                onSubmitToPartner={!isTrashTab && partners.length > 0 ? (item) => setPartnerLead(item) : undefined}
               />
             ))}
           </div>
@@ -312,9 +450,9 @@ export default function LeadsPage() {
 
       {pendingAction ? (
         <ConfirmDialog
-          title="Удалить лид?"
-          description="Лид не будет физически удалён. Он перейдёт в отклонённые и исчезнет из активного списка."
-          confirmLabel="Удалить"
+          title="Переместить лида в корзину?"
+          description="Лид исчезнет из активных карточек, но останется доступен во вкладке «Корзина / Треш»."
+          confirmLabel="В корзину"
           tone="danger"
           isLoading={mutatingLeadId === pendingAction.lead.id}
           onCancel={() => setPendingAction(null)}

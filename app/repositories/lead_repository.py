@@ -33,6 +33,7 @@ from app.models.chat import Chat
 from app.models.lead import Lead
 from app.models.lead import LeadTag
 from app.models.lead_status import LeadStatus
+from app.models.partner import LeadSubmission
 from app.models.tracking import TrackingLink
 from app.models.user import User
 from app.repositories.base import BaseRepository
@@ -53,12 +54,25 @@ class LeadRepository(BaseRepository[Lead]):
                 Lead.id == lead_id,
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
+                Lead.is_trash.is_(False),
             )
         )
         return result.scalar_one_or_none()
 
     async def get_by_chat(self, chat_id: UUID, project_id: UUID) -> Optional[Lead]:
         """Fetch a lead by chat, scoped to a project."""
+        result = await self.db.execute(
+            select(Lead).where(
+                Lead.chat_id == chat_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                Lead.is_trash.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_existing_by_chat(self, chat_id: UUID, project_id: UUID) -> Optional[Lead]:
+        """Fetch a non-deleted lead by chat, including trash rows."""
         result = await self.db.execute(
             select(Lead).where(
                 Lead.chat_id == chat_id,
@@ -91,6 +105,12 @@ class LeadRepository(BaseRepository[Lead]):
         date_to: Optional[date] = None,
         tag_ids: list[UUID] | None = None,
         search: Optional[str] = None,
+        q: Optional[str] = None,
+        is_trash: bool = False,
+        partner_id: Optional[UUID] = None,
+        age_from: Optional[int] = None,
+        age_to: Optional[int] = None,
+        country: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Lead]:
@@ -103,6 +123,7 @@ class LeadRepository(BaseRepository[Lead]):
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
+                Lead.is_trash.is_(is_trash),
                 Chat.reset_at.is_(None),
             )
         )
@@ -110,7 +131,7 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.where(Lead.status_id == status_id)
         if status_code is not None:
             stmt = stmt.where(LeadStatus.code == status_code)
-        if status_id is None and status_code is None:
+        if status_id is None and status_code is None and not is_trash:
             stmt = stmt.where(~LeadStatus.code.in_(DEFAULT_EXCLUDED_STATUS_CODES))
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
@@ -134,14 +155,29 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.join(LeadTag, LeadTag.lead_id == Lead.id).where(
                 LeadTag.tag_id.in_(tag_ids)
             )
-        if search:
-            needle = f"%{search.strip().lower()}%"
+        if partner_id is not None:
+            stmt = stmt.join(LeadSubmission, LeadSubmission.lead_id == Lead.id).where(
+                LeadSubmission.partner_integration_id == partner_id
+            )
+        if age_from is not None:
+            stmt = stmt.where(Lead.age >= age_from)
+        if age_to is not None:
+            stmt = stmt.where(Lead.age <= age_to)
+        if country:
+            stmt = stmt.where(
+                func.lower(func.coalesce(Lead.country, "")) == country.strip().lower()
+            )
+        effective_search = q if q is not None else search
+        if effective_search:
+            needle = f"%{effective_search.strip().lower()}%"
             stmt = stmt.where(
                 or_(
+                    func.lower(func.coalesce(Lead.name, "")).like(needle),
                     func.lower(func.coalesce(Lead.username, "")).like(needle),
                     func.lower(func.coalesce(Lead.phone, "")).like(needle),
                     func.lower(func.coalesce(Chat.contact_name, "")).like(needle),
                     func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle),
+                    func.lower(func.coalesce(Chat.external_user_id, "")).like(needle),
                 )
             )
 
@@ -165,6 +201,12 @@ class LeadRepository(BaseRepository[Lead]):
         date_to: Optional[date] = None,
         tag_ids: list[UUID] | None = None,
         search: Optional[str] = None,
+        q: Optional[str] = None,
+        is_trash: bool = False,
+        partner_id: Optional[UUID] = None,
+        age_from: Optional[int] = None,
+        age_to: Optional[int] = None,
+        country: Optional[str] = None,
     ) -> int:
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -175,6 +217,7 @@ class LeadRepository(BaseRepository[Lead]):
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
+                Lead.is_trash.is_(is_trash),
                 Chat.reset_at.is_(None),
             )
         )
@@ -182,7 +225,7 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.where(Lead.status_id == status_id)
         if status_code is not None:
             stmt = stmt.where(LeadStatus.code == status_code)
-        if status_id is None and status_code is None:
+        if status_id is None and status_code is None and not is_trash:
             stmt = stmt.where(~LeadStatus.code.in_(DEFAULT_EXCLUDED_STATUS_CODES))
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
@@ -206,14 +249,29 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.join(LeadTag, LeadTag.lead_id == Lead.id).where(
                 LeadTag.tag_id.in_(tag_ids)
             )
-        if search:
-            needle = f"%{search.strip().lower()}%"
+        if partner_id is not None:
+            stmt = stmt.join(LeadSubmission, LeadSubmission.lead_id == Lead.id).where(
+                LeadSubmission.partner_integration_id == partner_id
+            )
+        if age_from is not None:
+            stmt = stmt.where(Lead.age >= age_from)
+        if age_to is not None:
+            stmt = stmt.where(Lead.age <= age_to)
+        if country:
+            stmt = stmt.where(
+                func.lower(func.coalesce(Lead.country, "")) == country.strip().lower()
+            )
+        effective_search = q if q is not None else search
+        if effective_search:
+            needle = f"%{effective_search.strip().lower()}%"
             stmt = stmt.where(
                 or_(
+                    func.lower(func.coalesce(Lead.name, "")).like(needle),
                     func.lower(func.coalesce(Lead.username, "")).like(needle),
                     func.lower(func.coalesce(Lead.phone, "")).like(needle),
                     func.lower(func.coalesce(Chat.contact_name, "")).like(needle),
                     func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle),
+                    func.lower(func.coalesce(Chat.external_user_id, "")).like(needle),
                 )
             )
 
@@ -353,6 +411,59 @@ class LeadRepository(BaseRepository[Lead]):
             return None
         return await self.get_active(lead_id, project_id)
 
+    async def set_trash(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        *,
+        is_trash: bool,
+    ) -> Optional[Lead]:
+        result = await self.db.execute(
+            update(Lead)
+            .where(
+                Lead.id == lead_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+            )
+            .values(is_trash=is_trash, updated_at=func.now())
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_existing_by_id(lead_id, project_id)
+
+    async def get_existing_by_id(self, lead_id: UUID, project_id: UUID) -> Optional[Lead]:
+        result = await self.db.execute(
+            select(Lead).where(
+                Lead.id == lead_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def mark_deleted_for_chat(
+        self,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> Optional[Lead]:
+        result = await self.db.execute(
+            update(Lead)
+            .where(
+                Lead.chat_id == chat_id,
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+            )
+            .values(
+                is_deleted=True,
+                is_trash=False,
+                manager_id=None,
+                updated_at=func.now(),
+            )
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_any_by_chat(chat_id, project_id)
+
     async def set_status_by_code(
         self,
         lead_id: UUID,
@@ -414,10 +525,11 @@ class LeadRepository(BaseRepository[Lead]):
             .where(
                 Lead.id == lead_id,
                 Lead.project_id == project_id,
-                Lead.is_deleted.is_(False),
             )
             .values(
                 status_id=new_status.id,
+                is_deleted=False,
+                is_trash=False,
                 manager_id=None,
                 name=None,
                 phone=None,

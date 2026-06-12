@@ -10,11 +10,13 @@ import {
   createBroadcast,
   deleteBroadcast,
   fetchBroadcastDetailedAnalytics,
+  fetchBroadcastErrorLog,
   fetchBroadcastReport,
   fetchBroadcasts,
   fetchBroadcastTemplates,
   fetchProjectSnippets,
   pauseBroadcast,
+  permanentlyDeleteBroadcast,
   resumeBroadcast,
   uploadBroadcastMedia,
 } from '../features/broadcasts/api'
@@ -24,6 +26,7 @@ import type {
   Broadcast,
   BroadcastContent,
   BroadcastDeliveryAnalytics,
+  BroadcastErrorLogRow,
   BroadcastOption,
   BroadcastReport,
   BroadcastTemplate,
@@ -98,8 +101,10 @@ export default function BroadcastsPage() {
   const [chatFilterPresets, setChatFilterPresets] = useState<ChatFilterPreset[]>([])
   const [reports, setReports] = useState<Record<string, BroadcastReport>>({})
   const [detailedAnalytics, setDetailedAnalytics] = useState<Record<string, BroadcastDeliveryAnalytics>>({})
+  const [errorLogs, setErrorLogs] = useState<Record<string, BroadcastErrorLogRow[]>>({})
   const [expandedAnalyticsIds, setExpandedAnalyticsIds] = useState<Set<string>>(() => new Set())
   const [loadingAnalyticsIds, setLoadingAnalyticsIds] = useState<Set<string>>(() => new Set())
+  const [loadingErrorLogIds, setLoadingErrorLogIds] = useState<Set<string>>(() => new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [isOptionsLoading, setIsOptionsLoading] = useState(false)
   const [editingBroadcast, setEditingBroadcast] = useState<Broadcast | null>(null)
@@ -123,8 +128,10 @@ export default function BroadcastsPage() {
       setBroadcasts([])
       setReports({})
       setDetailedAnalytics({})
+      setErrorLogs({})
       setExpandedAnalyticsIds(new Set())
       setLoadingAnalyticsIds(new Set())
+      setLoadingErrorLogIds(new Set())
       return
     }
     setIsLoading(true)
@@ -356,6 +363,11 @@ export default function BroadcastsPage() {
         delete next[broadcast.id]
         return next
       })
+      setErrorLogs((items) => {
+        const next = { ...items }
+        delete next[broadcast.id]
+        return next
+      })
       setExpandedAnalyticsIds((items) => {
         const next = new Set(items)
         next.delete(broadcast.id)
@@ -364,6 +376,42 @@ export default function BroadcastsPage() {
       notify({ tone: 'success', message: 'Рассылка удалена из списка.' })
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось удалить рассылку.') })
+    }
+  }
+
+  const handlePermanentDelete = async (broadcast: Broadcast) => {
+    if (
+      !selectedProjectId ||
+      !window.confirm('Удалить рассылку из базы навсегда? Это действие нельзя отменить.')
+    ) {
+      return
+    }
+    try {
+      await permanentlyDeleteBroadcast(broadcast.id, selectedProjectId)
+      setBroadcasts((items) => items.filter((item) => item.id !== broadcast.id))
+      setReports((items) => {
+        const next = { ...items }
+        delete next[broadcast.id]
+        return next
+      })
+      setDetailedAnalytics((items) => {
+        const next = { ...items }
+        delete next[broadcast.id]
+        return next
+      })
+      setErrorLogs((items) => {
+        const next = { ...items }
+        delete next[broadcast.id]
+        return next
+      })
+      setExpandedAnalyticsIds((items) => {
+        const next = new Set(items)
+        next.delete(broadcast.id)
+        return next
+      })
+      notify({ tone: 'success', message: 'Рассылка удалена из базы.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось удалить рассылку из базы.') })
     }
   }
 
@@ -384,9 +432,14 @@ export default function BroadcastsPage() {
     }
 
     setLoadingAnalyticsIds((items) => new Set(items).add(broadcast.id))
+    setLoadingErrorLogIds((items) => new Set(items).add(broadcast.id))
     try {
-      const analytics = await fetchBroadcastDetailedAnalytics(broadcast.id, selectedProjectId)
+      const [analytics, errors] = await Promise.all([
+        fetchBroadcastDetailedAnalytics(broadcast.id, selectedProjectId),
+        fetchBroadcastErrorLog(broadcast.id, selectedProjectId),
+      ])
       setDetailedAnalytics((items) => ({ ...items, [broadcast.id]: analytics }))
+      setErrorLogs((items) => ({ ...items, [broadcast.id]: errors }))
     } catch (err) {
       setExpandedAnalyticsIds((items) => {
         const next = new Set(items)
@@ -396,6 +449,11 @@ export default function BroadcastsPage() {
       notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось загрузить аналитику доставки.') })
     } finally {
       setLoadingAnalyticsIds((items) => {
+        const next = new Set(items)
+        next.delete(broadcast.id)
+        return next
+      })
+      setLoadingErrorLogIds((items) => {
         const next = new Set(items)
         next.delete(broadcast.id)
         return next
@@ -480,8 +538,10 @@ export default function BroadcastsPage() {
             botLabelById={botLabelById}
             reports={reports}
             detailedAnalytics={detailedAnalytics}
+            errorLogs={errorLogs}
             expandedAnalyticsIds={expandedAnalyticsIds}
             loadingAnalyticsIds={loadingAnalyticsIds}
+            loadingErrorLogIds={loadingErrorLogIds}
             onOpen={(broadcast) => {
               setEditingBroadcast(broadcast)
               setIsWizardOpen(true)
@@ -491,6 +551,7 @@ export default function BroadcastsPage() {
             onPause={(broadcast) => void handlePause(broadcast)}
             onResume={(broadcast) => void handleResume(broadcast)}
             onDelete={(broadcast) => void handleDelete(broadcast)}
+            onPermanentDelete={(broadcast) => void handlePermanentDelete(broadcast)}
             onToggleDetailedAnalytics={(broadcast) => void handleToggleDetailedAnalytics(broadcast)}
             onRefreshReport={(broadcast) => {
               void fetchBroadcastReport(broadcast.id, selectedProjectId).then((report) =>

@@ -23,6 +23,7 @@ export type Lead = {
   updated_at: string
   created_at: string
   is_deleted: boolean
+  is_trash: boolean
   tags: LeadTag[]
   bot_id?: string | null
   bot_name?: string | null
@@ -48,6 +49,29 @@ export type LeadStatus = {
   created_at: string
 }
 
+export type DuplicateSubmissionHistory = {
+  partner_integration_id: string
+  partner_name: string
+  status: string
+  partner_status: string | null
+  error_message: string | null
+  partner_feedback: string | null
+  created_at: string
+}
+
+export type DuplicateLeadDetail = {
+  lead_id: string
+  project_name: string
+  bot_name: string | null
+  created_at: string
+  match_type: string
+  matched_fields: string[]
+  lead_status: string | null
+  is_trash: boolean
+  is_deleted: boolean
+  submission_history: DuplicateSubmissionHistory[]
+}
+
 export type LeadListParams = {
   project_id: string
   bot_ids?: string[]
@@ -56,6 +80,12 @@ export type LeadListParams = {
   date_to?: string
   tag_ids?: string[]
   search?: string
+  q?: string
+  is_trash?: boolean
+  partner_id?: string
+  age_from?: number
+  age_to?: number
+  country?: string
   limit?: number
   offset?: number
 }
