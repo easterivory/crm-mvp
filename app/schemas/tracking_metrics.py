@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from app.core.constants import TrackingConversionStatus
+
 
 class TrackingMetricSummary(BaseModel):
     clicks: int = 0
@@ -39,6 +41,9 @@ class TrackingLinkMetric(BaseModel):
     ad_type: Optional[str] = None
     payment_type: Optional[str] = None
     is_active: bool
+    base_conversion_rate: float
+    min_sample_size: int
+    conversion_status: TrackingConversionStatus
     summary: TrackingMetricSummary
 
 
@@ -73,6 +78,9 @@ class TrackingLinkMetricsResponse(BaseModel):
     bot_id: uuid.UUID
     code: str
     title: str
+    base_conversion_rate: float
+    min_sample_size: int
+    conversion_status: TrackingConversionStatus
     date_from: date
     date_to: date
     summary: TrackingMetricSummary

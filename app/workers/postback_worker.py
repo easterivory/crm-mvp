@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.database import get_db_session
+from app.services.google_sheets_service import GoogleSheetsService
 from app.services.postback_service import PostbackService
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
 
@@ -64,6 +65,34 @@ async def send_lead_postback(
         return {"status": submission.status, "submission_id": str(submission.id)}
 
 
+async def export_lead_to_sheets_task(
+    ctx: dict,
+    lead_id: str,
+    project_id: str,
+) -> dict:
+    try:
+        lead_uuid = UUID(lead_id)
+        project_uuid = UUID(project_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    try:
+        async with get_db_session() as db:
+            await GoogleSheetsService(db).export_lead_to_sheet(
+                lead_id=lead_uuid,
+                project_id=project_uuid,
+            )
+            await db.commit()
+        return {"status": "completed", "lead_id": str(lead_uuid)}
+    except Exception as exc:
+        logger.exception(
+            "Google Sheets export task failed lead_id=%s project_id=%s",
+            lead_id,
+            project_id,
+        )
+        return {"status": "failed", "error": str(exc)[:1000]}
+
+
 def _redis_settings_from_url() -> Any:
     if RedisSettings is None:
         return None
@@ -79,5 +108,10 @@ def _redis_settings_from_url() -> Any:
 
 class WorkerSettings:
     """ARQ compatibility settings."""
-    functions = [send_lead_postback, process_broadcast, process_due_broadcasts]
+    functions = [
+        send_lead_postback,
+        export_lead_to_sheets_task,
+        process_broadcast,
+        process_due_broadcasts,
+    ]
     redis_settings = _redis_settings_from_url()

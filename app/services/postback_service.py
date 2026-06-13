@@ -17,6 +17,7 @@ from app.models.partner import LeadSubmission, PartnerIntegration
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.services.chat_audit_service import ChatAuditService
+from app.services.google_sheets_trigger_service import GoogleSheetsTriggerService
 from app.services.lead_identity_service import LeadIdentityService
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class PostbackService:
         self.lead_repo = LeadRepository(db)
         self.audit_service = ChatAuditService(db)
         self.identity_service = LeadIdentityService(db)
+        self.google_sheets_trigger = GoogleSheetsTriggerService(db)
 
     def build_payload(self, lead: Lead, integration: PartnerIntegration) -> dict[str, Any]:
         mapping = integration.field_mapping or {}
@@ -477,6 +479,7 @@ class PostbackService:
         integration: PartnerIntegration,
         partner_status: str,
     ) -> None:
+        old_status_id = lead.status_id
         for status_code in self._lead_status_candidates(integration, partner_status):
             updated = await self.lead_repo.set_status_by_code(
                 lead.id,
@@ -484,6 +487,12 @@ class PostbackService:
                 status_code,
             )
             if updated is not None:
+                if old_status_id != updated.status_id:
+                    await self.google_sheets_trigger.enqueue_if_status_triggered(
+                        lead_id=updated.id,
+                        project_id=updated.project_id,
+                        status_id=updated.status_id,
+                    )
                 return
         logger.warning(
             "Partner status could not be mapped to an existing lead status "

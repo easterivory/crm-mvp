@@ -113,6 +113,8 @@ class TrackingService:
                     cost_model=data.cost_model,
                     price_per_unit=data.price_per_unit,
                     spend=data.spend,
+                    base_conversion_rate=data.base_conversion_rate,
+                    min_sample_size=data.min_sample_size,
                     target_step_id=target_step_id,
                 )
         except IntegrityError as exc:
@@ -137,6 +139,8 @@ class TrackingService:
                     cost_model=data.cost_model,
                     price_per_unit=data.price_per_unit,
                     spend=data.spend,
+                    base_conversion_rate=data.base_conversion_rate,
+                    min_sample_size=data.min_sample_size,
                     target_step_id=target_step_id,
                 )
 
@@ -272,6 +276,8 @@ class TrackingService:
                 cost_model=data.cost_model,
                 price_per_unit=data.price_per_unit,
                 spend=data.spend,
+                base_conversion_rate=data.base_conversion_rate,
+                min_sample_size=data.min_sample_size,
                 target_step_id=target_step_id,
                 created_by_user_id=actor.id,
             )
@@ -654,5 +660,7 @@ class TrackingService:
             created_by_user_id=link.created_by_user_id,
             created_at=link.created_at,
             updated_at=link.updated_at,
+            base_conversion_rate=link.base_conversion_rate,
+            min_sample_size=link.min_sample_size,
             total_spend=total_spend,
         )

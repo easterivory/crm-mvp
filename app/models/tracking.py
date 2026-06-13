@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Date, Text
+from sqlalchemy import Boolean, CheckConstraint, Date, Float, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -30,6 +30,14 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_tracking_links_is_active", "is_active"),
         Index("ix_tracking_links_target_step_id", "target_step_id"),
         Index("ix_tracking_links_buyer_id", "buyer_id"),
+        CheckConstraint(
+            "base_conversion_rate >= 0 AND base_conversion_rate <= 100",
+            name="ck_tracking_links_base_conversion_rate_percent",
+        ),
+        CheckConstraint(
+            "min_sample_size >= 1",
+            name="ck_tracking_links_min_sample_size_positive",
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -83,6 +91,18 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         nullable=False,
         default=Decimal("0"),
         server_default="0",
+    )
+    base_conversion_rate: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=10.0,
+        server_default="10.0",
+    )
+    min_sample_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=500,
+        server_default="500",
     )
     target_step_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("bot_steps.id"), nullable=True

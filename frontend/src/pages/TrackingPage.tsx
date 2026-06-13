@@ -5,7 +5,9 @@ import {
   CalendarDays,
   Copy,
   DollarSign,
+  Flame,
   LoaderCircle,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -38,11 +40,13 @@ import {
   fetchTrackingLinks,
   fetchTrackingSpends,
   restoreTrackingLink,
+  updateTrackingLink,
   updateTrackingSpend,
 } from '../features/tracking/api'
 import type {
   BreakdownItem,
   FunnelStepMetric,
+  TrackingConversionStatus,
   TrackingLink,
   TrackingLinkMetricsResponse,
   TrackingMetricSummary,
@@ -54,6 +58,9 @@ import { Modal } from '../shared/ui'
 
 type ActiveFilter = 'active' | 'inactive' | 'all'
 type SpendMode = 'create' | 'edit'
+
+const DEFAULT_BASE_CONVERSION_RATE = '10.0'
+const DEFAULT_MIN_SAMPLE_SIZE = '500'
 
 const zeroSummary: TrackingMetricSummary = {
   clicks: 0,
@@ -129,6 +136,84 @@ function formatMoney(value: string | number | null | undefined, currency = 'USD'
 
 function formatPercent(value: string | number | null | undefined) {
   return `${toNumber(value).toFixed(1)}%`
+}
+
+function formatBenchmarkPercent(value: string | number | null | undefined) {
+  return `${toNumber(value).toFixed(1)}%`
+}
+
+function parseBaseConversionRate(value: string) {
+  if (value.trim() === '') {
+    return null
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    return null
+  }
+  return parsed
+}
+
+function parseMinSampleSize(value: string) {
+  if (value.trim() === '') {
+    return null
+  }
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return null
+  }
+  return parsed
+}
+
+function conversionSampleSize(summary: TrackingMetricSummary) {
+  return summary.clicks > 0 ? summary.clicks : summary.starts
+}
+
+function conversionCardClass(status: TrackingConversionStatus | undefined) {
+  if (status === 'high_cr') {
+    return 'border-emerald-500/25 bg-emerald-500/[0.055] shadow-lg shadow-emerald-500/5'
+  }
+  if (status === 'low_cr') {
+    return 'border-red-500/20 bg-red-500/[0.065] shadow-card'
+  }
+  return 'border-white/5 bg-surface shadow-card'
+}
+
+function conversionTextClass(status: TrackingConversionStatus | undefined) {
+  if (status === 'high_cr') {
+    return 'text-emerald-300'
+  }
+  if (status === 'low_cr') {
+    return 'text-red-300'
+  }
+  return 'text-gray-100'
+}
+
+function conversionHelperClass(status: TrackingConversionStatus | undefined) {
+  if (status === 'high_cr') {
+    return 'text-emerald-300'
+  }
+  if (status === 'low_cr') {
+    return 'text-red-300'
+  }
+  return 'text-gray-500'
+}
+
+function conversionHelperText(
+  status: TrackingConversionStatus | undefined,
+  summary: TrackingMetricSummary,
+  baseConversionRate: number,
+  minSampleSize: number,
+) {
+  if (status === 'insufficient_data') {
+    return `${formatNumber(conversionSampleSize(summary))}/${formatNumber(minSampleSize)} кликов`
+  }
+  if (status === 'low_cr') {
+    return `Конверсия ниже цели ${formatBenchmarkPercent(baseConversionRate)}`
+  }
+  if (status === 'high_cr') {
+    return `Конверсия выше цели ${formatBenchmarkPercent(baseConversionRate)}`
+  }
+  return ''
 }
 
 function formatShortDate(value: string) {
@@ -239,9 +324,29 @@ export default function TrackingPage() {
   const [createAdType, setCreateAdType] = useState('')
   const [createPaymentType, setCreatePaymentType] = useState('')
   const [createInviteLink, setCreateInviteLink] = useState('')
+  const [createBaseConversionRate, setCreateBaseConversionRate] = useState(
+    DEFAULT_BASE_CONVERSION_RATE,
+  )
+  const [createMinSampleSize, setCreateMinSampleSize] = useState(
+    DEFAULT_MIN_SAMPLE_SIZE,
+  )
   const [createError, setCreateError] = useState('')
   const [isCreatingLink, setIsCreatingLink] = useState(false)
   const [mutatingLinkId, setMutatingLinkId] = useState<string | null>(null)
+  const [editingLink, setEditingLink] = useState<TrackingLink | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editBuyerName, setEditBuyerName] = useState('')
+  const [editAdType, setEditAdType] = useState('')
+  const [editPaymentType, setEditPaymentType] = useState('')
+  const [editInviteLink, setEditInviteLink] = useState('')
+  const [editBaseConversionRate, setEditBaseConversionRate] = useState(
+    DEFAULT_BASE_CONVERSION_RATE,
+  )
+  const [editMinSampleSize, setEditMinSampleSize] = useState(
+    DEFAULT_MIN_SAMPLE_SIZE,
+  )
+  const [editError, setEditError] = useState('')
+  const [isUpdatingLink, setIsUpdatingLink] = useState(false)
   const [detailLink, setDetailLink] = useState<TrackingLink | null>(null)
   const [detailMetrics, setDetailMetrics] = useState<TrackingLinkMetricsResponse | null>(null)
   const [spends, setSpends] = useState<TrackingSpend[]>([])
@@ -400,6 +505,8 @@ export default function TrackingPage() {
     setCreateAdType('')
     setCreatePaymentType('')
     setCreateInviteLink('')
+    setCreateBaseConversionRate(DEFAULT_BASE_CONVERSION_RATE)
+    setCreateMinSampleSize(DEFAULT_MIN_SAMPLE_SIZE)
     setCreateError('')
     setIsCreateOpen(true)
   }
@@ -414,6 +521,16 @@ export default function TrackingPage() {
   const handleCreateLink = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!selectedProjectId || !createTitle.trim() || !createBotId || isCreatingLink) {
+      return
+    }
+    const baseConversionRate = parseBaseConversionRate(createBaseConversionRate)
+    const minSampleSize = parseMinSampleSize(createMinSampleSize)
+    if (baseConversionRate === null) {
+      setCreateError('Целевая конверсия должна быть числом от 0 до 100.')
+      return
+    }
+    if (minSampleSize === null) {
+      setCreateError('Минимальная выборка должна быть целым числом от 1.')
       return
     }
 
@@ -431,6 +548,8 @@ export default function TrackingPage() {
         ad_type: createAdType.trim() || null,
         payment_type: createPaymentType.trim() || null,
         invite_link: createInviteLink.trim() || null,
+        base_conversion_rate: baseConversionRate,
+        min_sample_size: minSampleSize,
       })
       setIsCreateOpen(false)
       setNotice('Tracking link создан.')
@@ -439,6 +558,70 @@ export default function TrackingPage() {
       setCreateError(getErrorMessage(err, 'Could not create tracking link.'))
     } finally {
       setIsCreatingLink(false)
+    }
+  }
+
+  const openEditLink = (link: TrackingLink) => {
+    setEditingLink(link)
+    setEditTitle(link.title)
+    setEditBuyerName(link.buyer_name ?? '')
+    setEditAdType(link.ad_type ?? '')
+    setEditPaymentType(link.payment_type ?? '')
+    setEditInviteLink(link.invite_link ?? '')
+    setEditBaseConversionRate(String(link.base_conversion_rate ?? 10))
+    setEditMinSampleSize(String(link.min_sample_size ?? 500))
+    setEditError('')
+  }
+
+  const closeEditLink = () => {
+    if (!isUpdatingLink) {
+      setEditingLink(null)
+      setEditError('')
+    }
+  }
+
+  const handleUpdateLink = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!editingLink || !editTitle.trim() || isUpdatingLink) {
+      return
+    }
+
+    const baseConversionRate = parseBaseConversionRate(editBaseConversionRate)
+    const minSampleSize = parseMinSampleSize(editMinSampleSize)
+    if (baseConversionRate === null) {
+      setEditError('Целевая конверсия должна быть числом от 0 до 100.')
+      return
+    }
+    if (minSampleSize === null) {
+      setEditError('Минимальная выборка должна быть целым числом от 1.')
+      return
+    }
+
+    setIsUpdatingLink(true)
+    setEditError('')
+    setNotice('')
+
+    try {
+      const updatedLink = await updateTrackingLink(editingLink.id, {
+        title: editTitle.trim(),
+        buyer_name: editBuyerName.trim() || null,
+        ad_type: editAdType.trim() || null,
+        payment_type: editPaymentType.trim() || null,
+        invite_link: editInviteLink.trim() || null,
+        base_conversion_rate: baseConversionRate,
+        min_sample_size: minSampleSize,
+      })
+      setNotice('Tracking link обновлён.')
+      setEditingLink(null)
+      setDetailLink((current) => (current?.id === updatedLink.id ? updatedLink : current))
+      await loadPageData()
+      if (detailLink?.id === updatedLink.id) {
+        await loadDetail(updatedLink)
+      }
+    } catch (err) {
+      setEditError(getErrorMessage(err, 'Could not update tracking link.'))
+    } finally {
+      setIsUpdatingLink(false)
     }
   }
 
@@ -793,11 +976,21 @@ export default function TrackingPage() {
             const linkMetric = linkMetricsById.get(link.id)
             const linkSummary = linkMetric?.summary ?? zeroSummary
             const botLabel = botNameById.get(link.bot_id) ?? `Bot ${link.bot_id.slice(0, 8)}`
+            const conversionStatus = linkMetric?.conversion_status
+            const baseConversionRate =
+              linkMetric?.base_conversion_rate ?? link.base_conversion_rate
+            const minSampleSize = linkMetric?.min_sample_size ?? link.min_sample_size
+            const conversionHelper = conversionHelperText(
+              conversionStatus,
+              linkSummary,
+              baseConversionRate,
+              minSampleSize,
+            )
 
             return (
               <article
                 key={link.id}
-                className="rounded-xl border border-white/5 bg-surface p-4 shadow-card"
+                className={`rounded-xl border p-4 transition ${conversionCardClass(conversionStatus)}`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -820,14 +1013,24 @@ export default function TrackingPage() {
                       {botLabel} · {link.buyer_name || 'buyer не указан'} · {link.ad_type || 'тип рекламы не указан'} · {link.payment_type || 'оплата не указана'}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleCopy(link)}
-                    title="Копировать"
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
-                  >
-                    <Copy size={15} />
-                  </button>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEditLink(link)}
+                      title="Настроить"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
+                    >
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopy(link)}
+                      title="Копировать"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
+                    >
+                      <Copy size={15} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 md:grid-cols-4">
@@ -839,8 +1042,29 @@ export default function TrackingPage() {
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-gray-500">
-                    CR в лид <span className="text-gray-100">{formatPercent(linkSummary.cr_to_lead)}</span>
-                    {' '}· Отправлены <span className="text-gray-100">{formatNumber(linkSummary.submitted_leads)}</span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span>CR в лид</span>
+                      <span
+                        className={`inline-flex items-center gap-1 font-semibold ${conversionTextClass(conversionStatus)}`}
+                      >
+                        {conversionStatus === 'high_cr' ? (
+                          <Flame
+                            size={16}
+                            className="animate-pulse fill-orange-300 text-orange-300 drop-shadow-[0_0_10px_rgba(251,146,60,0.8)]"
+                          />
+                        ) : null}
+                        {formatPercent(linkSummary.cr_to_lead)}
+                      </span>
+                      <span>· Отправлены</span>
+                      <span className="text-gray-100">
+                        {formatNumber(linkSummary.submitted_leads)}
+                      </span>
+                    </div>
+                    {conversionHelper ? (
+                      <p className={`mt-1 text-xs ${conversionHelperClass(conversionStatus)}`}>
+                        {conversionHelper}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -980,6 +1204,39 @@ export default function TrackingPage() {
                 />
               </label>
             </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Целевая конверсия (%)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={createBaseConversionRate}
+                  onChange={(event) => setCreateBaseConversionRate(event.target.value)}
+                  required
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="10.0"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Минимальная выборка кликов
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={createMinSampleSize}
+                  onChange={(event) => setCreateMinSampleSize(event.target.value)}
+                  required
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="500"
+                />
+              </label>
+            </div>
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 Invite link
@@ -1006,6 +1263,141 @@ export default function TrackingPage() {
               >
                 {isCreatingLink ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
                 Создать
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {editingLink ? (
+        <Modal
+          title="Редактировать tracking link"
+          description={`Code ${editingLink.code}`}
+          onClose={closeEditLink}
+          maxWidthClassName="max-w-lg"
+        >
+          <form className="space-y-3" onSubmit={handleUpdateLink}>
+            {editError ? (
+              <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                {editError}
+              </div>
+            ) : null}
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Название
+              </span>
+              <input
+                value={editTitle}
+                onChange={(event) => setEditTitle(event.target.value)}
+                required
+                maxLength={255}
+                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                placeholder="Таргет Инста"
+              />
+            </label>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Buyer
+                </span>
+                <input
+                  value={editBuyerName}
+                  onChange={(event) => setEditBuyerName(event.target.value)}
+                  maxLength={255}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="Имя buyer"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Тип рекламы
+                </span>
+                <input
+                  value={editAdType}
+                  onChange={(event) => setEditAdType(event.target.value)}
+                  maxLength={100}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="instagram"
+                />
+              </label>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Тип оплаты
+                </span>
+                <input
+                  value={editPaymentType}
+                  onChange={(event) => setEditPaymentType(event.target.value)}
+                  maxLength={100}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="cpa"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Invite link
+                </span>
+                <input
+                  value={editInviteLink}
+                  onChange={(event) => setEditInviteLink(event.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="Готовый URL, необязательно"
+                />
+              </label>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Целевая конверсия (%)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={editBaseConversionRate}
+                  onChange={(event) => setEditBaseConversionRate(event.target.value)}
+                  required
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="10.0"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Минимальная выборка кликов
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={editMinSampleSize}
+                  onChange={(event) => setEditMinSampleSize(event.target.value)}
+                  required
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  placeholder="500"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={closeEditLink}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-gray-200 transition hover:border-white/20 hover:text-white"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={!editTitle.trim() || isUpdatingLink}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isUpdatingLink ? (
+                  <LoaderCircle size={16} className="animate-spin" />
+                ) : (
+                  <Pencil size={16} />
+                )}
+                Сохранить
               </button>
             </div>
           </form>

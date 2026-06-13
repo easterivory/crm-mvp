@@ -373,6 +373,8 @@ class TrackingMetricsRepository:
             TrackingLink.ad_type,
             TrackingLink.payment_type,
             TrackingLink.is_active,
+            TrackingLink.base_conversion_rate,
+            TrackingLink.min_sample_size,
         ).where(TrackingLink.project_id == project_id)
         if bot_id is not None:
             stmt = stmt.where(TrackingLink.bot_id == bot_id)

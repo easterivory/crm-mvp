@@ -12,6 +12,8 @@ export type TrackingLink = {
   created_by_user_id: string | null
   created_at: string
   updated_at: string
+  base_conversion_rate: number
+  min_sample_size: number
   total_spend?: string | number | null
 }
 
@@ -24,6 +26,8 @@ export type TrackingLinkCreatePayload = {
   ad_type?: string | null
   payment_type?: string | null
   invite_link?: string | null
+  base_conversion_rate?: number
+  min_sample_size?: number
 }
 
 export type TrackingLinkUpdatePayload = Partial<{
@@ -34,6 +38,8 @@ export type TrackingLinkUpdatePayload = Partial<{
   payment_type: string | null
   invite_link: string | null
   is_active: boolean
+  base_conversion_rate: number
+  min_sample_size: number
 }>
 
 export type TrackingSpend = {
@@ -83,6 +89,12 @@ export type TrackingDailyMetric = {
   spend: string | number
 }
 
+export type TrackingConversionStatus =
+  | 'insufficient_data'
+  | 'high_cr'
+  | 'low_cr'
+  | 'normal_cr'
+
 export type TrackingLinkMetric = {
   link_id: string
   code: string
@@ -91,6 +103,9 @@ export type TrackingLinkMetric = {
   ad_type: string | null
   payment_type: string | null
   is_active: boolean
+  base_conversion_rate: number
+  min_sample_size: number
+  conversion_status: TrackingConversionStatus
   summary: TrackingMetricSummary
 }
 
@@ -125,6 +140,9 @@ export type TrackingLinkMetricsResponse = {
   bot_id: string
   code: string
   title: string
+  base_conversion_rate: number
+  min_sample_size: number
+  conversion_status: TrackingConversionStatus
   date_from: string
   date_to: string
   summary: TrackingMetricSummary

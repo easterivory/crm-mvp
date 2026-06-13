@@ -49,6 +49,7 @@ from app.schemas.lead import (
 )
 from app.services.audit_service import AuditService
 from app.services.chat_audit_service import ChatAuditService
+from app.services.google_sheets_trigger_service import GoogleSheetsTriggerService
 from app.services.lead_scoring_service import LeadScoringService
 
 
@@ -61,6 +62,7 @@ class LeadService:
         self.audit = AuditService(db)
         self.chat_audit = ChatAuditService(db)
         self.scoring = LeadScoringService(db)
+        self.google_sheets_trigger = GoogleSheetsTriggerService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
 
@@ -146,6 +148,11 @@ class LeadService:
                 "to_status_is_final": new_status.is_final,
                 "manual_override": current_status.is_final,
             },
+        )
+        await self.google_sheets_trigger.enqueue_if_status_triggered(
+            lead_id=updated.id,
+            project_id=project_id,
+            status_id=new_status.id,
         )
 
         return await self._lead_out(updated)
@@ -630,6 +637,11 @@ class LeadService:
             entity_id=lead_id,
             actor_id=actor_id,
             meta=audit_meta,
+        )
+        await self.google_sheets_trigger.enqueue_if_status_triggered(
+            lead_id=updated.id,
+            project_id=project_id,
+            status_id=target_status.id,
         )
         return updated
 

@@ -6,6 +6,7 @@ Order matters for forward-reference resolution.
 
 from app.models.base import Base  # noqa: F401
 from app.models.project import Project  # noqa: F401
+from app.models.google_sheets import ProjectGoogleSheetsConfig  # noqa: F401
 from app.models.role import Role  # noqa: F401
 from app.models.lead_status import LeadStatus  # noqa: F401
 from app.models.user import User  # noqa: F401
@@ -39,6 +40,7 @@ from app.models.partner import PartnerIntegration, LeadSubmission  # noqa: F401
 __all__ = [
     "Base",
     "Project",
+    "ProjectGoogleSheetsConfig",
     "Role",
     "LeadStatus",
     "User",

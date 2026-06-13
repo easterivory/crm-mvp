@@ -12,6 +12,7 @@ from app.api.v1.routers import (
     buyers,
     chats,
     funnels,
+    google_sheets,
     health,
     leads,
     messages,
@@ -57,6 +58,7 @@ app.include_router(health.router)
 _v1_prefix = "/api/v1"
 
 app.include_router(projects.router, prefix=_v1_prefix)
+app.include_router(google_sheets.router, prefix=_v1_prefix)
 app.include_router(auth.router, prefix=_v1_prefix)
 app.include_router(users.router, prefix=_v1_prefix)
 app.include_router(buyers.router, prefix=_v1_prefix)

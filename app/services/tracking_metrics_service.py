@@ -23,6 +23,7 @@ from app.schemas.tracking_metrics import (
     TrackingMetricSummary,
     TrackingProjectMetricsResponse,
 )
+from app.services.tracking_conversion import calculate_conversion_status
 
 
 class TrackingMetricsService:
@@ -59,19 +60,30 @@ class TrackingMetricsService:
             date_from=date_from,
             date_to=date_to,
         )
-        links = [
-            TrackingLinkMetric(
-                link_id=row["link_id"],
-                code=row["code"],
-                title=row["title"],
-                buyer_name=row["buyer_name"],
-                ad_type=row["ad_type"],
-                payment_type=row["payment_type"],
-                is_active=row["is_active"],
-                summary=self._summary_from_values(row),
+        links: list[TrackingLinkMetric] = []
+        for row in link_rows:
+            summary = self._summary_from_values(row)
+            links.append(
+                TrackingLinkMetric(
+                    link_id=row["link_id"],
+                    code=row["code"],
+                    title=row["title"],
+                    buyer_name=row["buyer_name"],
+                    ad_type=row["ad_type"],
+                    payment_type=row["payment_type"],
+                    is_active=row["is_active"],
+                    base_conversion_rate=row["base_conversion_rate"],
+                    min_sample_size=row["min_sample_size"],
+                    conversion_status=calculate_conversion_status(
+                        clicks=summary.clicks,
+                        starts=summary.starts,
+                        leads=summary.leads,
+                        base_conversion_rate=row["base_conversion_rate"],
+                        min_sample_size=row["min_sample_size"],
+                    ),
+                    summary=summary,
+                )
             )
-            for row in link_rows
-        ]
         summary = self._summary_from_values(
             {
                 "clicks": sum(link.summary.clicks for link in links),
@@ -158,24 +170,35 @@ class TrackingMetricsService:
             )
         )
 
+        summary = self._summary_from_values(
+            {
+                "clicks": clicks,
+                "starts": starts,
+                "leads": leads,
+                "submitted_leads": submitted,
+                "deposits": 0,
+                "spend": spend,
+            }
+        )
+
         return TrackingLinkMetricsResponse(
             link_id=link.id,
             project_id=link.project_id,
             bot_id=link.bot_id,
             code=link.code,
             title=link.title,
+            base_conversion_rate=link.base_conversion_rate,
+            min_sample_size=link.min_sample_size,
+            conversion_status=calculate_conversion_status(
+                clicks=summary.clicks,
+                starts=summary.starts,
+                leads=summary.leads,
+                base_conversion_rate=link.base_conversion_rate,
+                min_sample_size=link.min_sample_size,
+            ),
             date_from=date_from,
             date_to=date_to,
-            summary=self._summary_from_values(
-                {
-                    "clicks": clicks,
-                    "starts": starts,
-                    "leads": leads,
-                    "submitted_leads": submitted,
-                    "deposits": 0,
-                    "spend": spend,
-                }
-            ),
+            summary=summary,
             daily=daily,
             funnel_steps=funnel_steps,
             age_breakdown=self._build_breakdown(

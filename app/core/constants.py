@@ -126,6 +126,13 @@ class TrackingCostModel(StrEnum):
     CPA = "cpa"
 
 
+class TrackingConversionStatus(StrEnum):
+    INSUFFICIENT_DATA = "insufficient_data"
+    HIGH_CR = "high_cr"
+    LOW_CR = "low_cr"
+    NORMAL_CR = "normal_cr"
+
+
 class TrackingSpendSource(StrEnum):
     CRM_MANUAL = "crm_manual"
     BUYER_BOT = "buyer_bot"

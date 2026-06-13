@@ -16,12 +16,20 @@ import axios from 'axios'
 
 import api from '../api/client'
 import BuyersSettings from '../features/buyers/components/BuyersSettings'
+import GoogleSheetsSettings from '../features/googleSheets/components/GoogleSheetsSettings'
 import PartnersSettings from '../features/partners/components/PartnersSettings'
 import { useProjectBotSelection } from '../shared/lib'
 import { Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
-type TabKey = 'project' | 'team' | 'buyers' | 'statuses' | 'tags' | 'partners'
+type TabKey =
+  | 'project'
+  | 'team'
+  | 'buyers'
+  | 'statuses'
+  | 'tags'
+  | 'partners'
+  | 'googleSheets'
 
 type PaginatedResponse<T> = {
   items: T[]
@@ -77,6 +85,7 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'statuses', label: 'Статусы' },
   { key: 'tags', label: 'Теги' },
   { key: 'partners', label: 'Партнёры' },
+  { key: 'googleSheets', label: 'Google Таблицы' },
 ]
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
@@ -168,6 +177,9 @@ export default function SettingsPage() {
           return canManageProject
         }
         if (tab.key === 'partners') {
+          return canManageProject
+        }
+        if (tab.key === 'googleSheets') {
           return canManageProject
         }
         return true
@@ -1222,6 +1234,10 @@ export default function SettingsPage() {
 
         {!isLoading && activeTab === 'partners' ? (
           <PartnersSettings projectId={activeProjectId} />
+        ) : null}
+
+        {!isLoading && activeTab === 'googleSheets' ? (
+          <GoogleSheetsSettings projectId={activeProjectId} />
         ) : null}
       </div>
 

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import TrackingCostModel
 from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.tracking import TrafficStatsOut
+from app.services.tracking_conversion import calculate_conversion_status
 
 
 class AnalyticsService:
@@ -45,6 +46,15 @@ class AnalyticsService:
                     leads=leads_count,
                     spend=spend,
                     cpl=cpl,
+                    base_conversion_rate=link.base_conversion_rate,
+                    min_sample_size=link.min_sample_size,
+                    conversion_status=calculate_conversion_status(
+                        clicks=clicks,
+                        starts=clicks,
+                        leads=leads_count,
+                        base_conversion_rate=link.base_conversion_rate,
+                        min_sample_size=link.min_sample_size,
+                    ),
                 )
             )
 

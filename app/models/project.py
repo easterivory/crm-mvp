@@ -57,3 +57,10 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
     partner_integrations: Mapped[list[PartnerIntegration]] = relationship(
         "PartnerIntegration", back_populates="project"
     )
+    google_sheets_config: Mapped[Optional[ProjectGoogleSheetsConfig]] = relationship(
+        "ProjectGoogleSheetsConfig",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        single_parent=True,
+        uselist=False,
+    )

@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 from typing import Optional
 
@@ -64,6 +65,20 @@ class Settings(BaseSettings):
     CHAT_PHOTO_MAX_MB: int = 10
     CHAT_VIDEO_MAX_MB: int = 50
     CHAT_DOCUMENT_MAX_MB: int = 20
+
+    # Google Sheets export
+    GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+
+    @property
+    def GOOGLE_SERVICE_ACCOUNT_EMAIL(self) -> Optional[str]:
+        if not self.GOOGLE_SERVICE_ACCOUNT_JSON:
+            return None
+        try:
+            payload = json.loads(self.GOOGLE_SERVICE_ACCOUNT_JSON)
+        except json.JSONDecodeError:
+            return None
+        email = payload.get("client_email")
+        return email if isinstance(email, str) and email.strip() else None
 
 
 @lru_cache

@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.constants import TrackingConversionStatus
 from app.core.constants import TrackingCostModel
 from app.core.constants import TrackingSpendSource
 from app.schemas.common import OrmBase
@@ -24,6 +25,8 @@ class TrackingLinkCreate(BaseModel):
     cost_model: TrackingCostModel = TrackingCostModel.FIX_PDP
     price_per_unit: Decimal = Field(default=Decimal("0"), ge=0)
     spend: Decimal = Field(default=Decimal("0"), ge=0)
+    base_conversion_rate: float = Field(default=10.0, ge=0, le=100)
+    min_sample_size: int = Field(default=500, ge=1)
     target_step_id: Optional[uuid.UUID] = None
 
     @model_validator(mode="after")
@@ -49,6 +52,8 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     payment_type: Optional[str] = Field(None, max_length=100)
     invite_link: Optional[str] = None
     is_active: Optional[bool] = None
+    base_conversion_rate: Optional[float] = Field(None, ge=0, le=100)
+    min_sample_size: Optional[int] = Field(None, ge=1)
     target_step_id: Optional[uuid.UUID] = None
 
 
@@ -61,6 +66,8 @@ class TrackingLinkOut(OrmBase):
     cost_model: TrackingCostModel
     price_per_unit: Decimal
     spend: Decimal
+    base_conversion_rate: float
+    min_sample_size: int
     target_step_id: Optional[uuid.UUID]
     tracking_url: str = ""
     created_at: datetime
@@ -80,6 +87,8 @@ class TrackingLinkRead(OrmBase):
     created_by_user_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
+    base_conversion_rate: float
+    min_sample_size: int
     total_spend: Optional[Decimal] = None
 
 
@@ -120,3 +129,6 @@ class TrafficStatsOut(BaseModel):
     leads: int
     spend: Decimal
     cpl: Decimal
+    base_conversion_rate: float
+    min_sample_size: int
+    conversion_status: TrackingConversionStatus
