@@ -509,9 +509,10 @@ export default function ChatsPage() {
   const [isLeadOpen, setIsLeadOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
-  const didMountProjectRef = useRef(false)
+  const previousProjectIdRef = useRef(selectedProjectId)
   const selectedChatIdRef = useRef<string | null>(selectedChatId)
   const searchParamsRef = useRef(searchParams)
+  const setSearchParamsRef = useRef(setSearchParams)
   const chatsRef = useRef<Chat[]>([])
   const chatsAbortRef = useRef<AbortController | null>(null)
   const messagesAbortRef = useRef<AbortController | null>(null)
@@ -598,6 +599,10 @@ export default function ChatsPage() {
   }, [searchParams])
 
   useEffect(() => {
+    setSearchParamsRef.current = setSearchParams
+  }, [setSearchParams])
+
+  useEffect(() => {
     chatsRef.current = chats
   }, [chats])
 
@@ -627,9 +632,9 @@ export default function ChatsPage() {
         return
       }
       searchParamsRef.current = params
-      setSearchParams(params, { replace: true })
+      setSearchParamsRef.current(params, { replace: true })
     },
-    [setSearchParams],
+    [],
   )
 
   const handleSelectChat = useCallback(
@@ -971,9 +976,11 @@ export default function ChatsPage() {
         return
       }
       setChats((current) =>
-        current.map((chat) =>
-          chat.id === chatId ? { ...chat, unread: false, is_read: true } : chat,
-        ),
+        current.some((chat) => chat.id === chatId && (chat.unread || !chat.is_read))
+          ? current.map((chat) =>
+              chat.id === chatId ? { ...chat, unread: false, is_read: true } : chat,
+            )
+          : current,
       )
     } catch (err) {
       if (isRequestCanceled(err)) {
@@ -1010,10 +1017,11 @@ export default function ChatsPage() {
   }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadSnippets])
 
   useEffect(() => {
-    if (!didMountProjectRef.current) {
-      didMountProjectRef.current = true
+    if (previousProjectIdRef.current === selectedProjectId) {
       return
     }
+    previousProjectIdRef.current = selectedProjectId
+
     setChatFilters(EMPTY_CHAT_FILTERS)
     setSelectedPresetId('')
     selectedChatIdRef.current = null
