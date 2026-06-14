@@ -134,6 +134,10 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         back_populates="tracking_link",
         cascade="all, delete-orphan",
     )
+    landers: Mapped[list[ProjectLander]] = relationship(
+        "ProjectLander",
+        back_populates="tracking_link",
+    )
 
 
 class TrackingSpend(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):

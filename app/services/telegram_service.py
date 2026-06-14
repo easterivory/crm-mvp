@@ -30,6 +30,8 @@ Error handling:
     logs them and returns 200 to Telegram anyway (Telegram must not retry).
 """
 import logging
+import re
+from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
@@ -39,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
 from app.models.chat import Chat
+from app.models.lead import Lead
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
@@ -51,11 +54,20 @@ from app.services.broadcast_service import BroadcastService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
+from app.services.utm_bridge_service import UtmBridgeService
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class TelegramStartPayload:
+    ref_code: str | None = None
+    utm_key: str | None = None
+
+
 class TelegramService:
+    START_UTM_SUFFIX_RE = re.compile(r"^(?P<ref_code>.+)_(?P<utm_key>utm_[0-9a-fA-F]{8})$")
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
@@ -68,6 +80,7 @@ class TelegramService:
         self.funnel_runtime = FunnelRuntimeService(db)
         self.telegram_sender = TelegramSenderService(db)
         self.audit = AuditService(db)
+        self.utm_bridge = UtmBridgeService()
 
     # ── Parsing ────────────────────────────────────────────────────────────────
 
@@ -152,8 +165,9 @@ class TelegramService:
             logger.debug("update_id=%s: unsupported update — skipping", update.update_id)
             return
 
+        start_payload = self._extract_start_payload(message.text)
         tracking_link_id = await self._resolve_tracking_link_id(
-            message,
+            start_payload,
             project_id,
             bot_id,
         )
@@ -173,12 +187,13 @@ class TelegramService:
             msg.id,
             message.text,
         )
-        await self._find_or_create_lead(
+        lead = await self._find_or_create_lead(
             chat.id,
             project_id,
             message,
             reset_existing=is_reactivated_cycle,
         )
+        await self._attach_utm_bridge_data(lead, start_payload.utm_key)
         await self._process_runtime_or_legacy(
             chat=chat,
             project_id=project_id,
@@ -629,11 +644,11 @@ class TelegramService:
 
     async def _resolve_tracking_link_id(
         self,
-        message: TelegramMessage,
+        start_payload: TelegramStartPayload,
         project_id: UUID,
         bot_id: UUID,
     ) -> Optional[UUID]:
-        ref_code = self._extract_start_ref_code(message.text)
+        ref_code = start_payload.ref_code
         if ref_code is None:
             return None
 
@@ -658,23 +673,34 @@ class TelegramService:
 
     @staticmethod
     def _extract_start_ref_code(text: Optional[str]) -> Optional[str]:
+        return TelegramService._extract_start_payload(text).ref_code
+
+    @classmethod
+    def _extract_start_payload(cls, text: Optional[str]) -> TelegramStartPayload:
         if not text:
-            return None
+            return TelegramStartPayload()
 
         parts = text.strip().split(maxsplit=1)
         if not parts:
-            return None
+            return TelegramStartPayload()
 
         command = parts[0]
-        if not TelegramService._is_start_command(command):
-            return None
+        if not cls._is_start_command(command):
+            return TelegramStartPayload()
         if len(parts) == 1:
-            return None
+            return TelegramStartPayload()
 
         ref_code = parts[1].strip().split(maxsplit=1)[0]
         if ref_code.startswith("ref_"):
             ref_code = ref_code.removeprefix("ref_")
-        return ref_code or None
+
+        utm_key = None
+        match = cls.START_UTM_SUFFIX_RE.match(ref_code)
+        if match:
+            ref_code = match.group("ref_code")
+            utm_key = UtmBridgeService.normalize_utm_key(match.group("utm_key"))
+
+        return TelegramStartPayload(ref_code=ref_code or None, utm_key=utm_key)
 
     @staticmethod
     def _is_start_command(text: Optional[str]) -> bool:
@@ -771,7 +797,7 @@ class TelegramService:
         message: TelegramMessage,
         *,
         reset_existing: bool = False,
-    ) -> None:
+    ) -> Optional[Lead]:
         """
         Ensure a Lead exists for this chat. If the chat already has a lead,
         this is a no-op. If not, create one with status=new.
@@ -802,7 +828,9 @@ class TelegramService:
                         chat_id,
                         project_id,
                     )
-            return
+                    return existing
+                return reset_lead
+            return existing
 
         # Resolve the 'new' status — must exist in the reference table
         new_status = await self.lead_repo.get_status_by_code(LeadStatusCode.NEW)
@@ -814,7 +842,7 @@ class TelegramService:
                 LeadStatusCode.NEW,
                 chat_id,
             )
-            return
+            return None
 
         username: Optional[str] = None
         if message.from_user and message.from_user.username:
@@ -845,6 +873,7 @@ class TelegramService:
                     "external_chat_id": str(message.chat.id),
                 },
             )
+            return lead
         except IntegrityError:
             # Concurrent webhook delivery created the lead first — that's fine.
             logger.debug(
@@ -852,3 +881,30 @@ class TelegramService:
                 chat_id,
                 project_id,
             )
+            return await self.lead_repo.get_by_chat(chat_id, project_id)
+
+    async def _attach_utm_bridge_data(
+        self,
+        lead: Optional[Lead],
+        utm_key: Optional[str],
+    ) -> None:
+        if lead is None or utm_key is None:
+            return
+
+        try:
+            fb_data = await self.utm_bridge.load_query_params(utm_key)
+        except Exception:
+            logger.exception("Could not load UTM bridge data key=%s", utm_key)
+            return
+        if not fb_data:
+            logger.info("UTM bridge data not found or empty key=%s lead_id=%s", utm_key, lead.id)
+            return
+
+        custom_fields = dict(lead.custom_fields or {})
+        custom_fields["fb_data"] = fb_data
+        await self.lead_repo.update_contact(
+            lead.id,
+            lead.project_id,
+            custom_fields=custom_fields,
+        )
+        logger.info("Attached UTM bridge data key=%s lead_id=%s", utm_key, lead.id)

@@ -11,13 +11,16 @@ from app.api.v1.routers import (
     broadcasts,
     buyers,
     chats,
+    domains,
     funnels,
     google_sheets,
     health,
+    landers,
     leads,
     messages,
     partners,
     projects,
+    public_landers,
     snippets,
     tags,
     telegram,
@@ -59,6 +62,8 @@ _v1_prefix = "/api/v1"
 
 app.include_router(projects.router, prefix=_v1_prefix)
 app.include_router(google_sheets.router, prefix=_v1_prefix)
+app.include_router(domains.router, prefix=_v1_prefix)
+app.include_router(landers.router, prefix=_v1_prefix)
 app.include_router(auth.router, prefix=_v1_prefix)
 app.include_router(users.router, prefix=_v1_prefix)
 app.include_router(buyers.router, prefix=_v1_prefix)
@@ -79,3 +84,6 @@ app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)
+
+# Public lander routes must stay last because /{slug} is intentionally broad.
+app.include_router(public_landers.router)

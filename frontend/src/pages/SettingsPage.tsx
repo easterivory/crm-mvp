@@ -17,6 +17,7 @@ import axios from 'axios'
 import api from '../api/client'
 import BuyersSettings from '../features/buyers/components/BuyersSettings'
 import GoogleSheetsSettings from '../features/googleSheets/components/GoogleSheetsSettings'
+import LandersSettings from '../features/landers/components/LandersSettings'
 import PartnersSettings from '../features/partners/components/PartnersSettings'
 import { useProjectBotSelection } from '../shared/lib'
 import { Modal } from '../shared/ui'
@@ -30,6 +31,7 @@ type TabKey =
   | 'tags'
   | 'partners'
   | 'googleSheets'
+  | 'landers'
 
 type PaginatedResponse<T> = {
   items: T[]
@@ -86,6 +88,7 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'tags', label: 'Теги' },
   { key: 'partners', label: 'Партнёры' },
   { key: 'googleSheets', label: 'Google Таблицы' },
+  { key: 'landers', label: 'Лендинги и Домены' },
 ]
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
@@ -180,6 +183,9 @@ export default function SettingsPage() {
           return canManageProject
         }
         if (tab.key === 'googleSheets') {
+          return canManageProject
+        }
+        if (tab.key === 'landers') {
           return canManageProject
         }
         return true
@@ -1238,6 +1244,10 @@ export default function SettingsPage() {
 
         {!isLoading && activeTab === 'googleSheets' ? (
           <GoogleSheetsSettings projectId={activeProjectId} />
+        ) : null}
+
+        {!isLoading && activeTab === 'landers' ? (
+          <LandersSettings projectId={activeProjectId} />
         ) : null}
       </div>
 

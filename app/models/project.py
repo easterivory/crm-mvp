@@ -57,6 +57,12 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
     partner_integrations: Mapped[list[PartnerIntegration]] = relationship(
         "PartnerIntegration", back_populates="project"
     )
+    domains: Mapped[list[ProjectDomain]] = relationship(
+        "ProjectDomain", back_populates="project", cascade="all, delete-orphan"
+    )
+    landers: Mapped[list[ProjectLander]] = relationship(
+        "ProjectLander", back_populates="project", cascade="all, delete-orphan"
+    )
     google_sheets_config: Mapped[Optional[ProjectGoogleSheetsConfig]] = relationship(
         "ProjectGoogleSheetsConfig",
         back_populates="project",
