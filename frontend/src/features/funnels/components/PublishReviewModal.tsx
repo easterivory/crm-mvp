@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Modal } from '../../../shared/ui'
 import { useNotificationStore } from '../../../shared/lib'
 import { publishFunnelVersion, validateFunnelGraph, validateFunnelVersion } from '../api'
+import { getFunnelApiErrorMessage } from '../errors'
 import type {
   FunnelGraph,
   FunnelGraphValidatePayload,
@@ -104,9 +105,15 @@ export default function PublishReviewModal({
           setValidation(data)
         }
       })
-      .catch(() => {
+      .catch((error) => {
         if (isMounted) {
-          notify({ tone: 'error', message: 'Не удалось выполнить проверку перед публикацией.' })
+          notify({
+            tone: 'error',
+            message: getFunnelApiErrorMessage(
+              error,
+              'Не удалось выполнить проверку перед публикацией.',
+            ),
+          })
         }
       })
       .finally(() => {
@@ -127,8 +134,11 @@ export default function PublishReviewModal({
     try {
       await publishFunnelVersion(funnelId, versionId, projectId)
       onPublished()
-    } catch {
-      notify({ tone: 'error', message: 'Не удалось опубликовать воронку.' })
+    } catch (error) {
+      notify({
+        tone: 'error',
+        message: getFunnelApiErrorMessage(error, 'Не удалось опубликовать воронку.'),
+      })
     } finally {
       setIsPublishing(false)
     }

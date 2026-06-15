@@ -21,6 +21,7 @@ from app.api.v1.routers import (
     partners,
     projects,
     public_landers,
+    settings as settings_router,
     snippets,
     tags,
     telegram,
@@ -66,6 +67,7 @@ app.include_router(domains.router, prefix=_v1_prefix)
 app.include_router(landers.router, prefix=_v1_prefix)
 app.include_router(auth.router, prefix=_v1_prefix)
 app.include_router(users.router, prefix=_v1_prefix)
+app.include_router(settings_router.router, prefix=_v1_prefix)
 app.include_router(buyers.router, prefix=_v1_prefix)
 app.include_router(chats.router, prefix=_v1_prefix)
 app.include_router(funnels.router, prefix=_v1_prefix)

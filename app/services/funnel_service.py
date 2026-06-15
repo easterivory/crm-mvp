@@ -6,6 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ChatEventType, RoleName
@@ -369,9 +370,23 @@ class FunnelService:
         if draft_validation.errors:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=[issue.model_dump(mode="json") for issue in draft_validation.errors],
+                detail=self._validation_detail(
+                    "Ошибка сохранения графа",
+                    draft_validation.errors,
+                ),
             )
-        await self.repo.replace_graph(version_id, graph)
+        try:
+            await self.repo.replace_graph(version_id, graph)
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "Failed to save funnel graph funnel_id=%s version_id=%s",
+                funnel_id,
+                version_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ошибка сохранения графа: база данных отклонила изменения версии.",
+            ) from exc
         return await self._graph_out(version_id)
 
     async def validate_version(
@@ -411,31 +426,45 @@ class FunnelService:
         if validation.errors:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=[issue.model_dump(mode="json") for issue in validation.errors],
+                detail=self._validation_detail(
+                    "Ошибка публикации воронки",
+                    validation.errors,
+                ),
             )
 
         funnel = await self._get_funnel_or_404(funnel_id, project_id)
-        await self.repo.archive_published_versions_for_bot(
-            bot_id=funnel.bot_id,
-            exclude_version_id=version_id,
-        )
-        await self.repo.archive_published_versions(
-            funnel_id=funnel_id,
-            exclude_version_id=version_id,
-        )
-        published = await self.repo.update_version_status(
-            version_id,
-            "published",
-            published_at=datetime.now(timezone.utc),
-        )
-        assert published is not None
-        await self.repo.set_active_funnel_for_bot(
-            bot_id=funnel.bot_id,
-            project_id=project_id,
-            funnel_id=funnel.id,
-            version_id=published.id,
-        )
-        await self.repo.update_in_project(funnel_id, project_id)
+        try:
+            await self.repo.archive_published_versions_for_bot(
+                bot_id=funnel.bot_id,
+                exclude_version_id=version_id,
+            )
+            await self.repo.archive_published_versions(
+                funnel_id=funnel_id,
+                exclude_version_id=version_id,
+            )
+            published = await self.repo.update_version_status(
+                version_id,
+                "published",
+                published_at=datetime.now(timezone.utc),
+            )
+            assert published is not None
+            await self.repo.set_active_funnel_for_bot(
+                bot_id=funnel.bot_id,
+                project_id=project_id,
+                funnel_id=funnel.id,
+                version_id=published.id,
+            )
+            await self.repo.update_in_project(funnel_id, project_id)
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "Failed to publish funnel funnel_id=%s version_id=%s",
+                funnel_id,
+                version_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ошибка публикации воронки: база данных отклонила изменения версии.",
+            ) from exc
         return FunnelVersionOut.model_validate(published).model_copy(
             update={"is_active_for_bot": True}
         )
@@ -1129,6 +1158,13 @@ class FunnelService:
             step_id=step_id,
             edge_id=edge_id,
         )
+
+    @staticmethod
+    def _validation_detail(prefix: str, issues: list[FunnelValidationIssue]) -> str:
+        messages = [issue.message for issue in issues if issue.message]
+        if not messages:
+            return f"{prefix}: граф не прошёл валидацию."
+        return f"{prefix}: " + "; ".join(messages)
 
     @staticmethod
     def _default_trigger_step() -> FunnelStepIn:

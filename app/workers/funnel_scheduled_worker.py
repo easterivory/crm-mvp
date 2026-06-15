@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from app.core.database import get_db_session
 from app.repositories.funnel_repository import FunnelRepository
@@ -31,6 +32,35 @@ async def run_once(limit: int = 100) -> int:
                 processed += 1
         await db.commit()
     return processed
+
+
+async def process_funnel_scheduled_job_task(ctx: dict, job_id: str) -> dict:
+    try:
+        job_uuid = UUID(job_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    async with get_db_session() as db:
+        repo = FunnelRepository(db)
+        job = await repo.get_scheduled_job(job_uuid)
+        if job is None:
+            return {"status": "not_found", "job_id": job_id}
+        if job.status != "pending":
+            return {"status": "skipped", "job_id": job_id, "job_status": job.status}
+
+        await repo.mark_scheduled_job_running(job.id)
+        runtime = FunnelRuntimeService(db)
+        try:
+            await runtime.process_scheduled_job(job)
+        except Exception as exc:
+            logger.exception("Funnel scheduled ARQ job failed job_id=%s", job.id)
+            await repo.mark_scheduled_job_failed(job.id, str(exc))
+            await db.commit()
+            return {"status": "failed", "job_id": job_id, "error": str(exc)[:1000]}
+
+        await repo.mark_scheduled_job_done(job.id)
+        await db.commit()
+        return {"status": "completed", "job_id": job_id}
 
 
 async def run_loop(interval_seconds: float = 1.0) -> None:

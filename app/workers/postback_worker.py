@@ -10,6 +10,7 @@ from app.core.database import get_db_session
 from app.services.google_sheets_service import GoogleSheetsService
 from app.services.postback_service import PostbackService
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
+from app.workers.funnel_scheduled_worker import process_funnel_scheduled_job_task
 
 try:
     from arq.connections import RedisSettings
@@ -113,5 +114,6 @@ class WorkerSettings:
         export_lead_to_sheets_task,
         process_broadcast,
         process_due_broadcasts,
+        process_funnel_scheduled_job_task,
     ]
     redis_settings = _redis_settings_from_url()

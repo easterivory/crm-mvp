@@ -379,7 +379,7 @@ class FunnelBlockRegistry:
             if not self._text(config, "prompt", "question_text", "text", "message_text"):
                 errors.append("Для вопроса нужен текст вопроса.")
             answer_type = str(config.get("answer_type") or "").strip()
-            if answer_type not in {"text", "phone", "number", "choice", "date", "time"}:
+            if answer_type not in {"text", "phone", "email", "name", "number", "choice", "date", "time"}:
                 errors.append("Для вопроса выберите тип ответа.")
             save_to = str(config.get("save_to") or "").strip()
             if save_to and save_to not in LEAD_FIELD_KEYS:

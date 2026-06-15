@@ -129,6 +129,7 @@ class BuyerTelegramClient:
     def __init__(self, token: str) -> None:
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}"
+        self.session = httpx.AsyncClient(timeout=35.0)
 
     async def get_updates(
         self,
@@ -169,9 +170,11 @@ class BuyerTelegramClient:
         except RuntimeError:
             logger.debug("Buyer bot answerCallbackQuery failed", exc_info=True)
 
+    async def close(self) -> None:
+        await self.session.aclose()
+
     async def _post(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=35.0) as client:
-            response = await client.post(f"{self.base_url}/{method}", json=payload)
+        response = await self.session.post(f"{self.base_url}/{method}", json=payload)
 
         try:
             data = response.json()

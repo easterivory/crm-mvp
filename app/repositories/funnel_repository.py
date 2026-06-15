@@ -318,6 +318,12 @@ class FunnelRepository(BaseRepository[Funnel]):
             )
         )
 
+    async def delete_chat_funnel_state(self, chat_id: UUID) -> None:
+        await self.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.db.execute(
+            delete(ChatFunnelState).where(ChatFunnelState.chat_id == chat_id)
+        )
+
     async def next_version_number(self, funnel_id: UUID) -> int:
         result = await self.db.execute(
             select(func.coalesce(func.max(FunnelVersion.version_number), 0) + 1).where(
@@ -623,6 +629,12 @@ class FunnelRepository(BaseRepository[Funnel]):
         await self.db.flush()
         await self.db.refresh(job)
         return job
+
+    async def get_scheduled_job(self, job_id: UUID) -> Optional[FunnelScheduledJob]:
+        result = await self.db.execute(
+            select(FunnelScheduledJob).where(FunnelScheduledJob.id == job_id)
+        )
+        return result.scalar_one_or_none()
 
     async def list_due_scheduled_jobs(
         self,

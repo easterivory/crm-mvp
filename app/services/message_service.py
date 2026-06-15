@@ -155,6 +155,7 @@ class MessageService:
             bot_id=chat.bot_id,
             external_chat_id=chat.external_chat_id,
             caption=message_text or None,
+            reply_markup=None,
             file_name=file_name,
             mime_type=mime_type,
         )
@@ -524,6 +525,7 @@ class MessageService:
             bot_id=chat.bot_id,
             external_chat_id=chat.external_chat_id,
             caption=caption,
+            reply_markup=data.reply_markup,
             file_name=data.file_name,
             mime_type=data.mime_type,
         )
@@ -567,6 +569,7 @@ class MessageService:
             bot_id=bot_id,
             external_chat_id=external_chat_id,
             caption=caption,
+            reply_markup=None,
             file_name=upload.file_name,
             mime_type=upload.mime_type,
         )
@@ -580,6 +583,7 @@ class MessageService:
         bot_id: UUID,
         external_chat_id: str,
         caption: str | None,
+        reply_markup: dict | None,
         file_name: str | None,
         mime_type: str | None,
     ) -> dict | None:
@@ -590,6 +594,7 @@ class MessageService:
                 external_chat_id=external_chat_id,
                 photo=media,
                 caption=caption,
+                reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
             )
@@ -600,6 +605,7 @@ class MessageService:
                 external_chat_id=external_chat_id,
                 video=media,
                 caption=caption,
+                reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
             )
@@ -610,6 +616,7 @@ class MessageService:
                 external_chat_id=external_chat_id,
                 voice=media,
                 caption=caption,
+                reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
             )
@@ -619,6 +626,7 @@ class MessageService:
                 bot_id=bot_id,
                 external_chat_id=external_chat_id,
                 video_note=media,
+                reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
             )
@@ -628,6 +636,7 @@ class MessageService:
             external_chat_id=external_chat_id,
             document=media,
             caption=caption,
+            reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
         )

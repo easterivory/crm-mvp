@@ -28,6 +28,7 @@ import {
   type FunnelUser,
 } from '../api'
 import type { BlockMenuItem } from '../blockCatalog'
+import { getFunnelApiErrorMessage } from '../errors'
 import {
   normalizeButtons,
   normalizeMessages,
@@ -477,8 +478,11 @@ export default function FunnelBuilder({
       setGraph(graphWithDefaults(saved))
       void fetchVersions(funnelId, projectId).then(setVersions)
       notify({ tone: 'success', message: 'Черновик сохранён.' })
-    } catch {
-      notify({ tone: 'error', message: 'Не удалось сохранить черновик.' })
+    } catch (error) {
+      notify({
+        tone: 'error',
+        message: getFunnelApiErrorMessage(error, 'Не удалось сохранить черновик.'),
+      })
     } finally {
       setIsSaving(false)
     }
@@ -500,8 +504,11 @@ export default function FunnelBuilder({
           ? 'Проверка пройдена.'
           : `Найдены ошибки: ${result.errors.length}.`,
       })
-    } catch {
-      notify({ tone: 'error', message: 'Не удалось проверить воронку.' })
+    } catch (error) {
+      notify({
+        tone: 'error',
+        message: getFunnelApiErrorMessage(error, 'Не удалось проверить воронку.'),
+      })
     } finally {
       setIsValidating(false)
     }
@@ -511,8 +518,14 @@ export default function FunnelBuilder({
     if (graph && activeVersionId) {
       try {
         await saveGraph(funnelId, activeVersionId, projectId, graph)
-      } catch {
-        notify({ tone: 'error', message: 'Не удалось сохранить черновик перед публикацией.' })
+      } catch (error) {
+        notify({
+          tone: 'error',
+          message: getFunnelApiErrorMessage(
+            error,
+            'Не удалось сохранить черновик перед публикацией.',
+          ),
+        })
         return
       }
     }

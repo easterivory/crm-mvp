@@ -8,13 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
-from app.core.config import settings
 from app.core.constants import RoleName
 from app.core.security import hash_password
 from app.models.project import Project
 from app.models.role import Role
 from app.models.user import User
 from app.schemas.buyer import BuyerCreate, BuyerInviteOut, BuyerUserOut
+from app.services.system_setting_service import SystemSettingService
 
 router = APIRouter(prefix="/buyers", tags=["buyers"])
 
@@ -38,7 +38,7 @@ async def create_buyer(
         )
 
     role = await _get_manager_role(db)
-    username = _buyer_bot_username_or_error()
+    username = await _buyer_bot_username_or_error(db)
 
     user: User | None = None
     invite_token: UUID | None = None
@@ -110,11 +110,11 @@ async def _get_manager_role(db: AsyncSession) -> Role:
     return role
 
 
-def _buyer_bot_username_or_error() -> str:
-    username = (settings.BUYER_BOT_USERNAME or "").strip().removeprefix("@")
+async def _buyer_bot_username_or_error(db: AsyncSession) -> str:
+    username = (await SystemSettingService(db).get_effective_buyer_bot_config()).username
     if not username:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="BUYER_BOT_USERNAME is not configured",
+            detail="buyer_bot_username is not configured",
         )
     return username

@@ -6,18 +6,23 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import LeadStatusCode, MessageType, SenderType
+from app.core.constants import ChatEventType, LeadStatusCode, MessageType, SenderType
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
+from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.message import MessageCreate
+from app.services.chat_audit_service import ChatAuditService
 from app.services.funnel_block_registry import LEAD_FIELD_KEYS
+from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
+from app.services.telegram_sender import TelegramSenderService
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,15 @@ DIRECT_LEAD_FIELDS = {
     "has_card",
 }
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PHONE_RE = re.compile(r"^\+?[0-9][0-9\s().-]{8,24}$")
+MANUAL_STATUS_CODE_CANDIDATES = (
+    "manual_processing",
+    "manual",
+    "operator",
+    "operator_required",
+)
+
 
 class FunnelRuntimeService:
     """
@@ -47,6 +61,7 @@ class FunnelRuntimeService:
         self.db = db
         self.repo = FunnelRepository(db)
         self.chat_repo = ChatRepository(db)
+        self.bot_repo = BotRepository(db)
         self.lead_repo = LeadRepository(db)
         self.partner_repo = PartnerIntegrationRepository(db)
         self.tag_repo = TagRepository(db)
@@ -54,6 +69,8 @@ class FunnelRuntimeService:
 
         self.message_service = MessageService(db)
         self.scoring = LeadScoringService(db)
+        self.chat_audit = ChatAuditService(db)
+        self.telegram_sender = TelegramSenderService(db)
 
     async def get_published_funnel_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         return await self.repo.get_published_for_bot(bot_id)
@@ -140,6 +157,17 @@ class FunnelRuntimeService:
             return None
 
         answer = button_payload if button_payload is not None else text
+        step = await self.repo.get_step(state.current_step_id)
+        if step is not None and self._is_input_step(step):
+            validation = self._validate_input_answer(step, answer)
+            if not validation["valid"]:
+                await self._create_outgoing_message(
+                    chat_id=chat_id,
+                    text=self._input_retry_message(step),
+                    reply_markup=self._reply_markup_for_step(step),
+                )
+                return step
+            await self._save_input_answer(chat_id=chat_id, step=step, answer=answer)
         await self.apply_field_mappings(
             chat_id=chat_id,
             step_id=state.current_step_id,
@@ -246,6 +274,7 @@ class FunnelRuntimeService:
                     await self._execute_from_step(chat_id=chat_id, step=next_step, answer=text)
                 return True
 
+            await self._save_input_answer(chat_id=chat_id, step=step, answer=text)
             await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
             await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
             runtime_json = self._runtime_with_answer(
@@ -370,6 +399,15 @@ class FunnelRuntimeService:
         answer = answer or fallback_text
 
         if self._is_input_step(step):
+            validation = self._validate_input_answer(step, answer)
+            if not validation["valid"]:
+                await self._create_outgoing_message(
+                    chat_id=chat_id,
+                    text=self._input_retry_message(step),
+                    reply_markup=self._reply_markup_for_step(step),
+                )
+                return True
+            await self._save_input_answer(chat_id=chat_id, step=step, answer=answer)
             await self.apply_field_mappings(
                 chat_id=chat_id,
                 step_id=step.id,
@@ -712,6 +750,27 @@ class FunnelRuntimeService:
                 current = next_step
                 continue
 
+            if current.step_type == "operator":
+                await self._execute_operator_handoff(chat_id=chat_id, step=current)
+                return None
+
+            if current.step_type == "integration":
+                integration_ok = await self._execute_integration_step(
+                    chat_id=chat_id,
+                    step=current,
+                )
+                if not integration_ok:
+                    return current
+                next_step = await self._move_from_step(
+                    chat_id=chat_id,
+                    step=current,
+                    answer=answer,
+                )
+                if next_step is None:
+                    return None
+                current = next_step
+                continue
+
             if current.step_type == "delay":
                 next_step = await self._execute_delay_step(chat_id=chat_id, step=current)
                 if next_step is None or next_step.id == current.id:
@@ -770,17 +829,23 @@ class FunnelRuntimeService:
                 )
                 return step
 
-            text = self._message_item_text(item)
             buttons = self._buttons_from_message_item(item)
-            if text:
-                await self._create_outgoing_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_markup=self._reply_markup_for_buttons(
-                        step=step,
-                        buttons=buttons,
-                        message_index=index,
-                    ),
+            sent = await self._send_message_item(
+                chat_id=chat_id,
+                step=step,
+                item=item,
+                reply_markup=self._reply_markup_for_buttons(
+                    step=step,
+                    buttons=buttons,
+                    message_index=index,
+                ),
+            )
+            if not sent:
+                logger.warning(
+                    "Message sequence item has no deliverable payload chat_id=%s step_id=%s index=%s",
+                    chat_id,
+                    step.id,
+                    index,
                 )
             if buttons:
                 state = await self.repo.get_chat_funnel_state(chat_id)
@@ -806,11 +871,16 @@ class FunnelRuntimeService:
 
     async def _send_step_message(self, *, chat_id: UUID, step: FunnelStep) -> None:
         text = self._step_text(step)
-        if not text:
+        media_type, media_ref = self._step_media_payload(step)
+        if not text and media_ref is None:
             return
         await self._create_outgoing_message(
             chat_id=chat_id,
             text=text,
+            message_type=media_type,
+            telegram_file_id=media_ref,
+            file_name=self._step_file_name(step),
+            mime_type=self._step_mime_type(step),
             reply_markup=self._reply_markup_for_step(step),
         )
 
@@ -859,7 +929,7 @@ class FunnelRuntimeService:
             job_type=job_type,
             step_id=step.id,
         )
-        await self.repo.create_scheduled_job(
+        job = await self.repo.create_scheduled_job(
             job_type=job_type,
             chat_id=chat_id,
             funnel_state_id=state.id,
@@ -869,6 +939,7 @@ class FunnelRuntimeService:
             run_at=datetime.now(timezone.utc) + timedelta(seconds=delay_seconds),
             payload_json=payload_json,
         )
+        await enqueue_funnel_scheduled_job(job.id, delay_seconds)
 
     async def _execute_delay_step(self, *, chat_id: UUID, step: FunnelStep) -> Optional[FunnelStep]:
         delay_seconds = self._delay_step_seconds(step)
@@ -919,21 +990,54 @@ class FunnelRuntimeService:
         chat_id: UUID,
         text: str,
         reply_markup: Optional[dict],
+        message_type: str = MessageType.TEXT,
+        telegram_file_id: Optional[str] = None,
+        file_name: Optional[str] = None,
+        mime_type: Optional[str] = None,
     ) -> None:
         chat = await self.chat_repo.get_by_id(chat_id)
         if chat is None:
             return
+        normalized_type = self._normalize_message_type(message_type)
+        message_text = text.strip()
         await self.message_service.create_message(
             chat_id=chat_id,
             project_id=chat.project_id,
             data=MessageCreate(
-                message_type=MessageType.TEXT,
+                message_type=normalized_type,
                 sender_type=SenderType.BOT,
                 sender_id=None,
-                body=text,
+                body=message_text if normalized_type == MessageType.TEXT else None,
+                caption=message_text if normalized_type != MessageType.TEXT else None,
+                telegram_file_id=telegram_file_id,
+                file_name=file_name,
+                mime_type=mime_type,
                 reply_markup=reply_markup,
             ),
         )
+
+    async def _send_message_item(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        item: dict[str, Any],
+        reply_markup: Optional[dict],
+    ) -> bool:
+        text = self._message_item_text(item)
+        message_type, media_ref = self._message_item_media_payload(step, item)
+        if not text and media_ref is None:
+            return False
+        await self._create_outgoing_message(
+            chat_id=chat_id,
+            text=text,
+            message_type=message_type,
+            telegram_file_id=media_ref,
+            file_name=self._message_item_file_name(item),
+            mime_type=self._message_item_mime_type(item),
+            reply_markup=reply_markup,
+        )
+        return True
 
     async def _move_from_step(
         self,
@@ -1032,11 +1136,14 @@ class FunnelRuntimeService:
         config = step.config_json or {}
         outcomes = config.get("outcomes")
         if isinstance(outcomes, list):
+            outcome_values = self._branch_match_values(outcome)
             for item in outcomes:
                 if not isinstance(item, dict):
                     continue
-                labels = {str(item.get("id") or "").lower(), str(item.get("label") or "").lower()}
-                if outcome.lower() in labels and item.get("target_step_id"):
+                labels = self._branch_match_values(item.get("id")) | self._branch_match_values(
+                    item.get("label")
+                ) | self._branch_match_values(item.get("value"))
+                if outcome_values & labels and item.get("target_step_id"):
                     return await self._move_to_step_id(
                         chat_id=chat_id,
                         target_step_id=item.get("target_step_id"),
@@ -1165,6 +1272,14 @@ class FunnelRuntimeService:
                     status_code = str(raw.get("status") or raw.get("value") or "").strip()
                     if status_code:
                         await self.lead_repo.set_status_by_code(lead.id, lead.project_id, status_code)
+                elif action_type == "mark_lost":
+                    await self.lead_repo.set_status_by_code(lead.id, lead.project_id, LeadStatusCode.LOST)
+                elif action_type == "mark_success":
+                    await self.lead_repo.set_status_by_code(lead.id, lead.project_id, LeadStatusCode.QUALIFIED)
+                elif action_type == "mark_rejected":
+                    updated = await self.lead_repo.set_status_by_code(lead.id, lead.project_id, "rejected")
+                    if updated is None:
+                        await self.lead_repo.set_status_by_code(lead.id, lead.project_id, LeadStatusCode.LOST)
                 elif action_type == "write_field":
                     field = self._normalize_field_key(raw.get("field") or raw.get("lead_field_key"))
                     if field:
@@ -1180,6 +1295,20 @@ class FunnelRuntimeService:
                             lead.id,
                             lead.project_id,
                             manager_id=UUID(str(manager_id)),
+                        )
+                elif action_type == "unassign_operator":
+                    await self.lead_repo.update_contact(
+                        lead.id,
+                        lead.project_id,
+                        manager_id=None,
+                    )
+                elif action_type in {"update_lead", "create_lead"}:
+                    direct_values, custom_values = self._lead_update_values(raw)
+                    if direct_values or custom_values:
+                        await self.repo.update_lead_mapped_fields(
+                            lead.id,
+                            direct_values,
+                            custom_values,
                         )
                 elif action_type in {"submit_to_partner", "send_to_crm"}:
                     integration_id = raw.get("partner_integration_id") or raw.get("integration_id")
@@ -1252,6 +1381,304 @@ class FunnelRuntimeService:
                 return False
         return True
 
+    async def _execute_operator_handoff(self, *, chat_id: UUID, step: FunnelStep) -> None:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        chat = await self.chat_repo.get_by_id(chat_id)
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if chat is None:
+            logger.warning("Operator handoff has no chat chat_id=%s step_id=%s", chat_id, step.id)
+            return
+
+        await self.bot_repo.disable_bot_for_chat(chat_id)
+
+        if lead is not None:
+            status_code = await self._manual_processing_status_code(lead.project_id)
+            updated = await self.lead_repo.set_status_by_code(
+                lead.id,
+                lead.project_id,
+                status_code,
+            )
+            if updated is None and status_code != LeadStatusCode.NEW:
+                await self.lead_repo.set_status_by_code(
+                    lead.id,
+                    lead.project_id,
+                    LeadStatusCode.NEW,
+                )
+
+            manager_id = self._operator_manager_id(step)
+            if manager_id is not None:
+                await self.lead_repo.update_contact(
+                    lead.id,
+                    lead.project_id,
+                    manager_id=manager_id,
+                )
+
+        handoff_message = self._operator_handoff_message(step)
+        if handoff_message:
+            await self._create_outgoing_message(
+                chat_id=chat_id,
+                text=handoff_message,
+                reply_markup=None,
+            )
+
+        await self.chat_audit.log_event(
+            chat_id=chat_id,
+            user_id=None,
+            event_type=ChatEventType.NOTE_ADDED,
+            old_value=None,
+            new_value=f"Воронка передала чат оператору на блоке «{step.title}».",
+            project_id=chat.project_id,
+        )
+        await self._send_operator_alert(chat=chat, lead_id=lead.id if lead else None, step=step)
+        await self._log_runtime_step(chat_id=chat_id, step=step, status="success")
+        await self.repo.delete_chat_funnel_state(chat_id)
+        logger.info(
+            "Funnel operator handoff completed chat_id=%s funnel_id=%s funnel_version_id=%s step_id=%s",
+            chat_id,
+            state.funnel_id if state else None,
+            state.funnel_version_id if state else step.funnel_version_id,
+            step.id,
+        )
+
+    async def _execute_integration_step(self, *, chat_id: UUID, step: FunnelStep) -> bool:
+        config = step.config_json or {}
+        integration_type = str(config.get("integration_type") or step.block_type or "").strip()
+        if integration_type not in {"webhook", "http_request", "outgoing_webhook", "generic_integration"}:
+            logger.info(
+                "Integration step has no local runtime handler; passing through chat_id=%s step_id=%s type=%s",
+                chat_id,
+                step.id,
+                integration_type,
+            )
+            return True
+
+        url = str(config.get("url") or config.get("webhook_url") or "").strip()
+        if not url:
+            await self._log_runtime_step(
+                chat_id=chat_id,
+                step=step,
+                status="failed",
+                error_message="Integration step requires url",
+            )
+            return False
+
+        method = str(config.get("method") or "POST").strip().upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            method = "POST"
+        headers = config.get("headers") if isinstance(config.get("headers"), dict) else {}
+        timeout_seconds = self._integration_timeout_seconds(config)
+        payload = await self._integration_payload(chat_id=chat_id, step=step)
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                response = await client.request(
+                    method,
+                    url,
+                    headers={str(key): str(value) for key, value in headers.items()},
+                    json=payload if method != "GET" else None,
+                    params=payload if method == "GET" else None,
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            await self._log_runtime_step(
+                chat_id=chat_id,
+                step=step,
+                status="failed",
+                error_message=f"Integration request failed: {exc}",
+            )
+            logger.warning(
+                "Funnel integration request failed chat_id=%s step_id=%s url=%s error=%s",
+                chat_id,
+                step.id,
+                url,
+                exc,
+            )
+            return False
+
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is not None:
+            runtime_json = dict(state.runtime_json or {})
+            integrations = dict(runtime_json.get("integrations") or {})
+            integrations[str(step.id)] = {
+                "url": url,
+                "method": method,
+                "status_code": response.status_code,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            runtime_json["integrations"] = integrations
+            await self.repo.update_chat_funnel_runtime(
+                chat_id=chat_id,
+                runtime_json=runtime_json,
+            )
+        return True
+
+    async def _save_input_answer(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        answer: Any,
+    ) -> None:
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if lead is None:
+            return
+
+        answer_type = self._input_answer_type(step)
+        direct_values: dict[str, Any] = {}
+        custom_values: dict[str, Any] = {}
+        normalized_answer = str(answer or "").strip()
+
+        if answer_type == "phone":
+            direct_values["phone"] = self._normalize_phone(normalized_answer)
+        elif answer_type == "email":
+            custom_values["email"] = normalized_answer
+        elif answer_type == "name":
+            direct_values["name"] = normalized_answer
+        else:
+            field_key = self._input_target_field(step)
+            if field_key:
+                value = self._transform_value(field_key, normalized_answer)
+                if field_key in DIRECT_LEAD_FIELDS:
+                    direct_values[field_key] = value
+                else:
+                    custom_values[field_key] = value
+
+        if not direct_values and not custom_values:
+            return
+        await self.repo.update_lead_mapped_fields(lead.id, direct_values, custom_values)
+        await self.scoring.update_lead_score(lead.id)
+
+    async def _manual_processing_status_code(self, project_id: UUID) -> str:
+        statuses = await self.lead_repo.list_statuses()
+        for candidate in MANUAL_STATUS_CODE_CANDIDATES:
+            if any(status.code == candidate for status in statuses):
+                return candidate
+        for status in statuses:
+            haystack = f"{status.code} {status.name}".lower()
+            if "manual" in haystack or "ручн" in haystack:
+                return status.code
+        if await self.lead_repo.get_status_by_code(LeadStatusCode.NEW) is not None:
+            return LeadStatusCode.NEW
+        logger.warning("No manual or new lead status configured project_id=%s", project_id)
+        return LeadStatusCode.NEW
+
+    @staticmethod
+    def _operator_manager_id(step: FunnelStep) -> Optional[UUID]:
+        config = step.config_json or {}
+        raw = config.get("operator_id") or config.get("manager_id")
+        if not raw:
+            return None
+        try:
+            return raw if isinstance(raw, UUID) else UUID(str(raw))
+        except (TypeError, ValueError):
+            logger.warning("Invalid operator manager id step_id=%s manager_id=%s", step.id, raw)
+            return None
+
+    @staticmethod
+    def _operator_handoff_message(step: FunnelStep) -> str:
+        config = step.config_json or {}
+        if config.get("send_message") is False:
+            return ""
+        return str(
+            config.get("text")
+            or config.get("message")
+            or config.get("message_text")
+            or "Передаю диалог оператору. Специалист скоро подключится."
+        ).strip()
+
+    async def _send_operator_alert(
+        self,
+        *,
+        chat: Any,
+        lead_id: Optional[UUID],
+        step: FunnelStep,
+    ) -> None:
+        config = step.config_json or {}
+        alert_chat_id = (
+            config.get("alert_chat_id")
+            or config.get("admin_chat_id")
+            or config.get("telegram_alert_chat_id")
+        )
+        if not alert_chat_id:
+            logger.info(
+                "Operator handoff Telegram alert skipped: alert chat is not configured "
+                "project_id=%s chat_id=%s step_id=%s",
+                chat.project_id,
+                chat.id,
+                step.id,
+            )
+            return
+        text = str(
+            config.get("alert_text")
+            or (
+                "Чат требует ручного вмешательства.\n"
+                f"CRM chat_id: {chat.id}\n"
+                f"lead_id: {lead_id or 'нет'}\n"
+                f"Блок: {step.title}"
+            )
+        ).strip()
+        result = await self.telegram_sender.send_message(
+            project_id=chat.project_id,
+            bot_id=chat.bot_id,
+            external_chat_id=str(alert_chat_id),
+            text=text,
+        )
+        if result is None:
+            logger.warning(
+                "Operator handoff Telegram alert was not delivered project_id=%s chat_id=%s alert_chat_id=%s",
+                chat.project_id,
+                chat.id,
+                alert_chat_id,
+            )
+
+    @staticmethod
+    def _integration_timeout_seconds(config: dict[str, Any]) -> float:
+        try:
+            return min(max(float(config.get("timeout_seconds") or 10), 1), 60)
+        except (TypeError, ValueError):
+            return 10.0
+
+    async def _integration_payload(self, *, chat_id: UUID, step: FunnelStep) -> dict[str, Any]:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        lead_context = await self.lead_repo.get_lead_context(lead.id) if lead is not None else {}
+        config = step.config_json or {}
+        extra_payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
+        return {
+            "chat_id": str(chat_id),
+            "lead_id": str(lead.id) if lead is not None else None,
+            "project_id": str(lead.project_id) if lead is not None else None,
+            "funnel_id": str(state.funnel_id) if state is not None else None,
+            "funnel_version_id": str(state.funnel_version_id) if state is not None else None,
+            "step_id": str(step.id),
+            "step_key": step.key,
+            "step_title": step.title,
+            "lead": {
+                "name": lead.name,
+                "phone": lead.phone,
+                "username": lead.username,
+                "custom_fields": lead.custom_fields or {},
+                "context": lead_context,
+            }
+            if lead is not None
+            else None,
+            **extra_payload,
+        }
+
+    @staticmethod
+    def _lead_update_values(raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        source = raw.get("fields") if isinstance(raw.get("fields"), dict) else raw
+        direct_values: dict[str, Any] = {}
+        custom_values: dict[str, Any] = {}
+        for key, value in source.items():
+            field = FunnelRuntimeService._normalize_field_key(key)
+            if not field or field in {"type", "actions"}:
+                continue
+            if field in DIRECT_LEAD_FIELDS:
+                direct_values[field] = FunnelRuntimeService._transform_value(field, value)
+            else:
+                custom_values[field] = value
+        return direct_values, custom_values
+
     async def _evaluate_condition_outcome(
         self,
         *,
@@ -1278,7 +1705,15 @@ class FunnelRuntimeService:
                 step.id,
                 hold_enabled,
             )
-            return "true" if hold_enabled else "false"
+            return "tomorrow" if hold_enabled else "today"
+
+        block_outcome = await self._evaluate_block_specific_condition(
+            chat_id=chat_id,
+            step=step,
+            answer=answer,
+        )
+        if block_outcome is not None:
+            return block_outcome
 
         raw_conditions = config.get("conditions")
         if not isinstance(raw_conditions, list) or not raw_conditions:
@@ -1301,9 +1736,65 @@ class FunnelRuntimeService:
         )
         return outcome
 
+    async def _evaluate_block_specific_condition(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        answer: Optional[str],
+    ) -> Optional[str]:
+        config = step.config_json or {}
+        block_type = step.block_type
+
+        if block_type in {"button_equals", "text_contains", "text_equals"}:
+            actual = answer or await self._condition_source_value(chat_id, "last_answer", None)
+            operator = "contains" if block_type == "text_contains" else "equals"
+            passed = self._compare_condition(actual, operator, config.get("value"))
+            return "true" if passed else "false"
+
+        if block_type in {"field_exists", "field_empty", "field_compare"}:
+            field = config.get("field") or config.get("lead_field_key")
+            source = "lead_field"
+            operator = (
+                "exists"
+                if block_type == "field_exists"
+                else "empty"
+                if block_type == "field_empty"
+                else str(config.get("operator") or "equals")
+            )
+            actual = await self._condition_source_value(chat_id, source, field)
+            passed = self._compare_condition(actual, operator, config.get("value"))
+            return "true" if passed else "false"
+
+        if block_type in {"has_tag", "not_has_tag"}:
+            actual = await self._condition_source_value(chat_id, "tag", None)
+            expected = config.get("tag_id") or config.get("tag_name") or config.get("value")
+            has_tag = self._compare_condition(actual, "contains", expected)
+            passed = has_tag if block_type == "has_tag" else not has_tag
+            return "true" if passed else "false"
+
+        if block_type == "lead_status_equals":
+            actual = await self._condition_source_value(chat_id, "status", None)
+            expected = config.get("status") or config.get("status_code") or config.get("value")
+            return "true" if self._compare_condition(actual, "equals", expected) else "false"
+
+        if block_type == "tracking_link_equals":
+            actual = await self._condition_source_value(chat_id, "tracking_link", None)
+            expected = config.get("tracking_link") or config.get("tracking_code") or config.get("value")
+            return "true" if self._compare_condition(actual, "equals", expected) else "false"
+
+        if block_type in {"operator_assigned", "operator_not_assigned"}:
+            assigned = bool(await self._condition_source_value(chat_id, "operator_assigned", None))
+            passed = assigned if block_type == "operator_assigned" else not assigned
+            return "true" if passed else "false"
+
+        return None
+
     async def _evaluate_single_condition(self, *, chat_id: UUID, condition: dict) -> bool:
-        source = str(condition.get("source") or condition.get("field") or "last_answer")
+        source = str(condition.get("source") or "last_answer")
         field = condition.get("field")
+        if condition.get("source") is None and field:
+            source = "lead_field"
         operator = str(condition.get("operator") or condition.get("type") or "equals")
         expected = condition.get("value")
         actual = await self._condition_source_value(chat_id, source, field)
@@ -1323,7 +1814,7 @@ class FunnelRuntimeService:
             return bool(version.is_hold_active) if version is not None else False
         if lead is None:
             return None
-        if source == "lead_field":
+        if source in {"lead_field", "custom_field", "field"}:
             key = str(field or "").strip()
             if not key:
                 return None
@@ -1546,6 +2037,10 @@ class FunnelRuntimeService:
             aliases.update({"true", "yes", "y", "1", "да"})
         if normalized in {"false", "no", "n", "0", "нет"}:
             aliases.update({"false", "no", "n", "0", "нет"})
+        if "завтр" in normalized or normalized == "tomorrow":
+            aliases.update({"tomorrow", "завтра", "на завтра", "true", "yes", "да"})
+        if "сегодня" in normalized or normalized == "today":
+            aliases.update({"today", "сегодня", "false", "no", "нет"})
         return aliases
 
     @staticmethod
@@ -1555,6 +2050,14 @@ class FunnelRuntimeService:
             "send_text",
             "send_inline_buttons",
             "send_personalized_message",
+            "send_photo",
+            "send_video",
+            "send_voice",
+            "send_video_note",
+            "send_file",
+            "send_link",
+            "send_reply_buttons",
+            "send_template",
         }
 
     @staticmethod
@@ -1574,17 +2077,28 @@ class FunnelRuntimeService:
                 return messages
 
         text = FunnelRuntimeService._step_text(step)
-        if not text:
+        legacy = {
+            "id": "legacy_message",
+            "type": config.get("message_type") or config.get("type") or step.block_type,
+            "text": text,
+            "caption": config.get("caption"),
+            "delay_seconds": config.get("delay_seconds") or 0,
+            "buttons": config.get("buttons") or [],
+            "telegram_file_id": config.get("telegram_file_id")
+            or config.get("file_id")
+            or config.get("media_file_id"),
+            "photo": config.get("photo"),
+            "video": config.get("video"),
+            "voice": config.get("voice"),
+            "video_note": config.get("video_note"),
+            "document": config.get("document") or config.get("file"),
+            "media_url": config.get("media_url"),
+            "file_name": config.get("file_name"),
+            "mime_type": config.get("mime_type"),
+        }
+        if not text and FunnelRuntimeService._media_reference_from_item(legacy) is None:
             return []
-        return [
-            {
-                "id": "legacy_text",
-                "type": config.get("message_type") or "text",
-                "text": text,
-                "delay_seconds": config.get("delay_seconds") or 0,
-                "buttons": config.get("buttons") or [],
-            }
-        ]
+        return [legacy]
 
     @staticmethod
     def _message_item_text(item: dict[str, Any]) -> str:
@@ -1594,8 +2108,103 @@ class FunnelRuntimeService:
             or item.get("message_text")
             or item.get("body")
             or item.get("content")
+            or item.get("caption")
             or ""
         ).strip()
+
+    @classmethod
+    def _message_item_media_payload(
+        cls,
+        step: FunnelStep,
+        item: dict[str, Any],
+    ) -> tuple[str, Optional[str]]:
+        media_ref = cls._media_reference_from_item(item)
+        if media_ref is None:
+            return MessageType.TEXT, None
+        message_type = cls._message_item_type(step, item)
+        if message_type == MessageType.TEXT:
+            message_type = MessageType.DOCUMENT
+        return message_type, media_ref
+
+    @classmethod
+    def _step_media_payload(cls, step: FunnelStep) -> tuple[str, Optional[str]]:
+        sequence = cls._message_sequence(step)
+        item = sequence[0] if sequence else step.config_json or {}
+        return cls._message_item_media_payload(step, item)
+
+    @staticmethod
+    def _media_reference_from_item(item: dict[str, Any]) -> Optional[str]:
+        media = item.get("media") if isinstance(item.get("media"), dict) else {}
+        for key in (
+            "telegram_file_id",
+            "file_id",
+            "media_file_id",
+            "photo",
+            "video",
+            "voice",
+            "video_note",
+            "document",
+            "file",
+            "media_url",
+        ):
+            value = item.get(key) or media.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @classmethod
+    def _message_item_type(cls, step: FunnelStep, item: dict[str, Any]) -> str:
+        if item.get("photo"):
+            return MessageType.PHOTO
+        if item.get("video"):
+            return MessageType.VIDEO
+        if item.get("voice"):
+            return MessageType.VOICE
+        if item.get("video_note"):
+            return MessageType.VIDEO_NOTE
+        if item.get("document") or item.get("file") or item.get("media_url"):
+            return MessageType.DOCUMENT
+        raw = str(
+            item.get("message_type")
+            or item.get("media_type")
+            or item.get("type")
+            or step.block_type
+            or MessageType.TEXT
+        ).strip()
+        return cls._normalize_message_type(raw)
+
+    @staticmethod
+    def _normalize_message_type(message_type: str) -> str:
+        normalized = message_type.strip().lower()
+        if normalized in {"send_photo", "photo", "image", "picture"}:
+            return MessageType.PHOTO
+        if normalized in {"send_video", "video"}:
+            return MessageType.VIDEO
+        if normalized in {"send_voice", "voice"}:
+            return MessageType.VOICE
+        if normalized in {"send_video_note", "video_note", "circle", "round_video"}:
+            return MessageType.VIDEO_NOTE
+        if normalized in {"send_file", "file", "document", "audio", "animation"}:
+            return MessageType.DOCUMENT
+        return MessageType.TEXT
+
+    @staticmethod
+    def _message_item_file_name(item: dict[str, Any]) -> Optional[str]:
+        value = item.get("file_name") or item.get("filename") or item.get("name")
+        return str(value).strip() if value else None
+
+    @staticmethod
+    def _message_item_mime_type(item: dict[str, Any]) -> Optional[str]:
+        value = item.get("mime_type") or item.get("content_type")
+        return str(value).strip() if value else None
+
+    @staticmethod
+    def _step_file_name(step: FunnelStep) -> Optional[str]:
+        return FunnelRuntimeService._message_item_file_name(step.config_json or {})
+
+    @staticmethod
+    def _step_mime_type(step: FunnelStep) -> Optional[str]:
+        return FunnelRuntimeService._message_item_mime_type(step.config_json or {})
 
     @staticmethod
     def _message_delay_seconds(item: dict[str, Any]) -> int:
@@ -1782,7 +2391,13 @@ class FunnelRuntimeService:
     @staticmethod
     def _input_retry_message(step: FunnelStep) -> str:
         config = step.config_json or {}
-        return str(config.get("retry_message") or "Введите корректное значение").strip()
+        validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
+        return str(
+            config.get("retry_message")
+            or config.get("error_message")
+            or validation.get("error_message")
+            or "Введите корректное значение"
+        ).strip()
 
     @staticmethod
     def _delay_step_seconds(step: FunnelStep) -> int:
@@ -1814,13 +2429,22 @@ class FunnelRuntimeService:
 
     def _validate_input_answer(self, step: FunnelStep, answer: Optional[str]) -> dict[str, Any]:
         config = step.config_json or {}
-        validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
-        validation_type = str(validation.get("type") or config.get("answer_type") or "text")
+        validation_type = self._input_answer_type(step)
         text = str(answer or "").strip()
 
         if validation_type == "phone":
             digits = re.sub(r"\D+", "", text)
-            return {"valid": len(digits) >= 10}
+            return {
+                "valid": bool(PHONE_RE.match(text)) and 10 <= len(digits) <= 15,
+                "normalized": self._normalize_phone(text),
+            }
+        if validation_type == "email":
+            return {"valid": bool(EMAIL_RE.match(text)), "normalized": text}
+        if validation_type == "name":
+            return {
+                "valid": len(text) >= 2 and not text.isdigit(),
+                "normalized": text,
+            }
         if validation_type == "number":
             try:
                 float(text.replace(",", "."))
@@ -1832,6 +2456,63 @@ class FunnelRuntimeService:
         if validation_type in {"date", "time"}:
             return {"valid": bool(text)}
         return {"valid": bool(text) or not config.get("wait_for_answer", True)}
+
+    @staticmethod
+    def _input_answer_type(step: FunnelStep) -> str:
+        config = step.config_json or {}
+        validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
+        raw_type = str(
+            validation.get("type")
+            or config.get("answer_type")
+            or config.get("data_type")
+            or config.get("field_type")
+            or ""
+        ).strip().lower()
+        if raw_type:
+            return raw_type
+        block_type = step.block_type
+        if block_type == "ask_phone":
+            return "phone"
+        if block_type == "ask_email":
+            return "email"
+        if block_type == "ask_name":
+            return "name"
+        if block_type in {"ask_number", "ask_age", "ask_budget"}:
+            return "number"
+        if block_type == "ask_choice":
+            return "choice"
+        if block_type == "ask_date":
+            return "date"
+        if block_type == "ask_time":
+            return "time"
+        return "text"
+
+    @classmethod
+    def _input_target_field(cls, step: FunnelStep) -> Optional[str]:
+        config = step.config_json or {}
+        field = cls._normalize_field_key(
+            config.get("field_key")
+            or config.get("custom_field_key")
+            or config.get("save_to")
+            or config.get("lead_field_key")
+            or config.get("variable_name")
+        )
+        if field:
+            return field
+        fallback_by_block = {
+            "ask_age": "age",
+            "ask_country": "country",
+            "ask_call_time": "call_time_text",
+            "ask_comment": "comment",
+            "ask_city": "city",
+            "ask_budget": "budget",
+        }
+        return fallback_by_block.get(step.block_type)
+
+    @staticmethod
+    def _normalize_phone(value: str) -> str:
+        digits = re.sub(r"\D+", "", value)
+        return f"+{digits}" if digits else value.strip()
 
     def _choice_for_answer(self, step: FunnelStep, answer: Optional[str]) -> Optional[dict[str, Any]]:
         normalized = str(answer or "").strip().lower()
