@@ -16,6 +16,7 @@ export type Chat = {
   external_chat_id: string
   external_user_id: string
   contact_name: string | null
+  client_lang: string | null
   last_message_at: string | null
   last_user_message_at: string | null
   last_manager_reply_at: string | null

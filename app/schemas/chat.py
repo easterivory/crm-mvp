@@ -18,6 +18,10 @@ class ChatUpdate(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=255)
 
 
+class ChatLanguageUpdate(BaseModel):
+    client_lang: Optional[str] = Field(None, max_length=10)
+
+
 class ChatTagOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -38,6 +42,7 @@ class ChatOut(OrmBase):
     external_chat_id: str
     external_user_id: str
     contact_name: Optional[str]
+    client_lang: Optional[str] = None
 
     last_message_at: Optional[datetime]
     last_user_message_at: Optional[datetime]

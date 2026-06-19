@@ -15,6 +15,8 @@ class MessageCreate(BaseModel):
     sender_id: Optional[uuid.UUID] = None
     operator_id: Optional[uuid.UUID] = None
     body: Optional[str] = None
+    translated_text: Optional[str] = None
+    original_text: Optional[str] = None
     caption: Optional[str] = None
     telegram_file_id: Optional[str] = Field(None, max_length=512)
     file_unique_id: Optional[str] = Field(None, max_length=255)
@@ -36,6 +38,8 @@ class MessageOut(OrmBase):
     sender_id: Optional[uuid.UUID]
     operator_id: Optional[uuid.UUID] = None
     body: Optional[str]
+    translated_text: Optional[str] = None
+    original_text: Optional[str] = None
     caption: Optional[str] = None
     telegram_file_id: Optional[str] = None
     file_unique_id: Optional[str] = None

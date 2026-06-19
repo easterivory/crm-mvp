@@ -31,6 +31,12 @@ class ProjectUpdate(BaseModel):
     sla_threshold_minutes: Optional[int] = Field(None, ge=1)
 
 
+class ProjectTranslationUpdate(BaseModel):
+    operator_lang: Optional[str] = Field(None, min_length=1, max_length=10)
+    default_client_lang: Optional[str] = Field(None, min_length=1, max_length=10)
+    is_translation_enabled: Optional[bool] = None
+
+
 class ProjectRead(OrmBase):
     id: uuid.UUID
     name: str
@@ -38,6 +44,9 @@ class ProjectRead(OrmBase):
     description: Optional[str]
     status: ProjectStatus
     sla_threshold_minutes: int
+    operator_lang: str
+    default_client_lang: str
+    is_translation_enabled: bool
     created_at: datetime
     updated_at: datetime
     is_deleted: bool

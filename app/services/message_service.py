@@ -38,10 +38,12 @@ from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import TelegramSenderService
+from app.services.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +84,11 @@ class MessageService:
         self.message_repo = MessageRepository(db)
         self.chat_repo = ChatRepository(db)
         self.bot_repo = BotRepository(db)
+        self.project_repo = ProjectRepository(db)
         self.user_repo = UserRepository(db)
         self.chat_service = ChatService(db)
         self.telegram_sender = TelegramSenderService(db)
+        self.translation_service = TranslationService(db)
 
     async def send_message_to_client(
         self,
@@ -98,6 +102,7 @@ class MessageService:
         file_bytes: bytes | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        auto_translate: bool = True,
     ) -> MessageOut:
         await self._ensure_operator_can_send(operator_id, project_id)
         chat = await self.chat_repo.get_active(chat_id, project_id)
@@ -116,11 +121,17 @@ class MessageService:
                 raise HTTPException(status_code=422, detail="Text message cannot include media payload.")
             if not message_text:
                 raise HTTPException(status_code=422, detail="Text message cannot be empty.")
+            sent_text, original_text = await self._translate_outgoing_text_for_chat(
+                chat=chat,
+                project_id=project_id,
+                text=message_text,
+                auto_translate=auto_translate,
+            )
             result = await self.telegram_sender.send_message(
                 project_id=project_id,
                 bot_id=chat.bot_id,
                 external_chat_id=chat.external_chat_id,
-                text=message_text,
+                text=sent_text,
             )
             if result is None:
                 raise HTTPException(status_code=502, detail="Telegram не принял текстовое сообщение.")
@@ -130,7 +141,8 @@ class MessageService:
                 sender_type=SenderType.MANAGER,
                 sender_id=operator_id,
                 operator_id=operator_id,
-                body=message_text,
+                body=sent_text,
+                original_text=original_text,
                 raw_payload_json={"telegram_result": result},
             )
             message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
@@ -148,13 +160,22 @@ class MessageService:
 
         media = file_id or file_bytes
         assert media is not None
+        sent_caption = message_text or None
+        original_text = None
+        if sent_caption is not None:
+            sent_caption, original_text = await self._translate_outgoing_text_for_chat(
+                chat=chat,
+                project_id=project_id,
+                text=sent_caption,
+                auto_translate=auto_translate,
+            )
         result = await self._send_media_to_telegram_by_type(
             media_type=normalized_type,
             media=media,
             project_id=project_id,
             bot_id=chat.bot_id,
             external_chat_id=chat.external_chat_id,
-            caption=message_text or None,
+            caption=sent_caption,
             reply_markup=None,
             file_name=file_name,
             mime_type=mime_type,
@@ -174,7 +195,8 @@ class MessageService:
             sender_id=operator_id,
             operator_id=operator_id,
             body=None,
-            caption=message_text or None,
+            caption=sent_caption,
+            original_text=original_text,
             telegram_file_id=telegram_file_id or file_id,
             file_unique_id=file_unique_id,
             file_name=file_name,
@@ -199,6 +221,7 @@ class MessageService:
         data: MessageCreate,
         *,
         send_to_telegram: bool = True,
+        auto_translate: bool = True,
     ) -> MessageOut:
         """
         Atomically (within one DB transaction):
@@ -248,6 +271,19 @@ class MessageService:
         if data.operator_id is not None:
             await self._ensure_operator_can_send(data.operator_id, project_id)
 
+        if data.sender_type == SenderType.USER:
+            data = await self._with_incoming_translation(
+                project_id=project_id,
+                data=data,
+            )
+        elif send_to_telegram and data.sender_type == SenderType.MANAGER:
+            data = await self._with_manager_outgoing_translation(
+                chat=chat,
+                project_id=project_id,
+                data=data,
+                auto_translate=auto_translate,
+            )
+
         upload_id_for_sent_mark = data.upload_id
         if send_to_telegram and self._is_outgoing_media_upload(data):
             data = await self._send_media_upload_to_telegram(
@@ -284,6 +320,8 @@ class MessageService:
                     sender_id=data.sender_id,
                     operator_id=data.operator_id,
                     body=data.body,
+                    translated_text=data.translated_text,
+                    original_text=data.original_text,
                     caption=data.caption,
                     telegram_file_id=data.telegram_file_id,
                     file_unique_id=data.file_unique_id,
@@ -410,6 +448,100 @@ class MessageService:
             except OSError:
                 continue
         return removed
+
+    async def _with_incoming_translation(
+        self,
+        *,
+        project_id: UUID,
+        data: MessageCreate,
+    ) -> MessageCreate:
+        if data.translated_text is not None:
+            return data
+
+        source_text = self._translation_source_text(data)
+        if source_text is None:
+            return data
+
+        project = await self.project_repo.get_active(project_id)
+        if project is None or not project.is_translation_enabled:
+            return data
+
+        translated_text = await self.translation_service.translate_text(
+            source_text,
+            source_lang=None,
+            target_lang=self._lang_or_default(project.operator_lang, "ru"),
+        )
+        return data.model_copy(update={"translated_text": translated_text})
+
+    async def _with_manager_outgoing_translation(
+        self,
+        *,
+        chat,
+        project_id: UUID,
+        data: MessageCreate,
+        auto_translate: bool,
+    ) -> MessageCreate:
+        source_text = self._translation_source_text(data)
+        if source_text is None:
+            return data
+
+        translated_text, original_text = await self._translate_outgoing_text_for_chat(
+            chat=chat,
+            project_id=project_id,
+            text=source_text,
+            auto_translate=auto_translate,
+        )
+        if original_text is None:
+            return data
+
+        updates: dict[str, str | None] = {
+            "original_text": data.original_text or original_text,
+        }
+        if data.message_type == MessageType.TEXT and data.body is not None:
+            updates["body"] = translated_text
+        elif data.caption is not None:
+            updates["caption"] = translated_text
+        else:
+            updates["body"] = translated_text
+        return data.model_copy(update=updates)
+
+    async def _translate_outgoing_text_for_chat(
+        self,
+        *,
+        chat,
+        project_id: UUID,
+        text: str,
+        auto_translate: bool,
+    ) -> tuple[str, str | None]:
+        if not auto_translate or not text.strip():
+            return text, None
+
+        project = await self.project_repo.get_active(project_id)
+        if project is None or not project.is_translation_enabled:
+            return text, None
+
+        client_lang = self._lang_or_default(
+            chat.client_lang or project.default_client_lang,
+            "en",
+        )
+        translated_text = await self.translation_service.translate_text(
+            text,
+            source_lang=self._lang_or_default(project.operator_lang, "ru"),
+            target_lang=client_lang,
+        )
+        return translated_text, text
+
+    @staticmethod
+    def _translation_source_text(data: MessageCreate) -> str | None:
+        text = data.body if data.message_type == MessageType.TEXT else (data.caption or data.body)
+        if text is None or not text.strip():
+            return None
+        return text
+
+    @staticmethod
+    def _lang_or_default(value: str | None, default: str) -> str:
+        normalized = (value or "").strip()
+        return normalized or default
 
     async def _send_text_to_telegram(
         self,
@@ -789,6 +921,64 @@ class MessageService:
             since=since,
         )
         return [MessageOut.model_validate(m) for m in messages], total
+
+    async def translate_message_on_demand(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        message_id: UUID,
+    ) -> MessageOut:
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found in this project",
+            )
+
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        message = await self.message_repo.get_by_id_in_project(message_id, project_id)
+        if message is None or message.chat_id != chat_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Message not found in this chat",
+            )
+
+        source_text: str | None
+        source_lang: str | None
+        target_lang: str
+        if message.sender_type == SenderType.USER and message.operator_id is None:
+            source_text = message.body or message.caption
+            source_lang = None
+            target_lang = self._lang_or_default(project.operator_lang, "ru")
+        else:
+            source_text = message.original_text or message.body or message.caption
+            source_lang = self._lang_or_default(project.operator_lang, "ru")
+            target_lang = self._lang_or_default(
+                chat.client_lang or project.default_client_lang,
+                "en",
+            )
+
+        if source_text is None or not source_text.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Message has no text to translate",
+            )
+
+        message.translated_text = await self.translation_service.translate_text(
+            source_text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        await self.db.flush()
+        await self.db.refresh(message)
+        return MessageOut.model_validate(message)
 
     async def media_response(self, message_id: UUID, project_id: UUID) -> StreamingResponse:
         message = await self.message_repo.get_by_id_in_project(message_id, project_id)

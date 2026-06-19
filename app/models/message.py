@@ -45,6 +45,8 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     )
     # NULL for media messages without a caption
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    translated_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    original_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     telegram_file_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
     file_unique_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

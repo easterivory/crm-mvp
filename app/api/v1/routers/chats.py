@@ -18,7 +18,7 @@ from app.api.v1.dependencies import get_current_project_id, get_current_user, ge
 from app.core.constants import RoleName
 from app.models.user import User
 from app.repositories.funnel_repository import FunnelRepository
-from app.schemas.chat import ChatCreate, ChatFilters, ChatOut
+from app.schemas.chat import ChatCreate, ChatFilters, ChatLanguageUpdate, ChatOut
 from app.schemas.chat_event_log import ChatEventLogOut
 from app.schemas.chat_filter_preset import (
     ChatFilterPresetCreate,
@@ -46,6 +46,14 @@ def _ensure_chat_trace_access(current_user: User) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only operator, manager, admin or super_admin can view funnel trace",
+        )
+
+
+def _ensure_chat_language_access(current_user: User) -> None:
+    if current_user.role_name not in RoleName.ALL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operator, manager, admin or super_admin can update chat language",
         )
 
 
@@ -257,6 +265,22 @@ async def get_chat(
 ) -> ChatOut:
     """Returns a single chat with computed flags (unread, unanswered, is_red)."""
     return await ChatService(db).get_chat(chat_id=chat_id, project_id=project_id)
+
+
+@router.patch("/{chat_id}/language", response_model=ChatOut)
+async def update_chat_language(
+    chat_id: UUID,
+    data: ChatLanguageUpdate,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatOut:
+    _ensure_chat_language_access(current_user)
+    return await ChatService(db).update_language(
+        chat_id=chat_id,
+        project_id=project_id,
+        data=data,
+    )
 
 
 @router.get("/{chat_id}/audit-logs", response_model=list[ChatEventLogOut])

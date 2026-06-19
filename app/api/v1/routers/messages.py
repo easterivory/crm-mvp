@@ -29,6 +29,10 @@ async def create_message(
 ) -> MessageOut:
     payload, upload = await _read_message_request(request)
     message_service = MessageService(db)
+    auto_translate = _optional_bool(
+        request.query_params.get("auto_translate", payload.get("auto_translate")),
+        default=True,
+    )
 
     upload_id = _optional_uuid(payload.get("upload_id"), "upload_id")
     if upload_id is not None:
@@ -45,6 +49,7 @@ async def create_message(
             chat_id=chat_id,
             project_id=project_id,
             data=legacy_data,
+            auto_translate=auto_translate,
         )
 
     snippet_id = _optional_uuid(payload.get("snippet_id"), "snippet_id")
@@ -65,6 +70,7 @@ async def create_message(
             text=text,
             media_type=snippet.type,
             file_id=snippet.file_id,
+            auto_translate=auto_translate,
         )
 
     media_type = str(payload.get("media_type") or payload.get("message_type") or MessageType.TEXT)
@@ -83,6 +89,7 @@ async def create_message(
             file_bytes=file_bytes,
             file_name=upload.filename,
             mime_type=upload.content_type,
+            auto_translate=auto_translate,
         )
 
     return await message_service.send_message_to_client(
@@ -92,7 +99,23 @@ async def create_message(
         text=text,
         media_type=media_type,
         file_id=file_id,
+        auto_translate=auto_translate,
     )
+
+
+@router.post("/{message_id}/translate", response_model=MessageOut)
+async def translate_message(
+    chat_id: UUID,
+    message_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> MessageOut:
+    return await MessageService(db).translate_message_on_demand(
+        chat_id=chat_id,
+        project_id=project_id,
+        message_id=message_id,
+    )
+
 
 @router.get("", response_model=PaginatedResponse[MessageOut])
 async def list_messages(
@@ -198,3 +221,16 @@ def _optional_text(value) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_bool(value, *, default: bool) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise HTTPException(status_code=422, detail="auto_translate must be a boolean")

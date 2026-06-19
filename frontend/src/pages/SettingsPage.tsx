@@ -1,6 +1,7 @@
 import {
   Check,
   KeyRound,
+  Languages,
   LoaderCircle,
   Pencil,
   Plus,
@@ -44,6 +45,9 @@ type Project = {
   id: string
   name: string
   sla_threshold_minutes: number
+  operator_lang: string
+  default_client_lang: string
+  is_translation_enabled: boolean
   created_at: string
   is_deleted: boolean
 }
@@ -91,6 +95,19 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'landers', label: 'Лендинги и Домены' },
 ]
 
+const languageOptions = [
+  { value: 'ru', label: 'Русский (RU)' },
+  { value: 'en', label: 'Английский (EN)' },
+  { value: 'es', label: 'Испанский (ES)' },
+  { value: 'pt', label: 'Португальский (PT)' },
+  { value: 'ar', label: 'Арабский (AR)' },
+  { value: 'fr', label: 'Французский (FR)' },
+  { value: 'de', label: 'Немецкий (DE)' },
+  { value: 'it', label: 'Итальянский (IT)' },
+  { value: 'tr', label: 'Турецкий (TR)' },
+  { value: 'hi', label: 'Хинди (HI)' },
+] as const
+
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
@@ -129,6 +146,7 @@ export default function SettingsPage() {
   const [notice, setNotice] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSavingProject, setIsSavingProject] = useState(false)
+  const [isSavingTranslation, setIsSavingTranslation] = useState(false)
   const [isAddingUser, setIsAddingUser] = useState(false)
   const [isAddingStatus, setIsAddingStatus] = useState(false)
   const [isAddingTag, setIsAddingTag] = useState(false)
@@ -151,6 +169,9 @@ export default function SettingsPage() {
 
   const [projectName, setProjectName] = useState('')
   const [slaMinutes, setSlaMinutes] = useState('30')
+  const [translationEnabled, setTranslationEnabled] = useState(false)
+  const [operatorLang, setOperatorLang] = useState('ru')
+  const [defaultClientLang, setDefaultClientLang] = useState('en')
   const [newUserEmail, setNewUserEmail] = useState('')
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
@@ -292,6 +313,9 @@ export default function SettingsPage() {
     setProject(data)
     setProjectName(data.name)
     setSlaMinutes(String(data.sla_threshold_minutes))
+    setTranslationEnabled(data.is_translation_enabled)
+    setOperatorLang(data.operator_lang || 'ru')
+    setDefaultClientLang(data.default_client_lang || 'en')
   }, [activeProjectId])
 
   const loadUsers = useCallback(async () => {
@@ -377,6 +401,36 @@ export default function SettingsPage() {
       setError(getErrorMessage(err, 'Не удалось сохранить проект.'))
     } finally {
       setIsSavingProject(false)
+    }
+  }
+
+  const handleTranslationSave = async () => {
+    if (!project || isSavingTranslation) {
+      return
+    }
+
+    setIsSavingTranslation(true)
+    setError('')
+    setNotice('')
+
+    try {
+      const { data } = await api.patch<Project>(
+        `/projects/${project.id}/translation-settings`,
+        {
+          operator_lang: operatorLang,
+          default_client_lang: defaultClientLang,
+          is_translation_enabled: translationEnabled,
+        },
+      )
+      setProject(data)
+      setTranslationEnabled(data.is_translation_enabled)
+      setOperatorLang(data.operator_lang)
+      setDefaultClientLang(data.default_client_lang)
+      setNotice('Настройки перевода сохранены.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось сохранить настройки перевода.'))
+    } finally {
+      setIsSavingTranslation(false)
     }
   }
 
@@ -790,6 +844,80 @@ export default function SettingsPage() {
               {isSavingProject ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
               Сохранить проект
             </button>
+            <div className="mt-8 space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-500/15 text-sky-200">
+                  <Languages size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-zinc-100">
+                    Двусторонний перевод сообщений
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-zinc-500">
+                    Настройки языков для автоматического перевода входящих и исходящих сообщений.
+                  </p>
+                </div>
+              </div>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-3">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-zinc-200">
+                    Включить автоматический перевод
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                    Входящие сообщения переводятся оператору, исходящие — клиенту.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={translationEnabled}
+                  onChange={(event) => setTranslationEnabled(event.target.checked)}
+                  className="h-5 w-5 shrink-0 accent-emerald-500"
+                />
+              </label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-300">
+                    Язык операторов
+                  </span>
+                  <select
+                    value={operatorLang}
+                    onChange={(event) => setOperatorLang(event.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+                  >
+                    {languageOptions.map((language) => (
+                      <option key={language.value} value={language.value}>
+                        {language.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-300">
+                    Язык клиентов по умолчанию
+                  </span>
+                  <select
+                    value={defaultClientLang}
+                    onChange={(event) => setDefaultClientLang(event.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+                  >
+                    {languageOptions.map((language) => (
+                      <option key={language.value} value={language.value}>
+                        {language.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleTranslationSave()}
+                disabled={!project || isSavingTranslation}
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/35 px-4 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingTranslation ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
+                Сохранить настройки перевода
+              </button>
+            </div>
             {canArchiveProject && project ? (
               <div className="mt-8 rounded-xl border border-red-500/25 bg-red-950/20 p-4">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

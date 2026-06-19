@@ -386,6 +386,26 @@ class ChatRepository(BaseRepository[Chat]):
         )
         return result.scalar_one_or_none()
 
+    async def update_client_lang(
+        self,
+        chat_id: UUID,
+        project_id: UUID,
+        client_lang: str | None,
+    ) -> Optional[Chat]:
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(client_lang=client_lang, updated_at=func.now())
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_active(chat_id, project_id)
+
     async def list(
         self,
         project_id: UUID,

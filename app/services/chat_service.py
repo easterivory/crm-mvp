@@ -22,6 +22,7 @@ Sorting order (enforced by repository):
   2. unanswered DESC
   3. last_message_at DESC NULLS LAST
 """
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 
@@ -37,7 +38,14 @@ from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
-from app.schemas.chat import ChatCreate, ChatFilters, ChatLeadStatusOut, ChatOut, ChatTagOut
+from app.schemas.chat import (
+    ChatCreate,
+    ChatFilters,
+    ChatLanguageUpdate,
+    ChatLeadStatusOut,
+    ChatOut,
+    ChatTagOut,
+)
 from app.services.audit_service import AuditService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 
@@ -168,6 +176,33 @@ class ChatService:
             tags=tags_by_chat.get(chat.id, []),
             lead_status=statuses_by_chat.get(chat.id),
         )
+
+    async def update_language(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        data: ChatLanguageUpdate,
+    ) -> ChatOut:
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        client_lang = self._normalize_language_code(data.client_lang)
+        chat = await self.chat_repo.update_client_lang(
+            chat_id=chat_id,
+            project_id=project_id,
+            client_lang=client_lang,
+        )
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found",
+            )
+        return self._chat_out(chat, project.sla_threshold_minutes, None)
 
     async def create_chat(self, project_id: UUID, data: ChatCreate) -> ChatOut:
         project = await self.project_repo.get_active(project_id)
@@ -485,3 +520,16 @@ class ChatService:
             return None
         normalized = value.strip()
         return normalized or None
+
+    @staticmethod
+    def _normalize_language_code(value: str | None) -> str | None:
+        normalized = ChatService._normalize_optional(value)
+        if normalized is None:
+            return None
+        normalized = normalized.replace("_", "-").lower()
+        if not re.fullmatch(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})?", normalized):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="client_lang must be a valid language code",
+            )
+        return normalized

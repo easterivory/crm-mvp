@@ -70,6 +70,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     external_chat_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     contact_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    client_lang: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
 
     # Timestamp fields — updated by message_service on every message write
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

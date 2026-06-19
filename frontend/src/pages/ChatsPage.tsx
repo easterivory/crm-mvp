@@ -7,6 +7,7 @@ import {
   FileText,
   Film,
   Image as ImageIcon,
+  Languages,
   LoaderCircle,
   Mic,
   MessageSquareText,
@@ -71,6 +72,8 @@ type Message = {
   sender_id: string | null
   operator_id: string | null
   body: string | null
+  translated_text: string | null
+  original_text: string | null
   caption: string | null
   telegram_file_id: string | null
   file_unique_id: string | null
@@ -100,6 +103,13 @@ type ProjectSnippet = {
   content: string | null
   file_id: string | null
   created_at: string
+}
+
+type ProjectTranslationConfig = {
+  id: string
+  operator_lang: string
+  default_client_lang: string
+  is_translation_enabled: boolean
 }
 
 type ChatAuditLog = {
@@ -144,6 +154,19 @@ type TimelineItem =
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
 
+const languageOptions = [
+  { value: 'en', label: 'Английский', shortLabel: 'EN' },
+  { value: 'es', label: 'Испанский', shortLabel: 'ES' },
+  { value: 'pt', label: 'Португальский', shortLabel: 'PT' },
+  { value: 'ar', label: 'Арабский', shortLabel: 'AR' },
+  { value: 'ru', label: 'Русский', shortLabel: 'RU' },
+  { value: 'fr', label: 'Французский', shortLabel: 'FR' },
+  { value: 'de', label: 'Немецкий', shortLabel: 'DE' },
+  { value: 'it', label: 'Итальянский', shortLabel: 'IT' },
+  { value: 'tr', label: 'Турецкий', shortLabel: 'TR' },
+  { value: 'hi', label: 'Хинди', shortLabel: 'HI' },
+] as const
+
 const mediaLabels: Record<string, string> = {
   animation: 'Анимация',
   audio: 'Аудио',
@@ -156,6 +179,33 @@ const mediaLabels: Record<string, string> = {
   video: 'Видео',
   video_note: 'Кружок',
   voice: 'Голосовое',
+}
+
+function normalizeLanguageCode(value: string | null | undefined) {
+  const normalized = value?.trim().replace('_', '-').toLowerCase()
+  return normalized || null
+}
+
+function languageShortLabel(value: string | null | undefined) {
+  const normalized = normalizeLanguageCode(value)
+  if (!normalized) {
+    return 'EN'
+  }
+  return languageOptions.find((item) => item.value === normalized)?.shortLabel
+    ?? normalized.toUpperCase()
+}
+
+function languageName(value: string | null | undefined) {
+  const normalized = normalizeLanguageCode(value)
+  if (!normalized) {
+    return 'Английский'
+  }
+  return languageOptions.find((item) => item.value === normalized)?.label
+    ?? normalized.toUpperCase()
+}
+
+function hasText(value: string | null | undefined) {
+  return Boolean(value?.trim())
 }
 
 const attachmentModes: Array<{
@@ -474,6 +524,7 @@ export default function ChatsPage() {
   const [chats, setChats] = useState<Chat[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  const [projectTranslation, setProjectTranslation] = useState<ProjectTranslationConfig | null>(null)
   const [auditLogs, setAuditLogs] = useState<ChatAuditLog[]>([])
   const [snippets, setSnippets] = useState<ProjectSnippet[]>([])
   const [trackingOptions, setTrackingOptions] = useState<FilterOption[]>([])
@@ -496,6 +547,9 @@ export default function ChatsPage() {
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [isAutoTranslateEnabled, setIsAutoTranslateEnabled] = useState(true)
+  const [translatingMessageId, setTranslatingMessageId] = useState<string | null>(null)
+  const [isUpdatingChatLanguage, setIsUpdatingChatLanguage] = useState(false)
   const [attachment, setAttachment] = useState<ChatAttachmentDraft | null>(null)
   const [attachmentMode, setAttachmentMode] = useState<OutgoingMediaType>('document')
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false)
@@ -522,6 +576,11 @@ export default function ChatsPage() {
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId],
   )
+  const effectiveClientLang = normalizeLanguageCode(
+    selectedChat?.client_lang ?? projectTranslation?.default_client_lang ?? 'en',
+  ) ?? 'en'
+  const clientLangLabel = languageShortLabel(effectiveClientLang)
+  const operatorLangLabel = languageShortLabel(projectTranslation?.operator_lang ?? 'ru')
   const selectedPreset = useMemo(
     () => filterPresets.find((preset) => preset.id === selectedPresetId) ?? null,
     [filterPresets, selectedPresetId],
@@ -794,6 +853,23 @@ export default function ChatsPage() {
     }
   }, [selectedProjectId])
 
+  const loadProjectTranslation = useCallback(async () => {
+    if (!selectedProjectId) {
+      setProjectTranslation(null)
+      setIsAutoTranslateEnabled(true)
+      return
+    }
+
+    try {
+      const { data } = await api.get<ProjectTranslationConfig>(`/projects/${selectedProjectId}`)
+      setProjectTranslation(data)
+      setIsAutoTranslateEnabled(data.is_translation_enabled)
+    } catch {
+      setProjectTranslation(null)
+      setIsAutoTranslateEnabled(true)
+    }
+  }, [selectedProjectId])
+
   const loadFilterOptions = useCallback(async () => {
     if (!selectedProjectId) {
       setTrackingOptions([])
@@ -1003,6 +1079,7 @@ export default function ChatsPage() {
   useEffect(() => {
     void loadChats()
     void loadBots()
+    void loadProjectTranslation()
     void loadFilterOptions()
     void loadFilterPresets()
     void loadSnippets()
@@ -1014,7 +1091,7 @@ export default function ChatsPage() {
       window.clearInterval(timer)
       chatsAbortRef.current?.abort()
     }
-  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadSnippets])
+  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadProjectTranslation, loadSnippets])
 
   useEffect(() => {
     if (previousProjectIdRef.current === selectedProjectId) {
@@ -1104,7 +1181,10 @@ export default function ChatsPage() {
     setIsSending(true)
 
     try {
-      const params = selectedProjectId ? { project_id: selectedProjectId } : undefined
+      const params = {
+        ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+        auto_translate: isAutoTranslateEnabled,
+      }
       const { data } = attachment
         ? await api.post<Message>(
             `/chats/${selectedChatId}/messages`,
@@ -1150,15 +1230,17 @@ export default function ChatsPage() {
 
     setIsSending(true)
     try {
+      const params = {
+        ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+        auto_translate: isAutoTranslateEnabled,
+      }
       const { data } = await api.post<Message>(
         `/chats/${selectedChatId}/messages`,
         {
           snippet_id: snippet.id,
           ...(draft.trim() ? { text: draft.trim() } : {}),
         },
-        {
-          params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
-        },
+        { params },
       )
       setMessages((current) => sortMessagesByDate([...current, data]))
       setDraft('')
@@ -1169,6 +1251,58 @@ export default function ChatsPage() {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsSending(false)
+    }
+  }
+
+  const handleTranslateMessage = async (message: Message) => {
+    if (!selectedChatId || translatingMessageId) {
+      return
+    }
+
+    setTranslatingMessageId(message.id)
+    try {
+      const { data } = await api.post<Message>(
+        `/chats/${selectedChatId}/messages/${message.id}/translate`,
+        null,
+        {
+          params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+        },
+      )
+      setMessages((current) =>
+        sortMessagesByDate(current.map((item) => (item.id === data.id ? data : item))),
+      )
+      notify({ tone: 'success', message: 'Сообщение переведено.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      setTranslatingMessageId(null)
+    }
+  }
+
+  const handleClientLanguageChange = async (clientLang: string) => {
+    if (!selectedChat || !selectedProjectId || isUpdatingChatLanguage) {
+      return
+    }
+
+    const normalizedLang = normalizeLanguageCode(clientLang)
+    setIsUpdatingChatLanguage(true)
+    try {
+      const { data } = await api.patch<Chat>(
+        `/chats/${selectedChat.id}/language`,
+        { client_lang: normalizedLang },
+        { params: { project_id: selectedProjectId } },
+      )
+      setChats((current) =>
+        current.map((chat) => (chat.id === data.id ? { ...chat, ...data } : chat)),
+      )
+      notify({
+        tone: 'success',
+        message: `Язык клиента: ${languageName(data.client_lang)}.`,
+      })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      setIsUpdatingChatLanguage(false)
     }
   }
 
@@ -1470,6 +1604,23 @@ export default function ChatsPage() {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-gray-400">
+                  <Languages size={15} className="text-accent-200" />
+                  <span className="sr-only">Язык клиента</span>
+                  <select
+                    value={effectiveClientLang}
+                    onChange={(event) => void handleClientLanguageChange(event.target.value)}
+                    disabled={isUpdatingChatLanguage}
+                    className="bg-transparent text-xs font-semibold uppercase text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    title="Язык клиента"
+                  >
+                    {languageOptions.map((language) => (
+                      <option key={language.value} value={language.value} className="bg-[#0B0F19] text-gray-100">
+                        {language.shortLabel}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   type="button"
                   onClick={() => setIsLeadOpen(true)}
@@ -1538,6 +1689,11 @@ export default function ChatsPage() {
                       ? 'CRM'
                       : 'Менеджер',
                 )
+                const translatedText = message.translated_text?.trim() || null
+                const originalText = message.original_text?.trim() || null
+                const hasTranslatableText = hasText(message.body) || hasText(message.caption)
+                const canTranslateIncoming =
+                  !isOutgoing && hasTranslatableText && !translatedText
 
                 return (
                   <div
@@ -1616,6 +1772,34 @@ export default function ChatsPage() {
                         </div>
                       )}
                       </div>
+                      {!isOutgoing && translatedText ? (
+                        <div className="mt-1 max-w-full rounded-xl border border-accent-300/15 bg-accent-300/[0.08] px-3 py-2 text-xs leading-5 text-gray-300">
+                          <span className="font-semibold text-accent-100">📝 Перевод:</span>{' '}
+                          <span className="whitespace-pre-wrap break-words">{translatedText}</span>
+                        </div>
+                      ) : null}
+                      {canTranslateIncoming ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleTranslateMessage(message)}
+                          disabled={translatingMessageId === message.id}
+                          className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.035] px-2.5 py-1 text-[11px] font-medium text-gray-400 transition hover:border-accent-300/40 hover:text-accent-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          title="Перевести сообщение"
+                        >
+                          {translatingMessageId === message.id ? (
+                            <LoaderCircle size={12} className="animate-spin" />
+                          ) : (
+                            <Languages size={12} />
+                          )}
+                          Перевести
+                        </button>
+                      ) : null}
+                      {isOutgoing && originalText ? (
+                        <div className="mt-1 max-w-full rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2 text-xs leading-5 text-gray-300">
+                          <span className="font-semibold text-gray-200">📝 Исходный текст:</span>{' '}
+                          <span className="whitespace-pre-wrap break-words">{originalText}</span>
+                        </div>
+                      ) : null}
                       {message.sender_type === 'manager' ? (
                         <p className="mt-1 max-w-full truncate px-1 text-[11px] leading-4 text-gray-500">
                           Отправил: {operatorName}
@@ -1779,6 +1963,22 @@ export default function ChatsPage() {
                 </div>
               ) : null}
             </div>
+            <label
+              className="flex h-10 shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-gray-200 transition hover:border-accent-300/40"
+              title={`Автоперевод с ${operatorLangLabel} на ${clientLangLabel}`}
+            >
+              <input
+                type="checkbox"
+                checked={isAutoTranslateEnabled}
+                onChange={(event) => setIsAutoTranslateEnabled(event.target.checked)}
+                disabled={!selectedChat || isSending}
+                className="h-4 w-4 accent-accent-400 disabled:cursor-not-allowed"
+              />
+              <span className="hidden whitespace-nowrap sm:inline">
+                Автоперевод (на {clientLangLabel})
+              </span>
+              <span className="whitespace-nowrap sm:hidden">На {clientLangLabel}</span>
+            </label>
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}

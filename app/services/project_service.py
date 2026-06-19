@@ -19,6 +19,7 @@ from app.schemas.project import (
     ProjectDashboardHeaderOut,
     ProjectOut,
     ProjectStatus,
+    ProjectTranslationUpdate,
     ProjectUpdate,
 )
 from app.services.audit_service import AuditService
@@ -138,6 +139,55 @@ class ProjectService:
             )
         return ProjectOut.model_validate(project)
 
+    async def update_translation_settings(
+        self,
+        project_id: UUID,
+        data: ProjectTranslationUpdate,
+        actor: User,
+    ) -> ProjectOut:
+        self._ensure_translation_settings_admin(actor)
+        self._ensure_project_access(actor, project_id)
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        values = data.model_dump(exclude_unset=True)
+        for field_name in ("operator_lang", "default_client_lang"):
+            if field_name not in values:
+                continue
+            if values[field_name] is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{field_name} must not be null",
+                )
+            values[field_name] = self._validate_language_code(
+                values[field_name],
+                field_name=field_name,
+            )
+
+        if (
+            values.get("is_translation_enabled") is None
+            and "is_translation_enabled" in values
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="is_translation_enabled must not be null",
+            )
+
+        if not values:
+            return ProjectOut.model_validate(project)
+
+        updated = await self.project_repo.update_active(project_id, **values)
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        return ProjectOut.model_validate(updated)
+
     async def archive_project(self, project_id: UUID, actor: User) -> None:
         if actor.role_name != RoleName.SUPER_ADMIN:
             raise HTTPException(
@@ -238,6 +288,14 @@ class ProjectService:
             )
 
     @staticmethod
+    def _ensure_translation_settings_admin(actor: User) -> None:
+        if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admin/super_admin can manage translation settings",
+            )
+
+    @staticmethod
     def _ensure_project_access(actor: User, project_id: UUID) -> None:
         if actor.role_name == RoleName.SUPER_ADMIN:
             return
@@ -274,6 +332,21 @@ class ProjectService:
                 detail="SLA threshold must be greater than zero",
             )
         return sla_threshold_minutes
+
+    @staticmethod
+    def _validate_language_code(value: str, *, field_name: str) -> str:
+        normalized = value.strip().replace("_", "-").lower()
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must not be empty",
+            )
+        if not re.fullmatch(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})?", normalized):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be a valid language code",
+            )
+        return normalized
 
     @classmethod
     def _normalize_slug(cls, value: str) -> str:

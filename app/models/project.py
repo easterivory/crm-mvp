@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import (
@@ -40,6 +40,24 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
     )
     sla_threshold_minutes: Mapped[int] = mapped_column(
         Integer, nullable=False, default=30, server_default="30"
+    )
+    operator_lang: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default="ru",
+        server_default="ru",
+    )
+    default_client_lang: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default="en",
+        server_default="en",
+    )
+    is_translation_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
     )
 
     # Relationships
