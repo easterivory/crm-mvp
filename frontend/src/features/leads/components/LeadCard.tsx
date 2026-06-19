@@ -178,7 +178,7 @@ export default function LeadCard({
             type="button"
             onClick={() => onRestore?.(lead)}
             disabled={isMutating || !onRestore}
-            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-emerald-500/15 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:py-0"
           >
             <Undo2 size={17} />
             Восстановить лида
@@ -191,7 +191,7 @@ export default function LeadCard({
               type="button"
               onClick={() => onOpenChat(lead)}
               disabled={!lead.chat_id}
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/35 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 transition hover:border-sky-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-sky-300/35 bg-sky-400/10 px-4 py-2.5 text-sm font-semibold text-sky-100 transition hover:border-sky-200/70 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:py-0"
             >
               <MessageSquareText size={16} />
               Перейти в чат
@@ -202,7 +202,7 @@ export default function LeadCard({
               type="button"
               onClick={() => onSubmitToPartner(lead)}
               disabled={isMutating}
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:py-0"
             >
               <TrendingUp size={16} />
               Подать в CRM партнёра
@@ -213,7 +213,7 @@ export default function LeadCard({
               type="button"
               onClick={() => onTrash(lead)}
               disabled={isMutating}
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-4 text-sm font-semibold text-red-100 transition hover:border-red-300/60 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-100 transition hover:border-red-300/60 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:py-0"
             >
               <Trash2 size={16} />
               В корзину

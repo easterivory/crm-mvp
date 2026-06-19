@@ -10,6 +10,14 @@ type ModalProps = {
   maxWidthClassName?: string
 }
 
+const responsiveMaxWidthClassNames: Record<string, string> = {
+  'max-w-md': 'md:max-w-md',
+  'max-w-lg': 'md:max-w-lg',
+  'max-w-xl': 'md:max-w-xl',
+  'max-w-2xl': 'md:max-w-2xl',
+  'max-w-6xl': 'md:max-w-6xl',
+}
+
 export default function Modal({
   title,
   description,
@@ -18,6 +26,8 @@ export default function Modal({
   maxWidthClassName = 'max-w-md',
 }: ModalProps) {
   const titleId = useId()
+  const responsiveMaxWidthClassName =
+    responsiveMaxWidthClassNames[maxWidthClassName] ?? maxWidthClassName
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -32,7 +42,7 @@ export default function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex min-h-dvh items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex min-h-dvh items-center justify-center bg-black/70 p-0 backdrop-blur-sm md:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -43,7 +53,7 @@ export default function Modal({
       }}
     >
       <div
-        className={`flex max-h-[calc(100dvh-2rem)] w-full ${maxWidthClassName} flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0B0F19] shadow-card`}
+        className={`flex max-h-[calc(100dvh-2rem)] w-[calc(100%-24px)] max-w-none md:w-full ${responsiveMaxWidthClassName} flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0B0F19] shadow-card`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">

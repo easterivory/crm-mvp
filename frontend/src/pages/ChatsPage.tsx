@@ -53,7 +53,7 @@ import {
   type FilterOption,
 } from '../features/chats/types'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
-import { ConfirmDialog, Modal } from '../shared/ui'
+import { ConfirmDialog } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
 type PaginatedResponse<T> = {
@@ -515,11 +515,34 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
   return debouncedValue
 }
 
+function getMediaQueryMatches(query: string) {
+  if (typeof window === 'undefined') {
+    return false
+  }
+  return window.matchMedia(query).matches
+}
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => getMediaQueryMatches(query))
+
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const handleChange = () => setMatches(media.matches)
+
+    handleChange()
+    media.addEventListener('change', handleChange)
+    return () => media.removeEventListener('change', handleChange)
+  }, [query])
+
+  return matches
+}
+
 export default function ChatsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const user = useAuthStore((state) => state.user)
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
   const notify = useNotificationStore((state) => state.notify)
+  const isDesktopChatLayout = useMediaQuery('(min-width: 768px)')
 
   const [chats, setChats] = useState<Chat[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
@@ -706,6 +729,7 @@ export default function ChatsPage() {
   )
 
   const handleClearSelectedChat = useCallback(() => {
+    setIsLeadOpen(false)
     selectedChatIdRef.current = null
     setSelectedChatId(null)
     syncChatSearchParams(chatFilters, null)
@@ -807,11 +831,13 @@ export default function ChatsPage() {
         return data.items
       })
       setTotal(data.total)
-      if (!selectedChatIdRef.current) {
+      if (!selectedChatIdRef.current && isDesktopChatLayout) {
         const nextChatId = data.items[0]?.id ?? null
-        selectedChatIdRef.current = nextChatId
-        setSelectedChatId(nextChatId)
-        syncChatSearchParams(debouncedChatFilters, nextChatId)
+        if (nextChatId) {
+          selectedChatIdRef.current = nextChatId
+          setSelectedChatId(nextChatId)
+          syncChatSearchParams(debouncedChatFilters, nextChatId)
+        }
       } else if (!data.items.some((chat) => chat.id === selectedChatIdRef.current)) {
         const selected = chatsRef.current.find((chat) => chat.id === selectedChatIdRef.current)
         if (!selected) {
@@ -835,6 +861,7 @@ export default function ChatsPage() {
     }
   }, [
     debouncedChatFilters,
+    isDesktopChatLayout,
     notify,
     selectedBotIds,
     selectedProjectId,
@@ -1094,6 +1121,21 @@ export default function ChatsPage() {
   }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadProjectTranslation, loadSnippets])
 
   useEffect(() => {
+    if (!isDesktopChatLayout || selectedChatId || chats.length === 0) {
+      return
+    }
+
+    const nextChatId = chats[0]?.id ?? null
+    if (!nextChatId) {
+      return
+    }
+
+    selectedChatIdRef.current = nextChatId
+    setSelectedChatId(nextChatId)
+    syncChatSearchParams(chatFilters, nextChatId)
+  }, [chatFilters, chats, isDesktopChatLayout, selectedChatId, syncChatSearchParams])
+
+  useEffect(() => {
     if (previousProjectIdRef.current === selectedProjectId) {
       return
     }
@@ -1110,6 +1152,7 @@ export default function ChatsPage() {
 
   useEffect(() => {
     if (!selectedChatId) {
+      setIsLeadOpen(false)
       messagesAbortRef.current?.abort()
       setMessages([])
       setAuditLogs([])
@@ -1513,10 +1556,10 @@ export default function ChatsPage() {
   }
 
   return (
-    <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 xl:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
+    <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 md:grid-cols-[20rem_minmax(0,1fr)] lg:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
       <div
         className={`h-full min-h-0 overflow-hidden ${
-          selectedChat ? 'hidden xl:block' : ''
+          selectedChat ? 'hidden md:block' : ''
         }`}
       >
         <ChatList
@@ -1548,7 +1591,7 @@ export default function ChatsPage() {
       </div>
 
       <div
-        className={`${selectedChat ? 'flex' : 'hidden xl:flex'} relative h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}
+        className={`${selectedChat ? 'flex' : 'hidden md:flex'} relative h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}
         onDragEnter={(event) => {
           if (event.dataTransfer.types.includes('Files')) {
             event.preventDefault()
@@ -1568,43 +1611,44 @@ export default function ChatsPage() {
         }}
         onDrop={handleAttachmentDrop}
       >
-        <header className="flex min-h-[96px] shrink-0 items-center justify-between gap-4 border-b border-white/5 px-4 sm:px-5">
+        <header className="flex min-h-[88px] shrink-0 items-center justify-between gap-2 border-b border-white/5 px-3 sm:min-h-[96px] sm:gap-4 sm:px-5">
           {selectedChat ? (
             <>
-              <div className="flex min-w-0 items-center gap-3">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
                 <button
                   type="button"
                   onClick={handleClearSelectedChat}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 xl:hidden"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 md:hidden"
                   title="К списку чатов"
+                  aria-label="К списку чатов"
                 >
                   <ArrowLeft size={16} />
                 </button>
                 <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="truncate text-base font-semibold text-white">
-                    {getChatTitle(selectedChat)}
-                  </h2>
-                  {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
-                </div>
-                <p className="truncate text-sm text-gray-500">
-                  {getBotLabel(selectedChat)} · Telegram ID {selectedChat.external_chat_id}
-                </p>
-                <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
-                  <span className="truncate">
-                    Воронка:{' '}
-                    {selectedChat.active_funnel_name
-                      ? `${selectedChat.active_funnel_name} v${selectedChat.active_funnel_version_number ?? '—'}`
-                      : 'не выбрана'}
-                  </span>
-                  <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-sky-200">
-                    {getLifecycleLabel(selectedChat)}
-                  </span>
-                </p>
+                  <div className="flex items-center gap-2">
+                    <h2 className="truncate text-base font-semibold text-white">
+                      {getChatTitle(selectedChat)}
+                    </h2>
+                    {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
+                  </div>
+                  <p className="truncate text-sm text-gray-500">
+                    {getBotLabel(selectedChat)} · Telegram ID {selectedChat.external_chat_id}
+                  </p>
+                  <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                    <span className="truncate">
+                      Воронка:{' '}
+                      {selectedChat.active_funnel_name
+                        ? `${selectedChat.active_funnel_name} v${selectedChat.active_funnel_version_number ?? '—'}`
+                        : 'не выбрана'}
+                    </span>
+                    <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-sky-200">
+                      {getLifecycleLabel(selectedChat)}
+                    </span>
+                  </p>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-gray-400">
+                <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-2 py-2 text-xs text-gray-400 sm:px-3">
                   <Languages size={15} className="text-accent-200" />
                   <span className="sr-only">Язык клиента</span>
                   <select
@@ -1624,10 +1668,11 @@ export default function ChatsPage() {
                 <button
                   type="button"
                   onClick={() => setIsLeadOpen(true)}
-                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 xl:hidden"
+                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-2 text-sm text-gray-200 transition hover:border-accent-300/50 sm:px-3 lg:hidden"
+                  aria-label="Открыть информацию о лиде"
                 >
                   <UserRound size={15} />
-                  Лид
+                  <span>Инфо</span>
                 </button>
                 <div className="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
                   <CheckCheck size={16} />
@@ -1643,7 +1688,7 @@ export default function ChatsPage() {
           )}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto bg-background/45 px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background/45 px-3 py-4 md:px-5">
           {isMessagesLoading ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
               <LoaderCircle size={18} className="mr-2 animate-spin" />
@@ -1702,7 +1747,7 @@ export default function ChatsPage() {
                     className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`flex max-w-[72%] flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}
+                      className={`flex max-w-[86%] flex-col md:max-w-[72%] ${isOutgoing ? 'items-end' : 'items-start'}`}
                     >
                       <div
                       className={`w-fit max-w-full rounded-2xl border px-3 py-2 shadow-sm transition ${
@@ -1882,7 +1927,7 @@ export default function ChatsPage() {
                 <Paperclip size={18} />
               </button>
               {isAttachmentMenuOpen ? (
-                <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-2 shadow-card backdrop-blur-xl">
+                <div className="absolute bottom-full left-0 z-30 mb-2 w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-2 shadow-card backdrop-blur-xl">
                   {attachmentModes.map((mode) => {
                     const Icon = getMediaIcon(mode.type)
                     return (
@@ -2010,7 +2055,7 @@ export default function ChatsPage() {
         ) : null}
       </div>
 
-      <div className="hidden h-full min-h-0 xl:block">
+      <div className="hidden h-full min-h-0 lg:block">
         <LeadSidebar
           activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
           activeBotName={botScopeLabel}
@@ -2023,8 +2068,29 @@ export default function ChatsPage() {
       </div>
 
       {isLeadOpen ? (
-        <Modal title="Карточка лида" onClose={() => setIsLeadOpen(false)} maxWidthClassName="max-w-lg">
-          <div className="h-[calc(100dvh-8rem)] min-h-[360px] min-w-0">
+        <>
+          <button
+            type="button"
+            aria-label="Закрыть информацию о лиде"
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+            onClick={() => setIsLeadOpen(false)}
+          />
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-sm transform flex-col bg-[#0d1222] shadow-2xl transition-transform duration-300 lg:hidden">
+            <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4">
+              <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+                <UserRound size={16} className="text-accent-200" />
+                <span className="truncate">Инфо лида</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLeadOpen(false)}
+                aria-label="Закрыть"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 p-3">
             <LeadSidebar
               activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
               activeBotName={botScopeLabel}
@@ -2035,7 +2101,8 @@ export default function ChatsPage() {
               onLeadStatusChanged={() => void loadChats()}
             />
           </div>
-        </Modal>
+          </aside>
+        </>
       ) : null}
 
       {isResetConfirmOpen ? (

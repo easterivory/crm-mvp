@@ -1503,56 +1503,105 @@ export default function TrackingPage() {
                     Расходов пока нет.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border border-white/5">
-                    <table className="min-w-[720px] w-full text-left text-sm">
-                      <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-gray-500">
-                        <tr>
-                          <th className="px-4 py-3">Дата</th>
-                          <th className="px-4 py-3">Сумма</th>
-                          <th className="px-4 py-3">Источник</th>
-                          <th className="px-4 py-3">Комментарий</th>
-                          <th className="px-4 py-3 text-right">Действия</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {spends.map((spend) => (
-                          <tr key={spend.id}>
-                            <td className="px-4 py-3 text-gray-200">{spend.spend_date}</td>
-                            <td className="px-4 py-3 font-medium text-white">
-                              {formatMoney(spend.amount, spend.currency)}
-                            </td>
-                            <td className="px-4 py-3 text-gray-400">{spend.source}</td>
-                            <td className="px-4 py-3 text-gray-400">
-                              {spend.comment || 'Без комментария'}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => openSpendModal(detailLink, spend)}
-                                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-200 transition hover:border-accent-300/50 hover:text-white"
-                                >
-                                  Изменить
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleDeleteSpend(spend)}
-                                  disabled={deletingSpendId === spend.id}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-gray-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  {deletingSpendId === spend.id ? (
-                                    <LoaderCircle size={14} className="animate-spin" />
-                                  ) : (
-                                    <Trash2 size={14} />
-                                  )}
-                                </button>
-                              </div>
-                            </td>
+                  <>
+                    <div className="grid gap-3 md:hidden">
+                      {spends.map((spend) => (
+                        <article
+                          key={spend.id}
+                          className="rounded-xl border border-white/5 bg-background/50 p-4"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs uppercase tracking-[0.16em] text-gray-500">
+                                {spend.spend_date}
+                              </p>
+                              <p className="mt-1 text-lg font-semibold text-white">
+                                {formatMoney(spend.amount, spend.currency)}
+                              </p>
+                            </div>
+                            <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-xs text-gray-300">
+                              {spend.source}
+                            </span>
+                          </div>
+                          <p className="mt-3 text-sm leading-6 text-gray-400">
+                            {spend.comment || 'Без комментария'}
+                          </p>
+                          <div className="mt-4 flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openSpendModal(detailLink, spend)}
+                              className="rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+                            >
+                              Изменить
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteSpend(spend)}
+                              disabled={deletingSpendId === spend.id}
+                              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 text-gray-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                              aria-label="Удалить расход"
+                            >
+                              {deletingSpendId === spend.id ? (
+                                <LoaderCircle size={14} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="hidden overflow-x-auto rounded-xl border border-white/5 md:block">
+                      <table className="min-w-[720px] w-full text-left text-sm">
+                        <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-gray-500">
+                          <tr>
+                            <th className="px-4 py-3">Дата</th>
+                            <th className="px-4 py-3">Сумма</th>
+                            <th className="px-4 py-3">Источник</th>
+                            <th className="px-4 py-3">Комментарий</th>
+                            <th className="px-4 py-3 text-right">Действия</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {spends.map((spend) => (
+                            <tr key={spend.id}>
+                              <td className="px-4 py-3 text-gray-200">{spend.spend_date}</td>
+                              <td className="px-4 py-3 font-medium text-white">
+                                {formatMoney(spend.amount, spend.currency)}
+                              </td>
+                              <td className="px-4 py-3 text-gray-400">{spend.source}</td>
+                              <td className="px-4 py-3 text-gray-400">
+                                {spend.comment || 'Без комментария'}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openSpendModal(detailLink, spend)}
+                                    className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+                                  >
+                                    Изменить
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteSpend(spend)}
+                                    disabled={deletingSpendId === spend.id}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-gray-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {deletingSpendId === spend.id ? (
+                                      <LoaderCircle size={14} className="animate-spin" />
+                                    ) : (
+                                      <Trash2 size={14} />
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </div>
             </div>

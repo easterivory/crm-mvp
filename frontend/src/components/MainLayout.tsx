@@ -84,9 +84,9 @@ export default function MainLayout() {
   const sidebar = (
     <aside
       className={cn(
-        'relative flex h-full shrink-0 flex-col border-white/5 bg-[#090D16]/95 p-4 text-gray-200 shadow-card backdrop-blur-xl transition-all duration-200',
+        'relative flex h-full shrink-0 flex-col border-white/5 bg-[#0e1325] p-4 text-gray-200 shadow-card backdrop-blur-xl transition-all duration-200 md:bg-[#090D16]/95',
         isCollapsed ? 'md:w-20 md:px-3 md:py-4' : 'md:w-72 md:p-5',
-        'w-72 border-r',
+        'w-64 border-r',
       )}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-primary-500/10 to-transparent" />
@@ -176,17 +176,23 @@ export default function MainLayout() {
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background bg-neon-radial text-gray-200 md:flex-row">
       <div className="hidden md:block">{sidebar}</div>
 
-      {isMobileOpen ? (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            aria-label="Закрыть меню"
-            className="absolute inset-0 bg-black/65 backdrop-blur-sm"
-            onClick={() => setIsMobileOpen(false)}
-          />
-          <div className="relative h-full w-72 max-w-[86vw]">{sidebar}</div>
-        </div>
-      ) : null}
+      <button
+        type="button"
+        aria-label="Закрыть меню"
+        className={cn(
+          'fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-300 md:hidden',
+          isMobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0',
+        )}
+        onClick={() => setIsMobileOpen(false)}
+      />
+      <div
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300 md:hidden',
+          isMobileOpen ? 'translate-x-0' : '-translate-x-full',
+        )}
+      >
+        {sidebar}
+      </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <DashboardHeaderMetrics />
