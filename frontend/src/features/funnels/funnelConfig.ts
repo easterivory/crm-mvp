@@ -304,14 +304,21 @@ export function syncManagedEdgesForStep(edges: FunnelEdge[], step: FunnelStep): 
   const desiredKeys = new Set(desired.map((item) => item.sourceKey))
   let nextEdges = edges.filter((edge) => {
     const sourceKey = edge.condition_json?.source_key
-    return edge.from_step_id !== step.id || typeof sourceKey !== 'string' || desiredKeys.has(sourceKey)
+    return (
+      edge.from_step_id !== step.id ||
+      edge.condition_json?.managed !== true ||
+      typeof sourceKey !== 'string' ||
+      desiredKeys.has(sourceKey)
+    )
   })
 
   for (const output of desired) {
     const existingIndex = nextEdges.findIndex(
       (edge) =>
         edge.from_step_id === step.id &&
-        edge.condition_json?.source_key === output.sourceKey,
+        (edge.condition_json?.source_key === output.sourceKey ||
+          (typeof edge.condition_json?.source_key !== 'string' &&
+            edgeLabel(edge) === output.label)),
     )
     const condition_json = {
       source_key: output.sourceKey,
@@ -344,4 +351,30 @@ export function syncManagedEdgesForStep(edges: FunnelEdge[], step: FunnelStep): 
 export function edgeLabel(edge: FunnelEdge) {
   const raw = edge.condition_json?.label ?? edge.condition_json?.outcome
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null
+}
+
+export function edgeSourceKey(edge: FunnelEdge, sourceStep?: FunnelStep | null) {
+  const rawSourceKey = edge.condition_json?.source_key ?? edge.condition_json?.sourceKey
+  if (typeof rawSourceKey === 'string' && rawSourceKey.trim()) {
+    return rawSourceKey.trim()
+  }
+
+  if (!sourceStep) {
+    return null
+  }
+
+  const outputs = collectConfiguredOutputs(sourceStep)
+  const label = edgeLabel(edge)
+  if (label) {
+    const matches = outputs.filter((output) => output.label === label)
+    if (matches.length === 1) {
+      return matches[0].key
+    }
+  }
+
+  if (!label && outputs.length === 1) {
+    return outputs[0].key
+  }
+
+  return null
 }

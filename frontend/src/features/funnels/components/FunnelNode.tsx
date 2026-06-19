@@ -37,8 +37,8 @@ export type FunnelFlowNode = Node<FunnelNodeData, 'funnelStep'>
 export const TARGET_HANDLE_ID = 'in'
 export const DEFAULT_SOURCE_HANDLE_ID = 'next'
 
-export function sourceHandleId(label: string | null) {
-  const normalized = label?.trim()
+export function sourceHandleId(sourceKey: string | null) {
+  const normalized = sourceKey?.trim()
   return normalized ? `out:${normalized}` : DEFAULT_SOURCE_HANDLE_ID
 }
 
@@ -194,7 +194,7 @@ export default function FunnelNode({ data, selected, isConnectable }: NodeProps<
               >
                 <span className="max-w-[176px] truncate">{output.label}</span>
                 <Handle
-                  id={sourceHandleId(output.label)}
+                  id={sourceHandleId(output.key)}
                   type="source"
                   position={Position.Right}
                   isConnectable={isConnectable}

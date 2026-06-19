@@ -14,7 +14,7 @@ import {
 } from '@xyflow/react'
 import { useCallback, useMemo } from 'react'
 
-import { edgeLabel } from '../funnelConfig'
+import { edgeLabel, edgeSourceKey } from '../funnelConfig'
 import type { FunnelEdge, FunnelStep } from '../types'
 import FunnelNode, {
   DEFAULT_SOURCE_HANDLE_ID,
@@ -32,7 +32,7 @@ type FunnelCanvasProps = {
   onSelectStep: (stepId: string | null) => void
   onSelectEdge: (edgeId: string | null) => void
   onMoveStep: (stepId: string, position: { x: number; y: number }) => void
-  onConnect: (fromStepId: string, toStepId: string, outcome: string | null) => void
+  onConnect: (fromStepId: string, toStepId: string, sourceKey: string | null) => void
   onDeleteStep: (stepId: string) => void
 }
 
@@ -65,17 +65,19 @@ function FunnelCanvasInner({
       })),
     [onDeleteStep, selectedStepId, steps],
   )
+  const stepById = useMemo(() => new Map(steps.map((step) => [step.id, step])), [steps])
 
   const flowEdges = useMemo<FlowEdge[]>(
     () =>
       edges.map((edge) => {
         const outcome = edgeLabel(edge)
+        const sourceKey = edgeSourceKey(edge, stepById.get(edge.from_step_id))
         return {
           id: edge.id,
           type: 'smoothstep',
           source: edge.from_step_id,
           target: edge.to_step_id,
-          sourceHandle: outcome ? sourceHandleId(outcome) : DEFAULT_SOURCE_HANDLE_ID,
+          sourceHandle: sourceKey ? sourceHandleId(sourceKey) : DEFAULT_SOURCE_HANDLE_ID,
           targetHandle: TARGET_HANDLE_ID,
           label: outcome ?? undefined,
           selected: selectedEdgeId === edge.id,
@@ -90,7 +92,7 @@ function FunnelCanvasInner({
           labelBgBorderRadius: 6,
         }
       }),
-    [edges, selectedEdgeId],
+    [edges, selectedEdgeId, stepById],
   )
 
   const handleNodesChange = useCallback(

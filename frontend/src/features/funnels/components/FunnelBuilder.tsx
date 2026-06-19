@@ -30,6 +30,9 @@ import {
 import type { BlockMenuItem } from '../blockCatalog'
 import { getFunnelApiErrorMessage } from '../errors'
 import {
+  collectConfiguredOutputs,
+  edgeLabel,
+  edgeSourceKey,
   normalizeButtons,
   normalizeMessages,
   normalizeOutcomes,
@@ -60,27 +63,50 @@ type FunnelBuilderProps = {
 }
 
 function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
+  const steps = graph.steps.map((step) => ({
+    ...step,
+    config_json: step.config_json ?? {},
+    validation_json: step.validation_json ?? null,
+    ui_schema_json: step.ui_schema_json ?? null,
+  }))
+  const stepById = new Map(steps.map((step) => [step.id, step]))
+
   return {
-    steps: graph.steps.map((step) => ({
-      ...step,
-      config_json: step.config_json ?? {},
-      validation_json: step.validation_json ?? null,
-      ui_schema_json: step.ui_schema_json ?? null,
-    })),
-    edges: graph.edges,
+    steps,
+    edges: graph.edges.map((edge) => {
+      const sourceStep = stepById.get(edge.from_step_id)
+      const sourceKey = edgeSourceKey(edge, sourceStep)
+      if (!sourceKey) {
+        return edge
+      }
+      const output = sourceStep
+        ? collectConfiguredOutputs(sourceStep).find((item) => item.key === sourceKey)
+        : null
+      const label = edgeLabel(edge) ?? output?.label ?? null
+      return {
+        ...edge,
+        condition_json: {
+          ...(edge.condition_json ?? {}),
+          source_key: sourceKey,
+          ...(label ? { outcome: label, label } : {}),
+        },
+      }
+    }),
     push_rules: graph.push_rules,
     field_mappings: graph.field_mappings,
   }
 }
 
-function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
+function setManagedTarget(step: FunnelStep, sourceKey: string, targetStepId: string): FunnelStep {
   if (step.step_type === 'condition') {
     return {
       ...step,
       config_json: {
         ...step.config_json,
         outcomes: normalizeOutcomes(step.config_json.outcomes).map((outcome) =>
-          `condition:${outcome.id}` === sourceKey ? { ...outcome, target_step_id: '' } : outcome,
+          `condition:${outcome.id}` === sourceKey
+            ? { ...outcome, target_step_id: targetStepId }
+            : outcome,
         ),
       },
     }
@@ -95,7 +121,7 @@ function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
           ...message,
           buttons: message.buttons.map((button) =>
             `message:${message.id}:button:${button.id}` === sourceKey
-              ? { ...button, target_step_id: '' }
+              ? { ...button, target_step_id: targetStepId }
               : button,
           ),
         })),
@@ -107,15 +133,22 @@ function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
     if (sourceKey === 'input:timeout') {
       return {
         ...step,
-        config_json: { ...step.config_json, timeout_target_step_id: '' },
+        config_json: { ...step.config_json, timeout_target_step_id: targetStepId },
       }
+    }
+    if (!sourceKey.startsWith('choice:')) {
+      return step
     }
     return {
       ...step,
       config_json: {
         ...step.config_json,
-        choices: normalizeButtons(step.config_json.choices).map((choice) =>
-          `choice:${choice.id}` === sourceKey ? { ...choice, target_step_id: '' } : choice,
+        choices: normalizeButtons(
+          step.config_json.choices ?? step.config_json.options ?? step.config_json.buttons,
+        ).map((choice) =>
+          `choice:${choice.id}` === sourceKey
+            ? { ...choice, target_step_id: targetStepId }
+            : choice,
         ),
       },
     }
@@ -124,11 +157,25 @@ function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
   if (step.step_type === 'delay' && sourceKey === 'delay:target') {
     return {
       ...step,
-      config_json: { ...step.config_json, target_step_id: '' },
+      config_json: { ...step.config_json, target_step_id: targetStepId },
     }
   }
 
   return step
+}
+
+function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
+  return setManagedTarget(step, sourceKey, '')
+}
+
+function isConfigBackedSource(sourceKey: string) {
+  return (
+    sourceKey.startsWith('condition:') ||
+    (sourceKey.startsWith('message:') && sourceKey.includes(':button:')) ||
+    sourceKey.startsWith('choice:') ||
+    sourceKey === 'input:timeout' ||
+    sourceKey === 'delay:target'
+  )
 }
 
 export default function FunnelBuilder({
@@ -344,7 +391,9 @@ export default function FunnelBuilder({
             steps: current.steps.map((step) => {
               const edge = current.edges.find((item) => item.id === edgeId)
               const sourceKey = edge?.condition_json?.source_key
-              return edge?.from_step_id === step.id && typeof sourceKey === 'string'
+              return edge?.from_step_id === step.id &&
+                typeof sourceKey === 'string' &&
+                isConfigBackedSource(sourceKey)
                 ? clearManagedTarget(step, sourceKey)
                 : step
             }),
@@ -355,7 +404,7 @@ export default function FunnelBuilder({
     setSelectedEdgeId((current) => (current === edgeId ? null : current))
   }, [])
 
-  const connectSteps = (fromStepId: string, toStepId: string, outcome: string | null) => {
+  const connectSteps = (fromStepId: string, toStepId: string, sourceKey: string | null) => {
     if (fromStepId === toStepId) {
       return
     }
@@ -363,104 +412,66 @@ export default function FunnelBuilder({
       if (!current) {
         return current
       }
-      const exists = current.edges.some((edge) => {
-        const edgeOutcome = edge.condition_json?.outcome ?? edge.condition_json?.label ?? null
-        return (
-          edge.from_step_id === fromStepId &&
-          edge.to_step_id === toStepId &&
-          (outcome ? edgeOutcome === outcome : !edgeOutcome)
-        )
-      })
-      if (exists) {
+      const sourceStep = current.steps.find((step) => step.id === fromStepId)
+      if (!sourceStep) {
         return current
       }
-      const syncedSteps = current.steps.map((step) => {
-        if (step.id !== fromStepId || !outcome) {
-          return step
+      const output = sourceKey
+        ? collectConfiguredOutputs(sourceStep).find((item) => item.key === sourceKey)
+        : null
+      const label = output?.label ?? null
+
+      if (sourceKey && isConfigBackedSource(sourceKey)) {
+        const syncedSteps = current.steps.map((step) =>
+          step.id === fromStepId ? setManagedTarget(step, sourceKey, toStepId) : step,
+        )
+        const changedStep = syncedSteps.find((step) => step.id === fromStepId)
+        return {
+          ...current,
+          steps: syncedSteps,
+          edges: changedStep ? syncManagedEdgesForStep(current.edges, changedStep) : current.edges,
         }
-        if (step.step_type === 'condition' && Array.isArray(step.config_json.outcomes)) {
-          return {
-            ...step,
-            config_json: {
-              ...step.config_json,
-              outcomes: step.config_json.outcomes.map((item) => {
-                if (typeof item !== 'object' || item === null) {
-                  return item
-                }
-                const outcomeConfig = item as Record<string, unknown>
-                const label = String(outcomeConfig.label ?? outcomeConfig.id ?? '')
-                return label === outcome ? { ...outcomeConfig, target_step_id: toStepId } : item
-              }),
-            },
+      }
+
+      const condition_json = sourceKey
+        ? {
+            source_key: sourceKey,
+            ...(label ? { outcome: label, label } : {}),
+            managed: false,
           }
+        : null
+      const existingIndex = current.edges.findIndex((edge) => {
+        if (edge.from_step_id !== fromStepId) {
+          return false
         }
-        if (step.step_type === 'input' && outcome === 'Таймаут') {
-          return {
-            ...step,
-            config_json: { ...step.config_json, timeout_target_step_id: toStepId },
-          }
-        }
-        if (step.step_type === 'input' && Array.isArray(step.config_json.choices)) {
-          return {
-            ...step,
-            config_json: {
-              ...step.config_json,
-              choices: step.config_json.choices.map((item) => {
-                if (typeof item !== 'object' || item === null) {
-                  return item
-                }
-                const choice = item as Record<string, unknown>
-                const label = String(choice.label ?? choice.value ?? choice.id ?? '')
-                return label === outcome ? { ...choice, target_step_id: toStepId } : item
-              }),
-            },
-          }
-        }
-        if (step.step_type === 'message' && Array.isArray(step.config_json.messages)) {
-          const messages = step.config_json.messages
-          return {
-            ...step,
-            config_json: {
-              ...step.config_json,
-              messages: messages.map((message) => {
-                if (typeof message !== 'object' || message === null) {
-                  return message
-                }
-                const messageConfig = message as Record<string, unknown>
-                const buttons = Array.isArray(messageConfig.buttons) ? messageConfig.buttons : []
-                return {
-                  ...messageConfig,
-                  buttons: buttons.map((item) => {
-                    if (typeof item !== 'object' || item === null) {
-                      return item
-                    }
-                    const button = item as Record<string, unknown>
-                    const label = String(button.label ?? button.value ?? button.id ?? '')
-                    return label === outcome ? { ...button, target_step_id: toStepId } : item
-                  }),
-                }
-              }),
-            },
-          }
-        }
-        if (step.step_type === 'delay') {
-          return {
-            ...step,
-            config_json: { ...step.config_json, target_step_id: toStepId },
-          }
-        }
-        return step
+        const edgeKey = edgeSourceKey(edge, sourceStep)
+        return sourceKey ? edgeKey === sourceKey : !edgeKey && !edgeLabel(edge)
       })
+
+      if (existingIndex >= 0) {
+        return {
+          ...current,
+          edges: current.edges.map((edge, index) =>
+            index === existingIndex
+              ? {
+                  ...edge,
+                  to_step_id: toStepId,
+                  condition_json,
+                }
+              : edge,
+          ),
+        }
+      }
+
       return {
         ...current,
-        steps: syncedSteps,
         edges: [
           ...current.edges,
           {
             id: crypto.randomUUID(),
             from_step_id: fromStepId,
             to_step_id: toStepId,
-            condition_json: outcome ? { outcome, label: outcome } : null,
+            condition_json,
             priority: 0,
           },
         ],
