@@ -20,6 +20,11 @@ export type BuyerInvite = {
   invite_link: string
 }
 
+export type BuyerBotConfig = {
+  token: string | null
+  username: string | null
+}
+
 export type BuyerPerformance = {
   buyer_id: string
   name: string

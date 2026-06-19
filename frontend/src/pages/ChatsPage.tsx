@@ -1847,6 +1847,22 @@ export default function ChatsPage() {
               </button>
             </div>
           ) : null}
+          <div className="mb-2 flex justify-end">
+            <label
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 text-xs font-medium text-sky-50 transition hover:border-sky-300/40"
+              title={`Автоперевод с ${operatorLangLabel} на ${clientLangLabel}`}
+            >
+              <input
+                type="checkbox"
+                checked={isAutoTranslateEnabled}
+                onChange={(event) => setIsAutoTranslateEnabled(event.target.checked)}
+                disabled={!selectedChat || isSending}
+                className="h-4 w-4 accent-sky-300 disabled:cursor-not-allowed"
+              />
+              <Languages size={14} />
+              <span className="whitespace-nowrap">Автоперевод на {clientLangLabel}</span>
+            </label>
+          </div>
           <div className="flex min-h-[52px] items-end gap-2 rounded-xl border border-white/10 bg-background/70 p-2 transition focus-within:border-accent-300/45 focus-within:ring-2 focus-within:ring-accent-400/25">
             <input
               ref={attachmentInputRef}
@@ -1963,22 +1979,6 @@ export default function ChatsPage() {
                 </div>
               ) : null}
             </div>
-            <label
-              className="flex h-10 shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-gray-200 transition hover:border-accent-300/40"
-              title={`Автоперевод с ${operatorLangLabel} на ${clientLangLabel}`}
-            >
-              <input
-                type="checkbox"
-                checked={isAutoTranslateEnabled}
-                onChange={(event) => setIsAutoTranslateEnabled(event.target.checked)}
-                disabled={!selectedChat || isSending}
-                className="h-4 w-4 accent-accent-400 disabled:cursor-not-allowed"
-              />
-              <span className="hidden whitespace-nowrap sm:inline">
-                Автоперевод (на {clientLangLabel})
-              </span>
-              <span className="whitespace-nowrap sm:hidden">На {clientLangLabel}</span>
-            </label>
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}

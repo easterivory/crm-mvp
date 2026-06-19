@@ -217,7 +217,7 @@ class FunnelGraphValidator:
 
         for key in ("target_step_id", "timeout_target_step_id", "fallback_target_step_id"):
             add(config.get(key))
-        for key in ("buttons", "choices", "outcomes"):
+        for key in ("buttons", "choices", "outcomes", "variants"):
             add_from_list(config.get(key), "target_step_id")
         messages = config.get("messages")
         if isinstance(messages, list):

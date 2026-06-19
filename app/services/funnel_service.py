@@ -1128,6 +1128,7 @@ class FunnelService:
         add_from_list(config.get("buttons"), "target_step_id", "buttons")
         add_from_list(config.get("choices"), "target_step_id", "choices")
         add_from_list(config.get("outcomes"), "target_step_id", "outcomes")
+        add_from_list(config.get("variants"), "target_step_id", "variants")
 
         messages = config.get("messages")
         if isinstance(messages, list):

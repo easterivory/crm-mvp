@@ -1,6 +1,6 @@
 import api from '../../api/client'
 
-import type { BuyerCreatePayload, BuyerInvite, BuyerPerformance } from './types'
+import type { BuyerBotConfig, BuyerCreatePayload, BuyerInvite, BuyerPerformance } from './types'
 
 export async function createBuyer(
   payload: BuyerCreatePayload,
@@ -18,5 +18,15 @@ export async function fetchBuyerPerformance(
   const { data } = await api.get<BuyerPerformance[]>('/analytics/buyers', {
     params: projectId ? { project_id: projectId } : undefined,
   })
+  return data
+}
+
+export async function fetchBuyerBotConfig(): Promise<BuyerBotConfig> {
+  const { data } = await api.get<BuyerBotConfig>('/settings/buyer-bot')
+  return data
+}
+
+export async function updateBuyerBotConfig(payload: BuyerBotConfig): Promise<BuyerBotConfig> {
+  const { data } = await api.patch<BuyerBotConfig>('/settings/buyer-bot', payload)
   return data
 }

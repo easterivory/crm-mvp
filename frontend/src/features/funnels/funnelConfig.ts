@@ -31,6 +31,13 @@ export type OutcomeConfig = {
   target_step_id?: string
 }
 
+export type AbTestVariantConfig = {
+  id: string
+  label: string
+  weight: number
+  target_step_id?: string
+}
+
 export type ActionConfig = {
   id: string
   type: string
@@ -207,6 +214,24 @@ export function normalizeOutcomes(raw: unknown): OutcomeConfig[] {
   })
 }
 
+export function normalizeAbVariants(raw: unknown): AbTestVariantConfig[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [
+      { id: 'a', label: 'Вариант A', weight: 50, target_step_id: '' },
+      { id: 'b', label: 'Вариант B', weight: 50, target_step_id: '' },
+    ]
+  }
+  return raw.map((item, index) => {
+    const variant = typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {}
+    return {
+      id: String(variant.id ?? `variant_${index + 1}`),
+      label: String(variant.label ?? variant.name ?? `Вариант ${index + 1}`),
+      weight: typeof variant.weight === 'number' ? Math.max(0, variant.weight) : 50,
+      target_step_id: typeof variant.target_step_id === 'string' ? variant.target_step_id : '',
+    }
+  })
+}
+
 export function normalizeActions(raw: unknown): ActionConfig[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     return [{ id: configId('action'), type: 'set_lead_status', status: 'in_progress' }]
@@ -234,6 +259,14 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
   }
 
   if (step.step_type === 'condition') {
+    if (step.block_type === 'generic_ab_test') {
+      return normalizeAbVariants(step.config_json.variants).map((variant) => ({
+        key: `ab:${variant.id}`,
+        label: `${variant.label} · ${variant.weight}%`,
+        targetStepId: variant.target_step_id,
+      }))
+    }
+
     return normalizeOutcomes(step.config_json.outcomes).map((outcome) => ({
       key: `condition:${outcome.id}`,
       label: outcome.label,

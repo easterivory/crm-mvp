@@ -77,6 +77,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("lead_status_equals", "По статусу лида"),
         ("tracking_link_equals", "По tracking link"),
         ("generic_hold_router", "Hold: сегодня/завтра"),
+        ("generic_ab_test", "A/B тест"),
         ("source_equals", "По источнику"),
         ("operator_assigned", "Оператор назначен"),
         ("operator_not_assigned", "Оператор не назначен"),

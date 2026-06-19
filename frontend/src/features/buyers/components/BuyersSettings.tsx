@@ -2,6 +2,7 @@ import axios from 'axios'
 import {
   Check,
   Clipboard,
+  KeyRound,
   LoaderCircle,
   Plus,
   RefreshCcw,
@@ -11,7 +12,12 @@ import {
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Modal } from '../../../shared/ui'
-import { createBuyer, fetchBuyerPerformance } from '../api'
+import {
+  createBuyer,
+  fetchBuyerBotConfig,
+  fetchBuyerPerformance,
+  updateBuyerBotConfig,
+} from '../api'
 import type { BuyerInvite, BuyerPerformance } from '../types'
 
 type BuyersSettingsProps = {
@@ -42,6 +48,10 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
   const [createdInvite, setCreatedInvite] = useState<BuyerInvite | null>(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState('')
+  const [botToken, setBotToken] = useState('')
+  const [botUsername, setBotUsername] = useState('')
+  const [isBotConfigLoading, setIsBotConfigLoading] = useState(false)
+  const [isBotConfigSaving, setIsBotConfigSaving] = useState(false)
 
   const sortedBuyers = useMemo(
     () => [...buyers].sort((a, b) => a.name.localeCompare(b.name, 'ru')),
@@ -65,9 +75,24 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
     }
   }, [projectId])
 
+  const loadBuyerBotConfig = useCallback(async () => {
+    setIsBotConfigLoading(true)
+    setError('')
+    try {
+      const config = await fetchBuyerBotConfig()
+      setBotToken(config.token ?? '')
+      setBotUsername(config.username ?? '')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось загрузить настройки buyer-бота.'))
+    } finally {
+      setIsBotConfigLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     void loadBuyers()
-  }, [loadBuyers])
+    void loadBuyerBotConfig()
+  }, [loadBuyerBotConfig, loadBuyers])
 
   const resetCreateForm = () => {
     setName('')
@@ -124,6 +149,28 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
     }
   }
 
+  const handleSaveBotConfig = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (isBotConfigSaving) {
+      return
+    }
+
+    setIsBotConfigSaving(true)
+    setError('')
+    try {
+      const config = await updateBuyerBotConfig({
+        token: botToken.trim() || null,
+        username: botUsername.trim() || null,
+      })
+      setBotToken(config.token ?? '')
+      setBotUsername(config.username ?? '')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось сохранить настройки buyer-бота.'))
+    } finally {
+      setIsBotConfigSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -160,6 +207,59 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
           {error}
         </div>
       ) : null}
+
+      <form
+        onSubmit={handleSaveBotConfig}
+        className="rounded-lg border border-cyan-300/15 bg-cyan-300/[0.04] p-4"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cyan-400/15 text-cyan-100">
+            <KeyRound size={17} />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-100">Telegram-бот для баеров</h3>
+            <p className="mt-1 text-sm leading-6 text-zinc-500">
+              Токен используется воркером buyer-бота, username нужен для генерации invite-ссылок.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-zinc-300">Bot token</span>
+            <input
+              type="password"
+              value={botToken}
+              onChange={(event) => setBotToken(event.target.value)}
+              autoComplete="off"
+              placeholder="123456:ABC..."
+              disabled={isBotConfigLoading}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-cyan-400 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-60"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-zinc-300">Bot username</span>
+            <input
+              value={botUsername}
+              onChange={(event) => setBotUsername(event.target.value)}
+              placeholder="buyer_crm_bot"
+              disabled={isBotConfigLoading}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-cyan-400 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-60"
+            />
+          </label>
+        </div>
+        <button
+          type="submit"
+          disabled={isBotConfigLoading || isBotConfigSaving}
+          className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-cyan-300/35 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isBotConfigSaving || isBotConfigLoading ? (
+            <LoaderCircle size={16} className="animate-spin" />
+          ) : (
+            <KeyRound size={16} />
+          )}
+          Сохранить bot token
+        </button>
+      </form>
 
       {!projectId ? (
         <div className="rounded-lg border border-white/10 bg-white/[0.02] p-5 text-sm text-zinc-500">

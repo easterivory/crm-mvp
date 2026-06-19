@@ -58,6 +58,21 @@ textarea {
   color-scheme: dark;
 }
 
+.funnel-react-flow .react-flow__edges {
+  z-index: 5;
+}
+
+.funnel-react-flow .react-flow__edges svg {
+  max-width: none;
+  overflow: visible;
+}
+
+.funnel-react-flow .react-flow__edge-path,
+.funnel-react-flow .react-flow__connection-path {
+  stroke: #22d3ee;
+  stroke-width: 2.5;
+}
+
 ::selection {
   background: rgba(139, 92, 246, 0.55);
   color: #ffffff;

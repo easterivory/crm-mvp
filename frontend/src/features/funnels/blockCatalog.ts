@@ -105,6 +105,20 @@ export const universalBlocks: UniversalBlock[] = [
     },
   },
   {
+    stepType: 'condition',
+    blockType: 'generic_ab_test',
+    label: 'A/B тест',
+    defaultTitle: 'A/B тест',
+    description: 'Делит трафик по вариантам и ведёт в разные ветки воронки.',
+    defaultConfig: {
+      mode: 'ab_test',
+      variants: [
+        { id: 'a', label: 'Вариант A', weight: 50, target_step_id: '' },
+        { id: 'b', label: 'Вариант B', weight: 50, target_step_id: '' },
+      ],
+    },
+  },
+  {
     stepType: 'action',
     blockType: 'generic_crm_action',
     label: 'CRM-действие',
@@ -160,6 +174,7 @@ export const blockGroups: BlockMenuGroup[] = [
     items: [
       universalBlocks.find((item) => item.blockType === 'generic_condition') as UniversalBlock,
       universalBlocks.find((item) => item.blockType === 'generic_hold_router') as UniversalBlock,
+      universalBlocks.find((item) => item.blockType === 'generic_ab_test') as UniversalBlock,
     ],
   },
   {
@@ -214,6 +229,7 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
     items: [
       { stepType: 'condition', blockType: 'generic_condition', label: 'Универсальное условие', defaultTitle: 'Условие' },
       { stepType: 'condition', blockType: 'generic_hold_router', label: 'Hold: сегодня/завтра', defaultTitle: 'Hold-режим' },
+      { stepType: 'condition', blockType: 'generic_ab_test', label: 'A/B тест', defaultTitle: 'A/B тест' },
       { stepType: 'condition', blockType: 'button_equals', label: 'По кнопке', defaultTitle: 'Условие по кнопке' },
       { stepType: 'condition', blockType: 'text_contains', label: 'По тексту', defaultTitle: 'Текст содержит' },
       { stepType: 'condition', blockType: 'field_exists', label: 'Поле заполнено', defaultTitle: 'Поле заполнено' },

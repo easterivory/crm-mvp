@@ -84,6 +84,14 @@ type ProjectTag = {
   created_at: string
 }
 
+type TranslationProvider = 'deepl' | 'google' | 'libretranslate'
+
+type TranslationProviderSettings = {
+  provider: TranslationProvider | null
+  api_key: string | null
+  base_url: string | null
+}
+
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'project', label: 'Проект' },
   { key: 'team', label: 'Команда' },
@@ -107,6 +115,12 @@ const languageOptions = [
   { value: 'tr', label: 'Турецкий (TR)' },
   { value: 'hi', label: 'Хинди (HI)' },
 ] as const
+
+const translationProviderOptions: Array<{ value: TranslationProvider; label: string }> = [
+  { value: 'deepl', label: 'DeepL' },
+  { value: 'google', label: 'Google Translate' },
+  { value: 'libretranslate', label: 'LibreTranslate' },
+]
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
   if (axios.isAxiosError(err)) {
@@ -147,6 +161,7 @@ export default function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSavingProject, setIsSavingProject] = useState(false)
   const [isSavingTranslation, setIsSavingTranslation] = useState(false)
+  const [isSavingTranslationProvider, setIsSavingTranslationProvider] = useState(false)
   const [isAddingUser, setIsAddingUser] = useState(false)
   const [isAddingStatus, setIsAddingStatus] = useState(false)
   const [isAddingTag, setIsAddingTag] = useState(false)
@@ -172,6 +187,9 @@ export default function SettingsPage() {
   const [translationEnabled, setTranslationEnabled] = useState(false)
   const [operatorLang, setOperatorLang] = useState('ru')
   const [defaultClientLang, setDefaultClientLang] = useState('en')
+  const [translationProvider, setTranslationProvider] = useState<TranslationProvider>('libretranslate')
+  const [translationApiKey, setTranslationApiKey] = useState('')
+  const [translationBaseUrl, setTranslationBaseUrl] = useState('')
   const [newUserEmail, setNewUserEmail] = useState('')
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
@@ -355,6 +373,16 @@ export default function SettingsPage() {
     setTags(data.items)
   }, [activeProjectId])
 
+  const loadTranslationProviderSettings = useCallback(async () => {
+    if (!canManageProject) {
+      return
+    }
+    const { data } = await api.get<TranslationProviderSettings>('/settings/translation')
+    setTranslationProvider(data.provider ?? 'libretranslate')
+    setTranslationApiKey(data.api_key ?? '')
+    setTranslationBaseUrl(data.base_url ?? '')
+  }, [canManageProject])
+
   const loadAll = useCallback(async () => {
     setIsLoading(true)
     setError('')
@@ -366,13 +394,14 @@ export default function SettingsPage() {
         loadRoles(),
         loadStatuses(),
         loadTags(),
+        loadTranslationProviderSettings(),
       ])
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось загрузить настройки.'))
     } finally {
       setIsLoading(false)
     }
-  }, [loadProject, loadRoles, loadStatuses, loadTags, loadUsers])
+  }, [loadProject, loadRoles, loadStatuses, loadTags, loadTranslationProviderSettings, loadUsers])
 
   useEffect(() => {
     void loadAll()
@@ -431,6 +460,32 @@ export default function SettingsPage() {
       setError(getErrorMessage(err, 'Не удалось сохранить настройки перевода.'))
     } finally {
       setIsSavingTranslation(false)
+    }
+  }
+
+  const handleTranslationProviderSave = async () => {
+    if (isSavingTranslationProvider) {
+      return
+    }
+
+    setIsSavingTranslationProvider(true)
+    setError('')
+    setNotice('')
+
+    try {
+      const { data } = await api.patch<TranslationProviderSettings>('/settings/translation', {
+        provider: translationProvider,
+        api_key: translationApiKey.trim() || null,
+        base_url: translationBaseUrl.trim() || null,
+      })
+      setTranslationProvider(data.provider ?? 'libretranslate')
+      setTranslationApiKey(data.api_key ?? '')
+      setTranslationBaseUrl(data.base_url ?? '')
+      setNotice('Провайдер перевода сохранён.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось сохранить провайдера перевода.'))
+    } finally {
+      setIsSavingTranslationProvider(false)
     }
   }
 
@@ -917,6 +972,86 @@ export default function SettingsPage() {
                 {isSavingTranslation ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
                 Сохранить настройки перевода
               </button>
+              <div className="border-t border-zinc-800 pt-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-200">
+                    <KeyRound size={18} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-zinc-100">
+                      Провайдер перевода
+                    </h4>
+                    <p className="mt-1 text-sm leading-6 text-zinc-500">
+                      API, через который выполняется реальный перевод сообщений.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4">
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-zinc-300">
+                      Провайдер
+                    </span>
+                    <select
+                      value={translationProvider}
+                      onChange={(event) =>
+                        setTranslationProvider(event.target.value as TranslationProvider)
+                      }
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
+                    >
+                      {translationProviderOptions.map((provider) => (
+                        <option key={provider.value} value={provider.value}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-zinc-300">
+                      API ключ
+                    </span>
+                    <input
+                      type="password"
+                      value={translationApiKey}
+                      onChange={(event) => setTranslationApiKey(event.target.value)}
+                      autoComplete="off"
+                      placeholder={
+                        translationProvider === 'libretranslate'
+                          ? 'Необязательно для self-hosted без ключа'
+                          : 'Ключ API переводчика'
+                      }
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-zinc-300">
+                      Base URL
+                    </span>
+                    <input
+                      value={translationBaseUrl}
+                      onChange={(event) => setTranslationBaseUrl(event.target.value)}
+                      placeholder={
+                        translationProvider === 'libretranslate'
+                          ? 'https://libretranslate.example.com'
+                          : 'Оставьте пустым для стандартного API'
+                      }
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleTranslationProviderSave()}
+                  disabled={isSavingTranslationProvider}
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg border border-violet-400/35 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSavingTranslationProvider ? (
+                    <LoaderCircle size={16} className="animate-spin" />
+                  ) : (
+                    <Save size={16} />
+                  )}
+                  Сохранить провайдера
+                </button>
+              </div>
             </div>
             {canArchiveProject && project ? (
               <div className="mt-8 rounded-xl border border-red-500/25 bg-red-950/20 p-4">

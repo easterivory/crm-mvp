@@ -14,6 +14,7 @@ import {
   textValue,
 } from '../funnelConfig'
 import type { FunnelStep } from '../types'
+import AbTestBlockSettings from './AbTestBlockSettings'
 import ConditionBlockSettings from './ConditionBlockSettings'
 import InputBlockSettings from './InputBlockSettings'
 import MessageBlockSettings from './MessageBlockSettings'
@@ -259,6 +260,10 @@ export default function StepSettingsPanel({
               trackingLinks={trackingLinks}
               onConfigChange={replaceConfig}
             />
+          ) : null}
+
+          {step.block_type === 'generic_ab_test' ? (
+            <AbTestBlockSettings step={step} steps={steps} onConfigChange={replaceConfig} />
           ) : null}
 
           {step.block_type === 'generic_crm_action' ? (

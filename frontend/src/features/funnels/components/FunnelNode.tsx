@@ -153,6 +153,16 @@ export default function FunnelNode({ data, selected, isConnectable }: NodeProps<
         isConnectable={isConnectable}
         className="!h-4 !w-4 !border !border-white/30 !bg-background !shadow-card"
       />
+      {outputs.length > 0 ? (
+        <Handle
+          id={DEFAULT_SOURCE_HANDLE_ID}
+          type="source"
+          position={Position.Right}
+          isConnectable={false}
+          className="!right-[-14px] !h-3.5 !w-3.5 !border-0 !bg-transparent !opacity-0"
+          style={{ top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
+        />
+      ) : null}
 
       <div className={`flex items-start gap-3 bg-gradient-to-r ${headerClass} px-3 py-3`}>
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-current/25 bg-black/15">

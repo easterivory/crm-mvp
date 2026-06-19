@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
@@ -1134,6 +1135,21 @@ class FunnelRuntimeService:
         outcome: str,
     ) -> Optional[FunnelStep]:
         config = step.config_json or {}
+        if step.block_type == "generic_ab_test":
+            variants = config.get("variants")
+            if isinstance(variants, list):
+                for item in variants:
+                    if (
+                        isinstance(item, dict)
+                        and str(item.get("id") or "").strip() == outcome
+                        and item.get("target_step_id")
+                    ):
+                        return await self._move_to_step_id(
+                            chat_id=chat_id,
+                            target_step_id=item.get("target_step_id"),
+                            from_step=step,
+                        )
+
         outcomes = config.get("outcomes")
         if isinstance(outcomes, list):
             outcome_values = self._branch_match_values(outcome)
@@ -1687,6 +1703,9 @@ class FunnelRuntimeService:
         answer: Optional[str],
     ) -> str:
         config = step.config_json or {}
+        if step.block_type == "generic_ab_test":
+            return self._evaluate_ab_test_variant(chat_id=chat_id, step=step)
+
         if str(config.get("mode") or "").strip() == "simple_yes_no":
             value = str(answer or await self._condition_source_value(chat_id, "last_answer", None) or "")
             normalized = value.strip().lower()
@@ -1789,6 +1808,43 @@ class FunnelRuntimeService:
             return "true" if passed else "false"
 
         return None
+
+    def _evaluate_ab_test_variant(self, *, chat_id: UUID, step: FunnelStep) -> str:
+        config = step.config_json or {}
+        raw_variants = config.get("variants")
+        variants = [item for item in raw_variants if isinstance(item, dict)] if isinstance(raw_variants, list) else []
+        weighted_variants: list[tuple[str, int]] = []
+        for index, variant in enumerate(variants):
+            variant_id = str(variant.get("id") or f"variant_{index + 1}").strip()
+            if not variant_id:
+                continue
+            try:
+                weight = int(variant.get("weight") or 0)
+            except (TypeError, ValueError):
+                weight = 0
+            if weight > 0:
+                weighted_variants.append((variant_id, weight))
+
+        if not weighted_variants:
+            return "a"
+
+        total_weight = sum(weight for _, weight in weighted_variants)
+        digest = sha256(f"{chat_id}:{step.id}".encode("utf-8")).hexdigest()
+        bucket = int(digest[:12], 16) % total_weight
+        cursor = 0
+        for variant_id, weight in weighted_variants:
+            cursor += weight
+            if bucket < cursor:
+                logger.info(
+                    "A/B variant selected chat_id=%s step_id=%s variant=%s bucket=%s total=%s",
+                    chat_id,
+                    step.id,
+                    variant_id,
+                    bucket,
+                    total_weight,
+                )
+                return variant_id
+        return weighted_variants[-1][0]
 
     async def _evaluate_single_condition(self, *, chat_id: UUID, condition: dict) -> bool:
         source = str(condition.get("source") or "last_answer")

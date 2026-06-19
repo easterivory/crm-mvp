@@ -33,6 +33,7 @@ import {
   collectConfiguredOutputs,
   edgeLabel,
   edgeSourceKey,
+  normalizeAbVariants,
   normalizeButtons,
   normalizeMessages,
   normalizeOutcomes,
@@ -98,6 +99,20 @@ function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
 }
 
 function setManagedTarget(step: FunnelStep, sourceKey: string, targetStepId: string): FunnelStep {
+  if (step.block_type === 'generic_ab_test') {
+    return {
+      ...step,
+      config_json: {
+        ...step.config_json,
+        variants: normalizeAbVariants(step.config_json.variants).map((variant) =>
+          `ab:${variant.id}` === sourceKey
+            ? { ...variant, target_step_id: targetStepId }
+            : variant,
+        ),
+      },
+    }
+  }
+
   if (step.step_type === 'condition') {
     return {
       ...step,
@@ -171,6 +186,7 @@ function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
 function isConfigBackedSource(sourceKey: string) {
   return (
     sourceKey.startsWith('condition:') ||
+    sourceKey.startsWith('ab:') ||
     (sourceKey.startsWith('message:') && sourceKey.includes(':button:')) ||
     sourceKey.startsWith('choice:') ||
     sourceKey === 'input:timeout' ||
