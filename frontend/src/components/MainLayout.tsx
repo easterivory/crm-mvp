@@ -92,6 +92,7 @@ export default function MainLayout() {
   }, [])
 
   const displayName = user?.name ?? user?.email ?? 'Пользователь'
+  const isChatPage = location.pathname.startsWith('/chats')
   const roleLabel = useMemo(() => {
     const role = user?.role_name ?? 'user'
     return role.replace('_', ' ')
@@ -219,7 +220,16 @@ export default function MainLayout() {
         <div className="hidden md:block">
           <DashboardHeaderMetrics />
         </div>
-        <header className="relative z-40 flex shrink-0 flex-col gap-2 border-b border-white/5 bg-background/80 px-2.5 py-2 backdrop-blur-xl md:px-3 md:py-3 lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
+        {isMobileScopeOpen ? (
+          <button
+            type="button"
+            aria-label="Закрыть выбор проекта и ботов"
+            className="fixed inset-0 z-30 bg-black/20 md:hidden"
+            onClick={() => setIsMobileScopeOpen(false)}
+          />
+        ) : null}
+
+        <header className="relative z-40 flex shrink-0 flex-col gap-2 border-b border-white/5 bg-background/90 px-2.5 py-2 backdrop-blur-xl md:px-3 md:py-3 lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -236,24 +246,23 @@ export default function MainLayout() {
             <button
               type="button"
               onClick={() => setIsMobileScopeOpen((value) => !value)}
-              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 md:hidden"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 md:hidden"
               aria-expanded={isMobileScopeOpen}
               aria-label="Проект и боты"
             >
               <SlidersHorizontal size={17} />
-              Скоуп
             </button>
           </div>
 
           {isMobileScopeOpen ? (
-            <div className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-xl border border-white/8 bg-white/[0.035] p-2 md:hidden">
+            <div className="touch-scroll absolute left-2 right-2 top-[calc(100%+0.5rem)] z-50 grid max-h-[calc(var(--app-height,100dvh)-5rem)] min-w-0 grid-cols-1 gap-2 overflow-y-auto rounded-xl border border-white/10 bg-[#0B0F19]/98 p-2 shadow-2xl backdrop-blur-xl md:hidden">
               <ProjectSelector compact />
               <BotSelector compact />
 
               <button
                 type="button"
                 onClick={handleLogout}
-                className="col-span-2 inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white"
               >
                 <LogOut size={16} />
                 {t('logout')}
@@ -276,7 +285,12 @@ export default function MainLayout() {
           </div>
         </header>
 
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:p-5">
+        <main
+          className={cn(
+            'touch-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:overflow-hidden md:p-5',
+            isChatPage ? 'p-0' : 'p-2',
+          )}
+        >
           <Outlet />
         </main>
       </div>

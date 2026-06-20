@@ -253,7 +253,7 @@ export default function ChatList({
   const activeFilterCount = countActiveChatFilters(filters)
 
   return (
-    <aside className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card">
+    <aside className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/90 shadow-card md:rounded-xl md:border md:border-white/5">
       <div className="shrink-0 border-b border-white/5 p-3 md:p-4">
         <div className="flex items-center justify-between gap-3 md:mb-4">
           <div className="min-w-0">
@@ -348,7 +348,7 @@ export default function ChatList({
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="touch-scroll min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && !isLoading ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
             <p className="text-sm text-gray-400">

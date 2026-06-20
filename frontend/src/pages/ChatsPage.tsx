@@ -584,6 +584,7 @@ export default function ChatsPage() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
   const [isLeadOpen, setIsLeadOpen] = useState(false)
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const previousProjectIdRef = useRef(selectedProjectId)
@@ -595,11 +596,23 @@ export default function ChatsPage() {
   const messagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
 
-  const scrollMessagesToBottom = useCallback(() => {
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     window.requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ block: 'end' })
+      const container = messagesScrollRef.current
+      if (!container) {
+        return
+      }
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      })
     })
   }, [])
+
+  const handleComposerFocus = useCallback(() => {
+    scrollMessagesToBottom()
+    window.setTimeout(() => scrollMessagesToBottom(), 250)
+  }, [scrollMessagesToBottom])
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
@@ -1209,14 +1222,51 @@ export default function ChatsPage() {
   }, [scrollMessagesToBottom, timelineItems])
 
   useEffect(() => {
+    if (!selectedChatId) {
+      return undefined
+    }
+
+    const handleViewportChange = () => {
+      const activeElement = document.activeElement
+      if (
+        activeElement instanceof HTMLTextAreaElement &&
+        activeElement.dataset.chatComposer === 'true'
+      ) {
+        scrollMessagesToBottom()
+      }
+    }
+
+    const viewport = window.visualViewport
+    window.addEventListener('resize', handleViewportChange)
+    viewport?.addEventListener('resize', handleViewportChange)
+    viewport?.addEventListener('scroll', handleViewportChange)
+
+    return () => {
+      window.removeEventListener('resize', handleViewportChange)
+      viewport?.removeEventListener('resize', handleViewportChange)
+      viewport?.removeEventListener('scroll', handleViewportChange)
+    }
+  }, [scrollMessagesToBottom, selectedChatId])
+
+  useEffect(() => {
     if (!highlightedMessageId) {
       return undefined
     }
     const frame = window.requestAnimationFrame(() => {
-      document.getElementById(`message-${highlightedMessageId}`)?.scrollIntoView({
-        block: 'center',
-        behavior: 'smooth',
-      })
+      const container = messagesScrollRef.current
+      const target = document.getElementById(`message-${highlightedMessageId}`)
+      if (!container || !target) {
+        return
+      }
+      const containerRect = container.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      const top =
+        container.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        container.clientHeight / 2 +
+        targetRect.height / 2
+      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
     })
     return () => window.cancelAnimationFrame(frame)
   }, [highlightedMessageId, messages])
@@ -1562,7 +1612,7 @@ export default function ChatsPage() {
   }
 
   return (
-    <section className="relative grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden text-gray-200 md:grid-cols-[20rem_minmax(0,1fr)] lg:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
+    <section className="relative grid h-full min-h-0 grid-cols-1 gap-0 overflow-hidden text-gray-200 md:gap-4 md:grid-cols-[20rem_minmax(0,1fr)] lg:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
       <div
         className={`h-full min-h-0 overflow-hidden ${
           selectedChat ? 'hidden md:block' : ''
@@ -1597,7 +1647,7 @@ export default function ChatsPage() {
       </div>
 
       <div
-        className={`${selectedChat ? 'flex' : 'hidden md:flex'} relative h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card`}
+        className={`${selectedChat ? 'flex' : 'hidden md:flex'} relative h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/90 shadow-card md:rounded-xl md:border md:border-white/5`}
         onDragEnter={(event) => {
           if (event.dataTransfer.types.includes('Files')) {
             event.preventDefault()
@@ -1617,7 +1667,7 @@ export default function ChatsPage() {
         }}
         onDrop={handleAttachmentDrop}
       >
-        <header className="flex min-h-[64px] shrink-0 items-center justify-between gap-2 border-b border-white/5 px-3 sm:min-h-[96px] sm:gap-4 sm:px-5">
+        <header className="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-white/5 px-2.5 sm:min-h-[96px] sm:gap-4 sm:px-5">
           {selectedChat ? (
             <>
               <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -1694,7 +1744,10 @@ export default function ChatsPage() {
           )}
         </header>
 
-        <div className="min-h-0 flex-1 overscroll-contain overflow-y-auto bg-background/45 px-3 py-4 md:px-5">
+        <div
+          ref={messagesScrollRef}
+          className="touch-scroll min-h-0 flex-1 overflow-y-auto bg-background/45 px-3 py-4 md:px-5"
+        >
           {isMessagesLoading ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
               <LoaderCircle size={18} className="mr-2 animate-spin" />
@@ -1866,7 +1919,7 @@ export default function ChatsPage() {
         </div>
 
         <form
-          className="shrink-0 border-t border-white/5 bg-surface/80 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4"
+          className="relative z-10 shrink-0 border-t border-white/5 bg-surface/95 p-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4"
           onSubmit={handleSend}
         >
           {attachment ? (
@@ -2038,8 +2091,10 @@ export default function ChatsPage() {
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               onPaste={handleComposerPaste}
-              onFocus={scrollMessagesToBottom}
-              className="max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-lg border-0 bg-transparent px-2 py-2 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 disabled:text-gray-500"
+              onFocus={handleComposerFocus}
+              data-chat-composer="true"
+              enterKeyHint="send"
+              className="touch-scroll max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-lg border-0 bg-transparent px-2 py-2 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 disabled:text-gray-500"
               placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
               disabled={!selectedChat || isSending}
               rows={1}
