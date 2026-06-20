@@ -4,6 +4,7 @@ import html
 import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -137,7 +138,7 @@ class TranslationService:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 self._endpoint_url(
-                    config.base_url,
+                    self._deepl_base_url(config.base_url, config.api_key),
                     self._deepl_default_base_url(config.api_key),
                     "/v2/translate",
                 ),
@@ -269,6 +270,22 @@ class TranslationService:
         return "https://api.deepl.com"
 
     @staticmethod
+    def _deepl_base_url(base_url: str | None, api_key: str | None) -> str | None:
+        normalized = TranslationService._normalize_base_url(base_url)
+        if normalized is None:
+            return None
+
+        parsed = urlparse(normalized)
+        hostname = (parsed.hostname or "").lower()
+        is_free_key = bool(api_key and api_key.strip().endswith(":fx"))
+
+        if is_free_key and hostname == "api.deepl.com":
+            return urlunparse(parsed._replace(netloc="api-free.deepl.com"))
+        if not is_free_key and hostname == "api-free.deepl.com":
+            return urlunparse(parsed._replace(netloc="api.deepl.com"))
+        return normalized
+
+    @staticmethod
     def _normalize_optional(value: str | None) -> str | None:
         if value is None:
             return None
@@ -278,4 +295,12 @@ class TranslationService:
     @staticmethod
     def _normalize_base_url(value: str | None) -> str | None:
         normalized = TranslationService._normalize_optional(value)
-        return normalized.rstrip("/") if normalized is not None else None
+        if normalized is None:
+            return None
+        normalized = normalized.rstrip("/")
+        if "://" in normalized:
+            return normalized
+
+        host = normalized.split("/", 1)[0].split(":", 1)[0].lower()
+        scheme = "http" if host in {"localhost", "127.0.0.1", "0.0.0.0"} else "https"
+        return f"{scheme}://{normalized}"
