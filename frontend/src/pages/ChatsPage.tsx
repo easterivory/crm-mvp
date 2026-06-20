@@ -584,6 +584,9 @@ export default function ChatsPage() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
   const [isLeadOpen, setIsLeadOpen] = useState(false)
+  const [alternateMessageTextIds, setAlternateMessageTextIds] = useState<Set<string>>(
+    () => new Set(),
+  )
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
@@ -1207,6 +1210,7 @@ export default function ChatsPage() {
     setIsAttachmentMenuOpen(false)
     setIsSnippetsOpen(false)
     setSnippetSearch('')
+    setAlternateMessageTextIds(new Set<string>())
     if (attachmentPreviewUrl) {
       window.URL.revokeObjectURL(attachmentPreviewUrl)
       setAttachmentPreviewUrl(null)
@@ -1354,7 +1358,25 @@ export default function ChatsPage() {
   }
 
   const handleTranslateMessage = async (message: Message) => {
-    if (!selectedChatId || translatingMessageId) {
+    const isOutgoing = message.sender_type === 'manager' || message.sender_type === 'bot'
+    const hasSavedAlternative = isOutgoing
+      ? hasText(message.original_text)
+      : hasText(message.translated_text)
+
+    if (hasSavedAlternative) {
+      setAlternateMessageTextIds((current) => {
+        const next = new Set(current)
+        if (next.has(message.id)) {
+          next.delete(message.id)
+        } else {
+          next.add(message.id)
+        }
+        return next
+      })
+      return
+    }
+
+    if (!selectedChatId || translatingMessageId || isOutgoing) {
       return
     }
 
@@ -1370,7 +1392,11 @@ export default function ChatsPage() {
       setMessages((current) =>
         sortMessagesByDate(current.map((item) => (item.id === data.id ? data : item))),
       )
-      notify({ tone: 'success', message: 'Сообщение переведено.' })
+      setAlternateMessageTextIds((current) => {
+        const next = new Set(current)
+        next.add(data.id)
+        return next
+      })
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
@@ -1796,8 +1822,35 @@ export default function ChatsPage() {
                 const translatedText = message.translated_text?.trim() || null
                 const originalText = message.original_text?.trim() || null
                 const hasTranslatableText = hasText(message.body) || hasText(message.caption)
-                const canTranslateIncoming =
-                  !isOutgoing && hasTranslatableText && !translatedText
+                const isAlternateTextVisible = alternateMessageTextIds.has(message.id)
+                const canUseMessageTextToggle = isOutgoing
+                  ? Boolean(originalText)
+                  : hasTranslatableText
+                const isTranslationLoading = translatingMessageId === message.id
+                const visibleBody =
+                  isAlternateTextVisible && isOutgoing && originalText
+                    ? originalText
+                    : isAlternateTextVisible && !isOutgoing && translatedText
+                      ? translatedText
+                      : message.body
+                const visibleCaption =
+                  isAlternateTextVisible && isOutgoing && originalText
+                    ? originalText
+                    : isAlternateTextVisible && !isOutgoing && translatedText
+                      ? translatedText
+                      : message.caption
+                const textToggleLabel = isAlternateTextVisible
+                  ? (isOutgoing ? 'Перевод' : 'Оригинал')
+                  : isOutgoing
+                    ? 'Исходник'
+                    : translatedText
+                      ? 'Перевод'
+                      : 'Перевести'
+                const textToggleTitle = isAlternateTextVisible
+                  ? 'Показать исходный текст сообщения'
+                  : isOutgoing
+                    ? 'Показать текст до перевода'
+                    : 'Показать перевод вместо оригинала'
 
                 return (
                   <div
@@ -1809,101 +1862,91 @@ export default function ChatsPage() {
                       className={`flex max-w-[86%] flex-col md:max-w-[72%] ${isOutgoing ? 'items-end' : 'items-start'}`}
                     >
                       <div
-                      className={`w-fit max-w-full rounded-2xl border px-3 py-2 shadow-sm transition ${
-                        isOutgoing
-                          ? isBot
-                            ? 'border-accent-300/25 bg-accent-400/10 text-accent-50 shadow-glow-accent'
-                            : 'border-primary-300/25 bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary'
-                          : 'border-white/10 bg-white/[0.055] text-gray-100'
-                      } ${
-                        highlightedMessageId === message.id
-                          ? 'ring-2 ring-amber-300/70'
-                          : ''
-                      }`}
-                    >
-                      <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
-                        {isBot ? <Bot size={13} /> : null}
-                        <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
-                        <span>{formatDateTime(message.created_at)}</span>
-                      </div>
-                      {message.message_type === 'text' || message.message_type === 'system' ? (
-                        <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                          {message.body || ''}
-                        </p>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-black/10 p-2">
-                            {(() => {
-                              const Icon = getMediaIcon(message.message_type)
-                              const size = formatFileSize(message.file_size)
-                              return (
-                                <>
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06]">
-                                    <Icon size={16} />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-semibold">
-                                      {message.file_name || getMediaLabel(message)}
-                                    </p>
-                                    <p className="truncate text-xs opacity-70">
-                                      {[getMediaLabel(message), size].filter(Boolean).join(' · ')}
-                                    </p>
-                                  </div>
-                                  {message.telegram_file_id ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void openMedia(message)}
-                                      disabled={openingMediaId === message.id}
-                                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-60"
-                                      title="Открыть медиа"
-                                    >
-                                      {openingMediaId === message.id ? (
-                                        <LoaderCircle size={15} className="animate-spin" />
-                                      ) : (
-                                        <Download size={15} />
-                                      )}
-                                    </button>
-                                  ) : null}
-                                </>
-                              )
-                            })()}
+                        className={`w-fit max-w-full rounded-2xl border px-3 py-2 shadow-sm transition ${
+                          isOutgoing
+                            ? isBot
+                              ? 'border-accent-300/25 bg-accent-400/10 text-accent-50 shadow-glow-accent'
+                              : 'border-primary-300/25 bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary'
+                            : 'border-white/10 bg-white/[0.055] text-gray-100'
+                        } ${
+                          highlightedMessageId === message.id
+                            ? 'ring-2 ring-amber-300/70'
+                            : ''
+                        }`}
+                      >
+                        <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
+                          {isBot ? <Bot size={13} /> : null}
+                          <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
+                          <span>{formatDateTime(message.created_at)}</span>
+                        </div>
+                        {message.message_type === 'text' || message.message_type === 'system' ? (
+                          <p className="whitespace-pre-wrap break-words text-sm leading-6">
+                            {visibleBody || ''}
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-black/10 p-2">
+                              {(() => {
+                                const Icon = getMediaIcon(message.message_type)
+                                const size = formatFileSize(message.file_size)
+                                return (
+                                  <>
+                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06]">
+                                      <Icon size={16} />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-sm font-semibold">
+                                        {message.file_name || getMediaLabel(message)}
+                                      </p>
+                                      <p className="truncate text-xs opacity-70">
+                                        {[getMediaLabel(message), size].filter(Boolean).join(' · ')}
+                                      </p>
+                                    </div>
+                                    {message.telegram_file_id ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void openMedia(message)}
+                                        disabled={openingMediaId === message.id}
+                                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-60"
+                                        title="Открыть медиа"
+                                      >
+                                        {openingMediaId === message.id ? (
+                                          <LoaderCircle size={15} className="animate-spin" />
+                                        ) : (
+                                          <Download size={15} />
+                                        )}
+                                      </button>
+                                    ) : null}
+                                  </>
+                                )
+                              })()}
+                            </div>
+                            {visibleCaption ? (
+                              <p className="whitespace-pre-wrap break-words text-sm leading-6">
+                                {visibleCaption}
+                              </p>
+                            ) : null}
                           </div>
-                          {message.caption ? (
-                            <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                              {message.caption}
-                            </p>
-                          ) : null}
-                        </div>
-                      )}
+                        )}
+                        {canUseMessageTextToggle ? (
+                          <div className="mt-2 flex justify-end border-t border-white/10 pt-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void handleTranslateMessage(message)}
+                              disabled={isTranslationLoading}
+                              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 bg-black/10 px-2 text-[11px] font-medium text-white/75 transition hover:border-accent-300/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                              title={textToggleTitle}
+                            >
+                              {isTranslationLoading ? (
+                                <LoaderCircle size={12} className="animate-spin" />
+                              ) : (
+                                <Languages size={12} />
+                              )}
+                              <span>{textToggleLabel}</span>
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
-                      {!isOutgoing && translatedText ? (
-                        <div className="mt-1 max-w-full rounded-xl border border-accent-300/15 bg-accent-300/[0.08] px-3 py-2 text-xs leading-5 text-gray-300">
-                          <span className="font-semibold text-accent-100">📝 Перевод:</span>{' '}
-                          <span className="whitespace-pre-wrap break-words">{translatedText}</span>
-                        </div>
-                      ) : null}
-                      {canTranslateIncoming ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleTranslateMessage(message)}
-                          disabled={translatingMessageId === message.id}
-                          className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.035] px-2.5 py-1 text-[11px] font-medium text-gray-400 transition hover:border-accent-300/40 hover:text-accent-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          title="Перевести сообщение"
-                        >
-                          {translatingMessageId === message.id ? (
-                            <LoaderCircle size={12} className="animate-spin" />
-                          ) : (
-                            <Languages size={12} />
-                          )}
-                          Перевести
-                        </button>
-                      ) : null}
-                      {isOutgoing && originalText ? (
-                        <div className="mt-1 max-w-full rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2 text-xs leading-5 text-gray-300">
-                          <span className="font-semibold text-gray-200">📝 Исходный текст:</span>{' '}
-                          <span className="whitespace-pre-wrap break-words">{originalText}</span>
-                        </div>
-                      ) : null}
                       {message.sender_type === 'manager' ? (
                         <p className="mt-1 max-w-full truncate px-1 text-[11px] leading-4 text-gray-500">
                           Отправил: {operatorName}

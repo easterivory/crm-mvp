@@ -49,6 +49,14 @@ logger = logging.getLogger(__name__)
 
 MESSAGE_CYCLE_START_TOLERANCE = timedelta(seconds=1)
 
+
+def translation_error_detail(exc: TranslationUnavailableError) -> str:
+    detail = " ".join(str(exc).split())
+    if not detail:
+        return "Сервис перевода недоступен или не настроен."
+    return f"Сервис перевода недоступен: {detail}"
+
+
 ALLOWED_CHAT_MEDIA: dict[str, str] = {
     "image/jpeg": MessageType.PHOTO,
     "image/png": MessageType.PHOTO,
@@ -538,7 +546,7 @@ class MessageService:
         except TranslationUnavailableError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Сервис перевода недоступен или не настроен.",
+                detail=translation_error_detail(exc),
             ) from exc
         return translated_text, text
 
@@ -992,7 +1000,7 @@ class MessageService:
         except TranslationUnavailableError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Сервис перевода недоступен или не настроен.",
+                detail=translation_error_detail(exc),
             ) from exc
         await self.db.flush()
         await self.db.refresh(message)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
@@ -76,8 +77,9 @@ class TranslationService:
                 exc.response.text[:500],
             )
             if raise_on_failure:
+                detail = self._provider_response_detail(exc.response)
                 raise TranslationUnavailableError(
-                    f"Translation provider returned HTTP {exc.response.status_code}"
+                    f"HTTP {exc.response.status_code}: {detail}"
                 ) from exc
         except httpx.HTTPError as exc:
             logger.warning(
@@ -86,7 +88,9 @@ class TranslationService:
                 exc.__class__.__name__,
             )
             if raise_on_failure:
-                raise TranslationUnavailableError("Translation provider is unavailable") from exc
+                raise TranslationUnavailableError(
+                    f"provider unavailable ({exc.__class__.__name__})"
+                ) from exc
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Translation provider returned unexpected payload provider=%s error=%s",
@@ -94,7 +98,7 @@ class TranslationService:
                 exc,
             )
             if raise_on_failure:
-                raise TranslationUnavailableError("Translation provider returned unexpected payload") from exc
+                raise TranslationUnavailableError(f"unexpected provider payload: {exc}") from exc
         except Exception as exc:
             logger.warning(
                 "Unexpected translation failure provider=%s error=%s",
@@ -228,6 +232,29 @@ class TranslationService:
     def _endpoint_url(base_url: str | None, default_base_url: str, path: str) -> str:
         base = (base_url or default_base_url).rstrip("/")
         return base if base.endswith(path) else f"{base}{path}"
+
+    @staticmethod
+    def _provider_response_detail(response: httpx.Response) -> str:
+        text = response.text.strip()
+        if not text:
+            return response.reason_phrase or "empty response"
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return " ".join(text.split())[:240]
+
+        if isinstance(payload, dict):
+            for key in ("message", "detail", "error_description", "error"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return " ".join(value.split())[:240]
+                if isinstance(value, dict):
+                    nested = value.get("message") or value.get("detail")
+                    if isinstance(nested, str) and nested.strip():
+                        return " ".join(nested.split())[:240]
+
+        return " ".join(text.split())[:240]
 
     @staticmethod
     def _normalize_provider(provider: str | None) -> TranslationProvider | None:
