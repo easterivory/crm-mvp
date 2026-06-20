@@ -273,7 +273,7 @@ class LanderService:
     def _safe_slug(cls, slug: str) -> str:
         normalized = (slug or "").strip()
         if not cls.SAFE_SLUG_RE.fullmatch(normalized):
-            raise ValueError("Недопустимый slug лендинга")
+            raise ValueError("Invalid lander slug")
         return normalized
 
     @staticmethod

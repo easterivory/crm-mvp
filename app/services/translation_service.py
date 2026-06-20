@@ -131,9 +131,8 @@ class TranslationService:
             logger.warning("DeepL translation API key is not configured; returning original text")
             return text
 
-        payload = {
-            "auth_key": config.api_key,
-            "text": text,
+        payload: dict[str, Any] = {
+            "text": [text],
             "target_lang": self._deepl_target_lang(target_lang),
         }
         if source_lang is not None:
@@ -146,7 +145,8 @@ class TranslationService:
                     self._deepl_default_base_url(config.api_key),
                     "/v2/translate",
                 ),
-                data=payload,
+                headers={"Authorization": f"DeepL-Auth-Key {config.api_key}"},
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()

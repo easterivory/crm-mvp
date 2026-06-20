@@ -63,6 +63,9 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
     if (typeof detail === 'string' && detail.length > 0) {
+      if (detail === 'Invalid lander slug' || detail.includes('slug may contain only')) {
+        return 'Slug может содержать только латинские буквы, цифры, дефис и подчёркивание.'
+      }
       return detail
     }
     if (err.code === 'ERR_NETWORK') {
@@ -81,6 +84,14 @@ function generateSlug() {
   const bytes = new Uint8Array(10)
   crypto.getRandomValues(bytes)
   return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('')
+}
+
+function normalizeSlugInput(value: string) {
+  return value.trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 100)
+}
+
+function isValidLanderSlug(value: string) {
+  return /^[A-Za-z0-9_-]{1,100}$/.test(value.trim())
 }
 
 function normalizeDomainInput(value: string) {
@@ -260,6 +271,14 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       setBanner({ tone: 'error', message: 'Заполните домен, slug и реф-ссылку.' })
       return
     }
+    const slug = normalizeSlugInput(form.slug)
+    if (!isValidLanderSlug(slug)) {
+      setBanner({
+        tone: 'error',
+        message: 'Slug может содержать только латинские буквы, цифры, дефис и подчёркивание.',
+      })
+      return
+    }
     if (form.type === 'custom_upload' && !form.zipFile) {
       setBanner({ tone: 'error', message: 'Выберите ZIP-архив для кастомного лендинга.' })
       return
@@ -270,9 +289,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     try {
       const created = await createProjectLander(projectId, {
         domain_id: form.domainId,
-        name: form.name.trim() || form.slug.trim(),
+        name: form.name.trim() || slug,
         type: form.type,
-        slug: form.slug.trim(),
+        slug,
         tracking_link_id: form.trackingLinkId,
       })
       if (form.type === 'custom_upload' && form.zipFile) {
@@ -632,12 +651,20 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                 </span>
                 <input
                   value={form.slug}
-                  onChange={(event) => setForm((current) => ({ ...current, slug: event.target.value }))}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      slug: normalizeSlugInput(event.target.value),
+                    }))
+                  }
                   placeholder="0ZZVaOfQad"
                   required
                   maxLength={100}
                   className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
                 />
+                <span className="mt-1 block text-xs text-zinc-500">
+                  Только латиница, цифры, дефис и подчёркивание.
+                </span>
               </label>
               <button
                 type="button"
