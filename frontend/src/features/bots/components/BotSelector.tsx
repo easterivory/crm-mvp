@@ -5,7 +5,11 @@ import { useProjectBotSelection } from '../../../shared/lib'
 import { fetchBots } from '../api'
 import type { Bot } from '../types'
 
-export default function BotSelector() {
+type BotSelectorProps = {
+  compact?: boolean
+}
+
+export default function BotSelector({ compact = false }: BotSelectorProps) {
   const {
     selectedProjectId,
     selectedBotIds,
@@ -100,14 +104,14 @@ export default function BotSelector() {
 
   return (
     <div className="relative min-w-0">
-      <span className="block text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500">
+      <span className={`${compact ? 'sr-only' : 'block text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500'}`}>
         Боты
       </span>
       <button
         type="button"
         disabled={!selectedProjectId || Boolean(error)}
         onClick={() => setIsOpen((value) => !value)}
-        className="mt-1 flex h-10 w-full min-w-[190px] items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left text-sm font-medium text-gray-100 outline-none transition hover:border-accent-300/40 focus:border-accent-300/60 focus:shadow-glow-accent disabled:cursor-not-allowed disabled:text-gray-500"
+        className={`${compact ? 'mt-0 min-w-0' : 'mt-1 min-w-[190px]'} flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left text-sm font-medium text-gray-100 outline-none transition hover:border-accent-300/40 focus:border-accent-300/60 focus:shadow-glow-accent disabled:cursor-not-allowed disabled:text-gray-500`}
         title={label}
       >
         <span className="truncate">{label}</span>
@@ -119,7 +123,7 @@ export default function BotSelector() {
       </button>
 
       {isOpen ? (
-        <div className="absolute right-0 z-50 mt-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-card backdrop-blur-xl">
+        <div className={`${compact ? 'right-0 w-[min(20rem,calc(100vw-1.5rem))]' : 'right-0 w-72'} absolute z-50 mt-2 overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/95 p-2 shadow-card backdrop-blur-xl`}>
           <button
             type="button"
             disabled={isDisabled}

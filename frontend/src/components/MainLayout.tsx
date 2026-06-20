@@ -8,6 +8,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  SlidersHorizontal,
   Sparkles,
   UsersRound,
   Workflow,
@@ -61,6 +62,7 @@ export default function MainLayout() {
   const location = useLocation()
   const [isCollapsed, setIsCollapsed] = useState(readCollapsed)
   const [isMobileOpen, setIsMobileOpen] = useState(false)
+  const [isMobileScopeOpen, setIsMobileScopeOpen] = useState(false)
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(isCollapsed))
@@ -68,7 +70,26 @@ export default function MainLayout() {
 
   useEffect(() => {
     setIsMobileOpen(false)
+    setIsMobileScopeOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    const setAppHeight = () => {
+      const height = window.visualViewport?.height ?? window.innerHeight
+      document.documentElement.style.setProperty('--app-height', `${height}px`)
+    }
+
+    setAppHeight()
+    window.addEventListener('resize', setAppHeight)
+    window.visualViewport?.addEventListener('resize', setAppHeight)
+    window.visualViewport?.addEventListener('scroll', setAppHeight)
+
+    return () => {
+      window.removeEventListener('resize', setAppHeight)
+      window.visualViewport?.removeEventListener('resize', setAppHeight)
+      window.visualViewport?.removeEventListener('scroll', setAppHeight)
+    }
+  }, [])
 
   const displayName = user?.name ?? user?.email ?? 'Пользователь'
   const roleLabel = useMemo(() => {
@@ -173,7 +194,7 @@ export default function MainLayout() {
   )
 
   return (
-    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background bg-neon-radial text-gray-200 md:flex-row">
+    <div className="flex h-[var(--app-height,100dvh)] min-w-0 flex-col overflow-hidden bg-background bg-neon-radial text-gray-200 md:h-screen md:flex-row">
       <div className="hidden md:block">{sidebar}</div>
 
       <button
@@ -195,8 +216,10 @@ export default function MainLayout() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <DashboardHeaderMetrics />
-        <header className="relative z-40 flex shrink-0 flex-col gap-3 border-b border-white/5 bg-background/65 px-3 py-3 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
+        <div className="hidden md:block">
+          <DashboardHeaderMetrics />
+        </div>
+        <header className="relative z-40 flex shrink-0 flex-col gap-2 border-b border-white/5 bg-background/80 px-2.5 py-2 backdrop-blur-xl md:px-3 md:py-3 lg:flex-row lg:items-center lg:justify-between lg:px-6 lg:py-4">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -206,13 +229,39 @@ export default function MainLayout() {
             >
               <Menu size={18} />
             </button>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1 md:flex-none">
               <p className="truncate text-sm font-medium text-white">{displayName}</p>
               <p className="text-xs text-gray-500">Рабочая панель CRM</p>
             </div>
+            <button
+              type="button"
+              onClick={() => setIsMobileScopeOpen((value) => !value)}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 md:hidden"
+              aria-expanded={isMobileScopeOpen}
+              aria-label="Проект и боты"
+            >
+              <SlidersHorizontal size={17} />
+              Скоуп
+            </button>
           </div>
 
-          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end lg:flex lg:justify-end">
+          {isMobileScopeOpen ? (
+            <div className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-xl border border-white/8 bg-white/[0.035] p-2 md:hidden">
+              <ProjectSelector compact />
+              <BotSelector compact />
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="col-span-2 inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-medium text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+              >
+                <LogOut size={16} />
+                {t('logout')}
+              </button>
+            </div>
+          ) : null}
+
+          <div className="hidden min-w-0 grid-cols-1 gap-3 md:mt-3 md:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end lg:mt-0 lg:flex lg:justify-end">
             <ProjectSelector />
             <BotSelector />
 
@@ -227,7 +276,7 @@ export default function MainLayout() {
           </div>
         </header>
 
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden p-3 md:p-5">
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:p-5">
           <Outlet />
         </main>
       </div>

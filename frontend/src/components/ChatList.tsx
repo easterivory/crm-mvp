@@ -249,12 +249,13 @@ export default function ChatList({
   selectedPresetId,
 }: ChatListProps) {
   const [isFiltersOpen, setIsFiltersOpen] = useState(false)
+  const [isMobileControlsOpen, setIsMobileControlsOpen] = useState(false)
   const activeFilterCount = countActiveChatFilters(filters)
 
   return (
     <aside className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card">
-      <div className="shrink-0 border-b border-white/5 p-4">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="shrink-0 border-b border-white/5 p-3 md:p-4">
+        <div className="flex items-center justify-between gap-3 md:mb-4">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold text-white">Чаты</h1>
             <p className="truncate text-sm text-gray-500">
@@ -276,7 +277,19 @@ export default function ChatList({
           </button>
         </div>
 
-        <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => setIsMobileControlsOpen((value) => !value)}
+          className="mt-3 flex h-10 w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 text-sm font-medium text-gray-200 md:hidden"
+          aria-expanded={isMobileControlsOpen}
+        >
+          <span>Поиск и фильтры</span>
+          <span className="rounded-full bg-accent-300/10 px-2 py-0.5 text-xs text-accent-100">
+            {activeFilterCount > 0 ? activeFilterCount : 'Все'}
+          </span>
+        </button>
+
+        <div className={`${isMobileControlsOpen ? 'mt-3 flex' : 'hidden'} gap-2 md:flex`}>
           <div className="min-w-0 flex-1">
             <ChatSearchBar
               value={filters.q}
@@ -291,7 +304,7 @@ export default function ChatList({
           />
         </div>
 
-        <div className="mt-3">
+        <div className={`${isMobileControlsOpen ? 'mt-3 block' : 'hidden'} md:mt-3 md:block`}>
           <ChatQuickFilters
             currentUserId={currentUserId}
             filters={filters}
@@ -300,7 +313,7 @@ export default function ChatList({
         </div>
 
         {activeFilterCount > 0 ? (
-          <div className="mt-2">
+          <div className={`${isMobileControlsOpen ? 'mt-2 block' : 'hidden'} md:mt-2 md:block`}>
             <ChatFilterChips
               filters={filters}
               statusOptions={statusOptions}

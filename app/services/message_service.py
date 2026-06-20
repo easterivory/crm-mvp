@@ -43,7 +43,7 @@ from app.repositories.user_repository import UserRepository
 from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import TelegramSenderService
-from app.services.translation_service import TranslationService
+from app.services.translation_service import TranslationService, TranslationUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -466,11 +466,15 @@ class MessageService:
         if project is None or not project.is_translation_enabled:
             return data
 
-        translated_text = await self.translation_service.translate_text(
-            source_text,
-            source_lang=None,
-            target_lang=self._lang_or_default(project.operator_lang, "ru"),
-        )
+        try:
+            translated_text = await self.translation_service.translate_text(
+                source_text,
+                source_lang=None,
+                target_lang=self._lang_or_default(project.operator_lang, "ru"),
+                raise_on_failure=True,
+            )
+        except TranslationUnavailableError:
+            return data
         return data.model_copy(update={"translated_text": translated_text})
 
     async def _with_manager_outgoing_translation(
@@ -524,11 +528,18 @@ class MessageService:
             chat.client_lang or project.default_client_lang,
             "en",
         )
-        translated_text = await self.translation_service.translate_text(
-            text,
-            source_lang=self._lang_or_default(project.operator_lang, "ru"),
-            target_lang=client_lang,
-        )
+        try:
+            translated_text = await self.translation_service.translate_text(
+                text,
+                source_lang=self._lang_or_default(project.operator_lang, "ru"),
+                target_lang=client_lang,
+                raise_on_failure=True,
+            )
+        except TranslationUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Сервис перевода недоступен или не настроен.",
+            ) from exc
         return translated_text, text
 
     @staticmethod
@@ -971,11 +982,18 @@ class MessageService:
                 detail="Message has no text to translate",
             )
 
-        message.translated_text = await self.translation_service.translate_text(
-            source_text,
-            source_lang=source_lang,
-            target_lang=target_lang,
-        )
+        try:
+            message.translated_text = await self.translation_service.translate_text(
+                source_text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                raise_on_failure=True,
+            )
+        except TranslationUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Сервис перевода недоступен или не настроен.",
+            ) from exc
         await self.db.flush()
         await self.db.refresh(message)
         return MessageOut.model_validate(message)

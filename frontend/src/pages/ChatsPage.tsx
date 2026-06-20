@@ -595,6 +595,12 @@ export default function ChatsPage() {
   const messagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
 
+  const scrollMessagesToBottom = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ block: 'end' })
+    })
+  }, [])
+
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId],
@@ -1199,8 +1205,8 @@ export default function ChatsPage() {
   }, [selectedChatId])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [timelineItems])
+    scrollMessagesToBottom()
+  }, [scrollMessagesToBottom, timelineItems])
 
   useEffect(() => {
     if (!highlightedMessageId) {
@@ -1611,7 +1617,7 @@ export default function ChatsPage() {
         }}
         onDrop={handleAttachmentDrop}
       >
-        <header className="flex min-h-[88px] shrink-0 items-center justify-between gap-2 border-b border-white/5 px-3 sm:min-h-[96px] sm:gap-4 sm:px-5">
+        <header className="flex min-h-[64px] shrink-0 items-center justify-between gap-2 border-b border-white/5 px-3 sm:min-h-[96px] sm:gap-4 sm:px-5">
           {selectedChat ? (
             <>
               <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -1631,10 +1637,10 @@ export default function ChatsPage() {
                     </h2>
                     {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
                   </div>
-                  <p className="truncate text-sm text-gray-500">
+                  <p className="hidden truncate text-sm text-gray-500 sm:block">
                     {getBotLabel(selectedChat)} · Telegram ID {selectedChat.external_chat_id}
                   </p>
-                  <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                  <p className="mt-1 hidden flex-wrap items-center gap-1.5 text-xs text-gray-500 sm:flex">
                     <span className="truncate">
                       Воронка:{' '}
                       {selectedChat.active_funnel_name
@@ -1647,7 +1653,7 @@ export default function ChatsPage() {
                   </p>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                 <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-2 py-2 text-xs text-gray-400 sm:px-3">
                   <Languages size={15} className="text-accent-200" />
                   <span className="sr-only">Язык клиента</span>
@@ -1672,7 +1678,7 @@ export default function ChatsPage() {
                   aria-label="Открыть информацию о лиде"
                 >
                   <UserRound size={15} />
-                  <span>Инфо</span>
+                  <span className="hidden min-[360px]:inline">Инфо</span>
                 </button>
                 <div className="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
                   <CheckCheck size={16} />
@@ -1688,7 +1694,7 @@ export default function ChatsPage() {
           )}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto bg-background/45 px-3 py-4 md:px-5">
+        <div className="min-h-0 flex-1 overscroll-contain overflow-y-auto bg-background/45 px-3 py-4 md:px-5">
           {isMessagesLoading ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
               <LoaderCircle size={18} className="mr-2 animate-spin" />
@@ -1859,7 +1865,10 @@ export default function ChatsPage() {
           ) : null}
         </div>
 
-        <form className="shrink-0 border-t border-white/5 bg-surface/80 p-4" onSubmit={handleSend}>
+        <form
+          className="shrink-0 border-t border-white/5 bg-surface/80 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4"
+          onSubmit={handleSend}
+        >
           {attachment ? (
             <div className="mb-3 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
               {attachment.media_type === 'photo' && attachmentPreviewUrl ? (
@@ -2029,6 +2038,7 @@ export default function ChatsPage() {
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               onPaste={handleComposerPaste}
+              onFocus={scrollMessagesToBottom}
               className="max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-lg border-0 bg-transparent px-2 py-2 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 disabled:text-gray-500"
               placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
               disabled={!selectedChat || isSending}

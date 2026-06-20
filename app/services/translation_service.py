@@ -19,6 +19,10 @@ TRANSLATION_BASE_URL_KEY = "translation_base_url"
 TranslationProvider = Literal["deepl", "google", "libretranslate"]
 
 
+class TranslationUnavailableError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class TranslationSettings:
     provider: TranslationProvider | None
@@ -36,6 +40,8 @@ class TranslationService:
         text: str,
         source_lang: Optional[str],
         target_lang: str,
+        *,
+        raise_on_failure: bool = False,
     ) -> str:
         if not text.strip():
             return text
@@ -50,7 +56,9 @@ class TranslationService:
 
         config = await self._get_settings()
         if config.provider is None:
-            logger.warning("Translation provider is not configured; returning original text")
+            logger.warning("Translation provider is not configured")
+            if raise_on_failure:
+                raise TranslationUnavailableError("Translation provider is not configured")
             return text
 
         try:
@@ -66,18 +74,26 @@ class TranslationService:
                 exc.response.status_code,
                 exc.response.text[:500],
             )
+            if raise_on_failure:
+                raise TranslationUnavailableError(
+                    f"Translation provider returned HTTP {exc.response.status_code}"
+                ) from exc
         except httpx.HTTPError as exc:
             logger.warning(
                 "Translation provider is unavailable provider=%s error_type=%s",
                 config.provider,
                 exc.__class__.__name__,
             )
+            if raise_on_failure:
+                raise TranslationUnavailableError("Translation provider is unavailable") from exc
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Translation provider returned unexpected payload provider=%s error=%s",
                 config.provider,
                 exc,
             )
+            if raise_on_failure:
+                raise TranslationUnavailableError("Translation provider returned unexpected payload") from exc
         except Exception as exc:
             logger.warning(
                 "Unexpected translation failure provider=%s error=%s",
@@ -85,6 +101,8 @@ class TranslationService:
                 exc,
                 exc_info=True,
             )
+            if raise_on_failure:
+                raise TranslationUnavailableError("Unexpected translation failure") from exc
         return text
 
     async def _get_settings(self) -> TranslationSettings:
@@ -118,7 +136,11 @@ class TranslationService:
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
-                self._endpoint_url(config.base_url, "https://api.deepl.com", "/v2/translate"),
+                self._endpoint_url(
+                    config.base_url,
+                    self._deepl_default_base_url(config.api_key),
+                    "/v2/translate",
+                ),
                 data=payload,
             )
             response.raise_for_status()
@@ -239,6 +261,12 @@ class TranslationService:
         if value == "en":
             return "EN-US"
         return value.upper()
+
+    @staticmethod
+    def _deepl_default_base_url(api_key: str | None) -> str:
+        if api_key and api_key.strip().endswith(":fx"):
+            return "https://api-free.deepl.com"
+        return "https://api.deepl.com"
 
     @staticmethod
     def _normalize_optional(value: str | None) -> str | None:

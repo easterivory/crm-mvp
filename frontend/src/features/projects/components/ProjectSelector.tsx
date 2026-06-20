@@ -8,6 +8,10 @@ import { useAuthStore } from '../../../store/authStore'
 import { createProject, fetchProjects } from '../api'
 import type { Project } from '../types'
 
+type ProjectSelectorProps = {
+  compact?: boolean
+}
+
 function getProjectError(err: unknown) {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
@@ -43,7 +47,7 @@ function getProjectError(err: unknown) {
   return 'Не удалось создать проект.'
 }
 
-export default function ProjectSelector() {
+export default function ProjectSelector({ compact = false }: ProjectSelectorProps) {
   const { resetBotSelection, selectedProjectId, setSelectedProjectId } =
     useProjectBotSelection()
   const currentUser = useAuthStore((state) => state.user)
@@ -153,7 +157,7 @@ export default function ProjectSelector() {
   return (
     <div className="relative flex min-w-0 items-end gap-2">
       <label className="group relative flex min-w-0 flex-col gap-1">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500">
+        <span className={`${compact ? 'sr-only' : 'text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-500'}`}>
           Проект
         </span>
         <div className="relative">
@@ -162,7 +166,9 @@ export default function ProjectSelector() {
             value={selectedProjectId ?? ''}
             disabled={isLoading || Boolean(error) || activeProjects.length === 0}
             onChange={(event) => setSelectedProjectId(event.target.value || null)}
-            className="h-10 w-full min-w-[190px] appearance-none rounded-xl border border-white/10 bg-white/[0.04] px-3 pr-9 text-sm font-medium text-gray-100 outline-none transition hover:border-accent-300/40 focus:border-accent-300/60 focus:shadow-glow-accent disabled:cursor-not-allowed disabled:text-gray-500"
+            className={`h-10 w-full appearance-none rounded-xl border border-white/10 bg-white/[0.04] px-3 pr-9 text-sm font-medium text-gray-100 outline-none transition hover:border-accent-300/40 focus:border-accent-300/60 focus:shadow-glow-accent disabled:cursor-not-allowed disabled:text-gray-500 ${
+              compact ? 'min-w-0' : 'min-w-[190px]'
+            }`}
             title={error ?? selectedProjectName}
           >
             {isLoading ? <option value="">Загрузка проектов</option> : null}
@@ -193,7 +199,7 @@ export default function ProjectSelector() {
           title="Создать проект"
           aria-label="Создать проект"
           onClick={() => setIsCreateOpen(true)}
-          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent"
+          className={`${compact ? 'w-10 px-0' : 'px-3'} inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 hover:text-white hover:shadow-glow-accent`}
         >
           <Plus size={17} />
           <span className="hidden text-sm font-medium xl:inline">Новый</span>

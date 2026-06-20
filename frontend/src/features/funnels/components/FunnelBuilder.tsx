@@ -698,7 +698,7 @@ export default function FunnelBuilder({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/8 bg-[#090d18]/80">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/8 bg-[#0d1324]/95 px-4 py-3 shadow-card">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/8 bg-[#0d1324]/95 px-3 py-3 shadow-card md:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <button
             type="button"
@@ -764,7 +764,7 @@ export default function FunnelBuilder({
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        <div className="-mx-1 flex w-full shrink-0 gap-2 overflow-x-auto px-1 pb-1 md:mx-0 md:w-auto md:flex-wrap md:overflow-visible md:px-0 md:pb-0">
           {[
             { key: 'editor' as const, label: 'Редактор', icon: GitBranch },
             { key: 'analytics' as const, label: 'Аналитика', icon: BarChart3 },
@@ -776,7 +776,7 @@ export default function FunnelBuilder({
                 key={tab.key}
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
-                className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm transition ${
+                className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border px-3 text-sm transition ${
                   activeTab === tab.key
                     ? 'border-accent-300/35 bg-accent-300/10 text-accent-50'
                     : 'border-white/10 bg-white/[0.04] text-gray-100 hover:border-white/20'
@@ -791,7 +791,7 @@ export default function FunnelBuilder({
             type="button"
             onClick={() => void validate()}
             disabled={isValidating}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isValidating ? <LoaderCircle size={15} className="animate-spin" /> : <PlayCircle size={15} />}
             Тестировать
@@ -800,7 +800,7 @@ export default function FunnelBuilder({
             type="button"
             onClick={() => void saveDraft()}
             disabled={isSaving}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 transition hover:border-accent-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 transition hover:border-accent-300/35 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSaving ? <LoaderCircle size={15} className="animate-spin" /> : <Save size={15} />}
             Сохранить
@@ -808,7 +808,7 @@ export default function FunnelBuilder({
           <button
             type="button"
             onClick={() => void openPublish()}
-            className="inline-flex h-9 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
           >
             <Send size={15} />
             Опубликовать
