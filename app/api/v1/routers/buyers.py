@@ -77,7 +77,7 @@ async def create_buyer(
     )
 
 
-@router.delete("/{buyer_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{buyer_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_buyer(
     buyer_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
