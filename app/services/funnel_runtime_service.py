@@ -4,6 +4,7 @@ import logging
 import re
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import ChatEventType, LeadStatusCode, MessageType, SenderType
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
 from app.repositories.bot_repository import BotRepository
+from app.repositories.broadcast_repository import BroadcastRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
@@ -61,6 +63,7 @@ class FunnelRuntimeService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.repo = FunnelRepository(db)
+        self.broadcast_repo = BroadcastRepository(db)
         self.chat_repo = ChatRepository(db)
         self.bot_repo = BotRepository(db)
         self.lead_repo = LeadRepository(db)
@@ -871,15 +874,19 @@ class FunnelRuntimeService:
         return await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
 
     async def _send_step_message(self, *, chat_id: UUID, step: FunnelStep) -> None:
-        text = self._step_text(step)
-        media_type, media_ref = self._step_media_payload(step)
-        if not text and media_ref is None:
+        sequence = self._message_sequence(step)
+        item = sequence[0] if sequence else step.config_json or {}
+        text = self._message_item_text(item)
+        media_type, media_ref = self._message_item_media_payload(step, item)
+        upload_id = self._message_item_upload_id(item)
+        if not text and media_ref is None and upload_id is None:
             return
         await self._create_outgoing_message(
             chat_id=chat_id,
             text=text,
             message_type=media_type,
             telegram_file_id=media_ref,
+            broadcast_upload_id=upload_id,
             file_name=self._step_file_name(step),
             mime_type=self._step_mime_type(step),
             reply_markup=self._reply_markup_for_step(step),
@@ -993,6 +1000,7 @@ class FunnelRuntimeService:
         reply_markup: Optional[dict],
         message_type: str = MessageType.TEXT,
         telegram_file_id: Optional[str] = None,
+        broadcast_upload_id: Optional[UUID] = None,
         file_name: Optional[str] = None,
         mime_type: Optional[str] = None,
     ) -> None:
@@ -1001,6 +1009,71 @@ class FunnelRuntimeService:
             return
         normalized_type = self._normalize_message_type(message_type)
         message_text = text.strip()
+        if broadcast_upload_id is not None and normalized_type != MessageType.TEXT:
+            if chat.bot_id is None:
+                raise RuntimeError("Chat bot is not configured for funnel media send")
+            upload = await self.broadcast_repo.get_upload_in_project(
+                broadcast_upload_id,
+                chat.project_id,
+            )
+            if upload is None:
+                raise RuntimeError("Funnel media upload is missing or unavailable")
+            if upload.media_type != normalized_type:
+                raise RuntimeError("Funnel media upload type does not match message type")
+            if upload.expires_at is not None and upload.expires_at <= datetime.now(timezone.utc):
+                raise RuntimeError("Funnel media upload has expired")
+            path = Path(upload.storage_path)
+            if not upload.storage_path or not path.exists():
+                raise RuntimeError("Funnel media upload file is missing from private storage")
+
+            telegram_result = await self.message_service._send_media_to_telegram_by_type(
+                media_type=normalized_type,
+                media=path,
+                project_id=chat.project_id,
+                bot_id=chat.bot_id,
+                external_chat_id=chat.external_chat_id,
+                caption=message_text or None,
+                reply_markup=reply_markup,
+                file_name=upload.file_name,
+                mime_type=upload.mime_type,
+            )
+            if telegram_result is None:
+                raise RuntimeError("Telegram did not accept funnel media message")
+
+            actual_media_type = self.message_service._actual_telegram_media_type(
+                normalized_type,
+                telegram_result,
+            )
+            telegram_file_id, file_unique_id, telegram_file_size = (
+                self.message_service._extract_telegram_media_metadata(
+                    actual_media_type,
+                    telegram_result,
+                )
+            )
+            await self.message_service.create_message(
+                chat_id=chat_id,
+                project_id=chat.project_id,
+                data=MessageCreate(
+                    external_message_id=self.message_service._telegram_message_id(telegram_result),
+                    message_type=actual_media_type,
+                    sender_type=SenderType.BOT,
+                    sender_id=None,
+                    body=None,
+                    caption=message_text or None,
+                    telegram_file_id=telegram_file_id,
+                    file_unique_id=file_unique_id,
+                    file_name=upload.file_name,
+                    mime_type=upload.mime_type,
+                    file_size=telegram_file_size or upload.file_size,
+                    raw_payload_json={
+                        "telegram_result": telegram_result,
+                        "broadcast_upload_id": str(upload.id),
+                    },
+                ),
+                send_to_telegram=False,
+            )
+            return
+
         await self.message_service.create_message(
             chat_id=chat_id,
             project_id=chat.project_id,
@@ -1027,13 +1100,15 @@ class FunnelRuntimeService:
     ) -> bool:
         text = self._message_item_text(item)
         message_type, media_ref = self._message_item_media_payload(step, item)
-        if not text and media_ref is None:
+        upload_id = self._message_item_upload_id(item)
+        if not text and media_ref is None and upload_id is None:
             return False
         await self._create_outgoing_message(
             chat_id=chat_id,
             text=text,
             message_type=message_type,
             telegram_file_id=media_ref,
+            broadcast_upload_id=upload_id,
             file_name=self._message_item_file_name(item),
             mime_type=self._message_item_mime_type(item),
             reply_markup=reply_markup,
@@ -2140,9 +2215,11 @@ class FunnelRuntimeService:
             "caption": config.get("caption"),
             "delay_seconds": config.get("delay_seconds") or 0,
             "buttons": config.get("buttons") or [],
+            "media": config.get("media"),
             "telegram_file_id": config.get("telegram_file_id")
             or config.get("file_id")
             or config.get("media_file_id"),
+            "upload_id": config.get("upload_id"),
             "photo": config.get("photo"),
             "video": config.get("video"),
             "voice": config.get("voice"),
@@ -2152,7 +2229,11 @@ class FunnelRuntimeService:
             "file_name": config.get("file_name"),
             "mime_type": config.get("mime_type"),
         }
-        if not text and FunnelRuntimeService._media_reference_from_item(legacy) is None:
+        if (
+            not text
+            and FunnelRuntimeService._media_reference_from_item(legacy) is None
+            and FunnelRuntimeService._message_item_upload_id(legacy) is None
+        ):
             return []
         return [legacy]
 
@@ -2175,7 +2256,7 @@ class FunnelRuntimeService:
         item: dict[str, Any],
     ) -> tuple[str, Optional[str]]:
         media_ref = cls._media_reference_from_item(item)
-        if media_ref is None:
+        if media_ref is None and cls._message_item_upload_id(item) is None:
             return MessageType.TEXT, None
         message_type = cls._message_item_type(step, item)
         if message_type == MessageType.TEXT:
@@ -2206,6 +2287,19 @@ class FunnelRuntimeService:
             value = item.get(key) or media.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+        return None
+
+    @staticmethod
+    def _message_item_upload_id(item: dict[str, Any]) -> Optional[UUID]:
+        media = item.get("media") if isinstance(item.get("media"), dict) else {}
+        for key in ("upload_id", "broadcast_upload_id"):
+            value = item.get(key) or media.get(key)
+            if value is None:
+                continue
+            try:
+                return UUID(str(value))
+            except (TypeError, ValueError):
+                continue
         return None
 
     @classmethod

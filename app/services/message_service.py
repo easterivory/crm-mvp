@@ -110,6 +110,7 @@ class MessageService:
         file_bytes: bytes | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        original_text: str | None = None,
         auto_translate: bool = True,
     ) -> MessageOut:
         await self._ensure_operator_can_send(operator_id, project_id)
@@ -124,6 +125,7 @@ class MessageService:
             raise HTTPException(status_code=422, detail=f"Unsupported outgoing media type: {media_type}")
 
         message_text = (text or "").strip()
+        approved_original_text = (original_text or "").strip() or None
         if normalized_type == MessageType.TEXT:
             if file_id is not None or file_bytes is not None:
                 raise HTTPException(status_code=422, detail="Text message cannot include media payload.")
@@ -150,7 +152,7 @@ class MessageService:
                 sender_id=operator_id,
                 operator_id=operator_id,
                 body=sent_text,
-                original_text=original_text,
+                original_text=approved_original_text or original_text,
                 raw_payload_json={"telegram_result": result},
             )
             message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
@@ -169,9 +171,9 @@ class MessageService:
         media = file_id or file_bytes
         assert media is not None
         sent_caption = message_text or None
-        original_text = None
+        translated_original_text = None
         if sent_caption is not None:
-            sent_caption, original_text = await self._translate_outgoing_text_for_chat(
+            sent_caption, translated_original_text = await self._translate_outgoing_text_for_chat(
                 chat=chat,
                 project_id=project_id,
                 text=sent_caption,
@@ -204,7 +206,7 @@ class MessageService:
             operator_id=operator_id,
             body=None,
             caption=sent_caption,
-            original_text=original_text,
+            original_text=approved_original_text or translated_original_text,
             telegram_file_id=telegram_file_id or file_id,
             file_unique_id=file_unique_id,
             file_name=file_name,
@@ -221,6 +223,50 @@ class MessageService:
             message.id,
         )
         return message
+
+    async def preview_outgoing_translation(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        operator_id: UUID,
+        text: str,
+    ) -> dict[str, str]:
+        await self._ensure_operator_can_send(operator_id, project_id)
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found in this project")
+
+        source_text = text.strip()
+        if not source_text:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Text cannot be empty")
+
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        if not project.is_translation_enabled:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Перевод отключён для проекта.")
+
+        source_lang = self._lang_or_default(project.operator_lang, "ru")
+        target_lang = self._lang_or_default(chat.client_lang or project.default_client_lang, "en")
+        try:
+            translated_text = await self.translation_service.translate_text(
+                source_text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                raise_on_failure=True,
+            )
+        except TranslationUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=translation_error_detail(exc),
+            ) from exc
+        return {
+            "original_text": source_text,
+            "translated_text": translated_text,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+        }
 
     async def create_message(
         self,

@@ -112,6 +112,20 @@ type ProjectTranslationConfig = {
   is_translation_enabled: boolean
 }
 
+type TranslationPreview = {
+  original_text: string
+  translated_text: string
+  source_lang: string
+  target_lang: string
+}
+
+type PendingTranslationApproval = {
+  originalText: string
+  approvedText: string
+  sourceLang: string
+  targetLang: string
+}
+
 type ChatAuditLog = {
   id: string
   chat_id: string
@@ -206,6 +220,10 @@ function languageName(value: string | null | undefined) {
 
 function hasText(value: string | null | undefined) {
   return Boolean(value?.trim())
+}
+
+function normalizeTranslationForChat(value: string) {
+  return value.replace(/[¿¡]/g, '').trim()
 }
 
 const attachmentModes: Array<{
@@ -570,7 +588,10 @@ export default function ChatsPage() {
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [isPreparingTranslation, setIsPreparingTranslation] = useState(false)
   const [isAutoTranslateEnabled, setIsAutoTranslateEnabled] = useState(true)
+  const [pendingTranslation, setPendingTranslation] =
+    useState<PendingTranslationApproval | null>(null)
   const [translatingMessageId, setTranslatingMessageId] = useState<string | null>(null)
   const [isUpdatingChatLanguage, setIsUpdatingChatLanguage] = useState(false)
   const [attachment, setAttachment] = useState<ChatAttachmentDraft | null>(null)
@@ -1210,6 +1231,7 @@ export default function ChatsPage() {
     setIsAttachmentMenuOpen(false)
     setIsSnippetsOpen(false)
     setSnippetSearch('')
+    setPendingTranslation(null)
     setAlternateMessageTextIds(new Set<string>())
     if (attachmentPreviewUrl) {
       window.URL.revokeObjectURL(attachmentPreviewUrl)
@@ -1275,10 +1297,54 @@ export default function ChatsPage() {
     return () => window.cancelAnimationFrame(frame)
   }, [highlightedMessageId, messages])
 
-  const sendMessage = async () => {
-    const text = draft.trim()
-    if (!selectedChatId || (!text && !attachment) || isSending) {
-      return
+  const prepareTranslationApproval = async (text: string) => {
+    if (!selectedChatId || isPreparingTranslation) {
+      return false
+    }
+
+    setIsPreparingTranslation(true)
+    try {
+      const { data } = await api.post<TranslationPreview>(
+        `/chats/${selectedChatId}/messages/translate-preview`,
+        { text },
+        {
+          params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+        },
+      )
+      setPendingTranslation({
+        originalText: data.original_text,
+        approvedText: normalizeTranslationForChat(data.translated_text),
+        sourceLang: data.source_lang,
+        targetLang: data.target_lang,
+      })
+      return true
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+      return false
+    } finally {
+      setIsPreparingTranslation(false)
+    }
+  }
+
+  const sendMessage = async (options: {
+    autoTranslate?: boolean
+    originalText?: string
+    skipTranslationApproval?: boolean
+    textOverride?: string
+  } = {}) => {
+    const text = (options.textOverride ?? draft).trim()
+    if (!selectedChatId || (!text && !attachment) || isSending || isPreparingTranslation) {
+      return false
+    }
+
+    const shouldPrepareTranslation =
+      Boolean(text)
+      && isAutoTranslateEnabled
+      && !options.skipTranslationApproval
+      && projectTranslation?.is_translation_enabled !== false
+
+    if (shouldPrepareTranslation) {
+      return prepareTranslationApproval(text)
     }
 
     setIsSending(true)
@@ -1286,8 +1352,9 @@ export default function ChatsPage() {
     try {
       const params = {
         ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
-        auto_translate: isAutoTranslateEnabled,
+        auto_translate: options.autoTranslate ?? isAutoTranslateEnabled,
       }
+      const originalText = options.originalText?.trim()
       const { data } = attachment
         ? await api.post<Message>(
             `/chats/${selectedChatId}/messages`,
@@ -1298,6 +1365,9 @@ export default function ChatsPage() {
               if (text) {
                 formData.append('text', text)
               }
+              if (originalText) {
+                formData.append('original_text', originalText)
+              }
               return formData
             })(),
             { params },
@@ -1307,15 +1377,19 @@ export default function ChatsPage() {
             {
               media_type: 'text',
               text,
+              ...(originalText ? { original_text: originalText } : {}),
             },
             { params },
           )
       setMessages((current) => sortMessagesByDate([...current, data]))
       setDraft('')
       clearAttachment()
+      setPendingTranslation(null)
       await loadChats()
+      return true
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
+      return false
     } finally {
       setIsSending(false)
     }
@@ -1584,6 +1658,23 @@ export default function ChatsPage() {
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     await sendMessage()
+  }
+
+  const handleApproveTranslation = async () => {
+    if (!pendingTranslation || isSending) {
+      return
+    }
+    const approvedText = pendingTranslation.approvedText.trim()
+    if (!approvedText) {
+      notify({ tone: 'error', message: 'Перевод не может быть пустым.' })
+      return
+    }
+    await sendMessage({
+      autoTranslate: false,
+      originalText: pendingTranslation.originalText,
+      skipTranslationApproval: true,
+      textOverride: approvedText,
+    })
   }
 
   const openMedia = async (message: Message) => {
@@ -2000,17 +2091,17 @@ export default function ChatsPage() {
           <div className="mb-2 flex justify-end">
             <label
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 text-xs font-medium text-sky-50 transition hover:border-sky-300/40"
-              title={`Автоперевод с ${operatorLangLabel} на ${clientLangLabel}`}
+              title={`Подготовить перевод с ${operatorLangLabel} на ${clientLangLabel} перед отправкой`}
             >
               <input
                 type="checkbox"
                 checked={isAutoTranslateEnabled}
                 onChange={(event) => setIsAutoTranslateEnabled(event.target.checked)}
-                disabled={!selectedChat || isSending}
+                disabled={!selectedChat || isSending || isPreparingTranslation}
                 className="h-4 w-4 accent-sky-300 disabled:cursor-not-allowed"
               />
               <Languages size={14} />
-              <span className="whitespace-nowrap">Автоперевод на {clientLangLabel}</span>
+              <span className="whitespace-nowrap">Перевод на {clientLangLabel}</span>
             </label>
           </div>
           <div className="flex min-h-[52px] items-end gap-2 rounded-xl border border-white/10 bg-background/70 p-2 transition focus-within:border-accent-300/45 focus-within:ring-2 focus-within:ring-accent-400/25">
@@ -2025,7 +2116,7 @@ export default function ChatsPage() {
               <button
                 type="button"
                 onClick={() => setIsAttachmentMenuOpen((value) => !value)}
-                disabled={!selectedChat || isSending}
+                disabled={!selectedChat || isSending || isPreparingTranslation}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Прикрепить файл"
               >
@@ -2061,7 +2152,7 @@ export default function ChatsPage() {
               <button
                 type="button"
                 onClick={() => setIsSnippetsOpen((value) => !value)}
-                disabled={!selectedChat || isSending || isSnippetsLoading}
+                disabled={!selectedChat || isSending || isPreparingTranslation || isSnippetsLoading}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Быстрые ответы"
               >
@@ -2139,16 +2230,16 @@ export default function ChatsPage() {
               enterKeyHint="send"
               className="touch-scroll max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-lg border-0 bg-transparent px-2 py-2 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 disabled:text-gray-500"
               placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
-              disabled={!selectedChat || isSending}
+              disabled={!selectedChat || isSending || isPreparingTranslation}
               rows={1}
             />
             <button
               type="submit"
               title="Отправить сообщение"
-              disabled={!selectedChat || (!draft.trim() && !attachment) || isSending}
+              disabled={!selectedChat || (!draft.trim() && !attachment) || isSending || isPreparingTranslation}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isSending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
+              {isSending || isPreparingTranslation ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           </div>
         </form>
@@ -2174,6 +2265,78 @@ export default function ChatsPage() {
           onLeadStatusChanged={() => void loadChats()}
         />
       </div>
+
+      {pendingTranslation ? (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm md:items-center">
+          <div className="max-h-[calc(100dvh-24px)] w-[calc(100%-24px)] max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-[#0d1222] shadow-2xl md:w-full">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-3">
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-white">Проверка перевода</h3>
+                <p className="mt-1 text-xs text-gray-500">
+                  {languageShortLabel(pendingTranslation.sourceLang)} → {languageShortLabel(pendingTranslation.targetLang)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingTranslation(null)}
+                disabled={isSending}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="Закрыть проверку перевода"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="touch-scroll max-h-[calc(100dvh-11rem)] space-y-4 overflow-y-auto p-4">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Исходный текст
+                </span>
+                <textarea
+                  value={pendingTranslation.originalText}
+                  readOnly
+                  rows={4}
+                  className="touch-scroll w-full resize-none rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-base leading-6 text-gray-300 outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Текст к отправке
+                </span>
+                <textarea
+                  value={pendingTranslation.approvedText}
+                  onChange={(event) =>
+                    setPendingTranslation((current) =>
+                      current ? { ...current, approvedText: event.target.value } : current,
+                    )
+                  }
+                  rows={6}
+                  autoFocus
+                  className="touch-scroll w-full resize-none rounded-xl border border-accent-300/25 bg-background/80 px-3 py-2 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
+                />
+              </label>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-white/10 p-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPendingTranslation(null)}
+                disabled={isSending}
+                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Вернуться к тексту
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleApproveTranslation()}
+                disabled={isSending || !pendingTranslation.approvedText.trim()}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSending ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
+                Отправить
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {isLeadOpen ? (
         <>

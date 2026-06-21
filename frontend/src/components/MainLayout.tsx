@@ -5,6 +5,7 @@ import {
   Megaphone,
   Menu,
   MessageSquareText,
+  MousePointerClick,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -33,7 +34,7 @@ const navItems = [
   { label: t('bots'), path: '/bots', icon: Bot },
   { label: t('leads'), path: '/leads', icon: UsersRound },
   { label: t('analytics'), path: '/analytics', icon: BarChart3 },
-  { label: t('tracking'), path: '/tracking', icon: BarChart3 },
+  { label: t('tracking'), path: '/tracking', icon: MousePointerClick },
   { label: t('settings'), path: '/settings', icon: Settings },
 ]
 

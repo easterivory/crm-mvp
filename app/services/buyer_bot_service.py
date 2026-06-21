@@ -26,11 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.constants import TrackingSpendSource
+from app.core.constants import LeadStatusCode, TrackingSpendSource
 from app.models.bot import Bot
 from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
+from app.models.lead_status import LeadStatus
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
@@ -47,6 +48,30 @@ MAIN_MENU_MARKUP: dict[str, Any] = {
     "is_persistent": True,
 }
 
+MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
+    "inline_keyboard": [
+        [
+            {"text": "Мои ссылки", "callback_data": "menu:links"},
+            {"text": "Создать ссылку", "callback_data": "menu:create_link"},
+        ],
+        [
+            {"text": "Ввести расход", "callback_data": "menu:spend"},
+            {"text": "Статистика", "callback_data": "menu:stats"},
+        ],
+        [{"text": "Воронка отвалов", "callback_data": "menu:funnel"}],
+    ]
+}
+
+STATS_ACTION_MARKUP: dict[str, Any] = {
+    "inline_keyboard": [
+        [
+            {"text": "Обновить статистику", "callback_data": "menu:stats"},
+            {"text": "Воронка отвалов", "callback_data": "menu:funnel"},
+        ],
+        [{"text": "Мои ссылки", "callback_data": "menu:links"}],
+    ]
+}
+
 STATE_CREATE_LINK_NAME = "create_link_name"
 STATE_SPEND_DATE = "spend_date"
 STATE_SPEND_AMOUNT = "spend_amount"
@@ -60,6 +85,8 @@ class BuyerPeriodStats:
     spend: Decimal
     leads: int
     clicks: int
+    submitted_leads: int
+    links_count: int
 
     @property
     def cpl(self) -> Decimal:
@@ -72,6 +99,27 @@ class BuyerPeriodStats:
         if self.clicks <= 0:
             return Decimal("0.00")
         return percent(Decimal(self.leads) / Decimal(self.clicks) * Decimal("100"))
+
+    @property
+    def submitted_conversion_percent(self) -> Decimal:
+        if self.leads <= 0:
+            return Decimal("0.00")
+        return percent(Decimal(self.submitted_leads) / Decimal(self.leads) * Decimal("100"))
+
+
+@dataclass(frozen=True, slots=True)
+class BuyerLinkStats:
+    title: str
+    spend: Decimal
+    leads: int
+    clicks: int
+    submitted_leads: int
+
+    @property
+    def cpl(self) -> Decimal:
+        if self.leads <= 0:
+            return Decimal("0.00")
+        return money(self.spend / Decimal(self.leads))
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +218,21 @@ class BuyerTelegramClient:
         except RuntimeError:
             logger.debug("Buyer bot answerCallbackQuery failed", exc_info=True)
 
+    async def set_commands(self) -> None:
+        await self._post(
+            "setMyCommands",
+            {
+                "commands": [
+                    {"command": "links", "description": "Мои ссылки"},
+                    {"command": "create_link", "description": "Создать ссылку"},
+                    {"command": "spend", "description": "Ввести расход"},
+                    {"command": "stats", "description": "Статистика"},
+                    {"command": "funnel", "description": "Воронка отвалов"},
+                    {"command": "cancel", "description": "Отменить текущее действие"},
+                ]
+            },
+        )
+
     async def close(self) -> None:
         await self.session.aclose()
 
@@ -214,6 +277,7 @@ class BuyerBotService:
             return
 
         command, argument = self._split_command(text)
+        command = self._normalize_command(command)
         if self._is_start_command(command):
             if argument:
                 await self._activate(chat_id, argument)
@@ -239,7 +303,7 @@ class BuyerBotService:
             await self.telegram.send_message(chat_id, "Действие отменено.", reply_markup=MAIN_MENU_MARKUP)
             return
 
-        if command in {"/create_link", "Создать ссылку"}:
+        if command in {"/create_link", "/new_link", "Создать ссылку"}:
             await self._start_create_link(chat_id)
             return
         if command in {"/links", "Мои ссылки"}:
@@ -283,12 +347,37 @@ class BuyerBotService:
             return
 
         data = callback_query.data
+        if data.startswith("menu:"):
+            await self._handle_menu_callback(chat_id, buyer, data.removeprefix("menu:"))
+            return
+
         if data.startswith("spend_link:"):
             await self._select_spend_link(chat_id, buyer, data.removeprefix("spend_link:"))
             return
 
         if data.startswith("spend_date:"):
             await self._select_spend_date(chat_id, buyer, data.removeprefix("spend_date:"))
+            return
+
+    async def _handle_menu_callback(self, chat_id: int, buyer: User, action: str) -> None:
+        if action == "create_link":
+            await self._start_create_link(chat_id)
+            return
+        if action == "links":
+            await self._send_links(chat_id, buyer)
+            return
+        if action == "spend":
+            await self._start_spend(chat_id, buyer)
+            return
+        if action == "stats":
+            await self._send_stats(chat_id, buyer)
+            return
+        if action == "funnel":
+            await self._send_funnel(chat_id, buyer)
+            return
+        if action == "cancel":
+            await self.state_store.clear(chat_id)
+            await self.telegram.send_message(chat_id, "Действие отменено.", reply_markup=MAIN_MENU_MARKUP)
             return
 
     async def _activate(self, chat_id: int, raw_token: str) -> None:
@@ -340,12 +429,22 @@ class BuyerBotService:
             "Тебе доступны: Мои ссылки, Ввести расход, Статистика, Воронка отвалов.",
             reply_markup=MAIN_MENU_MARKUP,
         )
+        await self.telegram.send_message(
+            chat_id,
+            "Быстрые кнопки:",
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
+        )
 
     async def _send_menu(self, chat_id: int, buyer: User) -> None:
         await self.telegram.send_message(
             chat_id,
             f"{buyer.name}, выбери действие:",
             reply_markup=MAIN_MENU_MARKUP,
+        )
+        await self.telegram.send_message(
+            chat_id,
+            "Быстрые кнопки:",
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
     async def _start_create_link(self, chat_id: int) -> None:
@@ -608,20 +707,36 @@ class BuyerBotService:
             ("Сегодня", today, today),
             ("Вчера", today - timedelta(days=1), today - timedelta(days=1)),
             ("7 дней", today - timedelta(days=6), today),
+            ("30 дней", today - timedelta(days=29), today),
         ]
         stats = [
             await self._get_buyer_period_stats(buyer.id, label, date_from, date_to)
             for label, date_from, date_to in periods
         ]
+        top_links = await self._get_buyer_link_stats(
+            buyer.id,
+            date_from=today - timedelta(days=6),
+            date_to=today,
+            limit=5,
+        )
 
         lines = ["Статистика по твоим ссылкам:"]
         for item in stats:
             lines.append(
                 f"{item.label}\n"
-                f"Расход: ${money(item.spend)} | Лиды: {item.leads} | "
-                f"CPL: ${item.cpl} | CR в лиды: {item.lead_conversion_percent}%"
+                f"Ссылки: {item.links_count} | Клики: {item.clicks} | Лиды: {item.leads} | Подано: {item.submitted_leads}\n"
+                f"Расход: ${money(item.spend)} | CPL: ${item.cpl} | "
+                f"CR click→lead: {item.lead_conversion_percent}% | submit CR: {item.submitted_conversion_percent}%"
             )
-        await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=MAIN_MENU_MARKUP)
+        if top_links:
+            lines.append("Топ ссылок за 7 дней:")
+            for index, item in enumerate(top_links, start=1):
+                lines.append(
+                    f"{index}. {item.title}\n"
+                    f"Клики: {item.clicks} | Лиды: {item.leads} | Подано: {item.submitted_leads} | "
+                    f"Расход: ${money(item.spend)} | CPL: ${item.cpl}"
+                )
+        await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=STATS_ACTION_MARKUP)
 
     async def _send_funnel(self, chat_id: int, buyer: User) -> None:
         steps = await self._get_buyer_funnel_dropoff(buyer.id)
@@ -757,7 +872,154 @@ class BuyerBotService:
             )
         )
         clicks = int(clicks_result.scalar_one() or 0)
-        return BuyerPeriodStats(label=label, spend=spend, leads=leads, clicks=clicks)
+
+        submitted_result = await self.db.execute(
+            select(func.count(distinct(Lead.id)))
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                TrackingLink.buyer_id == buyer_id,
+                Lead.is_deleted.is_(False),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                LeadStatus.code.in_(LeadStatusCode.SUBMITTED_SET),
+                func.coalesce(Chat.current_cycle_started_at, Lead.created_at) >= start_at,
+                func.coalesce(Chat.current_cycle_started_at, Lead.created_at) < end_at,
+            )
+        )
+        submitted_leads = int(submitted_result.scalar_one() or 0)
+
+        links_result = await self.db.execute(
+            select(func.count(distinct(TrackingLink.id))).where(
+                TrackingLink.buyer_id == buyer_id,
+                TrackingLink.is_active.is_(True),
+            )
+        )
+        links_count = int(links_result.scalar_one() or 0)
+
+        return BuyerPeriodStats(
+            label=label,
+            spend=spend,
+            leads=leads,
+            clicks=clicks,
+            submitted_leads=submitted_leads,
+            links_count=links_count,
+        )
+
+    async def _get_buyer_link_stats(
+        self,
+        buyer_id: UUID,
+        *,
+        date_from: date,
+        date_to: date,
+        limit: int,
+    ) -> list[BuyerLinkStats]:
+        start_at, end_at = date_bounds(date_from, date_to)
+
+        spend_totals = (
+            select(
+                TrackingSpend.tracking_link_id.label("link_id"),
+                func.coalesce(func.sum(TrackingSpend.amount), 0).label("spend"),
+            )
+            .where(
+                TrackingSpend.spend_date >= date_from,
+                TrackingSpend.spend_date <= date_to,
+            )
+            .group_by(TrackingSpend.tracking_link_id)
+            .subquery()
+        )
+        click_totals = (
+            select(
+                TrackingEvent.tracking_link_id.label("link_id"),
+                func.coalesce(func.sum(TrackingEvent.clicks), 0).label("clicks"),
+            )
+            .where(
+                TrackingEvent.created_at >= start_at,
+                TrackingEvent.created_at < end_at,
+            )
+            .group_by(TrackingEvent.tracking_link_id)
+            .subquery()
+        )
+        lead_totals = (
+            select(
+                TrackingLink.id.label("link_id"),
+                func.count(distinct(Lead.id)).label("leads"),
+            )
+            .join(Chat, Chat.tracking_link_id == TrackingLink.id)
+            .join(Lead, Lead.chat_id == Chat.id)
+            .where(
+                Lead.is_deleted.is_(False),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                func.coalesce(Chat.current_cycle_started_at, Lead.created_at) >= start_at,
+                func.coalesce(Chat.current_cycle_started_at, Lead.created_at) < end_at,
+            )
+            .group_by(TrackingLink.id)
+            .subquery()
+        )
+        submitted_totals = (
+            select(
+                TrackingLink.id.label("link_id"),
+                func.count(distinct(Lead.id)).label("submitted_leads"),
+            )
+            .join(Chat, Chat.tracking_link_id == TrackingLink.id)
+            .join(Lead, Lead.chat_id == Chat.id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                Lead.is_deleted.is_(False),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                LeadStatus.code.in_(LeadStatusCode.SUBMITTED_SET),
+                func.coalesce(Chat.current_cycle_started_at, Lead.created_at) >= start_at,
+                func.coalesce(Chat.current_cycle_started_at, Lead.created_at) < end_at,
+            )
+            .group_by(TrackingLink.id)
+            .subquery()
+        )
+
+        result = await self.db.execute(
+            select(
+                TrackingLink.title,
+                TrackingLink.name,
+                func.coalesce(spend_totals.c.spend, 0).label("spend"),
+                func.coalesce(click_totals.c.clicks, 0).label("clicks"),
+                func.coalesce(lead_totals.c.leads, 0).label("leads"),
+                func.coalesce(submitted_totals.c.submitted_leads, 0).label("submitted_leads"),
+            )
+            .outerjoin(spend_totals, spend_totals.c.link_id == TrackingLink.id)
+            .outerjoin(click_totals, click_totals.c.link_id == TrackingLink.id)
+            .outerjoin(lead_totals, lead_totals.c.link_id == TrackingLink.id)
+            .outerjoin(submitted_totals, submitted_totals.c.link_id == TrackingLink.id)
+            .where(
+                TrackingLink.buyer_id == buyer_id,
+                TrackingLink.is_active.is_(True),
+            )
+            .order_by(
+                func.coalesce(lead_totals.c.leads, 0).desc(),
+                func.coalesce(spend_totals.c.spend, 0).desc(),
+                TrackingLink.created_at.desc(),
+            )
+            .limit(limit)
+        )
+
+        items: list[BuyerLinkStats] = []
+        for row in result.mappings().all():
+            clicks = int(row["clicks"] or 0)
+            leads = int(row["leads"] or 0)
+            spend = Decimal(row["spend"] or 0)
+            if clicks == 0 and leads == 0 and spend == 0:
+                continue
+            items.append(
+                BuyerLinkStats(
+                    title=str(row["title"] or row["name"] or "Ссылка"),
+                    spend=spend,
+                    leads=leads,
+                    clicks=clicks,
+                    submitted_leads=int(row["submitted_leads"] or 0),
+                )
+            )
+        return items
 
     async def _get_buyer_funnel_dropoff(self, buyer_id: UUID) -> list[BuyerFunnelStepStats]:
         result = await self.db.execute(
@@ -852,6 +1114,14 @@ class BuyerBotService:
         command = parts[0] if parts else ""
         argument = parts[1].strip() if len(parts) > 1 else None
         return command, argument
+
+    @staticmethod
+    def _normalize_command(command: str) -> str:
+        value = command.strip()
+        if value.startswith("/") and "@" in value:
+            name, _bot_username = value.split("@", 1)
+            return name
+        return value
 
     @staticmethod
     def _is_start_command(command: str) -> bool:

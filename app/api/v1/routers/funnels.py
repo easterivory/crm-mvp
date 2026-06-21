@@ -1,12 +1,13 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.core.constants import RoleName
 from app.models.user import User
+from app.schemas.broadcast import BroadcastUploadOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
     FunnelBlockRegistryOut,
@@ -26,6 +27,7 @@ from app.schemas.funnel import (
     FunnelVersionUpdate,
 )
 from app.services.funnel_block_registry import FunnelBlockRegistry
+from app.services.broadcast_service import BroadcastService
 from app.services.funnel_service import FunnelService
 from app.services.funnel_validator import FunnelGraphValidator
 
@@ -45,6 +47,24 @@ def _ensure_funnel_manager(current_user: User) -> None:
 @router.get("/block-registry", response_model=FunnelBlockRegistryOut)
 async def get_block_registry() -> FunnelBlockRegistryOut:
     return FunnelBlockRegistry().as_schema()
+
+
+@router.post("/media/uploads", response_model=BroadcastUploadOut, status_code=status.HTTP_201_CREATED)
+async def upload_funnel_media(
+    file: UploadFile = File(...),
+    media_type: str | None = Form(default=None),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BroadcastUploadOut:
+    _ensure_funnel_manager(current_user)
+    return await BroadcastService(db).upload_media(
+        actor=current_user,
+        project_id=project_id,
+        file=file,
+        media_type=media_type,
+        persistent=True,
+    )
 
 
 @router.get("", response_model=PaginatedResponse[FunnelOut])

@@ -9,12 +9,26 @@ export type ButtonConfig = {
   url?: string
 }
 
+export type FunnelMessageMediaType = 'photo' | 'video' | 'voice' | 'video_note' | 'document'
+
+export type MessageMediaConfig = {
+  source: 'upload' | 'telegram_file_id'
+  upload_id?: string
+  telegram_file_id?: string
+  file_name?: string
+  mime_type?: string
+  file_size?: number
+  media_type?: FunnelMessageMediaType
+}
+
 export type MessageConfig = {
   id: string
   type: string
   text: string
+  caption?: string
   delay_seconds: number
   buttons: ButtonConfig[]
+  media?: MessageMediaConfig
 }
 
 export type ConditionRuleConfig = {
@@ -152,27 +166,75 @@ export function normalizeButtons(raw: unknown): ButtonConfig[] {
   return Array.isArray(raw) ? raw.map(normalizeButton) : []
 }
 
+function normalizeMessageMedia(raw: Record<string, unknown>): MessageMediaConfig | undefined {
+  const nested = typeof raw.media === 'object' && raw.media !== null
+    ? raw.media as Record<string, unknown>
+    : {}
+  const uploadId = String(raw.upload_id ?? nested.upload_id ?? '').trim()
+  const telegramFileId = String(
+    raw.telegram_file_id
+      ?? raw.file_id
+      ?? raw.media_file_id
+      ?? nested.telegram_file_id
+      ?? nested.file_id
+      ?? nested.media_file_id
+      ?? '',
+  ).trim()
+  if (!uploadId && !telegramFileId) {
+    return undefined
+  }
+  const rawType = String(raw.media_type ?? nested.media_type ?? raw.type ?? 'document')
+  const mediaType: FunnelMessageMediaType =
+    rawType === 'photo' ||
+    rawType === 'video' ||
+    rawType === 'voice' ||
+    rawType === 'video_note' ||
+    rawType === 'document'
+      ? rawType
+      : 'document'
+  const rawFileSize = raw.file_size ?? nested.file_size
+  return {
+    source: uploadId ? 'upload' : 'telegram_file_id',
+    ...(uploadId ? { upload_id: uploadId } : {}),
+    ...(telegramFileId ? { telegram_file_id: telegramFileId } : {}),
+    file_name: String(raw.file_name ?? nested.file_name ?? '').trim() || undefined,
+    mime_type: String(raw.mime_type ?? nested.mime_type ?? '').trim() || undefined,
+    file_size: typeof rawFileSize === 'number' ? rawFileSize : undefined,
+    media_type: mediaType,
+  }
+}
+
 export function normalizeMessages(config: Record<string, unknown>): MessageConfig[] {
   const rawMessages = config.messages
   if (Array.isArray(rawMessages) && rawMessages.length > 0) {
     return rawMessages.map((raw, index) => {
       const item = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+      const media = normalizeMessageMedia(item)
+      const type = String(item.type ?? item.media_type ?? media?.media_type ?? 'text')
+      const text = String(item.text ?? item.message ?? item.message_text ?? item.caption ?? '')
       return {
         id: String(item.id ?? `msg_${index + 1}`),
-        type: String(item.type ?? 'text'),
-        text: String(item.text ?? item.message ?? item.message_text ?? ''),
+        type,
+        text,
+        caption: typeof item.caption === 'string' ? item.caption : undefined,
         delay_seconds: typeof item.delay_seconds === 'number' ? item.delay_seconds : 0,
         buttons: normalizeButtons(item.buttons),
+        ...(media ? { media } : {}),
       }
     })
   }
+  const legacyMedia = normalizeMessageMedia(config)
+  const legacyType = String(config.message_type ?? config.type ?? legacyMedia?.media_type ?? 'text')
+  const legacyText = textValue(config, 'text') || textValue(config, 'message') || textValue(config, 'message_text')
   return [
     {
       id: 'msg_1',
-      type: 'text',
-      text: textValue(config, 'text') || textValue(config, 'message') || textValue(config, 'message_text'),
+      type: legacyType,
+      text: legacyText,
+      caption: textValue(config, 'caption') || undefined,
       delay_seconds: numberValue(config, 'delay_seconds', 0),
       buttons: normalizeButtons(config.buttons),
+      ...(legacyMedia ? { media: legacyMedia } : {}),
     },
   ]
 }

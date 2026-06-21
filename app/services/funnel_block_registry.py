@@ -356,6 +356,27 @@ class FunnelBlockRegistry:
                 errors.append("Выберите допустимый тип триггера.")
         if block_type == "generic_message":
             messages = config.get("messages")
+            def has_media_payload(message: dict) -> bool:
+                media = message.get("media") if isinstance(message.get("media"), dict) else {}
+                for key in (
+                    "upload_id",
+                    "broadcast_upload_id",
+                    "telegram_file_id",
+                    "file_id",
+                    "media_file_id",
+                    "photo",
+                    "video",
+                    "voice",
+                    "video_note",
+                    "document",
+                    "file",
+                    "media_url",
+                ):
+                    value = message.get(key) or media.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return True
+                return False
+
             has_sequence_text = (
                 isinstance(messages, list)
                 and any(
@@ -369,7 +390,17 @@ class FunnelBlockRegistry:
                     for message in messages
                 )
             )
-            if not has_sequence_text and not self._text(config, "text", "message_text"):
+            has_sequence_media = (
+                isinstance(messages, list)
+                and any(isinstance(message, dict) and has_media_payload(message) for message in messages)
+            )
+            has_config_media = has_media_payload(config)
+            if (
+                not has_sequence_text
+                and not has_sequence_media
+                and not self._text(config, "text", "message_text")
+                and not has_config_media
+            ):
                 errors.append("Для сообщения нужен текст.")
             buttons = config.get("buttons")
             if buttons is not None and not isinstance(buttons, list):

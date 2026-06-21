@@ -1,22 +1,95 @@
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  FileText,
+  Image as ImageIcon,
+  LoaderCircle,
+  Mic,
+  Paperclip,
+  PlayCircle,
+  Plus,
+  Trash2,
+  Video,
+  X,
+} from 'lucide-react'
+import { useRef, useState } from 'react'
 
+import type { BroadcastMediaType } from '../../broadcasts/types'
+import { uploadFunnelMedia } from '../api'
 import type { FunnelStep } from '../types'
-import { configId, type MessageConfig } from '../funnelConfig'
+import {
+  configId,
+  type FunnelMessageMediaType,
+  type MessageConfig,
+} from '../funnelConfig'
 import ButtonListEditor from './ButtonListEditor'
 
 type MessageSequenceEditorProps = {
   messages: MessageConfig[]
   currentStepId: string
+  projectId: string
   steps: FunnelStep[]
   onChange: (messages: MessageConfig[]) => void
+}
+
+const mediaModes: Array<{
+  type: FunnelMessageMediaType
+  label: string
+  accept: string
+}> = [
+  { type: 'document', label: 'Документ', accept: '*/*' },
+  { type: 'photo', label: 'Фото', accept: 'image/jpeg,image/png,image/webp' },
+  { type: 'video', label: 'Видео', accept: 'video/mp4,video/quicktime,video/webm' },
+  { type: 'voice', label: 'Голосовое', accept: 'audio/ogg,audio/mpeg,audio/mp4,audio/webm,audio/wav' },
+  { type: 'video_note', label: 'Кружок', accept: 'video/mp4,video/quicktime,video/webm' },
+]
+
+function isMediaType(value: string): value is FunnelMessageMediaType {
+  return value === 'photo' ||
+    value === 'video' ||
+    value === 'voice' ||
+    value === 'video_note' ||
+    value === 'document'
+}
+
+function mediaLabel(type: string | undefined) {
+  if (type === 'photo') return 'Фото'
+  if (type === 'video') return 'Видео'
+  if (type === 'voice') return 'Голосовое'
+  if (type === 'video_note') return 'Видео-кружок'
+  if (type === 'document') return 'Документ'
+  return 'Текст'
+}
+
+function mediaIcon(type: string | undefined) {
+  if (type === 'photo') return <ImageIcon size={16} />
+  if (type === 'video') return <Video size={16} />
+  if (type === 'voice') return <Mic size={16} />
+  if (type === 'video_note') return <PlayCircle size={16} />
+  return <FileText size={16} />
+}
+
+function formatBytes(value?: number) {
+  if (!value) return null
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} КБ`
+  return `${(value / 1024 / 1024).toFixed(1)} МБ`
 }
 
 export default function MessageSequenceEditor({
   messages,
   currentStepId,
+  projectId,
   steps,
   onChange,
 }: MessageSequenceEditorProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadTarget, setUploadTarget] = useState<{
+    index: number
+    mediaType: FunnelMessageMediaType
+  } | null>(null)
+  const [uploadingIndex, setUploadingIndex] = useState<number | null>(null)
+  const [uploadError, setUploadError] = useState('')
+
   const move = (from: number, to: number) => {
     const next = [...messages]
     const [item] = next.splice(from, 1)
@@ -26,6 +99,78 @@ export default function MessageSequenceEditor({
 
   const update = (index: number, patch: Partial<MessageConfig>) => {
     onChange(messages.map((message, idx) => (idx === index ? { ...message, ...patch } : message)))
+  }
+
+  const setType = (index: number, type: 'text' | FunnelMessageMediaType) => {
+    const message = messages[index]
+    if (!message) return
+    const caption = message.caption ?? message.text
+    if (type === 'text') {
+      update(index, {
+        type: 'text',
+        text: caption,
+        caption: undefined,
+        media: undefined,
+      })
+      return
+    }
+    update(index, {
+      type,
+      text: caption,
+      caption,
+      media: message.media?.media_type === type ? message.media : undefined,
+    })
+  }
+
+  const openUpload = (index: number, mediaType: FunnelMessageMediaType) => {
+    setUploadError('')
+    setUploadTarget({ index, mediaType })
+    if (fileInputRef.current) {
+      fileInputRef.current.accept =
+        mediaModes.find((mode) => mode.type === mediaType)?.accept ?? '*/*'
+      fileInputRef.current.click()
+    }
+  }
+
+  const uploadFile = async (file: File | null | undefined) => {
+    if (!file || !uploadTarget) return
+    const target = uploadTarget
+    const message = messages[target.index]
+    if (!message) return
+
+    setUploadingIndex(target.index)
+    setUploadError('')
+    try {
+      const upload = await uploadFunnelMedia(
+        projectId,
+        file,
+        target.mediaType as BroadcastMediaType,
+      )
+      const caption = upload.media_type === 'video_note'
+        ? ''
+        : message.caption ?? message.text
+      update(target.index, {
+        type: upload.media_type,
+        text: caption,
+        caption,
+        media: {
+          source: 'upload',
+          upload_id: upload.upload_id,
+          file_name: upload.file_name,
+          mime_type: upload.mime_type,
+          file_size: upload.file_size,
+          media_type: upload.media_type,
+        },
+      })
+    } catch {
+      setUploadError('Не удалось загрузить файл.')
+    } finally {
+      setUploadingIndex(null)
+      setUploadTarget(null)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
   }
 
   return (
@@ -50,70 +195,186 @@ export default function MessageSequenceEditor({
         </button>
       </div>
 
-      {messages.map((message, index) => (
-        <div key={message.id} className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-gray-300">Сообщение {index + 1}</span>
-            <div className="flex gap-1">
-              <button
-                type="button"
-                disabled={index === 0}
-                onClick={() => move(index, index - 1)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-gray-300 disabled:opacity-40"
-                title="Вверх"
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={(event) => void uploadFile(event.target.files?.[0])}
+      />
+
+      {uploadError ? (
+        <p className="rounded-lg border border-red-300/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+          {uploadError}
+        </p>
+      ) : null}
+
+      {messages.map((message, index) => {
+        const mediaType: FunnelMessageMediaType | null = isMediaType(message.type)
+          ? message.type
+          : null
+        const isMedia = mediaType !== null
+        const captionText = isMedia ? message.caption ?? message.text : message.text
+        const fileSize = formatBytes(message.media?.file_size)
+        return (
+          <div key={message.id} className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-gray-300">Сообщение {index + 1}</span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  disabled={index === 0}
+                  onClick={() => move(index, index - 1)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-gray-300 disabled:opacity-40"
+                  title="Вверх"
+                >
+                  <ArrowUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  disabled={index === messages.length - 1}
+                  onClick={() => move(index, index + 1)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-gray-300 disabled:opacity-40"
+                  title="Вниз"
+                >
+                  <ArrowDown size={13} />
+                </button>
+                <button
+                  type="button"
+                  disabled={messages.length === 1}
+                  onClick={() => onChange(messages.filter((_, idx) => idx !== index))}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-300/15 text-red-200 disabled:opacity-40"
+                  title="Удалить"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-500">Тип сообщения</span>
+              <select
+                value={isMedia ? message.type : 'text'}
+                onChange={(event) =>
+                  setType(index, event.target.value as 'text' | FunnelMessageMediaType)
+                }
+                className="h-10 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-100 outline-none"
               >
-                <ArrowUp size={13} />
-              </button>
-              <button
-                type="button"
-                disabled={index === messages.length - 1}
-                onClick={() => move(index, index + 1)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 text-gray-300 disabled:opacity-40"
-                title="Вниз"
-              >
-                <ArrowDown size={13} />
-              </button>
-              <button
-                type="button"
-                disabled={messages.length === 1}
-                onClick={() => onChange(messages.filter((_, idx) => idx !== index))}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-300/15 text-red-200 disabled:opacity-40"
-                title="Удалить"
-              >
-                <Trash2 size={13} />
-              </button>
+                <option value="text">Текст</option>
+                {mediaModes.map((mode) => (
+                  <option key={mode.type} value={mode.type}>{mode.label}</option>
+                ))}
+              </select>
+            </label>
+
+            {isMedia ? (
+              <div className="mt-3 rounded-xl border border-white/10 bg-background/55 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-400/15 text-accent-100">
+                    {mediaIcon(message.type)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white">{mediaLabel(message.type)}</p>
+                    <p className="truncate text-xs text-gray-500">
+                      {message.media?.file_name || 'Файл не прикреплён'}
+                      {fileSize ? ` · ${fileSize}` : ''}
+                    </p>
+                  </div>
+                  {message.media ? (
+                    <button
+                      type="button"
+                      onClick={() => update(index, { media: undefined })}
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 transition hover:border-red-300/35 hover:text-red-100"
+                      title="Убрать файл"
+                    >
+                      <X size={15} />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <input
+                    value={
+                      message.media?.source === 'telegram_file_id'
+                        ? message.media.telegram_file_id ?? ''
+                        : ''
+                    }
+                    onChange={(event) =>
+                      update(index, {
+                        media: event.target.value.trim()
+                          ? {
+                              source: 'telegram_file_id',
+                              telegram_file_id: event.target.value.trim(),
+                              file_name: message.media?.file_name,
+                              media_type: mediaType ?? undefined,
+                            }
+                          : undefined,
+                      })
+                    }
+                    placeholder="Telegram file_id"
+                    className="h-10 min-w-0 rounded-lg border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none placeholder:text-gray-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => mediaType ? openUpload(index, mediaType) : undefined}
+                    disabled={uploadingIndex === index}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-100 transition hover:border-accent-300/35 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {uploadingIndex === index ? (
+                      <LoaderCircle size={15} className="animate-spin" />
+                    ) : (
+                      <Paperclip size={15} />
+                    )}
+                    Прикрепить
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <textarea
+              rows={isMedia ? 3 : 4}
+              value={captionText}
+              disabled={message.type === 'video_note'}
+              onChange={(event) => {
+                if (isMedia) {
+                  update(index, {
+                    text: event.target.value,
+                    caption: event.target.value,
+                  })
+                  return
+                }
+                update(index, { text: event.target.value })
+              }}
+              placeholder={
+                message.type === 'video_note'
+                  ? 'Telegram не поддерживает caption для video_note.'
+                  : isMedia
+                    ? 'Caption к вложению'
+                    : 'Текст сообщения'
+              }
+              className="mt-3 w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            />
+
+            <label className="mt-2 block">
+              <span className="mb-1 block text-xs text-gray-500">Задержка перед сообщением, сек</span>
+              <input
+                type="number"
+                min={0}
+                value={message.delay_seconds}
+                onChange={(event) => update(index, { delay_seconds: Number(event.target.value) || 0 })}
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              />
+            </label>
+
+            <div className="mt-3">
+              <ButtonListEditor
+                buttons={message.buttons}
+                currentStepId={currentStepId}
+                steps={steps}
+                onChange={(buttons) => update(index, { buttons })}
+              />
             </div>
           </div>
-
-          <textarea
-            rows={4}
-            value={message.text}
-            onChange={(event) => update(index, { text: event.target.value })}
-            placeholder="Текст сообщения"
-            className="w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-          />
-
-          <label className="mt-2 block">
-            <span className="mb-1 block text-xs text-gray-500">Задержка перед сообщением, сек</span>
-            <input
-              type="number"
-              min={0}
-              value={message.delay_seconds}
-              onChange={(event) => update(index, { delay_seconds: Number(event.target.value) || 0 })}
-              className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-            />
-          </label>
-
-          <div className="mt-3">
-            <ButtonListEditor
-              buttons={message.buttons}
-              currentStepId={currentStepId}
-              steps={steps}
-              onChange={(buttons) => update(index, { buttons })}
-            />
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

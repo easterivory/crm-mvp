@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from app.core.constants import RoleName
 from app.core.security import hash_password
 from app.models.project import Project
 from app.models.role import Role
+from app.models.tracking import TrackingLink
 from app.models.user import User
 from app.schemas.buyer import BuyerCreate, BuyerInviteOut, BuyerUserOut
 from app.services.system_setting_service import SystemSettingService
@@ -76,6 +77,57 @@ async def create_buyer(
     )
 
 
+@router.delete("/{buyer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_buyer(
+    buyer_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    _ensure_admin(current_user)
+    await _ensure_project_active(db, project_id)
+    if buyer_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own user",
+        )
+
+    result = await db.execute(
+        select(User).where(
+            User.id == buyer_id,
+            User.project_id == project_id,
+            User.is_deleted.is_(False),
+        )
+    )
+    buyer = result.scalar_one_or_none()
+    if buyer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Buyer not found",
+        )
+
+    links_count = await _count_buyer_links(db, buyer_id)
+    if (
+        buyer.buyer_telegram_id is None
+        and buyer.buyer_invite_token is None
+        and links_count == 0
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Buyer not found",
+        )
+
+    await db.execute(
+        update(User)
+        .where(User.id == buyer_id, User.is_deleted.is_(False))
+        .values(
+            is_deleted=True,
+            buyer_telegram_id=None,
+            buyer_invite_token=None,
+        )
+    )
+
+
 def _ensure_admin(user: User) -> None:
     if user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
         raise HTTPException(
@@ -118,3 +170,10 @@ async def _buyer_bot_username_or_error(db: AsyncSession) -> str:
             detail="buyer_bot_username is not configured",
         )
     return username
+
+
+async def _count_buyer_links(db: AsyncSession, buyer_id: UUID) -> int:
+    result = await db.execute(
+        select(func.count(TrackingLink.id)).where(TrackingLink.buyer_id == buyer_id)
+    )
+    return int(result.scalar_one() or 0)

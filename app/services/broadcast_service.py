@@ -365,6 +365,7 @@ class BroadcastService:
         project_id: UUID,
         file: UploadFile,
         media_type: str | None = None,
+        persistent: bool = False,
     ) -> BroadcastUploadOut:
         self._ensure_can_manage(actor)
         file_name = os.path.basename(file.filename or "upload")
@@ -393,7 +394,9 @@ class BroadcastService:
                     if size > max_size:
                         raise HTTPException(status_code=413, detail="Файл слишком большой.")
                     output.write(chunk)
-            expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.BROADCAST_UPLOAD_TTL_HOURS)
+            expires_at = None if persistent else (
+                datetime.now(timezone.utc) + timedelta(hours=settings.BROADCAST_UPLOAD_TTL_HOURS)
+            )
             upload = await self.repo.create_upload(
                 project_id=project_id,
                 created_by_user_id=actor.id,

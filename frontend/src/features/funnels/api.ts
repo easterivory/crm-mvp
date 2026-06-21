@@ -1,5 +1,6 @@
 import api from '../../api/client'
 import type { PaginatedResponse } from '../../shared/types'
+import type { BroadcastMediaType, BroadcastUpload } from '../broadcasts/types'
 import type {
   CopyFunnelPayload,
   CopyFunnelResult,
@@ -46,6 +47,21 @@ export async function fetchFunnels(params: {
 export async function createFunnel(payload: CreateFunnelPayload): Promise<Funnel> {
   const { data } = await api.post<Funnel>('/funnels', payload, {
     params: { project_id: payload.project_id },
+  })
+  return data
+}
+
+export async function uploadFunnelMedia(
+  projectId: string,
+  file: File,
+  mediaType: BroadcastMediaType,
+): Promise<BroadcastUpload> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('media_type', mediaType)
+  const { data } = await api.post<BroadcastUpload>('/funnels/media/uploads', formData, {
+    params: { project_id: projectId },
+    headers: { 'Content-Type': 'multipart/form-data' },
   })
   return data
 }

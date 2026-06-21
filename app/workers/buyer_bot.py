@@ -71,6 +71,10 @@ async def run_loop() -> None:
                         if telegram is not None:
                             await telegram.close()
                         telegram = BuyerTelegramClient(next_token)
+                        try:
+                            await telegram.set_commands()
+                        except RuntimeError:
+                            logger.warning("Buyer Telegram bot command sync failed", exc_info=True)
                         current_token = next_token
                         offset = None
                         logger.info("Buyer Telegram bot polling started with refreshed token")

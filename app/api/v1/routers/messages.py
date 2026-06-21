@@ -10,7 +10,13 @@ from app.api.v1.dependencies import get_current_project_id, get_current_user, ge
 from app.core.constants import MessageType, SenderType
 from app.core.config import settings
 from app.schemas.common import PaginatedResponse
-from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
+from app.schemas.message import (
+    MessageCreate,
+    MessageOut,
+    MessageTranslationPreviewOut,
+    MessageTranslationPreviewRequest,
+    MessageUploadOut,
+)
 from app.services.message_service import MessageService
 from app.services.project_snippet_service import ProjectSnippetService
 
@@ -75,6 +81,7 @@ async def create_message(
 
     media_type = str(payload.get("media_type") or payload.get("message_type") or MessageType.TEXT)
     text = _optional_text(payload.get("text") or payload.get("caption") or payload.get("body"))
+    original_text = _optional_text(payload.get("original_text"))
     file_id = _optional_text(payload.get("file_id") or payload.get("telegram_file_id"))
     if upload is not None:
         if file_id is not None:
@@ -89,6 +96,7 @@ async def create_message(
             file_bytes=file_bytes,
             file_name=upload.filename,
             mime_type=upload.content_type,
+            original_text=original_text,
             auto_translate=auto_translate,
         )
 
@@ -99,7 +107,24 @@ async def create_message(
         text=text,
         media_type=media_type,
         file_id=file_id,
+        original_text=original_text,
         auto_translate=auto_translate,
+    )
+
+
+@router.post("/translate-preview", response_model=MessageTranslationPreviewOut)
+async def preview_outgoing_translation(
+    chat_id: UUID,
+    data: MessageTranslationPreviewRequest,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageTranslationPreviewOut:
+    return await MessageService(db).preview_outgoing_translation(
+        chat_id=chat_id,
+        project_id=project_id,
+        operator_id=current_user.id,
+        text=data.text,
     )
 
 

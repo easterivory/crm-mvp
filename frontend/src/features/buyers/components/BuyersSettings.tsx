@@ -7,6 +7,7 @@ import {
   Plus,
   RefreshCcw,
   Send,
+  Trash2,
   UserRoundPlus,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
@@ -14,6 +15,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { Modal } from '../../../shared/ui'
 import {
   createBuyer,
+  deleteBuyer,
   fetchBuyerBotConfig,
   fetchBuyerPerformance,
   updateBuyerBotConfig,
@@ -42,6 +44,7 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
+  const [deletingBuyerId, setDeletingBuyerId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -146,6 +149,29 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
       setCopied(true)
     } catch {
       setError('Не удалось скопировать ссылку в буфер обмена.')
+    }
+  }
+
+  const handleDeleteBuyer = async (buyer: BuyerPerformance) => {
+    if (!projectId || deletingBuyerId) {
+      return
+    }
+    const confirmed = window.confirm(
+      `Удалить баера ${buyer.name}? Его Telegram-доступ будет отключен, статистика по старым ссылкам сохранится.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setDeletingBuyerId(buyer.buyer_id)
+    setError('')
+    try {
+      await deleteBuyer(buyer.buyer_id, projectId)
+      await loadBuyers()
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось удалить баера.'))
+    } finally {
+      setDeletingBuyerId(null)
     }
   }
 
@@ -267,26 +293,27 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-white/10 bg-white/[0.02]">
-          <table className="min-w-[720px] w-full text-left text-sm">
+          <table className="min-w-[780px] w-full text-left text-sm">
             <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="px-4 py-3">Имя баера</th>
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Telegram</th>
                 <th className="px-4 py-3 text-right">Ссылки</th>
+                <th className="px-4 py-3 text-right">Действия</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
               {isLoading ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-zinc-500">
+                  <td colSpan={5} className="px-4 py-8 text-center text-zinc-500">
                     <LoaderCircle size={18} className="mr-2 inline animate-spin" />
                     Загрузка баеров
                   </td>
                 </tr>
               ) : sortedBuyers.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-zinc-500">
+                  <td colSpan={5} className="px-4 py-8 text-center text-zinc-500">
                     Баеры еще не созданы.
                   </td>
                 </tr>
@@ -309,6 +336,21 @@ export default function BuyersSettings({ projectId }: BuyersSettingsProps) {
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-zinc-300">
                       {buyer.links_count}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteBuyer(buyer)}
+                        disabled={deletingBuyerId !== null}
+                        title="Удалить баера"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-400/20 bg-red-400/10 text-red-200 transition hover:border-red-300/50 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {deletingBuyerId === buyer.buyer_id ? (
+                          <LoaderCircle size={15} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={15} />
+                        )}
+                      </button>
                     </td>
                   </tr>
                 ))

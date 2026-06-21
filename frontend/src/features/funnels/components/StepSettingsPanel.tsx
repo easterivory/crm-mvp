@@ -205,7 +205,12 @@ export default function StepSettingsPanel({
           ) : null}
 
           {step.block_type === 'generic_message' ? (
-            <MessageBlockSettings step={step} steps={steps} onConfigChange={replaceConfig} />
+            <MessageBlockSettings
+              step={step}
+              projectId={projectId}
+              steps={steps}
+              onConfigChange={replaceConfig}
+            />
           ) : null}
 
           {step.step_type === 'message' && step.block_type !== 'generic_message' ? (

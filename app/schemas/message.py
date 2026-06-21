@@ -29,6 +29,17 @@ class MessageCreate(BaseModel):
     upload_id: Optional[uuid.UUID] = None
 
 
+class MessageTranslationPreviewRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+
+
+class MessageTranslationPreviewOut(BaseModel):
+    original_text: str
+    translated_text: str
+    source_lang: str
+    target_lang: str
+
+
 class MessageOut(OrmBase):
     id: uuid.UUID
     chat_id: uuid.UUID

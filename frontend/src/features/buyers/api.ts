@@ -12,6 +12,12 @@ export async function createBuyer(
   return data
 }
 
+export async function deleteBuyer(buyerId: string, projectId: string | null): Promise<void> {
+  await api.delete(`/buyers/${buyerId}`, {
+    params: projectId ? { project_id: projectId } : undefined,
+  })
+}
+
 export async function fetchBuyerPerformance(
   projectId: string | null,
 ): Promise<BuyerPerformance[]> {
