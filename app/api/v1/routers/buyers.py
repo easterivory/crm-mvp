@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +13,7 @@ from app.core.security import hash_password
 from app.models.project import Project
 from app.models.role import Role
 from app.models.tracking import TrackingLink
-from app.models.user import User
+from app.models.user import User, UserProjectAccess
 from app.schemas.buyer import BuyerCreate, BuyerInviteOut, BuyerUserOut
 from app.services.system_setting_service import SystemSettingService
 
@@ -58,6 +58,8 @@ async def create_buyer(
                 user.role = role
                 db.add(user)
                 await db.flush()
+                db.add(UserProjectAccess(user_id=user.id, project_id=project_id))
+                await db.flush()
                 await db.refresh(user)
             break
         except IntegrityError:
@@ -95,7 +97,14 @@ async def delete_buyer(
     result = await db.execute(
         select(User).where(
             User.id == buyer_id,
-            User.project_id == project_id,
+            or_(
+                User.project_id == project_id,
+                User.id.in_(
+                    select(UserProjectAccess.user_id).where(
+                        UserProjectAccess.project_id == project_id
+                    )
+                ),
+            ),
             User.is_deleted.is_(False),
         )
     )

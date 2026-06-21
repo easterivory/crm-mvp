@@ -7,6 +7,7 @@ type User = {
   email: string
   name: string
   project_id: string | null
+  project_ids?: string[]
   role_id: string
   role_name?: string | null
   created_at: string

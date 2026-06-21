@@ -13,6 +13,7 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8)
     role_id: uuid.UUID
     project_id: Optional[uuid.UUID] = None
+    project_ids: Optional[list[uuid.UUID]] = None
     telegram_id: Optional[int] = Field(None, gt=0)
 
 
@@ -24,6 +25,7 @@ class UserUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     role_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
+    project_ids: Optional[list[uuid.UUID]] = None
     telegram_id: Optional[int] = Field(None, gt=0)
 
 
@@ -32,6 +34,7 @@ class UserOut(OrmBase):
     email: str
     name: str
     project_id: Optional[uuid.UUID]
+    project_ids: list[uuid.UUID] = Field(default_factory=list)
     role_id: uuid.UUID
     telegram_id: Optional[int] = None
     role_name: Optional[str] = None

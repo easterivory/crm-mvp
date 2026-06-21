@@ -8,7 +8,6 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import RoleName
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
@@ -24,6 +23,7 @@ from app.schemas.tracking_metrics import (
     TrackingProjectMetricsResponse,
 )
 from app.services.tracking_conversion import calculate_conversion_status
+from app.services.access_control import require_project_access
 
 
 class TrackingMetricsService:
@@ -242,13 +242,7 @@ class TrackingMetricsService:
 
     @staticmethod
     async def _ensure_project_access(actor: User, project_id: UUID) -> None:
-        if actor.role_name == RoleName.SUPER_ADMIN:
-            return
-        if actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
 
     async def _ensure_bot_in_project(self, bot_id: UUID, project_id: UUID) -> None:
         bot = await self.bot_repo.get_by_id_in_project(bot_id, project_id)

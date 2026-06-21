@@ -24,6 +24,7 @@ from app.schemas.bot import (
     BotUpdate,
     BotWebhookOut,
 )
+from app.services.access_control import resolve_scoped_project_id
 from app.services.telegram_sender import TelegramSenderService
 
 
@@ -473,19 +474,7 @@ class BotService:
         if actor.role_name == RoleName.SUPER_ADMIN:
             return requested_project_id
 
-        if actor.project_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User is not associated with a project",
-            )
-
-        if requested_project_id is not None and requested_project_id != actor.project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
-
-        return actor.project_id
+        return resolve_scoped_project_id(actor, requested_project_id)
 
     async def _get_active_project_or_404(self, project_id: UUID):
         project = await self.project_repo.get_any_by_id(project_id)

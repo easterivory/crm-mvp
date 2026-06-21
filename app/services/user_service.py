@@ -25,6 +25,10 @@ from app.schemas.user import (
     UserPasswordChange,
     UserUpdate,
 )
+from app.services.access_control import (
+    accessible_project_ids,
+    has_project_access,
+)
 
 
 class UserService:
@@ -109,24 +113,22 @@ class UserService:
                 detail="Only super_admin can create super_admin users",
             )
 
-        if role.name != RoleName.SUPER_ADMIN and data.project_id is None:
+        project_ids = self._normalize_project_ids(data.project_ids, data.project_id)
+        if role.name != RoleName.SUPER_ADMIN and not project_ids:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="project_id is required for non-super_admin users",
+                detail="At least one project access is required for non-super_admin users",
             )
 
-        if data.project_id is not None:
-            self._ensure_actor_can_manage_project(actor, data.project_id)
+        for project_id in project_ids:
+            self._ensure_actor_can_manage_project(actor, project_id)
 
-        project_id = None if role.name == RoleName.SUPER_ADMIN else data.project_id
+        if role.name == RoleName.SUPER_ADMIN:
+            project_ids = []
 
-        if project_id is not None:
-            project = await self.project_repo.get_active(project_id)
-            if project is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Project does not exist",
-                )
+        project_id = None if role.name == RoleName.SUPER_ADMIN else project_ids[0]
+
+        await self._ensure_projects_active(project_ids)
 
         try:
             async with self.db.begin_nested():
@@ -139,6 +141,9 @@ class UserService:
                     telegram_id=data.telegram_id,
                 )
                 user.role = role
+                if project_ids:
+                    await self.user_repo.replace_project_accesses(user.id, project_ids)
+                    user = await self.user_repo.get_by_id(user.id) or user
         except IntegrityError:
             existing = await self.user_repo.get_any_by_email(email)
             if existing is not None:
@@ -175,6 +180,7 @@ class UserService:
 
         self._ensure_can_manage_target(actor, target)
         values = data.model_dump(exclude_unset=True)
+        provided_project_ids = values.pop("project_ids", None)
 
         if "name" in values and values["name"] is not None:
             values["name"] = values["name"].strip()
@@ -215,18 +221,27 @@ class UserService:
 
         if next_role.name == RoleName.SUPER_ADMIN:
             values["project_id"] = None
-        elif "project_id" in values:
-            if values["project_id"] is None:
+            next_project_ids: list[UUID] = []
+        else:
+            if provided_project_ids is not None:
+                next_project_ids = self._normalize_project_ids(
+                    provided_project_ids,
+                    values.get("project_id"),
+                )
+            elif "project_id" in values:
+                next_project_ids = self._normalize_project_ids(None, values["project_id"])
+            else:
+                next_project_ids = accessible_project_ids(target)
+
+            if not next_project_ids:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="project_id is required for non-super_admin users",
+                    detail="At least one project access is required for non-super_admin users",
                 )
-            self._ensure_actor_can_manage_project(actor, values["project_id"])
-        elif target.project_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="project_id is required for non-super_admin users",
-            )
+            for project_id in next_project_ids:
+                self._ensure_actor_can_manage_project(actor, project_id)
+            await self._ensure_projects_active(next_project_ids)
+            values["project_id"] = next_project_ids[0]
 
         updated = await self.user_repo.update_user(user_id, **values)
         if updated is None:
@@ -234,6 +249,8 @@ class UserService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found",
             )
+        await self.user_repo.replace_project_accesses(user_id, next_project_ids)
+        updated = await self.user_repo.get_by_id(user_id) or updated
         return UserOut.model_validate(updated)
 
     async def change_password(
@@ -292,6 +309,28 @@ class UserService:
         return email.strip().lower()
 
     @staticmethod
+    def _normalize_project_ids(
+        project_ids: list[UUID] | None,
+        fallback_project_id: UUID | None,
+    ) -> list[UUID]:
+        normalized: list[UUID] = []
+        for project_id in project_ids or []:
+            if project_id not in normalized:
+                normalized.append(project_id)
+        if fallback_project_id is not None and fallback_project_id not in normalized:
+            normalized.insert(0, fallback_project_id)
+        return normalized
+
+    async def _ensure_projects_active(self, project_ids: list[UUID]) -> None:
+        for project_id in project_ids:
+            project = await self.project_repo.get_active(project_id)
+            if project is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Project does not exist",
+                )
+
+    @staticmethod
     def _ensure_can_create_user(actor: User) -> None:
         if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
             raise HTTPException(
@@ -307,25 +346,26 @@ class UserService:
         if actor.role_name == RoleName.SUPER_ADMIN:
             return project_id
 
-        if actor.project_id is None:
+        actor_project_ids = accessible_project_ids(actor)
+        if not actor_project_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User is not associated with a project",
             )
 
-        if project_id is not None and project_id != actor.project_id:
+        if project_id is not None and project_id not in actor_project_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Project is not accessible for current user",
             )
 
-        return actor.project_id
+        return project_id if project_id is not None else actor_project_ids[0]
 
     @classmethod
     def _ensure_actor_can_manage_project(cls, actor: User, project_id: UUID) -> None:
         if actor.role_name == RoleName.SUPER_ADMIN:
             return
-        if actor.role_name == RoleName.ADMIN and actor.project_id == project_id:
+        if actor.role_name == RoleName.ADMIN and has_project_access(actor, project_id):
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -345,10 +385,11 @@ class UserService:
             )
 
         if actor.role_name == RoleName.ADMIN:
-            if target.project_id != actor.project_id:
+            target_project_ids = accessible_project_ids(target)
+            if not any(has_project_access(actor, project_id) for project_id in target_project_ids):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Target user is outside current admin project",
+                    detail="Target user is outside current admin projects",
                 )
             if target_role not in RoleName.ADMIN_MANAGED:
                 raise HTTPException(

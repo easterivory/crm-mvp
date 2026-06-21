@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import case, distinct, func, select
+from sqlalchemy import case, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode
@@ -14,7 +14,7 @@ from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.role import Role
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
-from app.models.user import User
+from app.models.user import User, UserProjectAccess
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
 
 
@@ -128,7 +128,14 @@ class BuyerAnalyticsService:
             .outerjoin(lead_totals, lead_totals.c.buyer_id == User.id)
             .outerjoin(submitted_totals, submitted_totals.c.buyer_id == User.id)
             .where(
-                User.project_id == project_id,
+                or_(
+                    User.project_id == project_id,
+                    User.id.in_(
+                        select(UserProjectAccess.user_id).where(
+                            UserProjectAccess.project_id == project_id
+                        )
+                    ),
+                ),
                 User.is_deleted.is_(False),
                 Role.name.in_(("manager", "buyer")),
             )

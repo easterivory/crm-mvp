@@ -13,7 +13,6 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import RoleName
 from app.core.constants import TrackingSpendSource
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
@@ -33,6 +32,7 @@ from app.schemas.tracking import (
     TrackingSpendUpdate,
 )
 from app.services.bot_service import BotService
+from app.services.access_control import require_project_access
 
 
 class TrackingService:
@@ -461,13 +461,7 @@ class TrackingService:
 
     @staticmethod
     async def _ensure_project_access(actor: User, project_id: UUID) -> None:
-        if actor.role_name == RoleName.SUPER_ADMIN:
-            return
-        if actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
 
     async def _ensure_code_available(
         self,

@@ -44,6 +44,7 @@ type PaginatedResponse<T> = {
 type Project = {
   id: string
   name: string
+  status: 'active' | 'archived'
   sla_threshold_minutes: number
   operator_lang: string
   default_client_lang: string
@@ -57,6 +58,7 @@ type User = {
   email: string
   name: string
   project_id: string | null
+  project_ids?: string[]
   role_id: string
   role_name?: string | null
   created_at: string
@@ -152,6 +154,7 @@ export default function SettingsPage() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('project')
   const [project, setProject] = useState<Project | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [roles, setRoles] = useState<Role[]>([])
   const [statuses, setStatuses] = useState<LeadStatus[]>([])
@@ -194,6 +197,7 @@ export default function SettingsPage() {
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
   const [newUserRoleId, setNewUserRoleId] = useState('')
+  const [newUserProjectIds, setNewUserProjectIds] = useState<string[]>([])
   const [newStatusCode, setNewStatusCode] = useState('')
   const [newStatusName, setNewStatusName] = useState('')
   const [newStatusFinal, setNewStatusFinal] = useState(false)
@@ -206,6 +210,10 @@ export default function SettingsPage() {
   const canManageProject =
     currentRoleName === 'super_admin' || currentRoleName === 'admin'
   const canArchiveProject = currentRoleName === 'super_admin'
+  const activeProjects = useMemo(
+    () => projects.filter((item) => item.status === 'active' && !item.is_deleted),
+    [projects],
+  )
   const visibleTabs = useMemo(
     () =>
       tabs.filter((tab) => {
@@ -259,6 +267,17 @@ export default function SettingsPage() {
     [roles],
   )
 
+  const getUserProjectIds = useCallback((user: User) => {
+    const accessIds = user.project_ids ?? []
+    const rawIds = accessIds.length > 0 ? accessIds : user.project_id ? [user.project_id] : []
+    return rawIds.filter((projectId, index) => rawIds.indexOf(projectId) === index)
+  }, [])
+
+  const getProjectName = useCallback(
+    (projectId: string) => projects.find((item) => item.id === projectId)?.name ?? projectId.slice(0, 8),
+    [projects],
+  )
+
   const canDeleteUser = useCallback(
     (user: User) => {
       if (!canManageStaff || user.id === currentUser?.id) {
@@ -273,7 +292,7 @@ export default function SettingsPage() {
       return (
         currentRoleName === 'admin' &&
         (targetRoleName === 'manager' || targetRoleName === 'operator') &&
-        user.project_id === activeProjectId
+        Boolean(activeProjectId && getUserProjectIds(user).includes(activeProjectId))
       )
     },
     [
@@ -282,6 +301,7 @@ export default function SettingsPage() {
       currentRoleName,
       currentUser?.id,
       getUserRoleName,
+      getUserProjectIds,
     ],
   )
 
@@ -321,6 +341,25 @@ export default function SettingsPage() {
     })
   }, [canManageStaff, staffRoles])
 
+  useEffect(() => {
+    if (selectedRole?.name === 'super_admin') {
+      setNewUserProjectIds([])
+      return
+    }
+
+    setNewUserProjectIds((currentIds) => {
+      const allowedIds = activeProjects.map((item) => item.id)
+      const filteredIds = currentIds.filter((projectId) => allowedIds.includes(projectId))
+      if (filteredIds.length > 0) {
+        return filteredIds
+      }
+      if (activeProjectId && allowedIds.includes(activeProjectId)) {
+        return [activeProjectId]
+      }
+      return allowedIds[0] ? [allowedIds[0]] : []
+    })
+  }, [activeProjectId, activeProjects, selectedRole?.name])
+
   const loadProject = useCallback(async () => {
     if (!activeProjectId) {
       setProject(null)
@@ -335,6 +374,13 @@ export default function SettingsPage() {
     setOperatorLang(data.operator_lang || 'ru')
     setDefaultClientLang(data.default_client_lang || 'en')
   }, [activeProjectId])
+
+  const loadProjects = useCallback(async () => {
+    const { data } = await api.get<PaginatedResponse<Project>>('/projects', {
+      params: { limit: 100, offset: 0 },
+    })
+    setProjects(data.items)
+  }, [])
 
   const loadUsers = useCallback(async () => {
     const { data } = await api.get<PaginatedResponse<User>>('/users', {
@@ -390,6 +436,7 @@ export default function SettingsPage() {
     try {
       await Promise.all([
         loadProject(),
+        loadProjects(),
         loadUsers(),
         loadRoles(),
         loadStatuses(),
@@ -401,7 +448,15 @@ export default function SettingsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [loadProject, loadRoles, loadStatuses, loadTags, loadTranslationProviderSettings, loadUsers])
+  }, [
+    loadProject,
+    loadProjects,
+    loadRoles,
+    loadStatuses,
+    loadTags,
+    loadTranslationProviderSettings,
+    loadUsers,
+  ])
 
   useEffect(() => {
     void loadAll()
@@ -520,7 +575,7 @@ export default function SettingsPage() {
       !newUserRoleId ||
       !canManageStaff ||
       !staffRoles.some((role) => role.id === newUserRoleId) ||
-      (selectedRole?.name !== 'super_admin' && !activeProjectId) ||
+      (selectedRole?.name !== 'super_admin' && newUserProjectIds.length === 0) ||
       isAddingUser
     ) {
       return
@@ -536,11 +591,13 @@ export default function SettingsPage() {
         name: newUserName.trim(),
         password: newUserPassword,
         role_id: newUserRoleId,
-        project_id: selectedRole?.name === 'super_admin' ? null : activeProjectId,
+        project_id: selectedRole?.name === 'super_admin' ? null : newUserProjectIds[0],
+        project_ids: selectedRole?.name === 'super_admin' ? [] : newUserProjectIds,
       })
       setNewUserEmail('')
       setNewUserName('')
       setNewUserPassword('')
+      setNewUserProjectIds(activeProjectId ? [activeProjectId] : [])
       await loadUsers()
       setNotice('Пользователь добавлен.')
     } catch (err) {
@@ -582,8 +639,16 @@ export default function SettingsPage() {
       setError('Недостаточно прав для изменения роли.')
       return
     }
-    if (role.name !== 'super_admin' && !activeProjectId) {
-      setError('Выберите проект перед назначением проектной роли.')
+    const projectIds =
+      role.name === 'super_admin'
+        ? []
+        : getUserProjectIds(user).length > 0
+          ? getUserProjectIds(user)
+          : activeProjectId
+            ? [activeProjectId]
+            : []
+    if (role.name !== 'super_admin' && projectIds.length === 0) {
+      setError('Выберите хотя бы один проект перед назначением проектной роли.')
       return
     }
 
@@ -594,12 +659,56 @@ export default function SettingsPage() {
     try {
       await api.patch<User>(`/users/${user.id}`, {
         role_id: roleId,
-        project_id: role.name === 'super_admin' ? null : activeProjectId,
+        project_id: role.name === 'super_admin' ? null : projectIds[0],
+        project_ids: projectIds,
       })
       await loadUsers()
       setNotice('Роль пользователя обновлена.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось изменить роль.'))
+    } finally {
+      setUpdatingUserId(null)
+    }
+  }
+
+  const handleUserProjectAccessToggle = async (
+    user: User,
+    projectId: string,
+    isChecked: boolean,
+  ) => {
+    const roleName = getUserRoleName(user)
+    if (roleName === 'super_admin') {
+      setError('Суперадмин имеет доступ ко всем проектам.')
+      return
+    }
+    if (!canDeleteUser(user)) {
+      setError('Недостаточно прав для изменения доступов.')
+      return
+    }
+
+    const currentIds = getUserProjectIds(user)
+    const nextProjectIds = isChecked
+      ? [...currentIds, projectId].filter((item, index, items) => items.indexOf(item) === index)
+      : currentIds.filter((item) => item !== projectId)
+
+    if (nextProjectIds.length === 0) {
+      setError('У пользователя должен остаться хотя бы один проект.')
+      return
+    }
+
+    setUpdatingUserId(user.id)
+    setError('')
+    setNotice('')
+
+    try {
+      await api.patch<User>(`/users/${user.id}`, {
+        project_id: nextProjectIds[0],
+        project_ids: nextProjectIds,
+      })
+      await loadUsers()
+      setNotice('Доступы пользователя обновлены.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось изменить доступы.'))
     } finally {
       setUpdatingUserId(null)
     }
@@ -1081,88 +1190,144 @@ export default function SettingsPage() {
         ) : null}
 
         {!isLoading && activeTab === 'team' ? (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-semibold text-zinc-100">Команда</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Пользователи текущего проекта.
-              </p>
-            </div>
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-zinc-100">Команда</h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Пользователи и доступы к проектам.
+                </p>
+              </div>
 
-            <div className="overflow-x-auto rounded-lg border border-zinc-800">
-              <table className="min-w-[680px] w-full text-left text-sm">
-                <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
-                  <tr>
-                    <th className="px-4 py-3">Имя</th>
-                    <th className="px-4 py-3">Email</th>
-                    <th className="px-4 py-3">Роль</th>
-                    <th className="w-[132px] px-4 py-3 text-right">Действия</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800">
-                  {users.map((user) => {
-                    const role = roles.find((item) => item.id === user.role_id)
-                    const canRemove = canDeleteUser(user)
-                    const editableRoles = editableRolesForUser(user)
-                    return (
-                      <tr key={user.id} className="bg-zinc-950">
-                        <td className="px-4 py-3 text-zinc-100">{user.name}</td>
-                        <td className="px-4 py-3 text-zinc-400">{user.email}</td>
-                        <td className="px-4 py-3 text-zinc-400">
-                          {editableRoles.length > 0 ? (
-                            <select
-                              value={user.role_id}
-                              onChange={(event) => void handleUserRoleChange(user, event.target.value)}
-                              disabled={updatingUserId === user.id}
-                              className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:opacity-50"
-                            >
-                              {editableRoles.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                  {roleLabel(item.name)}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            role ? roleLabel(role.name) : user.role_id.slice(0, 8)
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex justify-end gap-2">
-                            {canRemove ? (
-                              <>
-                                <button
-                                  type="button"
-                                  title="Изменить пароль"
-                                  onClick={() => setPasswordUser(user)}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
-                                >
-                                  <KeyRound size={15} />
-                                </button>
-                                <button
-                                  type="button"
-                                  title="Архивировать пользователя"
-                                  onClick={() => void handleDeleteUser(user.id)}
-                                  disabled={deletingUserId === user.id}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  {deletingUserId === user.id ? (
-                                    <LoaderCircle size={15} className="animate-spin" />
-                                  ) : (
-                                    <Trash2 size={15} />
-                                  )}
-                                </button>
-                              </>
+              <div className="overflow-x-auto rounded-lg border border-zinc-800">
+                <table className="min-w-[1040px] w-full text-left text-sm">
+                  <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
+                    <tr>
+                      <th className="px-4 py-3">Имя</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Роль</th>
+                      <th className="px-4 py-3">Доступы</th>
+                      <th className="w-[132px] px-4 py-3 text-right">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800">
+                    {users.map((user) => {
+                      const role = roles.find((item) => item.id === user.role_id)
+                      const canRemove = canDeleteUser(user)
+                      const editableRoles = editableRolesForUser(user)
+                      const userProjectIds = getUserProjectIds(user)
+                      const roleName = getUserRoleName(user)
+                      const canEditProjectAccess =
+                        canRemove && roleName !== 'super_admin' && activeProjects.length > 0
+                      return (
+                        <tr key={user.id} className="bg-zinc-950">
+                          <td className="px-4 py-3 text-zinc-100">{user.name}</td>
+                          <td className="px-4 py-3 text-zinc-400">{user.email}</td>
+                          <td className="px-4 py-3 text-zinc-400">
+                            {editableRoles.length > 0 ? (
+                              <select
+                                value={user.role_id}
+                                onChange={(event) =>
+                                  void handleUserRoleChange(user, event.target.value)
+                                }
+                                disabled={updatingUserId === user.id}
+                                className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:opacity-50"
+                              >
+                                {editableRoles.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {roleLabel(item.name)}
+                                  </option>
+                                ))}
+                              </select>
                             ) : (
-                              <span className="text-xs text-zinc-600">Недоступно</span>
+                              role ? roleLabel(role.name) : user.role_id.slice(0, 8)
                             )}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          </td>
+                          <td className="min-w-[340px] px-4 py-3">
+                            {roleName === 'super_admin' ? (
+                              <span className="inline-flex rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-xs font-semibold text-cyan-200">
+                                Все проекты
+                              </span>
+                            ) : canEditProjectAccess ? (
+                              <div className="grid gap-2 md:grid-cols-2">
+                                {activeProjects.map((item) => {
+                                  const checked = userProjectIds.includes(item.id)
+                                  return (
+                                    <label
+                                      key={item.id}
+                                      className="flex min-w-0 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-2 text-xs text-zinc-300 transition hover:border-emerald-500/50"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        disabled={updatingUserId === user.id}
+                                        onChange={(event) =>
+                                          void handleUserProjectAccessToggle(
+                                            user,
+                                            item.id,
+                                            event.target.checked,
+                                          )
+                                        }
+                                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                                      />
+                                      <span className="truncate" title={item.name}>
+                                        {item.name}
+                                      </span>
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                            ) : userProjectIds.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {userProjectIds.map((projectId) => (
+                                  <span
+                                    key={projectId}
+                                    className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-300"
+                                  >
+                                    {getProjectName(projectId)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-zinc-600">Нет доступа</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex justify-end gap-2">
+                              {canRemove ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    title="Изменить пароль"
+                                    onClick={() => setPasswordUser(user)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
+                                  >
+                                    <KeyRound size={15} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Архивировать пользователя"
+                                    onClick={() => void handleDeleteUser(user.id)}
+                                    disabled={deletingUserId === user.id}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 text-zinc-400 transition hover:border-red-500/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {deletingUserId === user.id ? (
+                                      <LoaderCircle size={15} className="animate-spin" />
+                                    ) : (
+                                      <Trash2 size={15} />
+                                    )}
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="text-xs text-zinc-600">Недоступно</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
             {canManageStaff ? (
               <form
@@ -1210,15 +1375,62 @@ export default function SettingsPage() {
                   disabled={
                     isAddingUser ||
                     staffRoles.length === 0 ||
-                    (selectedRole?.name !== 'super_admin' && !activeProjectId)
+                    (selectedRole?.name !== 'super_admin' && newUserProjectIds.length === 0)
                   }
                   className="inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isAddingUser ? <LoaderCircle size={16} className="animate-spin" /> : <UserPlus size={16} />}
                   Добавить
                 </button>
-              </form>
-            ) : null}
+                {selectedRole?.name === 'super_admin' ? (
+                  <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100 md:col-span-2 xl:col-span-5">
+                    Суперадмин получает доступ ко всем проектам автоматически.
+                  </div>
+                ) : (
+                  <fieldset className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 md:col-span-2 xl:col-span-5">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Доступы к проектам
+                    </legend>
+                    {activeProjects.length > 0 ? (
+                      <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {activeProjects.map((item) => {
+                          const checked = newUserProjectIds.includes(item.id)
+                          return (
+                            <label
+                              key={item.id}
+                              className="flex min-w-0 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-sm text-zinc-300 transition hover:border-emerald-500/50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const isChecked = event.target.checked
+                                  setNewUserProjectIds((currentIds) => {
+                                    if (isChecked) {
+                                      return [...currentIds, item.id].filter(
+                                        (projectId, index, projectIds) =>
+                                          projectIds.indexOf(projectId) === index,
+                                      )
+                                    }
+                                    return currentIds.filter((projectId) => projectId !== item.id)
+                                  })
+                                }}
+                                className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                              />
+                              <span className="truncate" title={item.name}>
+                                {item.name}
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm text-zinc-500">Активных проектов нет.</p>
+                    )}
+                  </fieldset>
+                )}
+                </form>
+              ) : null}
           </div>
         ) : null}
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import BigInteger, ForeignKey, String, Text
+from sqlalchemy import BigInteger, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +46,12 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     # Relationships
     project: Mapped[Optional[Project]] = relationship("Project", back_populates="users")
     role: Mapped[Role] = relationship("Role", back_populates="users")
+    project_accesses: Mapped[list[UserProjectAccess]] = relationship(
+        "UserProjectAccess",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     managed_leads: Mapped[list[Lead]] = relationship(
         "Lead", back_populates="manager", foreign_keys="Lead.manager_id"
@@ -74,3 +80,36 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     @property
     def role_name(self) -> str | None:
         return self.role.name if self.role is not None else None
+
+    @property
+    def project_ids(self) -> list[uuid.UUID]:
+        accesses = self.__dict__.get("project_accesses")
+        if accesses is None:
+            return [self.project_id] if self.project_id is not None else []
+        ids = [access.project_id for access in accesses]
+        if self.project_id is not None and self.project_id not in ids:
+            ids.insert(0, self.project_id)
+        return ids
+
+
+class UserProjectAccess(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "user_project_accesses"
+    __table_args__ = (
+        UniqueConstraint("user_id", "project_id", name="uq_user_project_access_user_project"),
+        Index("ix_user_project_accesses_user_id", "user_id"),
+        Index("ix_user_project_accesses_project_id", "project_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    user: Mapped[User] = relationship("User", back_populates="project_accesses")
+    project: Mapped[Project] = relationship("Project")

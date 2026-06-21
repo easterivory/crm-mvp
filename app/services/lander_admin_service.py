@@ -19,6 +19,7 @@ from app.schemas.lander import (
     ProjectLanderCreate,
     ProjectLanderOut,
 )
+from app.services.access_control import require_project_access
 
 
 class LanderAdminService:
@@ -177,11 +178,7 @@ class LanderAdminService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only admin/super_admin can manage landers",
             )
-        if actor.role_name != RoleName.SUPER_ADMIN and actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:
             raise HTTPException(

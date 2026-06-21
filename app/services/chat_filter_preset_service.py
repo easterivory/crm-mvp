@@ -14,6 +14,7 @@ from app.schemas.chat_filter_preset import (
     ChatFilterPresetOut,
     ChatFilterPresetUpdate,
 )
+from app.services.access_control import has_project_access, resolve_scoped_project_id
 
 
 class ChatFilterPresetService:
@@ -66,11 +67,9 @@ class ChatFilterPresetService:
         actor: User,
         data: ChatFilterPresetUpdate,
     ) -> ChatFilterPresetOut:
-        project_id = self._actor_project_or_none(actor)
         preset = await self._get_accessible_preset(
             preset_id=preset_id,
             actor=actor,
-            project_id=project_id,
             for_write=True,
         )
         values = data.model_dump(exclude_unset=True)
@@ -110,7 +109,6 @@ class ChatFilterPresetService:
         preset = await self._get_accessible_preset(
             preset_id=preset_id,
             actor=actor,
-            project_id=self._actor_project_or_none(actor),
             for_write=True,
         )
         deleted = await self.repo.delete_preset(preset.id)
@@ -125,21 +123,9 @@ class ChatFilterPresetService:
         *,
         preset_id: UUID,
         actor: User,
-        project_id: UUID | None,
         for_write: bool,
     ) -> ChatFilterPreset:
-        if actor.role_name == RoleName.SUPER_ADMIN:
-            preset = await self.repo.get_by_id(preset_id)
-        else:
-            if project_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="User is not associated with a project",
-                )
-            preset = await self.repo.get_in_project(
-                preset_id=preset_id,
-                project_id=project_id,
-            )
+        preset = await self.repo.get_by_id(preset_id)
         if preset is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -162,26 +148,7 @@ class ChatFilterPresetService:
         actor: User,
         project_id: UUID | None,
     ) -> UUID:
-        if actor.role_name == RoleName.SUPER_ADMIN:
-            if project_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="project_id is required for super_admin scoped requests",
-                )
-            resolved = project_id
-        else:
-            if actor.project_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="User is not associated with a project",
-                )
-            if project_id is not None and project_id != actor.project_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Project is not accessible for current user",
-                )
-            resolved = actor.project_id
-
+        resolved = resolve_scoped_project_id(actor, project_id)
         project = await self.project_repo.get_active(resolved)
         if project is None:
             raise HTTPException(
@@ -191,14 +158,10 @@ class ChatFilterPresetService:
         return resolved
 
     @staticmethod
-    def _actor_project_or_none(actor: User) -> UUID | None:
-        return None if actor.role_name == RoleName.SUPER_ADMIN else actor.project_id
-
-    @staticmethod
     def _can_read(actor: User, preset: ChatFilterPreset) -> bool:
         if actor.role_name == RoleName.SUPER_ADMIN:
             return True
-        return preset.project_id == actor.project_id and (
+        return has_project_access(actor, preset.project_id) and (
             preset.user_id == actor.id or preset.is_shared
         )
 

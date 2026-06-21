@@ -13,6 +13,7 @@ from app.models.lead_status import LeadStatus
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.google_sheets import GoogleSheetsConfigOut, GoogleSheetsConfigUpdate
+from app.services.access_control import require_project_access
 
 
 class GoogleSheetsConfigService:
@@ -89,11 +90,7 @@ class GoogleSheetsConfigService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only super_admin/admin can manage Google Sheets settings",
             )
-        if actor.role_name != RoleName.SUPER_ADMIN and actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:
             raise HTTPException(

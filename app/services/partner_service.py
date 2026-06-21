@@ -19,6 +19,7 @@ from app.schemas.partner import (
     PartnerIntegrationOut,
     PartnerIntegrationUpdate,
 )
+from app.services.access_control import require_project_access
 from app.services.postback_service import PostbackService
 
 
@@ -218,13 +219,7 @@ class PartnerService:
 
     @staticmethod
     def _ensure_project_access(actor: User, project_id: UUID) -> None:
-        if actor.role_name == RoleName.SUPER_ADMIN:
-            return
-        if actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
 
     @staticmethod
     def _ensure_can_manage(actor: User) -> None:

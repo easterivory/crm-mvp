@@ -13,6 +13,7 @@ from app.models.user import User
 from app.repositories.chat_event_log_repository import ChatEventLogRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.user_repository import UserRepository
+from app.services.access_control import has_project_access, require_project_access
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class ChatAuditService:
             user = await self.user_repo.get_by_id(user_id)
             if user is None or user.is_deleted:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-            if user.role_name != RoleName.SUPER_ADMIN and user.project_id != chat.project_id:
+            if user.role_name != RoleName.SUPER_ADMIN and not has_project_access(user, chat.project_id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="User is not a member of this chat project",
@@ -85,9 +86,5 @@ class ChatAuditService:
         chat = await self.chat_repo.get_active(chat_id, project_id)
         if chat is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-        if actor.role_name != RoleName.SUPER_ADMIN and actor.project_id != chat.project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Chat is not accessible for current user",
-            )
+        require_project_access(actor, chat.project_id)
         return await self.event_repo.list_by_chat(chat_id, limit=limit, offset=offset)

@@ -8,6 +8,7 @@ from app.core.constants import RoleName
 from app.core.database import get_db
 from app.schemas.common import PaginatedResponse
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
+from app.services.access_control import require_project_access
 from app.services.tag_service import TagService
 
 router = APIRouter(prefix="/tags", tags=["tags"])
@@ -127,8 +128,4 @@ def _ensure_project_member(current_user, project_id: UUID) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only CRM staff can manage project tags",
         )
-    if current_user.role_name != RoleName.SUPER_ADMIN and current_user.project_id != project_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not a member of this project",
-        )
+    require_project_access(current_user, project_id)

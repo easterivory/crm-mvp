@@ -12,6 +12,7 @@ from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_snippet_repository import ProjectSnippetRepository
 from app.schemas.snippet import SnippetCreate, SnippetOut
+from app.services.access_control import require_project_access
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,7 @@ class ProjectSnippetService:
         return snippet
 
     async def _ensure_access(self, project_id: UUID, actor: User) -> None:
-        if actor.role_name != RoleName.SUPER_ADMIN and actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")

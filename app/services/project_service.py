@@ -23,6 +23,7 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.access_control import accessible_project_ids, require_project_access
 
 
 PROJECT_STATUSES: set[str] = {"active", "archived"}
@@ -45,11 +46,11 @@ class ProjectService:
             total = await self.project_repo.count()
             return [ProjectOut.model_validate(project) for project in projects], total
 
-        if actor.project_id is None:
+        project_ids = accessible_project_ids(actor)
+        if not project_ids:
             return [], 0
 
-        project = await self.project_repo.get_active(actor.project_id)
-        projects = [project] if project is not None else []
+        projects = await self.project_repo.list_by_ids(project_ids)
         total = len(projects)
         return [ProjectOut.model_validate(project) for project in projects], total
 
@@ -297,13 +298,7 @@ class ProjectService:
 
     @staticmethod
     def _ensure_project_access(actor: User, project_id: UUID) -> None:
-        if actor.role_name == RoleName.SUPER_ADMIN:
-            return
-        if actor.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Project is not accessible for current user",
-            )
+        require_project_access(actor, project_id)
 
     @staticmethod
     def _validate_name(name: str) -> str:

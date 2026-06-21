@@ -7,9 +7,9 @@ bearer_scheme
     └── get_current_user(db, token) → User
             └── get_current_project_id(user) → UUID
 
-Project-bound users receive project_id from their authenticated user context.
-super_admin users are global and must pass explicit project_id on scoped
-endpoints, while project-bound users cannot override their own project.
+Project-bound users receive project_id from their authenticated user context
+when they have exactly one project. Multi-project staff and super_admin users
+must pass explicit project_id on scoped endpoints.
 
 get_db is imported from app.core.database and re-exported here so routers
 have a single import source for all dependencies.
@@ -23,10 +23,10 @@ from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db  # re-export — routers import from here
-from app.core.constants import RoleName
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
+from app.services.access_control import resolve_scoped_project_id
 
 __all__ = ["get_db", "get_current_user", "get_current_project_id"]
 
@@ -72,26 +72,4 @@ async def get_current_project_id(
     the request. Project-bound users may only access their own project; an
     explicit different project_id is rejected.
     """
-    role_name = current_user.role_name
-
-    if role_name == RoleName.SUPER_ADMIN:
-        if project_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="project_id is required for super_admin scoped requests",
-            )
-        return project_id
-
-    if current_user.project_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not associated with a project",
-        )
-
-    if project_id is not None and project_id != current_user.project_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Project is not accessible for current user",
-        )
-
-    return current_user.project_id
+    return resolve_scoped_project_id(current_user, project_id)

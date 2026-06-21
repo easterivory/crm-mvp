@@ -42,6 +42,7 @@ from app.services.funnel_block_registry import (
     LEAD_FIELD_KEYS,
     FunnelBlockRegistry,
 )
+from app.services.access_control import require_project_access
 from app.services.chat_audit_service import ChatAuditService
 from app.services.funnel_validator import FunnelGraphValidator
 
@@ -1236,10 +1237,4 @@ class FunnelService:
 
     @staticmethod
     def _ensure_target_project_allowed(current_user: User, target_project_id: UUID) -> None:
-        if current_user.role_name == RoleName.SUPER_ADMIN:
-            return
-        if current_user.project_id != target_project_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Target project is not accessible for current user",
-            )
+        require_project_access(current_user, target_project_id)
