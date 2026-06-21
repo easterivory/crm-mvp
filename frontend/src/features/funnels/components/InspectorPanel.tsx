@@ -42,11 +42,11 @@ export default function InspectorPanel({
   onPushRulesChange,
 }: InspectorPanelProps) {
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col border-l border-white/8 bg-[#0d1324]/92">
+    <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-white/8 bg-[#0d1324]/92 lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l">
       <div className="border-b border-white/8 px-4 py-3">
-        <h2 className="text-sm font-semibold text-white">Inspector</h2>
+        <h2 className="text-sm font-semibold text-white">Настройки</h2>
         <p className="mt-1 text-xs text-gray-500">
-          Настройки выбранного блока или связи.
+          Выбранный блок, связь и служебные действия.
         </p>
       </div>
 

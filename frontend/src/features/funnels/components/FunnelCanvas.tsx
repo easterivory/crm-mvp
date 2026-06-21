@@ -3,16 +3,17 @@ import '@xyflow/react/dist/style.css'
 import {
   Background,
   BackgroundVariant,
-  Controls,
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type Connection,
   type Edge,
   type NodeChange,
   type NodeTypes,
 } from '@xyflow/react'
-import { useCallback, useMemo } from 'react'
+import { Maximize2, Minus, Plus } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { edgeLabel } from '../funnelConfig'
 import type { FunnelEdge, FunnelStep } from '../types'
@@ -52,6 +53,9 @@ function FunnelCanvasInner({
   onConnect,
   onDeleteStep,
 }: FunnelCanvasProps) {
+  const { fitView, zoomIn, zoomOut } = useReactFlow()
+  const [zoom, setZoom] = useState(1)
+
   const flowNodes = useMemo<FunnelFlowNode[]>(
     () =>
       steps.map((step) => ({
@@ -92,6 +96,26 @@ function FunnelCanvasInner({
     [edges, selectedEdgeId],
   )
 
+  const graphKey = useMemo(() => steps.map((step) => step.id).join('|'), [steps])
+
+  const fitCanvas = useCallback(() => {
+    void fitView({
+      padding: 0.28,
+      includeHiddenNodes: false,
+      minZoom: 0.68,
+      maxZoom: 1.05,
+      duration: 280,
+    })
+  }, [fitView])
+
+  useEffect(() => {
+    if (steps.length === 0) {
+      return undefined
+    }
+    const timer = window.setTimeout(fitCanvas, 80)
+    return () => window.clearTimeout(timer)
+  }, [fitCanvas, graphKey, steps.length])
+
   const handleNodesChange = useCallback(
     (changes: NodeChange<FunnelFlowNode>[]) => {
       for (const change of changes) {
@@ -122,7 +146,7 @@ function FunnelCanvasInner({
   )
 
   return (
-    <div className="relative h-full min-h-[620px] overflow-hidden bg-[#0b1020]">
+    <div className="relative h-[min(68dvh,720px)] min-h-[430px] overflow-hidden rounded-xl border border-white/8 bg-[#0b1020] lg:h-full lg:min-h-[620px] lg:rounded-none lg:border-0">
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
@@ -147,11 +171,17 @@ function FunnelCanvasInner({
           onSelectStep(node?.id ?? null)
           onSelectEdge(edge?.id ?? null)
         }}
+        onMove={(_, viewport) => setZoom(viewport.zoom)}
         connectionRadius={28}
         deleteKeyCode={null}
         fitView
-        fitViewOptions={{ padding: 0.18, includeHiddenNodes: false }}
-        minZoom={0.25}
+        fitViewOptions={{
+          padding: 0.28,
+          includeHiddenNodes: false,
+          minZoom: 0.68,
+          maxZoom: 1.05,
+        }}
+        minZoom={0.45}
         maxZoom={1.7}
         nodesDraggable
         nodesConnectable
@@ -160,11 +190,39 @@ function FunnelCanvasInner({
         className="funnel-react-flow"
       >
         <Background color="rgba(255,255,255,0.16)" gap={28} variant={BackgroundVariant.Dots} />
-        <Controls
-          showInteractive={false}
-          className="!border !border-white/10 !bg-background/80 !shadow-card"
-        />
       </ReactFlow>
+      <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex items-center gap-1 rounded-xl border border-white/10 bg-[#0B0F19]/90 p-1 shadow-card backdrop-blur-xl">
+        <button
+          type="button"
+          onClick={fitCanvas}
+          className="pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-300 transition hover:bg-white/[0.06] hover:text-white"
+          title="Показать всю схему"
+          aria-label="Показать всю схему"
+        >
+          <Maximize2 size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void zoomOut({ duration: 160 })}
+          className="pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-300 transition hover:bg-white/[0.06] hover:text-white"
+          title="Уменьшить"
+          aria-label="Уменьшить"
+        >
+          <Minus size={16} />
+        </button>
+        <div className="min-w-14 px-2 text-center text-xs font-semibold text-gray-300">
+          {Math.round(zoom * 100)}%
+        </div>
+        <button
+          type="button"
+          onClick={() => void zoomIn({ duration: 160 })}
+          className="pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-300 transition hover:bg-white/[0.06] hover:text-white"
+          title="Увеличить"
+          aria-label="Увеличить"
+        >
+          <Plus size={16} />
+        </button>
+      </div>
     </div>
   )
 }

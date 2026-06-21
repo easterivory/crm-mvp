@@ -76,19 +76,24 @@ export default function MainLayout() {
 
   useEffect(() => {
     const setAppHeight = () => {
-      const height = window.visualViewport?.height ?? window.innerHeight
+      const activeElement = document.activeElement
+      if (
+        activeElement instanceof HTMLElement &&
+        activeElement.matches('input, textarea, select, [contenteditable="true"]')
+      ) {
+        return
+      }
+      const height = window.innerHeight
       document.documentElement.style.setProperty('--app-height', `${height}px`)
     }
 
     setAppHeight()
     window.addEventListener('resize', setAppHeight)
-    window.visualViewport?.addEventListener('resize', setAppHeight)
-    window.visualViewport?.addEventListener('scroll', setAppHeight)
+    document.addEventListener('focusout', setAppHeight)
 
     return () => {
       window.removeEventListener('resize', setAppHeight)
-      window.visualViewport?.removeEventListener('resize', setAppHeight)
-      window.visualViewport?.removeEventListener('scroll', setAppHeight)
+      document.removeEventListener('focusout', setAppHeight)
     }
   }, [])
 
@@ -196,7 +201,14 @@ export default function MainLayout() {
   )
 
   return (
-    <div className="flex h-[var(--app-height,100dvh)] min-w-0 flex-col overflow-hidden bg-background bg-neon-radial text-gray-200 md:h-screen md:flex-row">
+    <div
+      className={cn(
+        'flex min-w-0 flex-col bg-background bg-neon-radial text-gray-200 md:h-screen md:overflow-hidden md:flex-row',
+        isChatPage
+          ? 'h-[var(--app-height,100dvh)] overflow-hidden'
+          : 'min-h-[var(--app-height,100dvh)] overflow-x-hidden',
+      )}
+    >
       <div className="hidden md:block">{sidebar}</div>
 
       <button
@@ -288,7 +300,7 @@ export default function MainLayout() {
 
         <main
           className={cn(
-            'touch-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:overflow-hidden md:p-5',
+            'touch-scroll min-w-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:min-h-0 md:overflow-hidden md:p-5',
             isChatPage ? 'p-0' : 'p-2',
           )}
         >

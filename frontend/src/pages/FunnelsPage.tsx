@@ -165,7 +165,7 @@ export default function FunnelsPage() {
 
   if (funnelId && selectedProjectId) {
     return (
-      <section className="h-full min-h-0 overflow-hidden text-gray-200">
+      <section className="min-h-full text-gray-200 md:h-full md:min-h-0 md:overflow-hidden">
         <FunnelBuilder
           funnelId={funnelId}
           versionId={versionId}
@@ -178,7 +178,7 @@ export default function FunnelsPage() {
   }
 
   return (
-    <section className="h-full min-h-0 overflow-hidden text-gray-200">
+    <section className="min-h-full text-gray-200 md:h-full md:min-h-0 md:overflow-hidden">
       <FunnelList
         funnels={visibleFunnels}
         bots={bots.filter((bot) => !selectedProjectId || bot.project_id === selectedProjectId)}

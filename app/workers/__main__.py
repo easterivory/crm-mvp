@@ -1,5 +1,5 @@
 """
-Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|postback|buyer|all]
+Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|postback|buyer|backup|all]
 
 Each worker is an independent asyncio loop.
 Running 'all' starts both workers concurrently in the same process.
@@ -11,6 +11,7 @@ Usage:
     python -m app.workers broadcast  # broadcast send worker only
     python -m app.workers postback  # partner postback worker only
     python -m app.workers buyer  # buyer Telegram bot polling worker only
+    python -m app.workers backup  # scheduled database backups only
     python -m app.workers all     # all workers (default in Docker)
 """
 import asyncio
@@ -52,6 +53,10 @@ def main() -> None:
         from app.workers.buyer_bot import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "backup":
+        from app.workers.backup_worker import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "all":
         from app.workers.alert_worker import run_loop as alert_loop
         from app.workers.broadcast_worker import run_loop as broadcast_loop
@@ -75,7 +80,7 @@ def main() -> None:
 
     else:
         logger.error(
-            "Unknown worker mode: %r. Use: alert | stats | funnel | broadcast | postback | buyer | all",
+            "Unknown worker mode: %r. Use: alert | stats | funnel | broadcast | postback | buyer | backup | all",
             mode,
         )
         sys.exit(1)

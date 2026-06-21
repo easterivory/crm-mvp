@@ -6,9 +6,11 @@ import {
   GitBranch,
   History,
   LoaderCircle,
+  PanelLeft,
   PlayCircle,
   Save,
   Send,
+  Settings2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -61,6 +63,12 @@ type FunnelBuilderProps = {
   projectId: string
   onBack: () => void
   onVersionReady: (versionId: string) => void
+}
+
+type CompactBuilderPanel = 'canvas' | 'library' | 'inspector'
+
+function isCompactBuilderViewport() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
 }
 
 function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
@@ -214,6 +222,7 @@ export default function FunnelBuilder({
   const [isValidating, setIsValidating] = useState(false)
   const [isPublishOpen, setIsPublishOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'editor' | 'analytics' | 'versions'>('editor')
+  const [compactPanel, setCompactPanel] = useState<CompactBuilderPanel>('canvas')
   const [analyticsData, setAnalyticsData] = useState<FunnelDropOffStep[]>([])
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
   const [isRollingBackVersionId, setIsRollingBackVersionId] = useState<string | null>(null)
@@ -323,6 +332,32 @@ export default function FunnelBuilder({
     [activeVersionId, versions],
   )
 
+  const revealCompactPanel = useCallback((panel: CompactBuilderPanel) => {
+    if (isCompactBuilderViewport()) {
+      setCompactPanel(panel)
+    }
+  }, [])
+
+  const handleSelectStep = useCallback(
+    (stepId: string | null) => {
+      setSelectedStepId(stepId)
+      if (stepId) {
+        revealCompactPanel('inspector')
+      }
+    },
+    [revealCompactPanel],
+  )
+
+  const handleSelectEdge = useCallback(
+    (edgeId: string | null) => {
+      setSelectedEdgeId(edgeId)
+      if (edgeId) {
+        revealCompactPanel('inspector')
+      }
+    },
+    [revealCompactPanel],
+  )
+
   const updateStep = useCallback((stepId: string, patch: Partial<FunnelStep>) => {
     setGraph((current) => {
       if (!current) {
@@ -384,6 +419,7 @@ export default function FunnelBuilder({
       setSelectedStepId(step.id)
       return { ...current, steps: [...current.steps, step] }
     })
+    revealCompactPanel('canvas')
   }
 
   const updateEdge = (edgeId: string, patch: Partial<FunnelEdge>) => {
@@ -689,7 +725,7 @@ export default function FunnelBuilder({
 
   if (isLoading || !graph || !funnel || !activeVersionId) {
     return (
-      <div className="flex h-full items-center justify-center rounded-lg border border-white/8 bg-surface/90 text-sm text-gray-400">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-white/8 bg-surface/90 text-sm text-gray-400 md:h-full">
         <LoaderCircle size={18} className="mr-2 animate-spin" />
         Загрузка конструктора
       </div>
@@ -697,7 +733,7 @@ export default function FunnelBuilder({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/8 bg-[#090d18]/80">
+    <div className="flex min-h-[calc(100dvh-5rem)] flex-col overflow-visible rounded-xl border border-white/8 bg-[#090d18]/80 md:min-h-[calc(100dvh-8rem)] lg:h-full lg:min-h-0 lg:overflow-hidden">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/8 bg-[#0d1324]/95 px-3 py-3 shadow-card md:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <button
@@ -816,10 +852,6 @@ export default function FunnelBuilder({
         </div>
       </header>
 
-      <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm text-amber-50 md:hidden">
-        Редактор воронок удобнее на компьютере.
-      </div>
-
       {activeTab === 'analytics' && (
         <div className="border-b border-white/8 bg-[#0d1324]/95 px-4 py-3">
           <HoldModeToggle
@@ -844,16 +876,52 @@ export default function FunnelBuilder({
             />
           </div>
 
-          <div className="grid min-h-0 flex-1 xl:grid-cols-[280px_minmax(0,1fr)_320px] xl:overflow-hidden">
-            <BlockLibrary onAdd={addBlock} />
-            <div className="min-h-0 overflow-hidden">
+          <div className="grid grid-cols-3 gap-2 border-b border-white/8 bg-[#0d1324]/80 p-2 lg:hidden">
+            {[
+              { key: 'canvas' as const, label: 'Холст', icon: GitBranch },
+              { key: 'library' as const, label: 'Блоки', icon: PanelLeft },
+              { key: 'inspector' as const, label: 'Настройки', icon: Settings2 },
+            ].map((panel) => {
+              const Icon = panel.icon
+              const isActive = compactPanel === panel.key
+              return (
+                <button
+                  key={panel.key}
+                  type="button"
+                  onClick={() => setCompactPanel(panel.key)}
+                  className={`inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl border px-2 text-sm font-semibold transition ${
+                    isActive
+                      ? 'border-accent-300/40 bg-accent-300/12 text-accent-50'
+                      : 'border-white/10 bg-white/[0.04] text-gray-300'
+                  }`}
+                >
+                  <Icon size={15} />
+                  <span className="truncate">{panel.label}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="grid min-h-0 flex-1 gap-3 overflow-visible p-2 sm:p-3 lg:grid-cols-[240px_minmax(0,1fr)_280px] lg:gap-0 lg:overflow-hidden lg:p-0 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+            <div
+              className={`h-[min(72dvh,760px)] min-h-[420px] lg:block lg:h-full lg:min-h-0 lg:overflow-hidden ${
+                compactPanel === 'library' ? 'block' : 'hidden'
+              }`}
+            >
+              <BlockLibrary onAdd={addBlock} />
+            </div>
+            <div
+              className={`min-h-0 lg:block lg:overflow-hidden ${
+                compactPanel === 'canvas' ? 'block' : 'hidden'
+              }`}
+            >
               <FunnelCanvas
                 steps={graph.steps}
                 edges={graph.edges}
                 selectedStepId={selectedStepId}
                 selectedEdgeId={selectedEdgeId}
-                onSelectStep={setSelectedStepId}
-                onSelectEdge={setSelectedEdgeId}
+                onSelectStep={handleSelectStep}
+                onSelectEdge={handleSelectEdge}
                 onMoveStep={(stepId, position) =>
                   updateStep(stepId, { position_x: position.x, position_y: position.y })
                 }
@@ -861,27 +929,33 @@ export default function FunnelBuilder({
                 onDeleteStep={deleteStep}
               />
             </div>
-            <InspectorPanel
-              selectedStep={selectedStep}
-              projectId={projectId}
-              selectedEdge={selectedEdge}
-              steps={graph.steps}
-              edges={graph.edges}
-              fieldMappings={graph.field_mappings}
-              pushRules={graph.push_rules}
-              hasPublishedVersion={Boolean(funnel.published_version_id)}
-              onUpdateStep={updateStep}
-              onDeleteStep={deleteStep}
-              onUpdateEdge={updateEdge}
-              onRemoveEdge={removeEdge}
-              onSelectEdge={setSelectedEdgeId}
-              onFieldMappingsChange={(field_mappings) =>
-                setGraph((current) => (current ? { ...current, field_mappings } : current))
-              }
-              onPushRulesChange={(push_rules) =>
-                setGraph((current) => (current ? { ...current, push_rules } : current))
-              }
-            />
+            <div
+              className={`h-[min(78dvh,820px)] min-h-[460px] lg:block lg:h-full lg:min-h-0 lg:overflow-hidden ${
+                compactPanel === 'inspector' ? 'block' : 'hidden'
+              }`}
+            >
+              <InspectorPanel
+                selectedStep={selectedStep}
+                projectId={projectId}
+                selectedEdge={selectedEdge}
+                steps={graph.steps}
+                edges={graph.edges}
+                fieldMappings={graph.field_mappings}
+                pushRules={graph.push_rules}
+                hasPublishedVersion={Boolean(funnel.published_version_id)}
+                onUpdateStep={updateStep}
+                onDeleteStep={deleteStep}
+                onUpdateEdge={updateEdge}
+                onRemoveEdge={removeEdge}
+                onSelectEdge={handleSelectEdge}
+                onFieldMappingsChange={(field_mappings) =>
+                  setGraph((current) => (current ? { ...current, field_mappings } : current))
+                }
+                onPushRulesChange={(push_rules) =>
+                  setGraph((current) => (current ? { ...current, push_rules } : current))
+                }
+              />
+            </div>
           </div>
         </>
       ) : activeTab === 'analytics' ? (

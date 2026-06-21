@@ -28,8 +28,9 @@ body {
     radial-gradient(circle at 50% 100%, rgba(59, 130, 246, 0.08), transparent 36%),
     #0b0f19;
   color: #e5e7eb;
-  overflow: hidden;
-  overscroll-behavior: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-x: none;
 }
 
 #root {
@@ -69,6 +70,13 @@ input,
 select,
 textarea {
   color-scheme: dark;
+}
+
+@media (min-width: 768px) {
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
 }
 
 @media (max-width: 767px) {

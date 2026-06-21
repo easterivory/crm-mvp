@@ -189,6 +189,12 @@ curl -fsS http://<dev-host>/api/v1/health
 
 Do not accept a deploy where frontend build is skipped silently.
 
+## Database Backups
+
+PostgreSQL backups are handled by a dedicated Docker service and verified
+`pg_dump` archives. See [BACKUP.md](BACKUP.md) for scheduled backups, Telegram
+delivery, encryption, retention, and restore commands.
+
 # Test deploy - Sat May 30 21:13:51 MSK 2026
 Автоматический деплой настроен!
 # Auto-deploy test - 2026-05-30 21:23:22

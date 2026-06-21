@@ -69,6 +69,27 @@ class Settings(BaseSettings):
     # Google Sheets export
     GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
 
+    # Database backups
+    BACKUP_ENABLED: bool = False
+    BACKUP_STORAGE_PATH: str = "/backups"
+    BACKUP_PREFIX: str = "crm_mvp"
+    BACKUP_INTERVAL_HOURS: int = 24
+    BACKUP_RUN_ON_STARTUP: bool = True
+    BACKUP_RETENTION_COUNT: int = 14
+    BACKUP_RETENTION_DAYS: int = 30
+    BACKUP_VERIFY: bool = True
+    BACKUP_COMMAND_TIMEOUT_SECONDS: int = 3600
+    # Optional passphrase. When set, backups are encrypted before they are
+    # stored locally or sent to Telegram.
+    BACKUP_ENCRYPTION_KEY: Optional[str] = None
+    BACKUP_TELEGRAM_BOT_TOKEN: Optional[str] = None
+    BACKUP_TELEGRAM_CHAT_ID: Optional[str] = None
+    BACKUP_TELEGRAM_API_BASE_URL: str = "https://api.telegram.org"
+    # Official Telegram Bot API multipart uploads are limited to 50 MB.
+    # Use a local Bot API server and raise this to 2000 for large archives.
+    BACKUP_TELEGRAM_MAX_UPLOAD_MB: int = 49
+    BACKUP_TELEGRAM_TIMEOUT_SECONDS: int = 600
+
     @property
     def GOOGLE_SERVICE_ACCOUNT_EMAIL(self) -> Optional[str]:
         if not self.GOOGLE_SERVICE_ACCOUNT_JSON:

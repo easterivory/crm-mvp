@@ -127,6 +127,7 @@ ssh codex@45.59.113.248 "cd /opt/crm-mvp-dev && docker compose logs --tail=50 ap
 - ⚠️ `SECRET_KEY` в `.env` — заменить на реальный (сейчас `change_me_in_production`)
 - ⚠️ HTTPS не настроен (сейчас HTTP)
 - ⚠️ Telegram bot token в `.env` — не коммитить в репозиторий
+- ⚠️ Для Telegram-бэкапов включить `BACKUP_ENCRYPTION_KEY` в серверном `.env`
 
 ---
 
@@ -147,7 +148,7 @@ ssh codex@45.59.113.248 "cd /opt/crm-mvp-dev && docker compose logs --tail=50 ap
 
 ### Опционально:
 3. Настроить мониторинг (Sentry, Prometheus)
-4. Настроить backup БД
+4. Включить scheduled backup БД по `BACKUP.md`
 5. Добавить staging окружение
 6. Настроить CI тесты перед деплоем
 7. Настроить автоматическую очистку старых Docker образов
@@ -175,7 +176,7 @@ ssh codex@45.59.113.248 "cd /opt/crm-mvp-dev && docker compose logs --tail=50 ap
 - **Путь:** /opt/crm-mvp-dev
 - **Ветка:** dev
 - **Последний коммит:** 347fb56
-- **Контейнеры:** ✅ api, postgres, redis, worker
+- **Контейнеры:** ✅ api, postgres, redis, worker, backup
 - **Статус:** ✅ Работает
 
 **Дата настройки:** 2026-05-30

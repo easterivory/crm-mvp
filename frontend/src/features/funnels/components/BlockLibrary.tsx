@@ -61,11 +61,11 @@ export default function BlockLibrary({ onAdd }: BlockLibraryProps) {
   }
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col border-r border-white/8 bg-[#0d1324]/92">
+    <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-white/8 bg-[#0d1324]/92 lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r">
       <div className="border-b border-white/8 px-4 py-3">
-        <h2 className="text-sm font-semibold text-white">Library</h2>
+        <h2 className="text-sm font-semibold text-white">Блоки</h2>
         <p className="mt-1 text-xs leading-5 text-gray-500">
-          Блоки добавляются на холст и настраиваются справа.
+          Добавьте шаг на холст, затем настройте его в панели «Настройки».
         </p>
       </div>
 
