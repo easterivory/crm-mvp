@@ -8,6 +8,7 @@ const ru = {
   close: 'Закрыть',
   create: 'Создать',
   createLink: 'Создать ссылку',
+  docs: 'Документация',
   funnels: 'Воронки',
   leads: 'Лиды',
   loading: 'Загрузка',

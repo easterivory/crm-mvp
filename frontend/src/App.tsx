@@ -10,6 +10,7 @@ import FunnelsPage from './pages/FunnelsPage'
 import LeadsPage from './pages/LeadsPage'
 import LoginPage from './pages/LoginPage'
 import ChatsPage from './pages/ChatsPage'
+import DocsPage from './pages/DocsPage'
 import SettingsPage from './pages/SettingsPage'
 import TrackingPage from './pages/TrackingPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -51,6 +52,7 @@ export default function App() {
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
+          <Route path="/docs" element={<DocsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />

@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BookOpen,
   Bot,
   LogOut,
   Megaphone,
@@ -35,6 +36,7 @@ const navItems = [
   { label: t('leads'), path: '/leads', icon: UsersRound },
   { label: t('analytics'), path: '/analytics', icon: BarChart3 },
   { label: t('tracking'), path: '/tracking', icon: MousePointerClick },
+  { label: t('docs'), path: '/docs', icon: BookOpen },
   { label: t('settings'), path: '/settings', icon: Settings },
 ]
 
