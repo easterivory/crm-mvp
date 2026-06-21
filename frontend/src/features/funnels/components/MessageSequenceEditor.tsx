@@ -12,14 +12,15 @@ import {
   Video,
   X,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { BroadcastMediaType } from '../../broadcasts/types'
-import { uploadFunnelMedia } from '../api'
+import { fetchFunnelMediaBlob, uploadFunnelMedia } from '../api'
 import type { FunnelStep } from '../types'
 import {
   configId,
   type FunnelMessageMediaType,
+  type MessageMediaConfig,
   type MessageConfig,
 } from '../funnelConfig'
 import ButtonListEditor from './ButtonListEditor'
@@ -73,6 +74,89 @@ function formatBytes(value?: number) {
   if (!value) return null
   if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} КБ`
   return `${(value / 1024 / 1024).toFixed(1)} МБ`
+}
+
+function UploadedPhotoPreview({
+  projectId,
+  media,
+}: {
+  projectId: string
+  media?: MessageMediaConfig
+}) {
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [hasError, setHasError] = useState(false)
+  const uploadId = media?.source === 'upload' ? media.upload_id : undefined
+  const isPhoto = media?.media_type === 'photo'
+
+  useEffect(() => {
+    if (!uploadId || !isPhoto) {
+      setPreviewUrl('')
+      setHasError(false)
+      return undefined
+    }
+
+    let isMounted = true
+    let objectUrl = ''
+    setPreviewUrl('')
+    setHasError(false)
+
+    void fetchFunnelMediaBlob(projectId, uploadId)
+      .then((blob) => {
+        if (!isMounted) return
+        objectUrl = URL.createObjectURL(blob)
+        setPreviewUrl(objectUrl)
+      })
+      .catch(() => {
+        if (isMounted) {
+          setHasError(true)
+        }
+      })
+
+    return () => {
+      isMounted = false
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+      }
+    }
+  }, [isPhoto, projectId, uploadId])
+
+  if (!uploadId || !isPhoto) {
+    return null
+  }
+
+  if (hasError) {
+    return (
+      <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+        Превью недоступно, но файл сохранён в шаге.
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={!previewUrl}
+      onClick={() => {
+        if (previewUrl) {
+          window.open(previewUrl, '_blank', 'noopener,noreferrer')
+        }
+      }}
+      className="mt-3 block w-full overflow-hidden rounded-xl border border-white/10 bg-black/20 text-left transition hover:border-accent-300/35 disabled:cursor-wait"
+      title="Открыть фото"
+    >
+      {previewUrl ? (
+        <img
+          src={previewUrl}
+          alt={media.file_name || 'Превью фото'}
+          className="max-h-48 w-full object-contain"
+        />
+      ) : (
+        <div className="flex h-28 items-center justify-center text-xs text-gray-500">
+          Загружаю превью...
+        </div>
+      )}
+    </button>
+  )
 }
 
 export default function MessageSequenceEditor({
@@ -185,7 +269,14 @@ export default function MessageSequenceEditor({
           onClick={() =>
             onChange([
               ...messages,
-              { id: configId('msg'), type: 'text', text: '', delay_seconds: 0, buttons: [] },
+              {
+                id: configId('msg'),
+                type: 'text',
+                text: '',
+                delay_seconds: 0,
+                wait_for_answer: false,
+                buttons: [],
+              },
             ])
           }
           className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/10 px-2 text-xs text-gray-100 transition hover:border-accent-300/35"
@@ -290,6 +381,7 @@ export default function MessageSequenceEditor({
                     </button>
                   ) : null}
                 </div>
+                <UploadedPhotoPreview projectId={projectId} media={message.media} />
                 <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   <input
                     value={
@@ -352,6 +444,23 @@ export default function MessageSequenceEditor({
               }
               className="mt-3 w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
+
+            <label className="mt-3 flex items-start gap-3 rounded-lg border border-white/8 bg-background/45 px-3 py-2">
+              <input
+                type="checkbox"
+                checked={message.wait_for_answer === true}
+                onChange={(event) => update(index, { wait_for_answer: event.target.checked })}
+                className="mt-1 h-4 w-4 rounded border-white/20 bg-background text-accent-300"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-gray-100">
+                  Ждать ответ после этого сообщения
+                </span>
+                <span className="mt-0.5 block text-xs leading-5 text-gray-500">
+                  После ответа лида сценарий продолжится по выходу «Далее».
+                </span>
+              </span>
+            </label>
 
             <label className="mt-2 block">
               <span className="mb-1 block text-xs text-gray-500">Задержка перед сообщением, сек</span>

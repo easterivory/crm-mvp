@@ -15,12 +15,12 @@ import {
 import { Maximize2, Minus, Plus } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { edgeLabel } from '../funnelConfig'
+import { edgeLabel, edgeSourceKey } from '../funnelConfig'
 import type { FunnelEdge, FunnelStep } from '../types'
 import FunnelNode, {
-  DEFAULT_SOURCE_HANDLE_ID,
   TARGET_HANDLE_ID,
   outcomeFromSourceHandle,
+  sourceHandleId,
   type FunnelFlowNode,
 } from './FunnelNode'
 
@@ -73,12 +73,13 @@ function FunnelCanvasInner({
     () =>
       edges.map((edge) => {
         const outcome = edgeLabel(edge)
+        const sourceStep = steps.find((step) => step.id === edge.from_step_id)
         return {
           id: edge.id,
           type: 'smoothstep',
           source: edge.from_step_id,
           target: edge.to_step_id,
-          sourceHandle: DEFAULT_SOURCE_HANDLE_ID,
+          sourceHandle: sourceHandleId(edgeSourceKey(edge, sourceStep)),
           targetHandle: TARGET_HANDLE_ID,
           label: outcome ?? undefined,
           selected: selectedEdgeId === edge.id,
@@ -93,7 +94,7 @@ function FunnelCanvasInner({
           labelBgBorderRadius: 6,
         }
       }),
-    [edges, selectedEdgeId],
+    [edges, selectedEdgeId, steps],
   )
 
   const graphKey = useMemo(() => steps.map((step) => step.id).join('|'), [steps])

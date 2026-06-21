@@ -1,12 +1,15 @@
+from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.core.constants import RoleName
 from app.models.user import User
+from app.repositories.broadcast_repository import BroadcastRepository
 from app.schemas.broadcast import BroadcastUploadOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
@@ -64,6 +67,29 @@ async def upload_funnel_media(
         file=file,
         media_type=media_type,
         persistent=True,
+    )
+
+
+@router.get("/media/uploads/{upload_id}", response_class=FileResponse)
+async def get_funnel_media_upload(
+    upload_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    _ensure_funnel_manager(current_user)
+    upload = await BroadcastRepository(db).get_upload_in_project(upload_id, project_id)
+    if upload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload not found")
+
+    path = Path(upload.storage_path)
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload file not found")
+
+    return FileResponse(
+        path,
+        media_type=upload.mime_type,
+        filename=upload.file_name,
     )
 
 

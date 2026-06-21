@@ -66,6 +66,17 @@ export async function uploadFunnelMedia(
   return data
 }
 
+export async function fetchFunnelMediaBlob(
+  projectId: string,
+  uploadId: string,
+): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/funnels/media/uploads/${uploadId}`, {
+    params: { project_id: projectId },
+    responseType: 'blob',
+  })
+  return data
+}
+
 export async function archiveFunnel(funnel: Funnel): Promise<Funnel> {
   const { data } = await api.post<Funnel>(`/funnels/${funnel.id}/archive`, null, {
     params: { project_id: funnel.project_id },

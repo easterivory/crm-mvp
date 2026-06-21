@@ -458,9 +458,10 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             <div>
               <h3 className="text-sm font-semibold text-cyan-100">DNS-настройка</h3>
               <p className="mt-2 text-sm leading-6 text-cyan-100/75">
-                Чтобы ваши прокладки работали, перейдите в панель Cloudflare/регистратора
-                вашего домена и направьте A-запись домена на IP-адрес нашего сервера
-                или настройте CNAME на технический домен проекта.
+                CRM сохраняет домен и лендинг, но DNS меняется у регистратора. Направьте
+                A-запись домена на IP API-сервера или настройте CNAME на технический домен
+                проекта. После этого ссылка вида /l/slug откроет прокладку и сохранит UTM
+                перед переходом в Telegram.
               </p>
             </div>
           </div>

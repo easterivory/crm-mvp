@@ -38,16 +38,6 @@ from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, Telegra
 
 logger = logging.getLogger(__name__)
 
-MAIN_MENU_MARKUP: dict[str, Any] = {
-    "keyboard": [
-        [{"text": "Мои ссылки"}, {"text": "Создать ссылку"}],
-        [{"text": "Ввести расход"}, {"text": "Статистика"}],
-        [{"text": "Воронка отвалов"}],
-    ],
-    "resize_keyboard": True,
-    "is_persistent": True,
-}
-
 MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
     "inline_keyboard": [
         [
@@ -61,6 +51,12 @@ MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
         [{"text": "Воронка отвалов", "callback_data": "menu:funnel"}],
     ]
 }
+
+CANCEL_INLINE_MARKUP: dict[str, Any] = {
+    "inline_keyboard": [[{"text": "Отмена", "callback_data": "menu:cancel"}]]
+}
+
+REMOVE_REPLY_KEYBOARD: dict[str, Any] = {"remove_keyboard": True}
 
 STATS_ACTION_MARKUP: dict[str, Any] = {
     "inline_keyboard": [
@@ -273,7 +269,11 @@ class BuyerBotService:
         chat_id = message.chat.id
         text = (message.text or "").strip()
         if not text:
-            await self.telegram.send_message(chat_id, "Пришли текстовую команду.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(
+                chat_id,
+                "Пришли текстовую команду или выбери действие ниже.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
             return
 
         command, argument = self._split_command(text)
@@ -300,7 +300,11 @@ class BuyerBotService:
 
         if command in {"/cancel", "Отмена"}:
             await self.state_store.clear(chat_id)
-            await self.telegram.send_message(chat_id, "Действие отменено.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(
+                chat_id,
+                "Действие отменено.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
             return
 
         if command in {"/create_link", "/new_link", "Создать ссылку"}:
@@ -330,7 +334,7 @@ class BuyerBotService:
         await self.telegram.send_message(
             chat_id,
             "Выбери действие в меню или используй команды /create_link, /spend, /stats, /funnel.",
-            reply_markup=MAIN_MENU_MARKUP,
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
     async def _handle_callback(self, callback_query: TelegramCallbackQuery) -> None:
@@ -377,7 +381,11 @@ class BuyerBotService:
             return
         if action == "cancel":
             await self.state_store.clear(chat_id)
-            await self.telegram.send_message(chat_id, "Действие отменено.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(
+                chat_id,
+                "Действие отменено.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
             return
 
     async def _activate(self, chat_id: int, raw_token: str) -> None:
@@ -427,23 +435,18 @@ class BuyerBotService:
             chat_id,
             f"Привет, {user.name}! Аккаунт привязан.\n\n"
             "Тебе доступны: Мои ссылки, Ввести расход, Статистика, Воронка отвалов.",
-            reply_markup=MAIN_MENU_MARKUP,
-        )
-        await self.telegram.send_message(
-            chat_id,
-            "Быстрые кнопки:",
             reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
     async def _send_menu(self, chat_id: int, buyer: User) -> None:
         await self.telegram.send_message(
             chat_id,
-            f"{buyer.name}, выбери действие:",
-            reply_markup=MAIN_MENU_MARKUP,
+            "Старая клавиатура скрыта. Действия теперь в кнопках под сообщениями.",
+            reply_markup=REMOVE_REPLY_KEYBOARD,
         )
         await self.telegram.send_message(
             chat_id,
-            "Быстрые кнопки:",
+            f"{buyer.name}, выбери действие:",
             reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
@@ -453,6 +456,7 @@ class BuyerBotService:
             chat_id,
             "Пришли название ссылки, например: tiktok_camp_3.\n\n"
             "Команда /cancel отменит действие.",
+            reply_markup=CANCEL_INLINE_MARKUP,
         )
 
     async def _finish_create_link(self, chat_id: int, buyer: User, raw_name: str) -> None:
@@ -507,7 +511,7 @@ class BuyerBotService:
             await self.telegram.send_message(
                 chat_id,
                 "Не удалось сгенерировать уникальный код ссылки. Попробуй еще раз.",
-                reply_markup=MAIN_MENU_MARKUP,
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
             await self.state_store.clear(chat_id)
             return
@@ -516,7 +520,7 @@ class BuyerBotService:
         await self.telegram.send_message(
             chat_id,
             f"Ссылка создана:\n{title}\n\n{invite_link}",
-            reply_markup=MAIN_MENU_MARKUP,
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
     async def _send_links(self, chat_id: int, buyer: User) -> None:
@@ -525,7 +529,7 @@ class BuyerBotService:
             await self.telegram.send_message(
                 chat_id,
                 "У тебя пока нет ссылок. Нажми «Создать ссылку» или отправь /create_link.",
-                reply_markup=MAIN_MENU_MARKUP,
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
             return
 
@@ -537,7 +541,7 @@ class BuyerBotService:
             )
             lines.append(f"{index}. {link.title or link.name}\n{invite_link}")
 
-        await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=MAIN_MENU_MARKUP)
+        await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=MAIN_MENU_INLINE_MARKUP)
 
     async def _start_spend(self, chat_id: int, buyer: User) -> None:
         links = await self._list_buyer_links(buyer.id, limit=MAX_LINKS_IN_KEYBOARD)
@@ -545,7 +549,7 @@ class BuyerBotService:
             await self.telegram.send_message(
                 chat_id,
                 "Сначала создай ссылку через «Создать ссылку».",
-                reply_markup=MAIN_MENU_MARKUP,
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
             return
 
@@ -559,6 +563,7 @@ class BuyerBotService:
                 ]
                 for link in links
             ]
+            + [[{"text": "Отмена", "callback_data": "menu:cancel"}]]
         }
         await self.state_store.set(chat_id, {"state": STATE_SPEND_DATE})
         await self.telegram.send_message(chat_id, "Выбери ссылку для внесения расхода:", reply_markup=keyboard)
@@ -566,12 +571,12 @@ class BuyerBotService:
     async def _select_spend_link(self, chat_id: int, buyer: User, raw_link_id: str) -> None:
         link_id = self._parse_uuid(raw_link_id)
         if link_id is None:
-            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
         link = await self._get_buyer_link(link_id, buyer.id)
         if link is None:
-            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
         await self.state_store.set(
@@ -583,7 +588,8 @@ class BuyerBotService:
                 [
                     {"text": "Сегодня", "callback_data": "spend_date:today"},
                     {"text": "Вчера", "callback_data": "spend_date:yesterday"},
-                ]
+                ],
+                [{"text": "Отмена", "callback_data": "menu:cancel"}],
             ]
         }
         await self.telegram.send_message(
@@ -599,13 +605,13 @@ class BuyerBotService:
             await self.telegram.send_message(
                 chat_id,
                 "Сначала выбери ссылку через «Ввести расход».",
-                reply_markup=MAIN_MENU_MARKUP,
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
             return
 
         link = await self._get_buyer_link(link_id, buyer.id)
         if link is None:
-            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
         if value == "today":
@@ -613,7 +619,7 @@ class BuyerBotService:
         elif value == "yesterday":
             spend_date = date.today() - timedelta(days=1)
         else:
-            await self.telegram.send_message(chat_id, "Дата не распознана.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(chat_id, "Дата не распознана.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
         await self.state_store.set(
@@ -627,6 +633,7 @@ class BuyerBotService:
         await self.telegram.send_message(
             chat_id,
             f"Пришли сумму расхода за {spend_date.isoformat()} по ссылке «{link.title or link.name}».",
+            reply_markup=CANCEL_INLINE_MARKUP,
         )
 
     async def _finish_spend(
@@ -643,17 +650,21 @@ class BuyerBotService:
             await self.telegram.send_message(
                 chat_id,
                 "Контекст расхода устарел. Начни заново через «Ввести расход».",
-                reply_markup=MAIN_MENU_MARKUP,
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
             await self.state_store.clear(chat_id)
             return
         if amount is None:
-            await self.telegram.send_message(chat_id, "Пришли положительное число, например 240 или 180.50.")
+            await self.telegram.send_message(
+                chat_id,
+                "Пришли положительное число, например 240 или 180.50.",
+                reply_markup=CANCEL_INLINE_MARKUP,
+            )
             return
 
         link = await self._get_buyer_link(link_id, buyer.id)
         if link is None:
-            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_MARKUP)
+            await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             await self.state_store.clear(chat_id)
             return
 
@@ -698,7 +709,7 @@ class BuyerBotService:
             chat_id,
             f"Расход сохранен: {money(amount)} USD за {spend_date.isoformat()}.\n"
             f"Ссылка: {link.title or link.name}",
-            reply_markup=MAIN_MENU_MARKUP,
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
     async def _send_stats(self, chat_id: int, buyer: User) -> None:
@@ -744,7 +755,7 @@ class BuyerBotService:
             await self.telegram.send_message(
                 chat_id,
                 "По твоему трафику пока нет данных прохождения воронки.",
-                reply_markup=MAIN_MENU_MARKUP,
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
             return
 
@@ -754,7 +765,7 @@ class BuyerBotService:
             lines.append(
                 f"{step.position}. {step.title}: {step.count} ({step.reached_percent}%){marker}"
             )
-        await self.telegram.send_message(chat_id, "\n".join(lines), reply_markup=MAIN_MENU_MARKUP)
+        await self.telegram.send_message(chat_id, "\n".join(lines), reply_markup=MAIN_MENU_INLINE_MARKUP)
 
     async def _require_buyer(self, chat_id: int) -> User | None:
         buyer = await self._get_buyer_by_telegram_id(chat_id)

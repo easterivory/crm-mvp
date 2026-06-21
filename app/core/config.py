@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # Google Sheets export
     GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
 
+    # Landings/domains
+    LANDER_STORAGE_PATH: str = "storage/landers"
+
     # Database backups
     BACKUP_ENABLED: bool = False
     BACKUP_STORAGE_PATH: str = "/backups"

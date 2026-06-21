@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.google_sheets import ProjectGoogleSheetsConfig
-from app.services.google_sheets_export_queue import enqueue_lead_sheets_export
+from app.services.google_sheets_service import GoogleSheetsService
 
 
 class GoogleSheetsTriggerService:
@@ -28,7 +28,11 @@ class GoogleSheetsTriggerService:
         if str(status_id) not in trigger_statuses:
             return None
 
-        return await enqueue_lead_sheets_export(lead_id=lead_id, project_id=project_id)
+        await GoogleSheetsService(self.db).export_lead_to_sheet(
+            lead_id=lead_id,
+            project_id=project_id,
+        )
+        return "exported"
 
     async def _get_active_config(
         self,

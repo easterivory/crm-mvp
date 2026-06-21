@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -37,11 +38,11 @@ class LanderService:
         self,
         db: AsyncSession,
         *,
-        storage_root: str | Path = "static/landers",
+        storage_root: str | Path | None = None,
         utm_bridge: UtmBridgeService | None = None,
     ) -> None:
         self.db = db
-        self.storage_root = Path(storage_root)
+        self.storage_root = Path(storage_root or settings.LANDER_STORAGE_PATH)
         self.utm_bridge = utm_bridge or UtmBridgeService()
 
     async def save_custom_lander_zip(
@@ -112,9 +113,33 @@ class LanderService:
             return self._render_default_redirect_html(lander, telegram_url)
         if lander.type == self.CUSTOM_UPLOAD:
             html_body = await self._read_custom_index_html(lander)
+            html_body = self._inject_base_href(html_body, f"/l/{lander.slug}/")
             return self.replace_bot_links(html_body, telegram_url, lander)
 
         raise ValueError("Недопустимый тип лендинга")
+
+    async def resolve_custom_asset(
+        self,
+        *,
+        host: str,
+        slug: str,
+        asset_path: str,
+    ) -> tuple[Path, str]:
+        lander = await self.resolve_lander_request(host=host, slug=slug)
+        if lander.type != self.CUSTOM_UPLOAD:
+            raise LanderNotFoundError("Ассет доступен только для custom_upload лендинга")
+
+        directory = await self._custom_lander_directory(lander)
+        member_path = self._safe_member_path(asset_path)
+        file_path = (directory / member_path).resolve()
+        try:
+            file_path.relative_to(directory.resolve())
+        except ValueError as exc:
+            raise ValueError("Некорректный путь к ассету лендинга") from exc
+        if not file_path.is_file():
+            raise LanderNotFoundError("Ассет лендинга не найден")
+        media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        return file_path, media_type
 
     async def build_telegram_url(
         self,
@@ -183,22 +208,41 @@ class LanderService:
         return lander
 
     async def _read_custom_index_html(self, lander: ProjectLander) -> str:
-        if not lander.custom_html_path:
-            raise ValueError("Для кастомного лендинга не загружен HTML")
-
-        root = self.storage_root.resolve()
-        directory = Path(lander.custom_html_path)
-        if not directory.is_absolute():
-            directory = directory.resolve()
-        try:
-            directory.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("Некорректный путь к кастомному лендингу") from exc
-
+        directory = await self._custom_lander_directory(lander)
         index_path = directory / "index.html"
         if not index_path.is_file():
             raise ValueError("В директории лендинга отсутствует index.html")
         return await asyncio.to_thread(index_path.read_text, encoding="utf-8")
+
+    async def _custom_lander_directory(self, lander: ProjectLander) -> Path:
+        if not lander.custom_html_path:
+            raise ValueError("Для кастомного лендинга не загружен HTML")
+
+        roots = [self.storage_root.resolve()]
+        legacy_root = Path("static/landers").resolve()
+        if legacy_root not in roots:
+            roots.append(legacy_root)
+        directory = Path(lander.custom_html_path)
+        if not directory.is_absolute():
+            directory = directory.resolve()
+        for root in roots:
+            try:
+                directory.relative_to(root)
+                return directory
+            except ValueError:
+                continue
+        raise ValueError("Некорректный путь к кастомному лендингу")
+
+    @staticmethod
+    def _inject_base_href(html_body: str, base_href: str) -> str:
+        if re.search(r"<base\b", html_body, flags=re.IGNORECASE):
+            return html_body
+        safe_href = html.escape(base_href, quote=True)
+        head_match = re.search(r"<head\b[^>]*>", html_body, flags=re.IGNORECASE)
+        if head_match is None:
+            return f'<base href="{safe_href}">\n{html_body}'
+        insert_at = head_match.end()
+        return f'{html_body[:insert_at]}\n  <base href="{safe_href}">{html_body[insert_at:]}'
 
     @classmethod
     def _extract_zip_to_destination(

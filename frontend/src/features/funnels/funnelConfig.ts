@@ -27,6 +27,7 @@ export type MessageConfig = {
   text: string
   caption?: string
   delay_seconds: number
+  wait_for_answer?: boolean
   buttons: ButtonConfig[]
   media?: MessageMediaConfig
 }
@@ -218,6 +219,10 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
         text,
         caption: typeof item.caption === 'string' ? item.caption : undefined,
         delay_seconds: typeof item.delay_seconds === 'number' ? item.delay_seconds : 0,
+        wait_for_answer:
+          typeof item.wait_for_answer === 'boolean'
+            ? item.wait_for_answer
+            : item.waitForAnswer === true,
         buttons: normalizeButtons(item.buttons),
         ...(media ? { media } : {}),
       }
@@ -233,6 +238,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
       text: legacyText,
       caption: textValue(config, 'caption') || undefined,
       delay_seconds: numberValue(config, 'delay_seconds', 0),
+      wait_for_answer: boolValue(config, 'wait_for_answer', false),
       buttons: normalizeButtons(config.buttons),
       ...(legacyMedia ? { media: legacyMedia } : {}),
     },
@@ -277,13 +283,52 @@ export function normalizeOutcomes(raw: unknown): OutcomeConfig[] {
 }
 
 export function normalizeAbVariants(raw: unknown): AbTestVariantConfig[] {
+  const normalizeWeights = (variants: AbTestVariantConfig[]): AbTestVariantConfig[] => {
+    const clamped = variants.map((variant) => ({
+      ...variant,
+      weight: Math.max(0, Math.round(Number.isFinite(variant.weight) ? variant.weight : 0)),
+    }))
+    const total = clamped.reduce((sum, variant) => sum + variant.weight, 0)
+    if (total === 100) {
+      return clamped
+    }
+    if (total <= 0) {
+      const base = Math.floor(100 / clamped.length)
+      let remainder = 100 - base * clamped.length
+      return clamped.map((variant) => {
+        const weight = base + (remainder > 0 ? 1 : 0)
+        remainder -= 1
+        return { ...variant, weight }
+      })
+    }
+    let remaining = 100
+    const scaled = clamped.map((variant, index) => {
+      if (index === clamped.length - 1) {
+        return { ...variant, weight: remaining }
+      }
+      const weight = Math.max(0, Math.round((variant.weight / total) * 100))
+      remaining -= weight
+      return { ...variant, weight }
+    })
+    if (remaining < 0) {
+      const last = scaled[scaled.length - 1]
+      scaled[scaled.length - 1] = { ...last, weight: Math.max(0, last.weight + remaining) }
+    }
+    const adjustedTotal = scaled.reduce((sum, variant) => sum + variant.weight, 0)
+    if (adjustedTotal !== 100 && scaled.length > 0) {
+      const last = scaled[scaled.length - 1]
+      scaled[scaled.length - 1] = { ...last, weight: Math.max(0, last.weight + 100 - adjustedTotal) }
+    }
+    return scaled
+  }
+
   if (!Array.isArray(raw) || raw.length === 0) {
     return [
       { id: 'a', label: 'Вариант A', weight: 50, target_step_id: '' },
       { id: 'b', label: 'Вариант B', weight: 50, target_step_id: '' },
     ]
   }
-  return raw.map((item, index) => {
+  return normalizeWeights(raw.map((item, index) => {
     const variant = typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {}
     return {
       id: String(variant.id ?? `variant_${index + 1}`),
@@ -291,7 +336,7 @@ export function normalizeAbVariants(raw: unknown): AbTestVariantConfig[] {
       weight: typeof variant.weight === 'number' ? Math.max(0, variant.weight) : 50,
       target_step_id: typeof variant.target_step_id === 'string' ? variant.target_step_id : '',
     }
-  })
+  }))
 }
 
 export function normalizeActions(raw: unknown): ActionConfig[] {
@@ -355,7 +400,8 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
   }
 
   if (step.step_type === 'message') {
-    const outputs = normalizeMessages(step.config_json).flatMap((message) =>
+    const messages = normalizeMessages(step.config_json)
+    const outputs = messages.flatMap((message) =>
       message.buttons
         .filter((button) => button.type === 'branch')
         .map((button) => ({
@@ -364,7 +410,9 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
           targetStepId: button.target_step_id,
         })),
     )
-    return outputs.length > 0 ? outputs : [{ key: 'message:next', label: 'Далее' }]
+    return outputs.length > 0
+      ? outputs
+      : [{ key: 'message:next', label: messages.some((message) => message.wait_for_answer) ? 'После ответа' : 'Далее' }]
   }
 
   if (step.step_type === 'delay') {

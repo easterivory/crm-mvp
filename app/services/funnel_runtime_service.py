@@ -213,6 +213,53 @@ class FunnelRuntimeService:
         if step is None:
             return False
 
+        if state.waiting_for_answer and self._is_message_step(step):
+            message_index = self._waiting_message_index(step, state.runtime_json)
+            messages = self._message_sequence(step)
+            item = messages[message_index] if message_index is not None else None
+            if item is not None and self._buttons_from_message_item(item):
+                logger.info(
+                    "Ignoring text while funnel message waits for button callback "
+                    "chat_id=%s step_id=%s",
+                    chat_id,
+                    step.id,
+                )
+                return True
+            if item is not None and self._message_item_waits_for_answer(item):
+                await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
+                await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
+                runtime_json = self._runtime_with_answer(
+                    state.runtime_json,
+                    step_id=step.id,
+                    answer=text,
+                )
+                await self.repo.upsert_chat_funnel_state(
+                    chat_id=chat_id,
+                    funnel_id=state.funnel_id,
+                    funnel_version_id=state.funnel_version_id,
+                    current_step_id=step.id,
+                    entered_step_at=state.entered_step_at,
+                    waiting_for_answer=False,
+                    runtime_json=runtime_json,
+                )
+                next_step = await self._execute_message_sequence(
+                    chat_id=chat_id,
+                    step=step,
+                    start_index=(message_index or 0) + 1,
+                    answer=text,
+                )
+                if next_step is not None:
+                    if next_step.id != step.id:
+                        await self._execute_from_step(chat_id=chat_id, step=next_step, answer=text)
+                return True
+            logger.info(
+                "Ignoring text while funnel message is in waiting state without free-answer mode "
+                "chat_id=%s step_id=%s",
+                chat_id,
+                step.id,
+            )
+            return True
+
         if state.waiting_for_answer or self._is_input_step(step):
             if await self._should_override_call_time_for_hold(chat_id=chat_id, step=step):
                 next_step = await self._apply_hold_call_time_override(
@@ -851,7 +898,7 @@ class FunnelRuntimeService:
                     step.id,
                     index,
                 )
-            if buttons:
+            if buttons or self._message_item_waits_for_answer(item):
                 state = await self.repo.get_chat_funnel_state(chat_id)
                 if state is not None:
                     runtime_json = dict(state.runtime_json or {})
@@ -2214,6 +2261,7 @@ class FunnelRuntimeService:
             "text": text,
             "caption": config.get("caption"),
             "delay_seconds": config.get("delay_seconds") or 0,
+            "wait_for_answer": bool(config.get("wait_for_answer")),
             "buttons": config.get("buttons") or [],
             "media": config.get("media"),
             "telegram_file_id": config.get("telegram_file_id")
@@ -2362,6 +2410,34 @@ class FunnelRuntimeService:
             return max(int(item.get("delay_seconds") or 0), 0)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _message_item_waits_for_answer(item: dict[str, Any]) -> bool:
+        return bool(
+            item.get("wait_for_answer")
+            or item.get("waitForAnswer")
+            or item.get("wait_answer")
+            or item.get("wait_for_reply")
+        )
+
+    def _waiting_message_index(
+        self,
+        step: FunnelStep,
+        runtime_json: dict[str, Any] | None,
+    ) -> Optional[int]:
+        marker = (runtime_json or {}).get("message_sequence")
+        if not isinstance(marker, dict):
+            return None
+        if str(marker.get("step_id") or "") != str(step.id):
+            return None
+        try:
+            message_index = int(marker.get("message_index") or 0)
+        except (TypeError, ValueError):
+            return None
+        messages = self._message_sequence(step)
+        if 0 <= message_index < len(messages):
+            return message_index
+        return None
 
     @staticmethod
     def _step_text(step: FunnelStep) -> str:

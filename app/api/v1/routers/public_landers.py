@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_db
@@ -20,6 +20,34 @@ SYSTEM_ROOT_PATHS = frozenset(
         "favicon.ico",
     }
 )
+
+
+@router.get("/l/{slug}/{asset_path:path}", response_class=FileResponse, include_in_schema=False)
+async def render_prefixed_lander_asset(
+    slug: str,
+    asset_path: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    host = request.headers.get("host", "")
+    try:
+        file_path, media_type = await LanderService(db).resolve_custom_asset(
+            host=host,
+            slug=slug,
+            asset_path=asset_path,
+        )
+    except LanderNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lander asset not found",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    return FileResponse(file_path, media_type=media_type)
 
 
 @router.get("/l/{slug}", response_class=HTMLResponse, include_in_schema=False)

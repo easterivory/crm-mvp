@@ -204,7 +204,8 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
       <div>
         <h2 className="text-xl font-semibold text-zinc-100">Google Таблицы</h2>
         <p className="mt-1 text-sm text-zinc-500">
-          Автоматический экспорт лидов при переходе в выбранные статусы.
+          Автоматический экспорт лидов при переходе в выбранные статусы. Включите
+          интеграцию, выберите статусы и проверьте подключение после сохранения.
         </p>
       </div>
 
@@ -218,7 +219,8 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
               {serviceAccountEmail || 'GOOGLE_SERVICE_ACCOUNT_JSON не настроен'}
             </p>
             <p className="mt-2 text-sm text-emerald-100/70">
-              Дайте сервисному аккаунту права Редактора (Editor).
+              Дайте сервисному аккаунту права Редактора (Editor). Если email не показан,
+              переменная GOOGLE_SERVICE_ACCOUNT_JSON не настроена на сервере.
             </p>
           </div>
           <button
