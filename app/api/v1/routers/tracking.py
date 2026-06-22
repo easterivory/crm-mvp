@@ -10,6 +10,7 @@ from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.tracking import (
     TrackingLinkCreate,
+    TrackingFunnelStepOption,
     TrackingLinkOut,
     TrackingLinkRead,
     TrackingLinkUpdate,
@@ -120,6 +121,20 @@ async def create_tracking_link_v1(
 ) -> TrackingLinkRead:
     return await TrackingService(db).create_tracking_link(
         data=data,
+        actor=current_user,
+    )
+
+
+@v1_router.get("/links/target-steps", response_model=list[TrackingFunnelStepOption])
+async def list_tracking_target_steps_v1(
+    project_id: UUID = Query(...),
+    bot_id: UUID = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TrackingFunnelStepOption]:
+    return await TrackingService(db).list_target_funnel_steps(
+        project_id=project_id,
+        bot_id=bot_id,
         actor=current_user,
     )
 

@@ -29,6 +29,8 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_tracking_links_code", "code"),
         Index("ix_tracking_links_is_active", "is_active"),
         Index("ix_tracking_links_target_step_id", "target_step_id"),
+        Index("ix_tracking_links_target_funnel_id", "target_funnel_id"),
+        Index("ix_tracking_links_target_funnel_step_key", "target_funnel_step_key"),
         Index("ix_tracking_links_buyer_id", "buyer_id"),
         CheckConstraint(
             "base_conversion_rate >= 0 AND base_conversion_rate <= 100",
@@ -107,12 +109,20 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     target_step_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("bot_steps.id"), nullable=True
     )
+    target_funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True
+    )
+    target_funnel_step_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     project: Mapped[Project] = relationship("Project")
     bot: Mapped[Bot] = relationship("Bot", back_populates="tracking_links")
     target_step: Mapped[Optional[BotStep]] = relationship(
         "BotStep",
         foreign_keys=[target_step_id],
+    )
+    target_funnel: Mapped[Optional[Funnel]] = relationship(
+        "Funnel",
+        foreign_keys=[target_funnel_id],
     )
     created_by_user: Mapped[Optional[User]] = relationship(
         "User",

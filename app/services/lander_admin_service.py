@@ -20,6 +20,8 @@ from app.schemas.lander import (
     ProjectLanderOut,
 )
 from app.services.access_control import require_project_access
+from app.schemas.tracking import TrackingLinkCreate
+from app.services.tracking_service import TrackingService
 
 
 class LanderAdminService:
@@ -116,8 +118,27 @@ class LanderAdminService:
                 detail="Lander slug already exists",
             )
         await self._ensure_domain_belongs_to_project(data.domain_id, project_id)
-        if data.tracking_link_id is not None:
-            await self._ensure_tracking_link_belongs_to_project(data.tracking_link_id, project_id)
+        tracking_link_id = data.tracking_link_id
+        if tracking_link_id is not None:
+            await self._ensure_tracking_link_belongs_to_project(tracking_link_id, project_id)
+        elif data.campaign is not None:
+            campaign = data.campaign
+            tracking_link = await TrackingService(self.db).create_tracking_link(
+                data=TrackingLinkCreate(
+                    project_id=project_id,
+                    bot_id=campaign.bot_id,
+                    title=campaign.title,
+                    code=campaign.code,
+                    buyer_name=campaign.buyer_name,
+                    ad_type=campaign.ad_type,
+                    payment_type=campaign.payment_type,
+                    base_conversion_rate=campaign.base_conversion_rate,
+                    min_sample_size=campaign.min_sample_size,
+                    target_funnel_step_key=campaign.target_funnel_step_key,
+                ),
+                actor=actor,
+            )
+            tracking_link_id = tracking_link.id
 
         lander = ProjectLander(
             project_id=project_id,
@@ -125,7 +146,9 @@ class LanderAdminService:
             name=data.name,
             type=lander_type,
             slug=slug,
-            tracking_link_id=data.tracking_link_id,
+            tracking_link_id=tracking_link_id,
+            pixels_json=[pixel.model_dump() for pixel in data.pixels],
+            utm_defaults_json=data.utm_defaults,
         )
         self.db.add(lander)
         await self.db.flush()

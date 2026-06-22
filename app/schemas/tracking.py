@@ -28,6 +28,7 @@ class TrackingLinkCreate(BaseModel):
     base_conversion_rate: float = Field(default=10.0, ge=0, le=100)
     min_sample_size: int = Field(default=500, ge=1)
     target_step_id: Optional[uuid.UUID] = None
+    target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def require_title_or_name(self) -> "TrackingLinkCreate":
@@ -55,6 +56,7 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     base_conversion_rate: Optional[float] = Field(None, ge=0, le=100)
     min_sample_size: Optional[int] = Field(None, ge=1)
     target_step_id: Optional[uuid.UUID] = None
+    target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
 
 
 class TrackingLinkOut(OrmBase):
@@ -89,7 +91,17 @@ class TrackingLinkRead(OrmBase):
     updated_at: datetime
     base_conversion_rate: float
     min_sample_size: int
+    target_funnel_id: Optional[uuid.UUID] = None
+    target_funnel_step_key: Optional[str] = None
+    target_funnel_step_title: Optional[str] = None
     total_spend: Optional[Decimal] = None
+
+
+class TrackingFunnelStepOption(BaseModel):
+    key: str
+    title: str
+    step_type: str
+    block_type: str
 
 
 class TrackingSpendCreate(BaseModel):

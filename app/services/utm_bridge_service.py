@@ -5,6 +5,7 @@ import logging
 import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
+from uuid import UUID
 
 from app.core.redis import get_redis
 
@@ -19,6 +20,8 @@ class UtmBridgeService:
 
     KEY_PREFIX = "utm_bridge:"
     TTL_SECONDS = 15 * 60
+    START_KEY_PREFIX = "start_"
+    LANDER_START_PREFIX = "ls_"
 
     async def store_query_params(self, query_params: QueryParamInput | None) -> str:
         payload = self.normalize_query_params(query_params)
@@ -52,6 +55,47 @@ class UtmBridgeService:
             return None
         return payload
 
+    async def store_lander_start(
+        self,
+        *,
+        ref_code: str,
+        query_params: QueryParamInput | None,
+    ) -> str:
+        key = f"{self.START_KEY_PREFIX}{uuid.uuid4().hex[:10]}"
+        payload = {
+            "ref_code": ref_code,
+            "params": self.normalize_query_params(query_params),
+        }
+        redis = await get_redis()
+        await redis.setex(
+            self._redis_key(key),
+            self.TTL_SECONDS,
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+        return key
+
+    async def load_lander_start(self, key: str) -> tuple[str, dict[str, Any]] | None:
+        normalized_key = self.normalize_start_key(key)
+        if normalized_key is None:
+            return None
+
+        redis = await get_redis()
+        raw = await redis.get(self._redis_key(normalized_key))
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Invalid landing start bridge JSON payload key=%s", normalized_key)
+            return None
+        if not isinstance(payload, dict):
+            return None
+        ref_code = payload.get("ref_code")
+        params = payload.get("params")
+        if not isinstance(ref_code, str) or not ref_code.strip() or not isinstance(params, dict):
+            return None
+        return ref_code.strip(), params
+
     @classmethod
     def normalize_utm_key(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
@@ -65,6 +109,53 @@ class UtmBridgeService:
         except ValueError:
             return None
         return f"utm_{suffix.lower()}"
+
+    @classmethod
+    def normalize_start_key(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        if not normalized.startswith(cls.START_KEY_PREFIX):
+            return None
+        suffix = normalized.removeprefix(cls.START_KEY_PREFIX)
+        if len(suffix) != 10:
+            return None
+        try:
+            int(suffix, 16)
+        except ValueError:
+            return None
+        return f"{cls.START_KEY_PREFIX}{suffix.lower()}"
+
+    @classmethod
+    def build_lander_start_payload(cls, tracking_link_id: UUID, start_key: str) -> str:
+        """Build a Telegram-safe payload with durable campaign attribution."""
+        normalized_key = cls.normalize_start_key(start_key)
+        if normalized_key is None:
+            raise ValueError("Invalid landing start key")
+        return (
+            f"{cls.LANDER_START_PREFIX}{tracking_link_id.hex}_"
+            f"{normalized_key.removeprefix(cls.START_KEY_PREFIX)}"
+        )
+
+    @classmethod
+    def parse_lander_start_payload(cls, value: str | None) -> tuple[UUID, str] | None:
+        normalized = (value or "").strip().lower()
+        prefix_length = len(cls.LANDER_START_PREFIX)
+        expected_length = prefix_length + 32 + 1 + 10
+        if not normalized.startswith(cls.LANDER_START_PREFIX) or len(normalized) != expected_length:
+            return None
+
+        tracking_link_hex = normalized[prefix_length : prefix_length + 32]
+        separator_index = prefix_length + 32
+        start_suffix = normalized[separator_index + 1 :]
+        if normalized[separator_index] != "_":
+            return None
+        try:
+            tracking_link_id = UUID(hex=tracking_link_hex)
+        except ValueError:
+            return None
+        start_key = cls.normalize_start_key(f"{cls.START_KEY_PREFIX}{start_suffix}")
+        if start_key is None:
+            return None
+        return tracking_link_id, start_key
 
     @staticmethod
     def normalize_query_params(query_params: QueryParamInput | None) -> dict[str, Any]:

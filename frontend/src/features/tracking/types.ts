@@ -14,6 +14,9 @@ export type TrackingLink = {
   updated_at: string
   base_conversion_rate: number
   min_sample_size: number
+  target_funnel_id: string | null
+  target_funnel_step_key: string | null
+  target_funnel_step_title: string | null
   total_spend?: string | number | null
 }
 
@@ -28,6 +31,7 @@ export type TrackingLinkCreatePayload = {
   invite_link?: string | null
   base_conversion_rate?: number
   min_sample_size?: number
+  target_funnel_step_key?: string | null
 }
 
 export type TrackingLinkUpdatePayload = Partial<{
@@ -40,7 +44,15 @@ export type TrackingLinkUpdatePayload = Partial<{
   is_active: boolean
   base_conversion_rate: number
   min_sample_size: number
+  target_funnel_step_key: string | null
 }>
+
+export type TrackingFunnelStepOption = {
+  key: string
+  title: string
+  step_type: string
+  block_type: string
+}
 
 export type TrackingSpend = {
   id: string

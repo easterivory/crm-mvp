@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 
+import { fetchBots, type Bot } from '../../bots'
 import { Modal } from '../../../shared/ui'
 import {
   createProjectDomain,
@@ -21,12 +22,16 @@ import {
   deleteProjectDomain,
   deleteProjectLander,
   fetchActiveTrackingLinks,
+  fetchLanderTargetSteps,
   fetchProjectDomains,
   fetchProjectLanders,
   uploadProjectLanderZip,
 } from '../api'
 import type {
   LanderType,
+  LanderPixel,
+  LanderPixelProvider,
+  LanderTargetStep,
   ProjectDomain,
   ProjectLander,
   TrackingLinkOption,
@@ -45,7 +50,23 @@ type LanderForm = {
   name: string
   domainId: string
   slug: string
+  trackingMode: 'campaign' | 'existing'
   trackingLinkId: string
+  campaignBotId: string
+  campaignTitle: string
+  campaignCode: string
+  campaignBuyerName: string
+  campaignAdType: string
+  campaignPaymentType: string
+  campaignTargetStepKey: string
+  metaPixelId: string
+  tiktokPixelId: string
+  googleTagId: string
+  utmSource: string
+  utmMedium: string
+  utmCampaign: string
+  utmTerm: string
+  utmContent: string
   type: LanderType
   zipFile: File | null
 }
@@ -54,7 +75,23 @@ const emptyLanderForm: LanderForm = {
   name: '',
   domainId: '',
   slug: '',
+  trackingMode: 'campaign',
   trackingLinkId: '',
+  campaignBotId: '',
+  campaignTitle: '',
+  campaignCode: '',
+  campaignBuyerName: '',
+  campaignAdType: '',
+  campaignPaymentType: '',
+  campaignTargetStepKey: '',
+  metaPixelId: '',
+  tiktokPixelId: '',
+  googleTagId: '',
+  utmSource: '',
+  utmMedium: '',
+  utmCampaign: '',
+  utmTerm: '',
+  utmContent: '',
   type: 'default_tg_redirect',
   zipFile: null,
 }
@@ -108,10 +145,39 @@ function buildLanderUrl(domainName: string, slug: string) {
   return `https://${domainName}/l/${slug}`
 }
 
+function buildPixels(form: LanderForm): LanderPixel[] {
+  const values: Array<[LanderPixelProvider, string]> = [
+    ['meta', form.metaPixelId],
+    ['tiktok', form.tiktokPixelId],
+    ['google_tag', form.googleTagId],
+  ]
+  return values
+    .map(([provider, pixelId]) => ({ provider, pixel_id: pixelId.trim() }))
+    .filter((pixel) => pixel.pixel_id.length > 0)
+}
+
+function buildUtmDefaults(form: LanderForm): Record<string, string> {
+  const values: Array<[string, string]> = [
+    ['utm_source', form.utmSource],
+    ['utm_medium', form.utmMedium],
+    ['utm_campaign', form.utmCampaign],
+    ['utm_term', form.utmTerm],
+    ['utm_content', form.utmContent],
+  ]
+  return Object.fromEntries(
+    values
+      .map(([key, value]) => [key, value.trim()] as const)
+      .filter(([, value]) => value.length > 0),
+  )
+}
+
 export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const [domains, setDomains] = useState<ProjectDomain[]>([])
   const [landers, setLanders] = useState<ProjectLander[]>([])
   const [trackingLinks, setTrackingLinks] = useState<TrackingLinkOption[]>([])
+  const [bots, setBots] = useState<Bot[]>([])
+  const [targetSteps, setTargetSteps] = useState<LanderTargetStep[]>([])
+  const [isTargetStepsLoading, setIsTargetStepsLoading] = useState(false)
   const [newDomainName, setNewDomainName] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isAddingDomain, setIsAddingDomain] = useState(false)
@@ -137,20 +203,23 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       setDomains([])
       setLanders([])
       setTrackingLinks([])
+      setBots([])
       return
     }
 
     setIsLoading(true)
     setBanner(null)
     try {
-      const [domainItems, landerItems, linkItems] = await Promise.all([
+      const [domainItems, landerItems, linkItems, botItems] = await Promise.all([
         fetchProjectDomains(projectId),
         fetchProjectLanders(projectId),
         fetchActiveTrackingLinks(projectId),
+        fetchBots(projectId),
       ])
       setDomains(domainItems)
       setLanders(landerItems)
       setTrackingLinks(linkItems)
+      setBots(botItems)
     } catch (err) {
       setBanner({
         tone: 'error',
@@ -170,9 +239,47 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       ...emptyLanderForm,
       domainId: domains[0]?.id ?? '',
       trackingLinkId: trackingLinks[0]?.id ?? '',
+      campaignBotId: bots[0]?.id ?? '',
       slug: generateSlug(),
     })
-  }, [domains, trackingLinks])
+  }, [bots, domains, trackingLinks])
+
+  useEffect(() => {
+    if (!isModalOpen || !projectId || form.trackingMode !== 'campaign' || !form.campaignBotId) {
+      setTargetSteps([])
+      setIsTargetStepsLoading(false)
+      return
+    }
+
+    let isMounted = true
+    setIsTargetStepsLoading(true)
+    void fetchLanderTargetSteps(projectId, form.campaignBotId)
+      .then((items) => {
+        if (!isMounted) {
+          return
+        }
+        setTargetSteps(items)
+        setForm((current) =>
+          current.campaignTargetStepKey && !items.some((item) => item.key === current.campaignTargetStepKey)
+            ? { ...current, campaignTargetStepKey: '' }
+            : current,
+        )
+      })
+      .catch(() => {
+        if (isMounted) {
+          setTargetSteps([])
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsTargetStepsLoading(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [form.campaignBotId, form.trackingMode, isModalOpen, projectId])
 
   const openCreateModal = () => {
     resetForm()
@@ -267,8 +374,16 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     if (!projectId || isSavingLander) {
       return
     }
-    if (!form.domainId || !form.trackingLinkId || !form.slug.trim()) {
-      setBanner({ tone: 'error', message: 'Заполните домен, slug и реф-ссылку.' })
+    if (!form.domainId || !form.slug.trim()) {
+      setBanner({ tone: 'error', message: 'Заполните домен и slug.' })
+      return
+    }
+    if (form.trackingMode === 'existing' && !form.trackingLinkId) {
+      setBanner({ tone: 'error', message: 'Выберите существующую tracking link.' })
+      return
+    }
+    if (form.trackingMode === 'campaign' && !form.campaignBotId) {
+      setBanner({ tone: 'error', message: 'Выберите бота для кампании.' })
       return
     }
     const slug = normalizeSlugInput(form.slug)
@@ -292,7 +407,20 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
         name: form.name.trim() || slug,
         type: form.type,
         slug,
-        tracking_link_id: form.trackingLinkId,
+        tracking_link_id: form.trackingMode === 'existing' ? form.trackingLinkId : null,
+        campaign: form.trackingMode === 'campaign'
+          ? {
+              bot_id: form.campaignBotId,
+              title: form.campaignTitle.trim() || form.name.trim() || `Landing ${slug}`,
+              code: form.campaignCode.trim() || null,
+              buyer_name: form.campaignBuyerName.trim() || null,
+              ad_type: form.campaignAdType.trim() || null,
+              payment_type: form.campaignPaymentType.trim() || null,
+              target_funnel_step_key: form.campaignTargetStepKey || null,
+            }
+          : null,
+        pixels: buildPixels(form),
+        utm_defaults: buildUtmDefaults(form),
       })
       if (form.type === 'custom_upload' && form.zipFile) {
         await uploadProjectLanderZip(projectId, created.id, form.zipFile)
@@ -300,7 +428,12 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       setIsModalOpen(false)
       setForm(emptyLanderForm)
       await loadData()
-      setBanner({ tone: 'success', message: 'Лендинг создан.' })
+      setBanner({
+        tone: 'success',
+        message: form.trackingMode === 'campaign'
+          ? 'Лендинг и отдельная campaign tracking link созданы.'
+          : 'Лендинг создан.',
+      })
     } catch (err) {
       setBanner({
         tone: 'error',
@@ -331,7 +464,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
         <button
           type="button"
           onClick={openCreateModal}
-          disabled={domains.length === 0 || trackingLinks.length === 0}
+          disabled={domains.length === 0 || bots.length === 0}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus size={16} />
@@ -473,13 +606,13 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
           <div>
             <h3 className="text-base font-semibold text-zinc-100">Конструктор Прокладок</h3>
             <p className="mt-1 text-sm text-zinc-500">
-              Лендинги с автоматической подстановкой ref-кода и UTM-ключа.
+              Кампания, Telegram-переход, UTM-атрибуция и пиксели в одном объекте.
             </p>
           </div>
           <button
             type="button"
             onClick={openCreateModal}
-            disabled={domains.length === 0 || trackingLinks.length === 0}
+            disabled={domains.length === 0 || bots.length === 0}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-100 transition hover:border-emerald-500/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus size={16} />
@@ -493,7 +626,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               <tr>
                 <th className="px-4 py-3">Название</th>
                 <th className="px-4 py-3">Итоговая ссылка</th>
-                <th className="px-4 py-3">Реф-ссылка</th>
+                <th className="px-4 py-3">Кампания и атрибуция</th>
                 <th className="w-[96px] px-4 py-3 text-right">Действия</th>
               </tr>
             </thead>
@@ -550,14 +683,35 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {link ? (
-                          <div>
-                            <div className="text-zinc-100">{link.title}</div>
-                            <div className="font-mono text-xs text-zinc-500">{link.code}</div>
+                        <div className="space-y-2">
+                          {link ? (
+                            <div>
+                              <div className="text-zinc-100">{link.title}</div>
+                              <div className="font-mono text-xs text-zinc-500">{link.code}</div>
+                            </div>
+                          ) : (
+                            <span className="text-zinc-500">Не найдена</span>
+                          )}
+                          <div className="flex flex-wrap gap-1.5 text-xs">
+                            {lander.pixels_json.length > 0 ? (
+                              lander.pixels_json.map((pixel) => (
+                                <span
+                                  key={`${pixel.provider}-${pixel.pixel_id}`}
+                                  className="rounded-md border border-violet-400/20 bg-violet-400/10 px-2 py-0.5 text-violet-100"
+                                >
+                                  {pixel.provider}: {pixel.pixel_id}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-zinc-600">Без пикселей</span>
+                            )}
+                            {Object.keys(lander.utm_defaults_json).length > 0 ? (
+                              <span className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">
+                                UTM defaults
+                              </span>
+                            ) : null}
                           </div>
-                        ) : (
-                          <span className="text-zinc-500">Не найдена</span>
-                        )}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end">
@@ -588,7 +742,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       {isModalOpen ? (
         <Modal
           title="Создать лендинг"
-          description="Выберите домен, slug, ref-ссылку и тип прокладки."
+          description="По умолчанию создается отдельная campaign tracking link. Существующую ссылку можно выбрать только для осознанного переиспользования."
           onClose={() => {
             if (!isSavingLander) {
               setIsModalOpen(false)
@@ -677,24 +831,168 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               </button>
             </div>
 
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-zinc-300">
-                Целевая ссылка баера
-              </span>
-              <select
-                value={form.trackingLinkId}
-                onChange={(event) => setForm((current) => ({ ...current, trackingLinkId: event.target.value }))}
-                required
-                className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
-              >
-                <option value="">Выберите tracking link</option>
-                {trackingLinks.map((link) => (
-                  <option key={link.id} value={link.id}>
-                    {link.title} · {link.code}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <fieldset className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+              <legend className="px-1 text-sm font-semibold text-zinc-100">Tracking-кампания</legend>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setForm((current) => ({ ...current, trackingMode: 'campaign', trackingLinkId: '' }))}
+                  className={`min-h-11 rounded-lg border px-3 text-left text-sm transition ${
+                    form.trackingMode === 'campaign'
+                      ? 'border-emerald-400/50 bg-emerald-500/10 text-emerald-100'
+                      : 'border-white/10 text-zinc-400 hover:border-white/20'
+                  }`}
+                >
+                  <span className="block font-semibold">Новая кампания</span>
+                  <span className="mt-0.5 block text-xs opacity-75">Создать отдельную ссылку для этого лендинга</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm((current) => ({ ...current, trackingMode: 'existing' }))}
+                  className={`min-h-11 rounded-lg border px-3 text-left text-sm transition ${
+                    form.trackingMode === 'existing'
+                      ? 'border-cyan-400/50 bg-cyan-500/10 text-cyan-100'
+                      : 'border-white/10 text-zinc-400 hover:border-white/20'
+                  }`}
+                >
+                  <span className="block font-semibold">Использовать существующую</span>
+                  <span className="mt-0.5 block text-xs opacity-75">Один источник для нескольких лендингов</span>
+                </button>
+              </div>
+
+              {form.trackingMode === 'campaign' ? (
+                <div className="mt-4 space-y-3">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-zinc-300">Бот кампании</span>
+                      <select
+                        value={form.campaignBotId}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            campaignBotId: event.target.value,
+                            campaignTargetStepKey: '',
+                          }))
+                        }
+                        required
+                        className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                      >
+                        <option value="">Выберите бота</option>
+                        {bots.map((bot) => (
+                          <option key={bot.id} value={bot.id}>{bot.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-zinc-300">Название кампании</span>
+                      <input
+                        value={form.campaignTitle}
+                        onChange={(event) => setForm((current) => ({ ...current, campaignTitle: event.target.value }))}
+                        maxLength={255}
+                        placeholder="Например: Meta ES June"
+                        className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Код</span>
+                      <input
+                        value={form.campaignCode}
+                        onChange={(event) => setForm((current) => ({ ...current, campaignCode: event.target.value }))}
+                        maxLength={64}
+                        placeholder="auto"
+                        className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Баер</span>
+                      <input
+                        value={form.campaignBuyerName}
+                        onChange={(event) => setForm((current) => ({ ...current, campaignBuyerName: event.target.value }))}
+                        maxLength={255}
+                        placeholder="Имя"
+                        className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Тип рекламы</span>
+                      <input
+                        value={form.campaignAdType}
+                        onChange={(event) => setForm((current) => ({ ...current, campaignAdType: event.target.value }))}
+                        maxLength={100}
+                        placeholder="meta"
+                        className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                      />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-zinc-300">Точка входа в активную воронку</span>
+                    <select
+                      value={form.campaignTargetStepKey}
+                      onChange={(event) => setForm((current) => ({ ...current, campaignTargetStepKey: event.target.value }))}
+                      disabled={!form.campaignBotId || isTargetStepsLoading}
+                      className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+                    >
+                      <option value="">Начать с обычного триггера</option>
+                      {targetSteps.map((step) => (
+                        <option key={step.key} value={step.key}>
+                          {step.title} · {step.block_type}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-xs text-zinc-500">
+                      {isTargetStepsLoading
+                        ? 'Загружаем шаги опубликованной воронки...'
+                        : 'Шаги доступны только у активной опубликованной воронки выбранного бота.'}
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <label className="mt-4 block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-300">Существующая tracking link</span>
+                  <select
+                    value={form.trackingLinkId}
+                    onChange={(event) => setForm((current) => ({ ...current, trackingLinkId: event.target.value }))}
+                    required
+                    className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                  >
+                    <option value="">Выберите tracking link</option>
+                    {trackingLinks.map((link) => (
+                      <option key={link.id} value={link.id}>{link.title} · {link.code}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </fieldset>
+
+            <fieldset className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+              <legend className="px-1 text-sm font-semibold text-zinc-100">Пиксели и UTM</legend>
+              <p className="mt-1 text-xs leading-5 text-zinc-500">
+                Пиксели получают PageView на открытии и событие TelegramOpen при переходе. UTM из URL сохраняются у лида автоматически; значения ниже подставляются, только если в URL их нет.
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Meta Pixel ID</span>
+                  <input value={form.metaPixelId} onChange={(event) => setForm((current) => ({ ...current, metaPixelId: event.target.value }))} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">TikTok Pixel ID</span>
+                  <input value={form.tiktokPixelId} onChange={(event) => setForm((current) => ({ ...current, tiktokPixelId: event.target.value }))} placeholder="C123ABC..." className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Google Tag ID</span>
+                  <input value={form.googleTagId} onChange={(event) => setForm((current) => ({ ...current, googleTagId: event.target.value }))} placeholder="G-XXXXXXX" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_source</span><input value={form.utmSource} onChange={(event) => setForm((current) => ({ ...current, utmSource: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
+                <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_medium</span><input value={form.utmMedium} onChange={(event) => setForm((current) => ({ ...current, utmMedium: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
+                <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_campaign</span><input value={form.utmCampaign} onChange={(event) => setForm((current) => ({ ...current, utmCampaign: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
+                <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_term</span><input value={form.utmTerm} onChange={(event) => setForm((current) => ({ ...current, utmTerm: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
+                <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_content</span><input value={form.utmContent} onChange={(event) => setForm((current) => ({ ...current, utmContent: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
+              </div>
+            </fieldset>
 
             {form.type === 'custom_upload' ? (
               <label className="block rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-4">

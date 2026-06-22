@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
@@ -74,6 +74,18 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         UUID(as_uuid=True),
         ForeignKey("tracking_links.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    pixels_json: Mapped[list[dict]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="'[]'::jsonb",
+    )
+    utm_defaults_json: Mapped[dict[str, str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default="'{}'::jsonb",
     )
     custom_html_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     is_active: Mapped[bool] = mapped_column(

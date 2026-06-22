@@ -112,6 +112,7 @@ class FunnelRuntimeService:
         chat_id: UUID,
         funnel_id: UUID,
         funnel_version_id: UUID,
+        start_step_key: str | None = None,
     ) -> Optional[FunnelStep]:
         steps = await self.repo.list_steps(funnel_version_id)
         trigger = next((step for step in steps if step.step_type == "trigger"), None)
@@ -124,24 +125,38 @@ class FunnelRuntimeService:
                 funnel_version_id,
             )
             return None
+        initial_step = trigger
+        if start_step_key:
+            target_step = next((step for step in steps if step.key == start_step_key), None)
+            if target_step is None:
+                logger.warning(
+                    "Tracking target step was not found; falling back to trigger chat_id=%s "
+                    "funnel_id=%s funnel_version_id=%s target_step_key=%s",
+                    chat_id,
+                    funnel_id,
+                    funnel_version_id,
+                    start_step_key,
+                )
+            else:
+                initial_step = target_step
         await self.repo.upsert_chat_funnel_state(
             chat_id=chat_id,
             funnel_id=funnel_id,
             funnel_version_id=funnel_version_id,
-            current_step_id=trigger.id,
+            current_step_id=initial_step.id,
             entered_step_at=datetime.now(timezone.utc),
             waiting_for_answer=False,
             runtime_json={},
         )
-        await self._log_runtime_step(chat_id=chat_id, step=trigger, status="success")
+        await self._log_runtime_step(chat_id=chat_id, step=initial_step, status="success")
         logger.info(
-            "Starting active funnel chat_id=%s funnel_id=%s funnel_version_id=%s trigger_step_id=%s",
+            "Starting active funnel chat_id=%s funnel_id=%s funnel_version_id=%s start_step_id=%s",
             chat_id,
             funnel_id,
             funnel_version_id,
-            trigger.id,
+            initial_step.id,
         )
-        return await self._execute_from_step(chat_id=chat_id, step=trigger)
+        return await self._execute_from_step(chat_id=chat_id, step=initial_step)
 
     async def get_current_step(self, chat_id: UUID) -> Optional[FunnelStep]:
         state = await self.repo.get_chat_funnel_state(chat_id)

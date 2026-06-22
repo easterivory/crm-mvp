@@ -38,6 +38,7 @@ import {
   fetchLinkTrackingMetrics,
   fetchProjectTrackingMetrics,
   fetchTrackingLinks,
+  fetchTrackingTargetSteps,
   fetchTrackingSpends,
   restoreTrackingLink,
   updateTrackingLink,
@@ -51,6 +52,7 @@ import type {
   TrackingLinkMetricsResponse,
   TrackingMetricSummary,
   TrackingProjectMetricsResponse,
+  TrackingFunnelStepOption,
   TrackingSpend,
 } from '../features/tracking/types'
 import { useProjectBotSelection } from '../shared/lib'
@@ -330,6 +332,7 @@ export default function TrackingPage() {
   const [createMinSampleSize, setCreateMinSampleSize] = useState(
     DEFAULT_MIN_SAMPLE_SIZE,
   )
+  const [createTargetStepKey, setCreateTargetStepKey] = useState('')
   const [createError, setCreateError] = useState('')
   const [isCreatingLink, setIsCreatingLink] = useState(false)
   const [mutatingLinkId, setMutatingLinkId] = useState<string | null>(null)
@@ -345,6 +348,9 @@ export default function TrackingPage() {
   const [editMinSampleSize, setEditMinSampleSize] = useState(
     DEFAULT_MIN_SAMPLE_SIZE,
   )
+  const [editTargetStepKey, setEditTargetStepKey] = useState('')
+  const [targetStepsByBot, setTargetStepsByBot] = useState<Record<string, TrackingFunnelStepOption[]>>({})
+  const [targetStepsLoadingBotId, setTargetStepsLoadingBotId] = useState<string | null>(null)
   const [editError, setEditError] = useState('')
   const [isUpdatingLink, setIsUpdatingLink] = useState(false)
   const [detailLink, setDetailLink] = useState<TrackingLink | null>(null)
@@ -493,6 +499,25 @@ export default function TrackingPage() {
     }
   }, [detailLink, loadDetail])
 
+  const loadTargetSteps = useCallback(async (botId: string) => {
+    if (!selectedProjectId || !botId) {
+      return
+    }
+    if (targetStepsByBot[botId]) {
+      return
+    }
+
+    setTargetStepsLoadingBotId(botId)
+    try {
+      const steps = await fetchTrackingTargetSteps(selectedProjectId, botId)
+      setTargetStepsByBot((current) => ({ ...current, [botId]: steps }))
+    } catch {
+      setTargetStepsByBot((current) => ({ ...current, [botId]: [] }))
+    } finally {
+      setTargetStepsLoadingBotId((current) => (current === botId ? null : current))
+    }
+  }, [selectedProjectId, targetStepsByBot])
+
   const openCreateLink = () => {
     const defaultBotId =
       selectedBotIds.length === 1 && bots.some((bot) => bot.id === selectedBotIds[0])
@@ -507,8 +532,12 @@ export default function TrackingPage() {
     setCreateInviteLink('')
     setCreateBaseConversionRate(DEFAULT_BASE_CONVERSION_RATE)
     setCreateMinSampleSize(DEFAULT_MIN_SAMPLE_SIZE)
+    setCreateTargetStepKey('')
     setCreateError('')
     setIsCreateOpen(true)
+    if (defaultBotId) {
+      void loadTargetSteps(defaultBotId)
+    }
   }
 
   const closeCreateLink = () => {
@@ -550,6 +579,7 @@ export default function TrackingPage() {
         invite_link: createInviteLink.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
+        target_funnel_step_key: createTargetStepKey || null,
       })
       setIsCreateOpen(false)
       setNotice('Tracking link создан.')
@@ -570,7 +600,9 @@ export default function TrackingPage() {
     setEditInviteLink(link.invite_link ?? '')
     setEditBaseConversionRate(String(link.base_conversion_rate ?? 10))
     setEditMinSampleSize(String(link.min_sample_size ?? 500))
+    setEditTargetStepKey(link.target_funnel_step_key ?? '')
     setEditError('')
+    void loadTargetSteps(link.bot_id)
   }
 
   const closeEditLink = () => {
@@ -610,6 +642,7 @@ export default function TrackingPage() {
         invite_link: editInviteLink.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
+        target_funnel_step_key: editTargetStepKey || null,
       })
       setNotice('Tracking link обновлён.')
       setEditingLink(null)
@@ -1012,6 +1045,11 @@ export default function TrackingPage() {
                     <p className="mt-1 truncate text-sm text-gray-500">
                       {botLabel} · {link.buyer_name || 'buyer не указан'} · {link.ad_type || 'тип рекламы не указан'} · {link.payment_type || 'оплата не указана'}
                     </p>
+                    {link.target_funnel_step_key ? (
+                      <p className="mt-2 inline-flex max-w-full items-center rounded-lg border border-violet-300/20 bg-violet-400/10 px-2 py-1 text-xs text-violet-100">
+                        Вход: {link.target_funnel_step_title || link.target_funnel_step_key}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex shrink-0 gap-2">
                     <button
@@ -1138,7 +1176,12 @@ export default function TrackingPage() {
               </span>
               <select
                 value={createBotId}
-                onChange={(event) => setCreateBotId(event.target.value)}
+                onChange={(event) => {
+                  const botId = event.target.value
+                  setCreateBotId(botId)
+                  setCreateTargetStepKey('')
+                  void loadTargetSteps(botId)
+                }}
                 required
                 className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
               >
@@ -1151,6 +1194,29 @@ export default function TrackingPage() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Точка входа в воронку
+              </span>
+              <select
+                value={createTargetStepKey}
+                onChange={(event) => setCreateTargetStepKey(event.target.value)}
+                disabled={!createBotId || targetStepsLoadingBotId === createBotId}
+                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+              >
+                <option value="">Обычный старт воронки</option>
+                {(targetStepsByBot[createBotId] ?? []).map((step) => (
+                  <option key={step.key} value={step.key}>
+                    {step.title} · {step.block_type}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-xs text-gray-500">
+                {targetStepsLoadingBotId === createBotId
+                  ? 'Загружаем шаги активной воронки...'
+                  : 'Выберите шаг, если трафик должен заходить не через стартовый триггер.'}
+              </span>
             </label>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
@@ -1346,6 +1412,29 @@ export default function TrackingPage() {
                 />
               </label>
             </div>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Точка входа в активную воронку
+              </span>
+              <select
+                value={editTargetStepKey}
+                onChange={(event) => setEditTargetStepKey(event.target.value)}
+                disabled={targetStepsLoadingBotId === editingLink.bot_id}
+                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+              >
+                <option value="">Обычный старт воронки</option>
+                {(targetStepsByBot[editingLink.bot_id] ?? []).map((step) => (
+                  <option key={step.key} value={step.key}>
+                    {step.title} · {step.block_type}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-xs text-gray-500">
+                {targetStepsLoadingBotId === editingLink.bot_id
+                  ? 'Загружаем шаги активной воронки...'
+                  : 'Ссылка зайдет прямо на выбранный шаг, если активная воронка этого бота не изменилась.'}
+              </span>
+            </label>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">

@@ -6,6 +6,7 @@ import type {
   TrackingLinkCreatePayload,
   TrackingLinkMetricsResponse,
   TrackingLinkUpdatePayload,
+  TrackingFunnelStepOption,
   TrackingMetricSummary,
   TrackingProjectMetricsResponse,
   TrackingSpend,
@@ -39,6 +40,16 @@ export async function fetchTrackingLinks(
     },
   })
 
+  return data
+}
+
+export async function fetchTrackingTargetSteps(
+  projectId: string,
+  botId: string,
+): Promise<TrackingFunnelStepOption[]> {
+  const { data } = await api.get<TrackingFunnelStepOption[]>('/tracking/links/target-steps', {
+    params: { project_id: projectId, bot_id: botId },
+  })
   return data
 }
 

@@ -139,6 +139,19 @@ function formatDateTime(value: string | null) {
   }).format(new Date(value))
 }
 
+function attributionEntries(customFields: Record<string, unknown> | undefined) {
+  const raw = customFields?.fb_data
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return []
+  }
+
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(([key, value]) => (
+      key.startsWith('utm_') || ['fbclid', 'gclid', 'ttclid'].includes(key)
+    ) && (typeof value === 'string' || typeof value === 'number'))
+    .map(([key, value]) => [key, String(value)] as const)
+}
+
 function getErrorMessage(err: unknown) {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
@@ -227,6 +240,11 @@ export default function LeadSidebar({
       ['Карта', lead.has_card === null ? null : lead.has_card ? 'Есть' : 'Нет'],
     ].filter(([, value]) => Boolean(value))
   }, [lead])
+
+  const attributionDetails = useMemo(
+    () => attributionEntries(lead?.custom_fields),
+    [lead?.custom_fields],
+  )
 
   const loadStatuses = useCallback(async () => {
     const { data } = await api.get<LeadStatus[]>('/leads/statuses')
@@ -597,6 +615,19 @@ export default function LeadSidebar({
                 </p>
               ) : null}
             </div>
+
+            {attributionDetails.length > 0 ? (
+              <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/[0.05] p-4">
+                <p className="text-sm font-medium text-cyan-100">Атрибуция трафика</p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {attributionDetails.map(([key, value]) => (
+                    <span key={key} className="rounded-md border border-cyan-300/15 bg-background/40 px-2 py-1 text-xs text-gray-200">
+                      <span className="text-cyan-100">{key}</span>={value}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-xl border border-accent-300/15 bg-accent-400/[0.045] p-4">
               <div className="mb-3 flex items-center justify-between gap-2">

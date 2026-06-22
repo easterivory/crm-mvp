@@ -6,6 +6,7 @@ import type {
   ProjectLander,
   ProjectLanderCreatePayload,
   ProjectLanderUploadResult,
+  LanderTargetStep,
   TrackingLinkOption,
 } from './types'
 
@@ -85,4 +86,14 @@ export async function fetchActiveTrackingLinks(
     },
   )
   return data.items
+}
+
+export async function fetchLanderTargetSteps(
+  projectId: string,
+  botId: string,
+): Promise<LanderTargetStep[]> {
+  const { data } = await api.get<LanderTargetStep[]>('/tracking/links/target-steps', {
+    params: { project_id: projectId, bot_id: botId },
+  })
+  return data
 }

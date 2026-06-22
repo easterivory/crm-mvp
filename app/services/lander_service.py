@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import mimetypes
 import os
@@ -108,12 +109,14 @@ class LanderService:
     ) -> str:
         lander = await self.resolve_lander_request(host=host, slug=slug)
         telegram_url = await self.build_telegram_url(lander, query_params)
+        pixel_markup = self._render_pixel_markup(lander.pixels_json)
 
         if lander.type == self.DEFAULT_TG_REDIRECT:
-            return self._render_default_redirect_html(lander, telegram_url)
+            return self._render_default_redirect_html(lander, telegram_url, pixel_markup)
         if lander.type == self.CUSTOM_UPLOAD:
             html_body = await self._read_custom_index_html(lander)
             html_body = self._inject_base_href(html_body, f"/l/{lander.slug}/")
+            html_body = self._inject_head_markup(html_body, pixel_markup)
             return self.replace_bot_links(html_body, telegram_url, lander)
 
         raise ValueError("Недопустимый тип лендинга")
@@ -158,8 +161,16 @@ class LanderService:
         if not code:
             raise ValueError("Tracking link не содержит code")
 
-        utm_key = await self.utm_bridge.store_query_params(query_params)
-        start_payload = quote(f"ref_{code}_{utm_key}", safe="")
+        utm_params = dict(lander.utm_defaults_json or {})
+        utm_params.update(self.utm_bridge.normalize_query_params(query_params))
+        start_key = await self.utm_bridge.store_lander_start(
+            ref_code=code,
+            query_params=utm_params,
+        )
+        start_payload = quote(
+            self.utm_bridge.build_lander_start_payload(tracking_link.id, start_key),
+            safe="",
+        )
         return f"https://t.me/{username}?start={start_payload}"
 
     def replace_bot_links(
@@ -243,6 +254,15 @@ class LanderService:
             return f'<base href="{safe_href}">\n{html_body}'
         insert_at = head_match.end()
         return f'{html_body[:insert_at]}\n  <base href="{safe_href}">{html_body[insert_at:]}'
+
+    @staticmethod
+    def _inject_head_markup(html_body: str, markup: str) -> str:
+        if not markup:
+            return html_body
+        closing_head = re.search(r"</head\\s*>", html_body, flags=re.IGNORECASE)
+        if closing_head is not None:
+            return f"{html_body[:closing_head.start()]}\n{markup}\n{html_body[closing_head.start():]}"
+        return f"{markup}\n{html_body}"
 
     @classmethod
     def _extract_zip_to_destination(
@@ -335,29 +355,74 @@ class LanderService:
             bot_username = tracking_link.bot.bot_username or ""
         return (bot_username or settings.CLIENT_BOT_USERNAME or "").removeprefix("@").strip()
 
+    @classmethod
+    def _render_pixel_markup(cls, pixels: object) -> str:
+        if not isinstance(pixels, list):
+            return ""
+
+        scripts: list[str] = []
+        for raw_pixel in pixels:
+            if not isinstance(raw_pixel, dict):
+                continue
+            provider = str(raw_pixel.get("provider") or "").strip()
+            pixel_id = str(raw_pixel.get("pixel_id") or "").strip()
+            if not cls._is_safe_pixel_id(pixel_id):
+                logger.warning("Skipped invalid landing pixel provider=%s", provider)
+                continue
+            pixel_json = json.dumps(pixel_id).replace("<", "\\u003c")
+            pixel_attr = html.escape(pixel_id, quote=True)
+            if provider == "meta":
+                scripts.append(
+                    "<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?"
+                    "n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;"
+                    "n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];"
+                    "s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');"
+                    f"fbq('init',{pixel_json});fbq('track','PageView');</script>"
+                    f"<noscript><img height=\"1\" width=\"1\" style=\"display:none\" src=\"https://www.facebook.com/tr?id={pixel_attr}&ev=PageView&noscript=1\" alt=\"\"></noscript>"
+                )
+            elif provider == "tiktok":
+                scripts.append(
+                    "<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=['page','track','identify','instances','debug','on','off','once','ready','alias','group','enableCookie','disableCookie'];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat([].slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e){var i='https://analytics.tiktok.com/i18n/pixel/events.js';ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=i;ttq._t=ttq._t||{};ttq._t[e]=+new Date;ttq._o=ttq._o||{};ttq._o[e]={};var o=d.createElement('script');o.type='text/javascript';o.async=!0;o.src=i+'?sdkid='+e+'&lib='+t;var a=d.getElementsByTagName('script')[0];a.parentNode.insertBefore(o,a)};"
+                    f"ttq.load({pixel_json});ttq.page();}}(window,document,'ttq');</script>"
+                )
+            elif provider == "google_tag":
+                scripts.append(
+                    f"<script async src=\"https://www.googletagmanager.com/gtag/js?id={pixel_attr}\"></script>"
+                    "<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}"
+                    f"gtag('js',new Date());gtag('config',{pixel_json});</script>"
+                )
+        return "\n".join(scripts)
+
+    @staticmethod
+    def _is_safe_pixel_id(value: str) -> bool:
+        return bool(value) and len(value) <= 120 and all(
+            char.isascii() and (char.isalnum() or char in "._-") for char in value
+        )
+
     @staticmethod
     def _render_default_redirect_html(
         lander: ProjectLander,
         telegram_url: str,
+        pixel_markup: str,
     ) -> str:
         title = html.escape(lander.name or "Telegram", quote=True)
         safe_url = html.escape(telegram_url, quote=True)
+        safe_url_json = json.dumps(telegram_url).replace("<", "\\u003c")
         return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
+  {pixel_markup}
   <style>
     :root {{
-      color-scheme: dark;
-      --bg: #05070c;
-      --panel: rgba(12, 18, 30, .82);
-      --line: rgba(52, 211, 153, .28);
-      --text: #f4f7fb;
-      --muted: #9aa4b2;
-      --accent: #34d399;
-      --accent-2: #22d3ee;
+      color-scheme: light;
+      --telegram-blue: #3390ec;
+      --telegram-blue-hover: #2782dc;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e7edf3;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -365,76 +430,84 @@ class LanderService:
       margin: 0;
       display: grid;
       place-items: center;
-      padding: 24px;
-      background:
-        radial-gradient(circle at 50% 0%, rgba(34, 211, 238, .18), transparent 34rem),
-        linear-gradient(135deg, #05070c 0%, #111827 52%, #06130f 100%);
+      padding: 24px 18px;
+      background: #ffffff;
       color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }}
     main {{
       width: min(100%, 440px);
-      padding: 32px;
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: var(--panel);
-      box-shadow: 0 24px 80px rgba(16, 185, 129, .14), inset 0 1px 0 rgba(255, 255, 255, .06);
-      backdrop-filter: blur(18px);
+      padding: 16px 8px 28px;
       text-align: center;
     }}
-    .badge {{
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 28px;
-      padding: 0 12px;
-      border-radius: 999px;
-      border: 1px solid rgba(34, 211, 238, .32);
-      color: #a5f3fc;
-      background: rgba(34, 211, 238, .08);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0;
+    .logo {{
+      width: 104px;
+      height: 104px;
+      margin: 0 auto 24px;
     }}
     h1 {{
-      margin: 18px 0 10px;
-      font-size: clamp(30px, 8vw, 44px);
-      line-height: 1;
-      letter-spacing: 0;
+      margin: 0 0 10px;
+      font-size: 26px;
+      line-height: 1.25;
+      font-weight: 600;
     }}
     p {{
-      margin: 0 auto 28px;
-      max-width: 30rem;
+      margin: 0 auto 24px;
+      max-width: 22rem;
       color: var(--muted);
       font-size: 16px;
-      line-height: 1.55;
+      line-height: 1.45;
     }}
     a {{
       display: inline-flex;
-      min-height: 52px;
+      min-height: 50px;
       width: 100%;
       align-items: center;
       justify-content: center;
-      border-radius: 16px;
-      color: #02130d;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      box-shadow: 0 0 34px rgba(52, 211, 153, .28);
+      border-radius: 8px;
+      color: #ffffff;
+      background: var(--telegram-blue);
       text-decoration: none;
-      font-weight: 800;
-      transition: transform .18s ease, box-shadow .18s ease;
+      font-size: 16px;
+      font-weight: 600;
+      transition: background .18s ease;
     }}
     a:hover {{
-      transform: translateY(-1px);
-      box-shadow: 0 0 48px rgba(52, 211, 153, .38);
+      background: var(--telegram-blue-hover);
+    }}
+    .hint {{
+      margin-top: 16px;
+      color: #9ca3af;
+      font-size: 13px;
     }}
   </style>
 </head>
 <body>
   <main>
-    <div class="badge">Telegram доступ</div>
-    <h1>{title}</h1>
-    <p>Нажмите кнопку ниже, чтобы открыть Telegram и продолжить в защищенном чате.</p>
-    <a href="{safe_url}" rel="noopener noreferrer">Открыть Telegram</a>
+    <img class="logo" src="https://telegram.org/img/t_logo.png" alt="Telegram">
+    <h1>Open Telegram</h1>
+    <p>{title}</p>
+    <a id="open-telegram" href="{safe_url}" rel="noopener noreferrer">Open in Telegram</a>
+    <div class="hint">Redirecting to Telegram...</div>
   </main>
+  <script>
+    (function () {{
+      var target = {safe_url_json};
+      var opened = false;
+      function openTelegram() {{
+        if (opened) return;
+        opened = true;
+        if (window.fbq) window.fbq('trackCustom', 'TelegramOpen');
+        if (window.ttq) window.ttq.track('ClickButton', {{ content_name: 'TelegramOpen' }});
+        if (window.gtag) window.gtag('event', 'telegram_open');
+        window.location.href = target;
+      }}
+      document.getElementById('open-telegram').addEventListener('click', function (event) {{
+        event.preventDefault();
+        window.setTimeout(openTelegram, 80);
+      }});
+      window.setTimeout(openTelegram, 650);
+    }}());
+  </script>
 </body>
 </html>"""

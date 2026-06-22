@@ -10,12 +10,14 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import TrackingSpendSource
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
+from app.models.funnel import FunnelStep, FunnelVersion
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
@@ -27,6 +29,7 @@ from app.schemas.tracking import (
     TrackingLinkOut,
     TrackingLinkRead,
     TrackingLinkUpdate,
+    TrackingFunnelStepOption,
     TrackingSpendCreate,
     TrackingSpendRead,
     TrackingSpendUpdate,
@@ -89,6 +92,11 @@ class TrackingService:
         target_step_id = data.target_step_id
         if target_step_id is not None:
             await self._ensure_step_belongs_to_bot(target_step_id, bot.id, project_id)
+        target_funnel_id, target_funnel_step_key = await self._resolve_target_funnel_step(
+            bot_id=bot.id,
+            project_id=project_id,
+            target_funnel_step_key=data.target_funnel_step_key,
+        )
 
         requested_code = self._normalize_code(data.code or data.ref_code)
         code = requested_code or await self._generate_unique_code(title)
@@ -116,6 +124,8 @@ class TrackingService:
                     base_conversion_rate=data.base_conversion_rate,
                     min_sample_size=data.min_sample_size,
                     target_step_id=target_step_id,
+                    target_funnel_id=target_funnel_id,
+                    target_funnel_step_key=target_funnel_step_key,
                 )
         except IntegrityError as exc:
             if requested_code is not None:
@@ -142,6 +152,8 @@ class TrackingService:
                     base_conversion_rate=data.base_conversion_rate,
                     min_sample_size=data.min_sample_size,
                     target_step_id=target_step_id,
+                    target_funnel_id=target_funnel_id,
+                    target_funnel_step_key=target_funnel_step_key,
                 )
 
         link.bot = bot
@@ -167,6 +179,14 @@ class TrackingService:
                 link.bot_id,
                 project_id,
             )
+        if "target_funnel_step_key" in values:
+            target_funnel_id, target_funnel_step_key = await self._resolve_target_funnel_step(
+                bot_id=link.bot_id,
+                project_id=project_id,
+                target_funnel_step_key=values["target_funnel_step_key"],
+            )
+            values["target_funnel_id"] = target_funnel_id
+            values["target_funnel_step_key"] = target_funnel_step_key
 
         if not values:
             return self._to_out(link)
@@ -225,6 +245,41 @@ class TrackingService:
         )
         return [await self._to_read(link, include_total_spend=True) for link in links], total
 
+    async def list_target_funnel_steps(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+        actor: User,
+    ) -> list[TrackingFunnelStepOption]:
+        await self._ensure_project_access(actor, project_id)
+        await self._get_active_project_or_404(project_id)
+        bot = await self.bot_repo.get_by_id_in_project(bot_id, project_id)
+        if bot is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        if bot.active_funnel_id is None or bot.active_funnel_version_id is None:
+            return []
+
+        result = await self.db.execute(
+            select(FunnelStep)
+            .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
+            .where(
+                FunnelVersion.id == bot.active_funnel_version_id,
+                FunnelVersion.funnel_id == bot.active_funnel_id,
+                FunnelStep.step_type.notin_(("trigger", "finish")),
+            )
+            .order_by(FunnelStep.position_y, FunnelStep.position_x, FunnelStep.created_at)
+        )
+        return [
+            TrackingFunnelStepOption(
+                key=step.key,
+                title=step.title,
+                step_type=step.step_type,
+                block_type=step.block_type,
+            )
+            for step in result.scalars().all()
+        ]
+
     async def get_tracking_link(self, link_id: UUID, actor: User) -> TrackingLinkRead:
         link = await self._get_link_for_actor(link_id, actor)
         return await self._to_read(link, include_total_spend=True)
@@ -255,6 +310,11 @@ class TrackingService:
         target_step_id = data.target_step_id
         if target_step_id is not None:
             await self._ensure_step_belongs_to_bot(target_step_id, bot.id, project.id)
+        target_funnel_id, target_funnel_step_key = await self._resolve_target_funnel_step(
+            bot_id=bot.id,
+            project_id=project.id,
+            target_funnel_step_key=data.target_funnel_step_key,
+        )
 
         invite_link = self._normalize_optional(data.invite_link) or self._build_invite_link(
             bot.bot_username,
@@ -279,6 +339,8 @@ class TrackingService:
                 base_conversion_rate=data.base_conversion_rate,
                 min_sample_size=data.min_sample_size,
                 target_step_id=target_step_id,
+                target_funnel_id=target_funnel_id,
+                target_funnel_step_key=target_funnel_step_key,
                 created_by_user_id=actor.id,
             )
         except IntegrityError as exc:
@@ -304,6 +366,14 @@ class TrackingService:
                 link.bot_id,
                 link.project_id,
             )
+        if "target_funnel_step_key" in values:
+            target_funnel_id, target_funnel_step_key = await self._resolve_target_funnel_step(
+                bot_id=link.bot_id,
+                project_id=link.project_id,
+                target_funnel_step_key=values["target_funnel_step_key"],
+            )
+            values["target_funnel_id"] = target_funnel_id
+            values["target_funnel_step_key"] = target_funnel_step_key
 
         if not values:
             return await self._to_read(link, include_total_spend=True)
@@ -444,6 +514,64 @@ class TrackingService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="target_step_id does not belong to the selected bot",
             )
+
+    async def _resolve_target_funnel_step(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+        target_funnel_step_key: str | None,
+    ) -> tuple[UUID | None, str | None]:
+        step_key = self._normalize_optional(target_funnel_step_key)
+        if step_key is None:
+            return None, None
+
+        bot = await self.bot_repo.get_by_id_in_project(bot_id, project_id)
+        if bot is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        if bot.active_funnel_id is None or bot.active_funnel_version_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Configure and publish an active funnel before choosing a target step",
+            )
+
+        result = await self.db.execute(
+            select(FunnelStep)
+            .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
+            .where(
+                FunnelVersion.id == bot.active_funnel_version_id,
+                FunnelVersion.funnel_id == bot.active_funnel_id,
+                FunnelStep.key == step_key,
+                FunnelStep.step_type.notin_(("trigger", "finish")),
+            )
+            .limit(1)
+        )
+        step = result.scalar_one_or_none()
+        if step is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="target_funnel_step_key does not belong to the active funnel",
+            )
+        return bot.active_funnel_id, step.key
+
+    async def _target_funnel_step_title(self, link: TrackingLink) -> str | None:
+        if link.target_funnel_id is None or not link.target_funnel_step_key:
+            return None
+        bot = link.bot
+        if bot is None or bot.active_funnel_version_id is None:
+            return None
+
+        result = await self.db.execute(
+            select(FunnelStep.title)
+            .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
+            .where(
+                FunnelVersion.id == bot.active_funnel_version_id,
+                FunnelVersion.funnel_id == link.target_funnel_id,
+                FunnelStep.key == link.target_funnel_step_key,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def _get_active_project_or_404(self, project_id: UUID):
         project = await self.project_repo.get_any_by_id(project_id)
@@ -656,5 +784,8 @@ class TrackingService:
             updated_at=link.updated_at,
             base_conversion_rate=link.base_conversion_rate,
             min_sample_size=link.min_sample_size,
+            target_funnel_id=link.target_funnel_id,
+            target_funnel_step_key=link.target_funnel_step_key,
+            target_funnel_step_title=await self._target_funnel_step_title(link),
             total_spend=total_spend,
         )

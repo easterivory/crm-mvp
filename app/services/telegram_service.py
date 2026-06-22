@@ -31,8 +31,8 @@ Error handling:
 """
 import logging
 import re
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, replace
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -63,6 +63,9 @@ logger = logging.getLogger(__name__)
 class TelegramStartPayload:
     ref_code: str | None = None
     utm_key: str | None = None
+    start_key: str | None = None
+    tracking_link_id: UUID | None = None
+    utm_data: dict[str, Any] | None = None
 
 
 class TelegramService:
@@ -165,7 +168,7 @@ class TelegramService:
             logger.debug("update_id=%s: unsupported update — skipping", update.update_id)
             return
 
-        start_payload = self._extract_start_payload(message.text)
+        start_payload = await self._hydrate_start_payload(self._extract_start_payload(message.text))
         tracking_link_id = await self._resolve_tracking_link_id(
             start_payload,
             project_id,
@@ -193,7 +196,11 @@ class TelegramService:
             message,
             reset_existing=is_reactivated_cycle,
         )
-        await self._attach_utm_bridge_data(lead, start_payload.utm_key)
+        await self._attach_utm_bridge_data(
+            lead,
+            start_payload.utm_key,
+            start_payload.utm_data,
+        )
         await self._process_runtime_or_legacy(
             chat=chat,
             project_id=project_id,
@@ -401,6 +408,10 @@ class TelegramService:
             fresh_lifecycle,
             start_requested,
         )
+        target_step_key = await self._tracking_target_step_key(
+            chat=chat,
+            active_funnel_id=active_funnel_id,
+        )
 
         if fresh_lifecycle:
             await self.bot_repo.reset_chat_state(chat.id)
@@ -409,6 +420,7 @@ class TelegramService:
                 chat_id=chat.id,
                 funnel_id=active_funnel_id,
                 funnel_version_id=active_funnel_version_id,
+                start_step_key=target_step_key,
             )
             return
 
@@ -419,6 +431,7 @@ class TelegramService:
                     chat_id=chat.id,
                     funnel_id=active_funnel_id,
                     funnel_version_id=active_funnel_version_id,
+                    start_step_key=target_step_key,
                 )
                 return
 
@@ -458,6 +471,23 @@ class TelegramService:
                 chat.id,
                 active_funnel_version_id,
             )
+
+    async def _tracking_target_step_key(
+        self,
+        *,
+        chat: Chat,
+        active_funnel_id: UUID,
+    ) -> str | None:
+        if chat.tracking_link_id is None:
+            return None
+        link = await self.tracking_repo.get_link_by_id(chat.tracking_link_id)
+        if (
+            link is None
+            or link.target_funnel_id != active_funnel_id
+            or not link.target_funnel_step_key
+        ):
+            return None
+        return link.target_funnel_step_key
 
     async def _process_callback_runtime_or_legacy(
         self,
@@ -648,23 +678,35 @@ class TelegramService:
         project_id: UUID,
         bot_id: UUID,
     ) -> Optional[UUID]:
-        ref_code = start_payload.ref_code
-        if ref_code is None:
-            return None
-
-        link = await self.tracking_repo.get_by_ref_code(ref_code, project_id)
+        if start_payload.tracking_link_id is not None:
+            link = await self.tracking_repo.get_link_by_id(start_payload.tracking_link_id)
+            source = f"tracking_link_id={start_payload.tracking_link_id}"
+        else:
+            ref_code = start_payload.ref_code
+            if ref_code is None:
+                return None
+            link = await self.tracking_repo.get_by_ref_code(ref_code, project_id)
+            source = f"ref_code={ref_code}"
         if link is None:
             logger.info(
-                "Telegram /start ref_code=%s was not found for project_id=%s",
-                ref_code,
+                "Telegram /start %s was not found for project_id=%s",
+                source,
+                project_id,
+            )
+            return None
+        if link.project_id != project_id:
+            logger.info(
+                "Telegram /start %s belongs to project_id=%s, but update arrived for project_id=%s",
+                source,
+                link.project_id,
                 project_id,
             )
             return None
         if link.bot_id != bot_id:
             logger.info(
-                "Telegram /start ref_code=%s belongs to bot_id=%s, "
+                "Telegram /start %s belongs to bot_id=%s, "
                 "but update arrived for bot_id=%s",
-                ref_code,
+                source,
                 link.bot_id,
                 bot_id,
             )
@@ -691,6 +733,17 @@ class TelegramService:
             return TelegramStartPayload()
 
         ref_code = parts[1].strip().split(maxsplit=1)[0]
+        lander_payload = UtmBridgeService.parse_lander_start_payload(ref_code)
+        if lander_payload is not None:
+            tracking_link_id, start_key = lander_payload
+            return TelegramStartPayload(
+                tracking_link_id=tracking_link_id,
+                start_key=start_key,
+            )
+
+        start_key = UtmBridgeService.normalize_start_key(ref_code)
+        if start_key is not None:
+            return TelegramStartPayload(start_key=start_key)
         if ref_code.startswith("ref_"):
             ref_code = ref_code.removeprefix("ref_")
 
@@ -701,6 +754,20 @@ class TelegramService:
             utm_key = UtmBridgeService.normalize_utm_key(match.group("utm_key"))
 
         return TelegramStartPayload(ref_code=ref_code or None, utm_key=utm_key)
+
+    async def _hydrate_start_payload(self, payload: TelegramStartPayload) -> TelegramStartPayload:
+        if payload.start_key is None:
+            return payload
+        try:
+            bridge = await self.utm_bridge.load_lander_start(payload.start_key)
+        except Exception:
+            logger.exception("Could not load landing start bridge key=%s", payload.start_key)
+            return payload
+        if bridge is None:
+            logger.info("Landing start bridge data not found key=%s", payload.start_key)
+            return payload
+        ref_code, utm_data = bridge
+        return replace(payload, ref_code=ref_code, utm_data=utm_data)
 
     @staticmethod
     def _is_start_command(text: Optional[str]) -> bool:
@@ -887,17 +954,20 @@ class TelegramService:
         self,
         lead: Optional[Lead],
         utm_key: Optional[str],
+        utm_data: Optional[dict[str, Any]] = None,
     ) -> None:
-        if lead is None or utm_key is None:
+        if lead is None:
             return
 
-        try:
-            fb_data = await self.utm_bridge.load_query_params(utm_key)
-        except Exception:
-            logger.exception("Could not load UTM bridge data key=%s", utm_key)
-            return
+        fb_data = utm_data
+        if fb_data is None and utm_key is not None:
+            try:
+                fb_data = await self.utm_bridge.load_query_params(utm_key)
+            except Exception:
+                logger.exception("Could not load UTM bridge data key=%s", utm_key)
+                return
         if not fb_data:
-            logger.info("UTM bridge data not found or empty key=%s lead_id=%s", utm_key, lead.id)
+            logger.info("UTM bridge data not found or empty lead_id=%s", lead.id)
             return
 
         custom_fields = dict(lead.custom_fields or {})

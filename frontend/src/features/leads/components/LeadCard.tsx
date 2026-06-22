@@ -67,6 +67,19 @@ function botLabel(lead: Lead) {
     .join(' · ')
 }
 
+function attributionEntries(customFields: Record<string, unknown> | null | undefined) {
+  const raw = customFields?.fb_data
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return []
+  }
+
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(([key, value]) => (
+      key.startsWith('utm_') || ['fbclid', 'gclid', 'ttclid'].includes(key)
+    ) && (typeof value === 'string' || typeof value === 'number'))
+    .map(([key, value]) => [key, String(value)] as const)
+}
+
 export default function LeadCard({
   lead,
   projectId,
@@ -83,6 +96,7 @@ export default function LeadCard({
     lead.contact_name ||
     (lead.username ? `@${lead.username}` : null) ||
     `Telegram ${lead.external_chat_id ?? lead.id.slice(0, 8)}`
+  const attribution = attributionEntries(lead.custom_fields)
 
   const handleCopy = async (key: string, value: string | null | undefined) => {
     if (!value) {
@@ -171,6 +185,19 @@ export default function LeadCard({
           <span className="text-sm text-gray-500">Тегов пока нет</span>
         )}
       </div>
+
+      {attribution.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-cyan-300/15 bg-cyan-400/[0.05] p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-100/80">Атрибуция</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {attribution.map(([key, value]) => (
+              <span key={key} className="rounded-md border border-cyan-300/15 bg-background/40 px-2 py-1 text-xs text-gray-200">
+                <span className="text-cyan-100">{key}</span>={value}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {isTrashView ? (
         <div className="mt-5">
