@@ -113,6 +113,11 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     partner_status_updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    submitted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    is_valid: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    validated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
@@ -121,6 +126,7 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     )
 
     lead: Mapped[Lead] = relationship("Lead")
+    submitted_by_user: Mapped[Optional[User]] = relationship("User", foreign_keys=[submitted_by_user_id])
     partner_integration: Mapped[PartnerIntegration] = relationship(
         "PartnerIntegration", back_populates="submissions"
     )

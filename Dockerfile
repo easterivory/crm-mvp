@@ -5,7 +5,7 @@ WORKDIR /app
 # System deps
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
+    apt-get install -y --no-install-recommends ca-certificates curl ffmpeg gnupg; \
     . /etc/os-release; \
     install -d /usr/share/postgresql-common/pgdg; \
     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \

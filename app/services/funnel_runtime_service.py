@@ -11,7 +11,8 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import ChatEventType, LeadStatusCode, MessageType, SenderType
+from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
+from app.models.user import User
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
 from app.repositories.bot_repository import BotRepository
 from app.repositories.broadcast_repository import BroadcastRepository
@@ -22,6 +23,7 @@ from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.message import MessageCreate
 from app.services.chat_audit_service import ChatAuditService
+from app.services.audit_service import AuditService
 from app.services.funnel_block_registry import LEAD_FIELD_KEYS
 from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
@@ -75,6 +77,7 @@ class FunnelRuntimeService:
         self.scoring = LeadScoringService(db)
         self.chat_audit = ChatAuditService(db)
         self.telegram_sender = TelegramSenderService(db)
+        self.audit = AuditService(db)
 
     async def get_published_funnel_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         return await self.repo.get_published_for_bot(bot_id)
@@ -96,10 +99,14 @@ class FunnelRuntimeService:
         active_funnel_version_id: UUID,
     ) -> tuple[str, Any]:
         state = await self.repo.get_chat_funnel_state(chat_id)
-        if state is None or state.funnel_version_id != active_funnel_version_id:
+        if state is None:
             return "not_started", state
+        # A running chat is pinned to the version that started it. Switching a
+        # bot's active funnel only affects fresh lifecycles, never a live dialog.
         if state.completed_at is not None:
             return "completed", state
+        if state.is_paused:
+            return "paused", state
 
         step = await self.repo.get_step(state.current_step_id)
         if state.waiting_for_answer or (step is not None and self._is_input_step(step)):
@@ -114,6 +121,10 @@ class FunnelRuntimeService:
         funnel_version_id: UUID,
         start_step_key: str | None = None,
     ) -> Optional[FunnelStep]:
+        existing = await self.repo.get_chat_funnel_state(chat_id)
+        if existing is not None and existing.is_paused and existing.completed_at is None:
+            return await self.repo.get_step(existing.current_step_id)
+
         steps = await self.repo.list_steps(funnel_version_id)
         trigger = next((step for step in steps if step.step_type == "trigger"), None)
         if trigger is None:
@@ -146,6 +157,7 @@ class FunnelRuntimeService:
             current_step_id=initial_step.id,
             entered_step_at=datetime.now(timezone.utc),
             waiting_for_answer=False,
+            is_paused=False,
             runtime_json={},
         )
         await self._log_runtime_step(chat_id=chat_id, step=initial_step, status="success")
@@ -164,6 +176,117 @@ class FunnelRuntimeService:
             return None
         return await self.repo.get_step(state.current_step_id)
 
+    async def pause_for_manager_assignment(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+    ) -> bool:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is None or state.completed_at is not None:
+            return False
+        if state.is_paused:
+            return True
+
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.repo.set_chat_funnel_paused(
+            chat_id=chat_id,
+            is_paused=True,
+            paused_at=datetime.now(timezone.utc),
+            paused_by_user_id=actor_id,
+        )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.CHAT_FUNNEL_PAUSED,
+            entity_type=EntityType.CHAT,
+            entity_id=chat_id,
+            actor_id=actor_id,
+            meta={"funnel_id": str(state.funnel_id), "step_id": str(state.current_step_id)},
+        )
+        return True
+
+    async def get_manager_funnel_control(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> dict[str, Any]:
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            return {"is_available": False, "is_paused": False, "steps": []}
+
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is None or state.completed_at is not None:
+            return {"is_available": False, "is_paused": False, "steps": []}
+
+        funnel = await self.repo.get_in_project(state.funnel_id, project_id)
+        if funnel is None:
+            return {"is_available": False, "is_paused": False, "steps": []}
+        current_step = await self.repo.get_step(state.current_step_id)
+        steps = await self.repo.list_steps(state.funnel_version_id)
+        return {
+            "is_available": True,
+            "is_paused": state.is_paused,
+            "funnel_id": state.funnel_id,
+            "funnel_name": funnel.name,
+            "current_step_id": state.current_step_id,
+            "current_step_title": current_step.title if current_step is not None else None,
+            "steps": [
+                {
+                    "id": step.id,
+                    "title": step.title,
+                    "step_type": step.step_type,
+                    "block_type": step.block_type,
+                }
+                for step in steps
+                if step.step_type != "trigger"
+            ],
+        }
+
+    async def resume_from_manager_step(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        step_id: UUID,
+        actor: User,
+    ) -> Optional[FunnelStep]:
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            return None
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if actor.role_name == RoleName.MANAGER and (lead is None or lead.manager_id != actor.id):
+            raise PermissionError("Only the assigned manager can resume this funnel.")
+
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is None or state.completed_at is not None or not state.is_paused:
+            return None
+        step = await self.repo.get_step(step_id)
+        if step is None or step.funnel_version_id != state.funnel_version_id:
+            return None
+
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.repo.upsert_chat_funnel_state(
+            chat_id=chat_id,
+            funnel_id=state.funnel_id,
+            funnel_version_id=state.funnel_version_id,
+            current_step_id=step.id,
+            entered_step_at=datetime.now(timezone.utc),
+            waiting_for_answer=False,
+            is_paused=False,
+            runtime_json={},
+        )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.CHAT_FUNNEL_RESUMED,
+            entity_type=EntityType.CHAT,
+            entity_id=chat_id,
+            actor_id=actor.id,
+            meta={"funnel_id": str(state.funnel_id), "step_id": str(step.id)},
+        )
+        return await self._execute_from_step(chat_id=chat_id, step=step)
+
     async def process_user_answer(
         self,
         *,
@@ -172,7 +295,7 @@ class FunnelRuntimeService:
         button_payload: Optional[str] = None,
     ) -> Optional[FunnelStep]:
         state = await self.repo.get_chat_funnel_state(chat_id)
-        if state is None or state.completed_at is not None:
+        if state is None or state.completed_at is not None or state.is_paused:
             return None
 
         answer = button_payload if button_payload is not None else text
@@ -214,6 +337,8 @@ class FunnelRuntimeService:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None:
             return False
+        if state.is_paused:
+            return True
         if state.completed_at is not None:
             logger.info(
                 "No auto response after completed funnel chat_id=%s funnel_id=%s "
@@ -416,6 +541,8 @@ class FunnelRuntimeService:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None:
             return False
+        if state.is_paused:
+            return True
         if state.completed_at is not None:
             logger.info(
                 "No auto response after completed funnel callback chat_id=%s funnel_id=%s "
@@ -525,7 +652,7 @@ class FunnelRuntimeService:
     ) -> Optional[dict[str, Any]]:
         step_id, message_index, button_index = self._parse_callback_data(callback_data)
         state = await self.repo.get_chat_funnel_state(chat_id)
-        if state is None:
+        if state is None or state.is_paused:
             return None
         step = await self.repo.get_step(step_id or state.current_step_id)
         if step is None:
@@ -624,6 +751,7 @@ class FunnelRuntimeService:
         if (
             state is None
             or state.completed_at is not None
+            or state.is_paused
             or state.funnel_version_id != job.funnel_version_id
             or state.current_step_id != job.step_id
         ):
@@ -719,6 +847,8 @@ class FunnelRuntimeService:
             state = await self.repo.get_chat_funnel_state(chat_id)
             if state is None:
                 return None
+            if state.is_paused:
+                return await self.repo.get_step(state.current_step_id)
 
             await self.repo.upsert_chat_funnel_state(
                 chat_id=chat_id,

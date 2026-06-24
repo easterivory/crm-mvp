@@ -129,6 +129,15 @@ class UserService:
         project_id = None if role.name == RoleName.SUPER_ADMIN else project_ids[0]
 
         await self._ensure_projects_active(project_ids)
+        if data.handler_code:
+            existing_by_handler_code = await self.user_repo.get_by_handler_code(
+                handler_code=data.handler_code,
+            )
+            if existing_by_handler_code is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Handler code is already used in this project",
+                )
 
         try:
             async with self.db.begin_nested():
@@ -139,6 +148,7 @@ class UserService:
                     role_id=data.role_id,
                     project_id=project_id,
                     telegram_id=data.telegram_id,
+                    handler_code=data.handler_code,
                 )
                 user.role = role
                 if project_ids:
@@ -222,6 +232,8 @@ class UserService:
         if next_role.name == RoleName.SUPER_ADMIN:
             values["project_id"] = None
             next_project_ids: list[UUID] = []
+            if "handler_code" in values:
+                values["handler_code"] = None
         else:
             if provided_project_ids is not None:
                 next_project_ids = self._normalize_project_ids(
@@ -242,6 +254,17 @@ class UserService:
                 self._ensure_actor_can_manage_project(actor, project_id)
             await self._ensure_projects_active(next_project_ids)
             values["project_id"] = next_project_ids[0]
+
+        if values.get("handler_code"):
+            existing_by_handler_code = await self.user_repo.get_by_handler_code(
+                handler_code=values["handler_code"],
+                exclude_user_id=user_id,
+            )
+            if existing_by_handler_code is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Handler code is already used in this project",
+                )
 
         updated = await self.user_repo.update_user(user_id, **values)
         if updated is None:

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, Up
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.core.constants import RoleName
 from app.schemas.bot import (
     BotCreate,
     BotOut,
@@ -42,8 +43,10 @@ async def list_bots(
 async def create_bot(
     data: BotCreate,
     current_project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
+    _ensure_bot_management_access(current_user)
     return await BotService(db).create_bot(project_id=current_project_id, data=data)
 
 
@@ -103,6 +106,7 @@ async def update_bot(
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
+    _ensure_bot_management_access(current_user)
     service = BotService(db)
     updated = await service.update_bot(
         bot_id=bot_id,
@@ -123,6 +127,7 @@ async def upload_bot_avatar(
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, bool]:
+    _ensure_bot_management_access(current_user)
     if file.content_type not in {"image/jpeg", "image/jpg"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -163,8 +168,10 @@ async def export_bot_audit_logs(
 async def delete_bot(
     bot_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_bot_management_access(current_user)
     await BotService(db).delete_bot(bot_id=bot_id, project_id=project_id)
 
 
@@ -172,8 +179,10 @@ async def delete_bot(
 async def set_bot_webhook(
     bot_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BotWebhookOut:
+    _ensure_bot_management_access(current_user)
     return await BotService(db).set_webhook(bot_id=bot_id, project_id=project_id)
 
 
@@ -181,8 +190,10 @@ async def set_bot_webhook(
 async def sync_bot_telegram_identity(
     bot_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
+    _ensure_bot_management_access(current_user)
     return await BotService(db).sync_bot_identity_from_token(
         bot_id=bot_id,
         project_id=project_id,
@@ -196,3 +207,11 @@ async def get_bot_telegram_status(
     db: AsyncSession = Depends(get_db),
 ) -> BotTelegramStatusOut:
     return await BotService(db).telegram_status(bot_id=bot_id, project_id=project_id)
+
+
+def _ensure_bot_management_access(current_user: Any) -> None:
+    if current_user.role_name == RoleName.MANAGER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managers cannot manage bots",
+        )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
@@ -12,7 +13,6 @@ from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
-from app.models.role import Role
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User, UserProjectAccess
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
@@ -33,8 +33,18 @@ class BuyerAnalyticsService:
     async def get_project_performance(
         self,
         project_id: UUID,
+        *,
+        bot_id: UUID | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> list[BuyerPerformanceOut]:
-        link_counts = (
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date_from must be before or equal to date_to",
+            )
+        start_at, end_at = self._date_bounds(date_from=date_from, date_to=date_to)
+        link_counts_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
                 func.count(distinct(TrackingLink.id)).label("links_count"),
@@ -43,10 +53,11 @@ class BuyerAnalyticsService:
                 TrackingLink.project_id == project_id,
                 TrackingLink.buyer_id.is_not(None),
             )
-            .group_by(TrackingLink.buyer_id)
-            .subquery()
         )
-        spend_totals = (
+        if bot_id is not None:
+            link_counts_stmt = link_counts_stmt.where(TrackingLink.bot_id == bot_id)
+        link_counts = link_counts_stmt.group_by(TrackingLink.buyer_id).subquery()
+        spend_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
                 func.coalesce(func.sum(TrackingSpend.amount), 0).label("total_spend"),
@@ -56,10 +67,16 @@ class BuyerAnalyticsService:
                 TrackingLink.project_id == project_id,
                 TrackingLink.buyer_id.is_not(None),
             )
-            .group_by(TrackingLink.buyer_id)
-            .subquery()
         )
-        click_totals = (
+        if date_from is not None:
+            spend_stmt = spend_stmt.where(TrackingSpend.spend_date >= date_from)
+        if date_to is not None:
+            spend_stmt = spend_stmt.where(TrackingSpend.spend_date <= date_to)
+        if bot_id is not None:
+            spend_stmt = spend_stmt.where(TrackingLink.bot_id == bot_id)
+        spend_totals = spend_stmt.group_by(TrackingLink.buyer_id).subquery()
+
+        click_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
                 func.coalesce(func.sum(TrackingEvent.clicks), 0).label("clicks"),
@@ -69,10 +86,17 @@ class BuyerAnalyticsService:
                 TrackingLink.project_id == project_id,
                 TrackingLink.buyer_id.is_not(None),
             )
-            .group_by(TrackingLink.buyer_id)
-            .subquery()
         )
-        lead_totals = (
+        if start_at is not None:
+            click_stmt = click_stmt.where(TrackingEvent.created_at >= start_at)
+        if end_at is not None:
+            click_stmt = click_stmt.where(TrackingEvent.created_at < end_at)
+        if bot_id is not None:
+            click_stmt = click_stmt.where(TrackingLink.bot_id == bot_id)
+        click_totals = click_stmt.group_by(TrackingLink.buyer_id).subquery()
+
+        lead_lifecycle_at = func.coalesce(Chat.current_cycle_started_at, Lead.created_at)
+        lead_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
                 func.count(distinct(Lead.id)).label("leads"),
@@ -86,10 +110,16 @@ class BuyerAnalyticsService:
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
             )
-            .group_by(TrackingLink.buyer_id)
-            .subquery()
         )
-        submitted_totals = (
+        if start_at is not None:
+            lead_stmt = lead_stmt.where(lead_lifecycle_at >= start_at)
+        if end_at is not None:
+            lead_stmt = lead_stmt.where(lead_lifecycle_at < end_at)
+        if bot_id is not None:
+            lead_stmt = lead_stmt.where(TrackingLink.bot_id == bot_id)
+        lead_totals = lead_stmt.group_by(TrackingLink.buyer_id).subquery()
+
+        submitted_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
                 func.count(distinct(Lead.id)).label("submitted_leads"),
@@ -105,9 +135,14 @@ class BuyerAnalyticsService:
                 Chat.reset_at.is_(None),
                 LeadStatus.code.in_(LeadStatusCode.SUBMITTED_SET),
             )
-            .group_by(TrackingLink.buyer_id)
-            .subquery()
         )
+        if start_at is not None:
+            submitted_stmt = submitted_stmt.where(lead_lifecycle_at >= start_at)
+        if end_at is not None:
+            submitted_stmt = submitted_stmt.where(lead_lifecycle_at < end_at)
+        if bot_id is not None:
+            submitted_stmt = submitted_stmt.where(TrackingLink.bot_id == bot_id)
+        submitted_totals = submitted_stmt.group_by(TrackingLink.buyer_id).subquery()
 
         result = await self.db.execute(
             select(
@@ -121,7 +156,6 @@ class BuyerAnalyticsService:
                 func.coalesce(lead_totals.c.leads, 0).label("leads"),
                 func.coalesce(submitted_totals.c.submitted_leads, 0).label("submitted_leads"),
             )
-            .join(Role, Role.id == User.role_id)
             .outerjoin(link_counts, link_counts.c.buyer_id == User.id)
             .outerjoin(spend_totals, spend_totals.c.buyer_id == User.id)
             .outerjoin(click_totals, click_totals.c.buyer_id == User.id)
@@ -137,7 +171,11 @@ class BuyerAnalyticsService:
                     ),
                 ),
                 User.is_deleted.is_(False),
-                Role.name.in_(("manager", "buyer")),
+                or_(
+                    User.buyer_telegram_id.is_not(None),
+                    User.buyer_invite_token.is_not(None),
+                    link_counts.c.buyer_id.is_not(None),
+                ),
             )
             .order_by(User.name.asc(), User.created_at.desc())
         )
@@ -165,6 +203,24 @@ class BuyerAnalyticsService:
                 )
             )
         return items
+
+    @staticmethod
+    def _date_bounds(
+        *,
+        date_from: date | None,
+        date_to: date | None,
+    ) -> tuple[datetime | None, datetime | None]:
+        start_at = (
+            datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            if date_from is not None
+            else None
+        )
+        end_at = (
+            datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            if date_to is not None
+            else None
+        )
+        return start_at, end_at
 
     async def _get_buyer_by_telegram_id(self, buyer_telegram_id: int) -> User:
         result = await self.db.execute(

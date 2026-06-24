@@ -30,6 +30,7 @@ type BroadcastListProps = {
   expandedAnalyticsIds: Set<string>
   loadingAnalyticsIds: Set<string>
   loadingErrorLogIds: Set<string>
+  canDelete: boolean
   onOpen: (broadcast: Broadcast) => void
   onDuplicate: (broadcast: Broadcast) => void
   onCancel: (broadcast: Broadcast) => void
@@ -143,6 +144,7 @@ export default function BroadcastList({
   expandedAnalyticsIds,
   loadingAnalyticsIds,
   loadingErrorLogIds,
+  canDelete,
   onOpen,
   onDuplicate,
   onCancel,
@@ -402,15 +404,17 @@ export default function BroadcastList({
               <RefreshCw size={14} />
               Обновить отчёт
             </button>
-            <button
-              type="button"
-              onClick={() => onDelete(broadcast)}
-              className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-300/20 px-3 text-sm text-red-200 transition hover:border-red-300/40"
-            >
-              <Trash2 size={14} />
-              Удалить из списка
-            </button>
-            {canHardDeleteBroadcast(broadcast) ? (
+            {canDelete ? (
+              <button
+                type="button"
+                onClick={() => onDelete(broadcast)}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-300/20 px-3 text-sm text-red-200 transition hover:border-red-300/40"
+              >
+                <Trash2 size={14} />
+                Удалить из списка
+              </button>
+            ) : null}
+            {canDelete && canHardDeleteBroadcast(broadcast) ? (
               <button
                 type="button"
                 onClick={() => onPermanentDelete(broadcast)}

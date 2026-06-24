@@ -3,6 +3,7 @@ import {
   CalendarDays,
   Check,
   Clock3,
+  Ban,
   Copy,
   LoaderCircle,
   Palette,
@@ -12,6 +13,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  ShieldCheck,
   Tag,
   UserRound,
   X,
@@ -66,6 +68,21 @@ type User = {
   is_deleted: boolean
 }
 
+type FunnelControl = {
+  is_available: boolean
+  is_paused: boolean
+  funnel_id: string | null
+  funnel_name: string | null
+  current_step_id: string | null
+  current_step_title: string | null
+  steps: Array<{
+    id: string
+    title: string
+    step_type: string
+    block_type: string
+  }>
+}
+
 type ProjectTag = {
   id: string
   project_id: string
@@ -86,7 +103,11 @@ type LeadSidebarProps = {
   activeBotName: string | null
   activeChatId: string | null
   hasActiveScope: boolean
+  isChatBlocked: boolean
+  isUpdatingChatBlock?: boolean
   currentUserId: string | null
+  currentUserRole: string | null
+  onSetBlocked?: (isBlocked: boolean) => void
   onResetRequest?: () => void
   onLeadStatusChanged?: () => void
 }
@@ -174,7 +195,11 @@ export default function LeadSidebar({
   activeBotName,
   activeChatId,
   hasActiveScope,
+  isChatBlocked,
+  isUpdatingChatBlock = false,
   currentUserId,
+  currentUserRole,
+  onSetBlocked,
   onResetRequest,
   onLeadStatusChanged,
 }: LeadSidebarProps) {
@@ -198,6 +223,10 @@ export default function LeadSidebar({
   const [isAssigning, setIsAssigning] = useState(false)
   const [isTagsLoading, setIsTagsLoading] = useState(false)
   const [isTagMutating, setIsTagMutating] = useState(false)
+  const [funnelControl, setFunnelControl] = useState<FunnelControl | null>(null)
+  const [selectedReturnStepId, setSelectedReturnStepId] = useState('')
+  const [isFunnelControlLoading, setIsFunnelControlLoading] = useState(false)
+  const [isResumingFunnel, setIsResumingFunnel] = useState(false)
 
   const currentStatus = useMemo(
     () => statuses.find((status) => status.id === lead?.status_id) ?? null,
@@ -334,6 +363,37 @@ export default function LeadSidebar({
     void loadLead()
   }, [loadLead])
 
+  const loadFunnelControl = useCallback(async () => {
+    if (!activeChatId || !selectedProjectId) {
+      setFunnelControl(null)
+      setSelectedReturnStepId('')
+      return
+    }
+
+    setIsFunnelControlLoading(true)
+    try {
+      const { data } = await api.get<FunnelControl>(`/chats/${activeChatId}/funnel-control`, {
+        params: { project_id: selectedProjectId },
+      })
+      setFunnelControl(data)
+      setSelectedReturnStepId((current) => {
+        if (current && data.steps.some((step) => step.id === current)) {
+          return current
+        }
+        return data.current_step_id ?? data.steps[0]?.id ?? ''
+      })
+    } catch {
+      setFunnelControl(null)
+      setSelectedReturnStepId('')
+    } finally {
+      setIsFunnelControlLoading(false)
+    }
+  }, [activeChatId, selectedProjectId])
+
+  useEffect(() => {
+    void loadFunnelControl()
+  }, [loadFunnelControl])
+
   const handleStatusChange = async (nextStatusId: string) => {
     if (!lead || nextStatusId === lead.status_id || isUpdatingStatus) {
       return
@@ -406,10 +466,34 @@ export default function LeadSidebar({
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
+      onLeadStatusChanged?.()
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
       setIsAssigning(false)
+    }
+  }
+
+  const handleResumeFunnel = async () => {
+    if (!activeChatId || !selectedProjectId || !selectedReturnStepId || isResumingFunnel) {
+      return
+    }
+
+    setIsResumingFunnel(true)
+    setError('')
+    try {
+      const { data } = await api.post<FunnelControl>(
+        `/chats/${activeChatId}/funnel-resume`,
+        { step_id: selectedReturnStepId },
+        { params: { project_id: selectedProjectId } },
+      )
+      setFunnelControl(data)
+      setSelectedReturnStepId(data.current_step_id ?? data.steps[0]?.id ?? '')
+      onLeadStatusChanged?.()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsResumingFunnel(false)
     }
   }
 
@@ -780,31 +864,88 @@ export default function LeadSidebar({
                   Взять себе
                 </button>
               </div>
-              <div className="relative">
-                <select
-                  value={lead.manager_id ?? ''}
-                  onChange={(event) => {
-                    const nextValue = event.target.value
-                    void handleManagerChange(nextValue || null)
-                  }}
-                  disabled={isAssigning}
-                  className="w-full appearance-none rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <option value="">Без менеджера</option>
-                  {users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name} ({user.email})
-                    </option>
-                  ))}
-                </select>
-                {isAssigning ? (
-                  <LoaderCircle
-                    size={16}
-                    className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400"
-                  />
-                ) : null}
-              </div>
+              {currentUserRole === 'manager' ? (
+                <p className="text-xs leading-5 text-gray-500">
+                  Менеджер может взять диалог только себе. Взятый диалог ставит сценарий на паузу.
+                </p>
+              ) : (
+                <div className="relative">
+                  <select
+                    value={lead.manager_id ?? ''}
+                    onChange={(event) => {
+                      const nextValue = event.target.value
+                      void handleManagerChange(nextValue || null)
+                    }}
+                    disabled={isAssigning}
+                    className="w-full appearance-none rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60 md:text-sm"
+                  >
+                    <option value="">Без менеджера</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name} ({user.email})
+                      </option>
+                    ))}
+                  </select>
+                  {isAssigning ? (
+                    <LoaderCircle
+                      size={16}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400"
+                    />
+                  ) : null}
+                </div>
+              )}
             </div>
+
+            {funnelControl?.is_available ? (
+              <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-white">Воронка</p>
+                    <p className="mt-1 truncate text-xs text-gray-500">
+                      {funnelControl.funnel_name || 'Активный сценарий'}
+                      {funnelControl.current_step_title ? ` · ${funnelControl.current_step_title}` : ''}
+                    </p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-medium ${
+                    funnelControl.is_paused
+                      ? 'bg-yellow-400/10 text-yellow-100'
+                      : 'bg-emerald-400/10 text-emerald-100'
+                  }`}>
+                    {funnelControl.is_paused ? 'На паузе' : 'Активна'}
+                  </span>
+                </div>
+
+                {funnelControl.is_paused ? (
+                  <div className="mt-3 space-y-3">
+                    <select
+                      value={selectedReturnStepId}
+                      onChange={(event) => setSelectedReturnStepId(event.target.value)}
+                      disabled={isFunnelControlLoading || isResumingFunnel}
+                      className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60 md:text-sm"
+                    >
+                      {funnelControl.steps.map((step) => (
+                        <option key={step.id} value={step.id}>
+                          {step.title}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void handleResumeFunnel()}
+                      disabled={!selectedReturnStepId || isResumingFunnel}
+                      className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 py-2 text-sm font-semibold text-accent-50 transition hover:border-accent-300/50 hover:bg-accent-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isResumingFunnel ? <LoaderCircle size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+                      Вернуть в выбранный шаг
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs leading-5 text-gray-500">
+                    Сценарий продолжится автоматически. При взятии диалога менеджером он будет поставлен на паузу.
+                  </p>
+                )}
+              </div>
+            ) : null}
 
                 <div className="space-y-3">
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
@@ -913,6 +1054,34 @@ export default function LeadSidebar({
             </div>
 
             <FunnelTraceWidget chatId={activeChatId} projectId={selectedProjectId} />
+
+            {onSetBlocked ? (
+              <div className={`rounded-xl border p-4 ${
+                isChatBlocked
+                  ? 'border-red-300/25 bg-red-500/[0.06]'
+                  : 'border-white/5 bg-white/[0.02]'
+              }`}>
+                <p className="text-sm font-medium text-gray-200">Доступ к боту</p>
+                <p className="mt-1 text-xs leading-5 text-gray-500">
+                  {isChatBlocked
+                    ? 'Клиент заблокирован в CRM: сообщения и старые кнопки не запускают сценарий бота.'
+                    : 'Блокировка остановит сценарий и автоответы для этого Telegram-диалога.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onSetBlocked(!isChatBlocked)}
+                  disabled={isUpdatingChatBlock}
+                  className={`mt-3 inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    isChatBlocked
+                      ? 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100 hover:border-emerald-300/45'
+                      : 'border-red-300/20 bg-transparent text-red-200 hover:border-red-300/40 hover:bg-red-500/10'
+                  }`}
+                >
+                  {isUpdatingChatBlock ? <LoaderCircle size={15} className="animate-spin" /> : isChatBlocked ? <ShieldCheck size={15} /> : <Ban size={15} />}
+                  {isChatBlocked ? 'Разблокировать в CRM' : 'Заблокировать в CRM'}
+                </button>
+              </div>
+            ) : null}
 
             {onResetRequest ? (
               <div className="rounded-xl border border-red-300/10 bg-red-500/[0.035] p-4">

@@ -334,6 +334,52 @@ class ChatService:
 
         return self._chat_out(updated, 0, None)
 
+    async def set_chat_blocked(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        actor_id: UUID,
+        is_blocked: bool,
+    ) -> ChatOut:
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found",
+            )
+        if chat.is_blocked == is_blocked:
+            return self._chat_out(chat, project.sla_threshold_minutes, None)
+
+        updated = await self.chat_repo.set_blocked(
+            chat_id=chat_id,
+            project_id=project_id,
+            is_blocked=is_blocked,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Chat was changed by another request",
+            )
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.CHAT_BLOCKED if is_blocked else AuditAction.CHAT_UNBLOCKED,
+            entity_type=EntityType.CHAT,
+            entity_id=chat_id,
+            actor_id=actor_id,
+            meta={
+                "external_chat_id": chat.external_chat_id,
+                "bot_id": str(chat.bot_id) if chat.bot_id else None,
+            },
+        )
+        return self._chat_out(updated, project.sla_threshold_minutes, None)
+
     async def count_red(self, project_id: UUID) -> int:
         project = await self.project_repo.get_active(project_id)
         if project is None:
@@ -369,6 +415,8 @@ class ChatService:
         )
 
         unanswered: bool = bool(
+            not chat.is_blocked
+            and
             chat.last_user_message_at
             and (
                 chat.last_manager_reply_at is None
@@ -476,6 +524,8 @@ class ChatService:
     def _lifecycle_status(chat: Chat, funnel_context: dict) -> str:
         if not funnel_context.get("active_funnel_version_id"):
             return "manual"
+        if funnel_context.get("is_paused"):
+            return "paused"
         completed_at = funnel_context.get("completed_at")
         if completed_at is not None:
             if chat.last_user_message_at and chat.last_user_message_at > completed_at:

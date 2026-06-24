@@ -32,7 +32,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AuditAction, EntityType
+from app.core.constants import AuditAction, EntityType, RoleName
 
 logger = logging.getLogger(__name__)
 from app.repositories.lead_repository import LeadRepository
@@ -78,6 +78,15 @@ class AssignmentService:
             )
 
         old_manager_id = lead.manager_id
+
+        actor = await self.user_repo.get_by_id(actor_id)
+        if actor is None or actor.is_deleted:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Actor is not active")
+        if actor.role_name == RoleName.MANAGER and manager_id != actor_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers can only take a dialogue for themselves.",
+            )
 
         # ── Idempotency ───────────────────────────────────────────────────────
         if manager_id == old_manager_id:
@@ -136,6 +145,15 @@ class AssignmentService:
                 "to_manager_id": str(manager_id) if manager_id else None,
             },
         )
+
+        if manager_id is not None:
+            from app.services.funnel_runtime_service import FunnelRuntimeService
+
+            await FunnelRuntimeService(self.db).pause_for_manager_assignment(
+                chat_id=lead.chat_id,
+                project_id=project_id,
+                actor_id=actor_id,
+            )
 
         return await self._lead_out(updated)
 

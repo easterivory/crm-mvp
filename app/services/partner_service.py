@@ -136,6 +136,7 @@ class PartnerService:
                     lead_id=lead.id,
                     partner_integration_id=integration.id,
                     status="pending",
+                    submitted_by_user_id=actor.id,
                 )
         except IntegrityError as exc:
             raise HTTPException(

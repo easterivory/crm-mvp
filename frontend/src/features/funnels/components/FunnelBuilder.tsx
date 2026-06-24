@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   BarChart3,
-  CheckCircle2,
   CopyPlus,
   GitBranch,
   History,
@@ -25,7 +24,6 @@ import {
   fetchVersions,
   rollbackFunnelVersion,
   saveGraph,
-  setBotActiveFunnel,
   validateFunnelVersion,
   type FunnelUser,
 } from '../api'
@@ -635,23 +633,6 @@ export default function FunnelBuilder({
     }
   }
 
-  const makeCurrentActive = async () => {
-    if (!funnel || !activeVersionId) {
-      return
-    }
-    try {
-      await setBotActiveFunnel(funnel.bot_id, projectId, {
-        funnel_id: funnel.id,
-        version_id: activeVersionId,
-      })
-      notify({ tone: 'success', message: 'Активная версия бота переключена.' })
-      setFunnel(await fetchFunnel(funnelId, projectId))
-      setVersions(await fetchVersions(funnelId, projectId))
-    } catch {
-      notify({ tone: 'error', message: 'Можно активировать только опубликованную версию.' })
-    }
-  }
-
   const rollbackToVersion = async (targetVersionId: string) => {
     const targetVersion = versions.find((version) => version.id === targetVersionId)
     if (isRollingBackVersionId || targetVersion?.is_active_for_bot) {
@@ -788,14 +769,6 @@ export default function FunnelBuilder({
               >
                 <CopyPlus size={13} />
                 Черновик
-              </button>
-              <button
-                type="button"
-                onClick={() => void makeCurrentActive()}
-                className="inline-flex h-7 items-center gap-1 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2 text-xs text-emerald-50 transition hover:border-emerald-300/40"
-              >
-                <CheckCircle2 size={13} />
-                Сделать активной
               </button>
             </div>
           </div>

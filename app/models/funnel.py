@@ -269,6 +269,7 @@ class ChatFunnelState(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_chat_funnel_states_current_step_id", "current_step_id"),
         Index("ix_chat_funnel_states_completed_at", "completed_at"),
         Index("ix_chat_funnel_states_entered_step_at", "entered_step_at"),
+        Index("ix_chat_funnel_states_is_paused", "is_paused"),
     )
 
     chat_id: Mapped[uuid.UUID] = mapped_column(
@@ -288,6 +289,13 @@ class ChatFunnelState(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     )
     waiting_for_answer: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
+    )
+    is_paused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    paused_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     runtime_json: Mapped[dict[str, Any]] = mapped_column(

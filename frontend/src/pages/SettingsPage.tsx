@@ -61,6 +61,7 @@ type User = {
   project_ids?: string[]
   role_id: string
   role_name?: string | null
+  handler_code?: string | null
   created_at: string
   is_deleted: boolean
 }
@@ -196,6 +197,7 @@ export default function SettingsPage() {
   const [newUserEmail, setNewUserEmail] = useState('')
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
+  const [newUserHandlerCode, setNewUserHandlerCode] = useState('')
   const [newUserRoleId, setNewUserRoleId] = useState('')
   const [newUserProjectIds, setNewUserProjectIds] = useState<string[]>([])
   const [newStatusCode, setNewStatusCode] = useState('')
@@ -580,6 +582,11 @@ export default function SettingsPage() {
     ) {
       return
     }
+    const handlerCode = newUserHandlerCode.trim()
+    if (handlerCode && !/^\d{4}$/.test(handlerCode)) {
+      setError('Код обработчика должен состоять из четырёх цифр.')
+      return
+    }
 
     setIsAddingUser(true)
     setError('')
@@ -593,10 +600,12 @@ export default function SettingsPage() {
         role_id: newUserRoleId,
         project_id: selectedRole?.name === 'super_admin' ? null : newUserProjectIds[0],
         project_ids: selectedRole?.name === 'super_admin' ? [] : newUserProjectIds,
+        handler_code: handlerCode || null,
       })
       setNewUserEmail('')
       setNewUserName('')
       setNewUserPassword('')
+      setNewUserHandlerCode('')
       setNewUserProjectIds(activeProjectId ? [activeProjectId] : [])
       await loadUsers()
       setNotice('Пользователь добавлен.')
@@ -666,6 +675,36 @@ export default function SettingsPage() {
       setNotice('Роль пользователя обновлена.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось изменить роль.'))
+    } finally {
+      setUpdatingUserId(null)
+    }
+  }
+
+  const handleUserHandlerCodeChange = async (user: User, rawValue: string) => {
+    if (!canDeleteUser(user)) {
+      setError('Недостаточно прав для изменения кода обработчика.')
+      return
+    }
+    const handlerCode = rawValue.replace(/\D/g, '').slice(0, 4)
+    if (handlerCode === (user.handler_code ?? '')) {
+      return
+    }
+    if (handlerCode && !/^\d{4}$/.test(handlerCode)) {
+      setError('Код обработчика должен состоять из четырёх цифр.')
+      return
+    }
+
+    setUpdatingUserId(user.id)
+    setError('')
+    setNotice('')
+    try {
+      await api.patch<User>(`/users/${user.id}`, {
+        handler_code: handlerCode || null,
+      })
+      await loadUsers()
+      setNotice('Код обработчика обновлён.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось обновить код обработчика.'))
     } finally {
       setUpdatingUserId(null)
     }
@@ -1199,11 +1238,12 @@ export default function SettingsPage() {
               </div>
 
               <div className="overflow-x-auto rounded-lg border border-zinc-800">
-                <table className="min-w-[1040px] w-full text-left text-sm">
+                <table className="min-w-[1160px] w-full text-left text-sm">
                   <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                     <tr>
                       <th className="px-4 py-3">Имя</th>
                       <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Код</th>
                       <th className="px-4 py-3">Роль</th>
                       <th className="px-4 py-3">Доступы</th>
                       <th className="w-[132px] px-4 py-3 text-right">Действия</th>
@@ -1222,6 +1262,21 @@ export default function SettingsPage() {
                         <tr key={user.id} className="bg-zinc-950">
                           <td className="px-4 py-3 text-zinc-100">{user.name}</td>
                           <td className="px-4 py-3 text-zinc-400">{user.email}</td>
+                          <td className="px-4 py-3">
+                            <input
+                              key={`${user.id}-${user.handler_code ?? 'empty'}`}
+                              defaultValue={user.handler_code ?? ''}
+                              inputMode="numeric"
+                              maxLength={4}
+                              placeholder="0001"
+                              disabled={!canRemove || updatingUserId === user.id}
+                              onChange={(event) => {
+                                event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 4)
+                              }}
+                              onBlur={(event) => void handleUserHandlerCodeChange(user, event.currentTarget.value)}
+                              className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-center font-mono text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                          </td>
                           <td className="px-4 py-3 text-zinc-400">
                             {editableRoles.length > 0 ? (
                               <select
@@ -1331,7 +1386,7 @@ export default function SettingsPage() {
 
             {canManageStaff ? (
               <form
-                className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_180px_140px]"
+                className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_180px_110px_140px]"
                 onSubmit={handleAddUser}
               >
                 <input
@@ -1341,6 +1396,14 @@ export default function SettingsPage() {
                   placeholder="Email"
                   required
                   className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+                <input
+                  value={newUserHandlerCode}
+                  onChange={(event) => setNewUserHandlerCode(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                  inputMode="numeric"
+                  maxLength={4}
+                  placeholder="Код 0001"
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-base font-mono text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                 />
                 <input
                   value={newUserName}

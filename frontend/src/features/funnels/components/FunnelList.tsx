@@ -13,6 +13,7 @@ type FunnelListProps = {
   selectedBotIds: string[]
   isLoading: boolean
   isCreating: boolean
+  canEdit: boolean
   onCreate: (payload: { name: string; description: string; botId: string }) => void
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
@@ -27,6 +28,7 @@ export default function FunnelList({
   selectedBotIds,
   isLoading,
   isCreating,
+  canEdit,
   onCreate,
   onOpen,
   onCopy,
@@ -108,6 +110,11 @@ export default function FunnelList({
           {isLoading ? <LoaderCircle size={18} className="animate-spin text-gray-500" /> : null}
         </div>
 
+        <p className="mb-4 rounded-lg border border-accent-300/15 bg-accent-300/[0.04] px-3 py-2 text-xs leading-5 text-gray-400">
+          Смена активной воронки влияет на новые и сброшенные диалоги. Уже начатые диалоги
+          безопасно заканчивают версию, с которой были начаты.
+        </p>
+
         {visibleBots.length === 0 && !isLoading ? (
           <EmptyState
             icon={<Workflow size={28} />}
@@ -134,14 +141,16 @@ export default function FunnelList({
                             {bot.bot_username ? `@${bot.bot_username}` : 'username не синхронизирован'}
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => startCreatingForBot(bot.id)}
-                          className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 text-sm font-medium text-accent-50 transition hover:border-accent-300/50"
-                        >
-                          <Plus size={15} />
-                          Создать
-                        </button>
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => startCreatingForBot(bot.id)}
+                            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 text-sm font-medium text-accent-50 transition hover:border-accent-300/50"
+                          >
+                            <Plus size={15} />
+                            Создать
+                          </button>
+                        ) : null}
                       </div>
                       <p className="mt-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-gray-400">
                         {active ? `Активная: ${active.name}` : 'Активная воронка не назначена'}
@@ -149,7 +158,7 @@ export default function FunnelList({
                     </header>
 
                     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-                      {isCreatingForBot ? (
+                      {canEdit && isCreatingForBot ? (
                         <form
                           onSubmit={handleSubmit}
                           className="space-y-3 rounded-xl border border-accent-300/20 bg-accent-300/5 p-3"
@@ -190,14 +199,16 @@ export default function FunnelList({
                       {botFunnels.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-white/10 p-5 text-center">
                           <p className="text-sm text-gray-400">У этого бота пока нет воронок</p>
-                          <button
-                            type="button"
-                            onClick={() => startCreatingForBot(bot.id)}
-                            className="mt-3 inline-flex h-9 items-center gap-2 rounded-xl border border-accent-300/25 px-3 text-sm text-accent-100 transition hover:border-accent-300/50"
-                          >
-                            <Plus size={15} />
-                            Создать воронку
-                          </button>
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              onClick={() => startCreatingForBot(bot.id)}
+                              className="mt-3 inline-flex h-9 items-center gap-2 rounded-xl border border-accent-300/25 px-3 text-sm text-accent-100 transition hover:border-accent-300/50"
+                            >
+                              <Plus size={15} />
+                              Создать воронку
+                            </button>
+                          ) : null}
                         </div>
                       ) : (
                         botFunnels.map((funnel) => (
@@ -205,6 +216,7 @@ export default function FunnelList({
                             key={funnel.id}
                             funnel={funnel}
                             bot={bot}
+                            canEdit={canEdit}
                             onOpen={onOpen}
                             onCopy={onCopy}
                             onArchive={onArchive}

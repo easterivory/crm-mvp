@@ -52,7 +52,7 @@ class ChatRepository(BaseRepository[Chat]):
             ),
             else_=Chat.last_operator_message_at,
         )
-        return (last_client_message_at.isnot(None)) & (
+        return Chat.is_blocked.is_(False) & (last_client_message_at.isnot(None)) & (
             last_operator_message_at.is_(None)
             | (last_client_message_at > last_operator_message_at)
         )
@@ -192,9 +192,12 @@ class ChatRepository(BaseRepository[Chat]):
 
     @staticmethod
     def _search_expr(search_query: str) -> ColumnElement:
-        needle = f"%{search_query.strip().lower()}%"
-        if needle == "%%":
+        query = search_query.strip().lower()
+        if not query:
             return True
+        needle = ChatRepository._search_needle(query)
+        username_needle = ChatRepository._search_needle(query.removeprefix("@"))
+        phone_digits = "".join(character for character in query if character.isdigit())
         cycle_started_at = Chat.current_cycle_started_at - func.make_interval(
             0,
             0,
@@ -211,10 +214,22 @@ class ChatRepository(BaseRepository[Chat]):
                 Lead.chat_id == Chat.id,
                 Lead.is_deleted.is_(False),
                 or_(
-                    func.lower(func.coalesce(Lead.name, "")).like(needle),
-                    func.lower(func.coalesce(Lead.phone, "")).like(needle),
-                    func.lower(func.coalesce(Lead.username, "")).like(needle),
-                    func.lower(func.cast(Lead.custom_fields, String)).like(needle),
+                    func.lower(func.coalesce(Lead.name, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(Lead.phone, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(Lead.username, "")).like(username_needle, escape="\\"),
+                    func.lower(func.cast(Lead.custom_fields, String)).like(needle, escape="\\"),
+                    *(
+                        [
+                            func.regexp_replace(
+                                func.coalesce(Lead.phone, ""),
+                                r"\D",
+                                "",
+                                "g",
+                            ).like(f"%{phone_digits}%")
+                        ]
+                        if phone_digits
+                        else []
+                    ),
                 ),
             )
             .exists()
@@ -224,10 +239,10 @@ class ChatRepository(BaseRepository[Chat]):
             .where(
                 TrackingLink.id == Chat.tracking_link_id,
                 or_(
-                    func.lower(func.coalesce(TrackingLink.code, "")).like(needle),
-                    func.lower(func.coalesce(TrackingLink.ref_code, "")).like(needle),
-                    func.lower(func.coalesce(TrackingLink.title, "")).like(needle),
-                    func.lower(func.coalesce(TrackingLink.buyer_name, "")).like(needle),
+                    func.lower(func.coalesce(TrackingLink.code, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(TrackingLink.ref_code, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(TrackingLink.title, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(TrackingLink.buyer_name, "")).like(needle, escape="\\"),
                 ),
             )
             .exists()
@@ -238,21 +253,26 @@ class ChatRepository(BaseRepository[Chat]):
                 Message.chat_id == Chat.id,
                 Message.created_at >= cycle_lower_bound,
                 or_(
-                    func.lower(func.coalesce(Message.body, "")).like(needle),
-                    func.lower(func.coalesce(Message.caption, "")).like(needle),
+                    func.lower(func.coalesce(Message.body, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(Message.caption, "")).like(needle, escape="\\"),
                 ),
             )
             .limit(1)
             .exists()
         )
         return or_(
-            func.lower(func.coalesce(Chat.contact_name, "")).like(needle),
-            func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle),
-            func.lower(func.coalesce(Chat.external_user_id, "")).like(needle),
+            func.lower(func.coalesce(Chat.contact_name, "")).like(needle, escape="\\"),
+            func.lower(func.coalesce(Chat.external_chat_id, "")).like(needle, escape="\\"),
+            func.lower(func.coalesce(Chat.external_user_id, "")).like(needle, escape="\\"),
             lead_exists,
             tracking_exists,
             message_exists,
         )
+
+    @staticmethod
+    def _search_needle(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
 
     @staticmethod
     def _funnel_state_expr(funnel_state: str) -> ColumnElement:
@@ -270,6 +290,15 @@ class ChatRepository(BaseRepository[Chat]):
                 ChatFunnelState.chat_id == Chat.id,
                 ChatFunnelState.completed_at.is_(None),
                 ChatFunnelState.waiting_for_answer.is_(True),
+            )
+            .exists()
+        )
+        paused_exists = (
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_(None),
+                ChatFunnelState.is_paused.is_(True),
             )
             .exists()
         )
@@ -293,6 +322,8 @@ class ChatRepository(BaseRepository[Chat]):
         )
         if funnel_state == "waiting_for_answer":
             return waiting_exists
+        if funnel_state == "paused":
+            return paused_exists
         if funnel_state == "in_funnel":
             return state_exists
         if funnel_state == "completed":
@@ -561,7 +592,7 @@ class ChatRepository(BaseRepository[Chat]):
         query = (search_query or "").strip()
         if not chat_ids or not query:
             return {}
-        needle = f"%{query.lower()}%"
+        needle = self._search_needle(query.lower())
         cycle_started_at = Chat.current_cycle_started_at - func.make_interval(
             0,
             0,
@@ -581,8 +612,8 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.reset_at.is_(None),
                 Message.created_at >= cycle_lower_bound,
                 or_(
-                    func.lower(func.coalesce(Message.body, "")).like(needle),
-                    func.lower(func.coalesce(Message.caption, "")).like(needle),
+                    func.lower(func.coalesce(Message.body, "")).like(needle, escape="\\"),
+                    func.lower(func.coalesce(Message.caption, "")).like(needle, escape="\\"),
                 ),
             )
             .order_by(Message.chat_id.asc(), Message.created_at.desc(), Message.id.desc())
@@ -721,6 +752,28 @@ class ChatRepository(BaseRepository[Chat]):
         if result.rowcount == 0:
             return None
         return await self.get_by_id(chat_id)
+
+    async def set_blocked(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        is_blocked: bool,
+    ) -> Optional[Chat]:
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(is_blocked=is_blocked, updated_at=now)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_active(chat_id, project_id)
 
     async def reactivate_reset_chat(
         self,

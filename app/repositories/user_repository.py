@@ -64,6 +64,21 @@ class UserRepository(BaseRepository[User]):
         )
         return result.scalar_one_or_none()
 
+    async def get_by_handler_code(
+        self,
+        *,
+        handler_code: str,
+        exclude_user_id: UUID | None = None,
+    ) -> Optional[User]:
+        stmt = select(User).where(
+            User.handler_code == handler_code,
+            User.is_deleted.is_(False),
+        )
+        if exclude_user_id is not None:
+            stmt = stmt.where(User.id != exclude_user_id)
+        result = await self.db.execute(stmt.limit(1))
+        return result.scalar_one_or_none()
+
     async def get_role_by_id(self, role_id: UUID) -> Optional[Role]:
         result = await self.db.execute(select(Role).where(Role.id == role_id))
         return result.scalar_one_or_none()

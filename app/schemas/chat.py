@@ -50,6 +50,7 @@ class ChatOut(OrmBase):
     last_client_message_at: Optional[datetime]
     last_operator_message_at: Optional[datetime]
     is_read: bool = True
+    is_blocked: bool = False
     unanswered_minutes: int = 0
     last_read_at: Optional[datetime]
     reset_at: Optional[datetime]
@@ -87,6 +88,7 @@ class ChatOut(OrmBase):
     current_step_id: Optional[uuid.UUID] = None
     current_step_title: Optional[str] = None
     waiting_for_answer: bool = False
+    is_paused: bool = False
     completed_at: Optional[datetime] = None
     lifecycle_status: str = "manual"
 

@@ -47,6 +47,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_last_client_message_at", "last_client_message_at"),
         Index("ix_chats_last_operator_message_at", "last_operator_message_at"),
         Index("ix_chats_is_read", "is_read"),
+        Index("ix_chats_is_blocked", "is_blocked"),
         Index("ix_chats_updated_at", "updated_at"),
         Index("ix_chats_project_last_user_msg", "project_id", "last_user_message_at"),
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
@@ -82,6 +83,12 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     last_client_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_operator_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    is_blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     unanswered_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     # Set explicitly when the manager opens the chat

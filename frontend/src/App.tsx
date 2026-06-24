@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import MainLayout from './components/MainLayout'
+import ManagerRestrictedRoute from './components/ManagerRestrictedRoute'
 import ProtectedRoute from './components/ProtectedRoute'
 import BotsPage from './pages/BotsPage'
 import BroadcastsPage from './pages/BroadcastsPage'
@@ -49,11 +50,11 @@ export default function App() {
           <Route path="/funnels" element={<FunnelsPage />} />
           <Route path="/funnels/:funnelId/builder" element={<FunnelsPage />} />
           <Route path="/broadcasts" element={<BroadcastsPage />} />
-          <Route path="/bots" element={<BotsPage />} />
+          <Route path="/bots" element={<ManagerRestrictedRoute><BotsPage /></ManagerRestrictedRoute>} />
           <Route path="/leads" element={<LeadsPage />} />
-          <Route path="/tracking" element={<TrackingPage />} />
+          <Route path="/tracking" element={<ManagerRestrictedRoute><TrackingPage /></ManagerRestrictedRoute>} />
           <Route path="/docs" element={<DocsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings" element={<ManagerRestrictedRoute><SettingsPage /></ManagerRestrictedRoute>} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

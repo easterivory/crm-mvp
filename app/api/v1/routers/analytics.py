@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -11,7 +12,9 @@ from app.core.config import settings
 from app.core.constants import RoleName
 from app.models.user import User
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
+from app.schemas.manager_analytics import ManagerPerformanceOut
 from app.services.buyer_analytics_service import BuyerAnalyticsService
+from app.services.manager_analytics_service import ManagerAnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -31,12 +34,36 @@ async def get_buyer_funnel_drop_off(
 
 @router.get("/buyers", response_model=list[BuyerPerformanceOut])
 async def get_buyers_performance(
+    bot_id: UUID | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     project_id: UUID = Depends(get_current_project_id),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[BuyerPerformanceOut]:
     _ensure_admin(current_user)
-    return await BuyerAnalyticsService(db).get_project_performance(project_id=project_id)
+    return await BuyerAnalyticsService(db).get_project_performance(
+        project_id=project_id,
+        bot_id=bot_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@router.get("/managers", response_model=list[ManagerPerformanceOut])
+async def get_managers_performance(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ManagerPerformanceOut]:
+    _ensure_admin(current_user)
+    return await ManagerAnalyticsService(db).get_project_performance(
+        project_id=project_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 def _verify_buyer_bot_token(

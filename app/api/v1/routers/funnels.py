@@ -36,14 +36,14 @@ from app.services.funnel_validator import FunnelGraphValidator
 
 router = APIRouter(prefix="/funnels", tags=["funnels"])
 
-FUNNEL_MANAGER_ROLES = {RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER}
+FUNNEL_EDITOR_ROLES = {RoleName.SUPER_ADMIN, RoleName.ADMIN}
 
 
-def _ensure_funnel_manager(current_user: User) -> None:
-    if current_user.role_name not in FUNNEL_MANAGER_ROLES:
+def _ensure_funnel_editor(current_user: User) -> None:
+    if current_user.role_name not in FUNNEL_EDITOR_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin, super_admin or manager can manage funnel versions",
+            detail="Only admin or super_admin can edit funnel versions",
         )
 
 
@@ -60,7 +60,7 @@ async def upload_funnel_media(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BroadcastUploadOut:
-    _ensure_funnel_manager(current_user)
+    _ensure_funnel_editor(current_user)
     return await BroadcastService(db).upload_media(
         actor=current_user,
         project_id=project_id,
@@ -77,7 +77,7 @@ async def get_funnel_media_upload(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    _ensure_funnel_manager(current_user)
+    _ensure_funnel_editor(current_user)
     upload = await BroadcastRepository(db).get_upload_in_project(upload_id, project_id)
     if upload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload not found")
@@ -179,7 +179,7 @@ async def validate_graph(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FunnelGraphValidationOut:
-    _ensure_funnel_manager(current_user)
+    _ensure_funnel_editor(current_user)
     await FunnelService(db).get_funnel(
         funnel_id=funnel_id,
         project_id=project_id,
@@ -297,7 +297,7 @@ async def rollback_version(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FunnelVersionOut:
-    _ensure_funnel_manager(current_user)
+    _ensure_funnel_editor(current_user)
     return await FunnelService(db).rollback_to_version(
         funnel_id=funnel_id,
         version_id=version_id,

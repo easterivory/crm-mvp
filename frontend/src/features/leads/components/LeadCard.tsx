@@ -200,17 +200,19 @@ export default function LeadCard({
       ) : null}
 
       {isTrashView ? (
-        <div className="mt-5">
-          <button
-            type="button"
-            onClick={() => onRestore?.(lead)}
-            disabled={isMutating || !onRestore}
-            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-emerald-500/15 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:py-0"
-          >
-            <Undo2 size={17} />
-            Восстановить лида
-          </button>
-        </div>
+        onRestore ? (
+          <div className="mt-5">
+            <button
+              type="button"
+              onClick={() => onRestore(lead)}
+              disabled={isMutating}
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-emerald-500/15 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-200/70 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:py-0"
+            >
+              <Undo2 size={17} />
+              Восстановить лида
+            </button>
+          </div>
+        ) : null
       ) : (
         <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
           {onOpenChat ? (

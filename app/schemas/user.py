@@ -15,6 +15,7 @@ class UserCreate(BaseModel):
     project_id: Optional[uuid.UUID] = None
     project_ids: Optional[list[uuid.UUID]] = None
     telegram_id: Optional[int] = Field(None, gt=0)
+    handler_code: Optional[str] = Field(None, pattern=r"^\d{4}$")
 
 
 class UserPasswordChange(BaseModel):
@@ -27,6 +28,7 @@ class UserUpdate(BaseModel):
     project_id: Optional[uuid.UUID] = None
     project_ids: Optional[list[uuid.UUID]] = None
     telegram_id: Optional[int] = Field(None, gt=0)
+    handler_code: Optional[str] = Field(None, pattern=r"^\d{4}$")
 
 
 class UserOut(OrmBase):
@@ -37,6 +39,7 @@ class UserOut(OrmBase):
     project_ids: list[uuid.UUID] = Field(default_factory=list)
     role_id: uuid.UUID
     telegram_id: Optional[int] = None
+    handler_code: Optional[str] = None
     role_name: Optional[str] = None
     created_at: datetime
     is_deleted: bool

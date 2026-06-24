@@ -232,22 +232,14 @@ class TelegramSenderService:
                 )
             except VideoProcessingError as exc:
                 logger.error(
-                    "Telegram video_note crop failed; falling back to sendVideo: "
+                    "Telegram video_note crop failed; refusing to send a non-circular video: "
                     "project_id=%s chat_id=%s file_name=%s error=%s",
                     project_id,
                     external_chat_id,
                     file_name,
                     exc,
                 )
-                return await self.send_video(
-                    project_id=project_id,
-                    bot_id=bot_id,
-                    external_chat_id=external_chat_id,
-                    video=video_note,
-                    reply_markup=reply_markup,
-                    file_name=file_name,
-                    mime_type=mime_type,
-                )
+                raise
 
         return await self._send_media(
             method="sendVideoNote",

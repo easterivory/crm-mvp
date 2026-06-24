@@ -20,9 +20,13 @@ export async function deleteBuyer(buyerId: string, projectId: string | null): Pr
 
 export async function fetchBuyerPerformance(
   projectId: string | null,
+  filters?: { date_from?: string; date_to?: string; bot_id?: string },
 ): Promise<BuyerPerformance[]> {
   const { data } = await api.get<BuyerPerformance[]>('/analytics/buyers', {
-    params: projectId ? { project_id: projectId } : undefined,
+    params: {
+      ...(projectId ? { project_id: projectId } : {}),
+      ...filters,
+    },
   })
   return data
 }

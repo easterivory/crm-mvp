@@ -102,10 +102,14 @@ class AuditAction:
     LEAD_TRASHED = "lead.trashed"
     LEAD_RESTORED = "lead.restored"
     CHAT_RESET = "chat.reset"
+    CHAT_BLOCKED = "chat.blocked"
+    CHAT_UNBLOCKED = "chat.unblocked"
     PROJECT_ARCHIVED = "project.archived"
     PROJECT_RESTORED = "project.restored"
     LEAD_SUBMITTED = "lead.submitted"
     LEAD_REJECTED = "lead.rejected"
+    CHAT_FUNNEL_PAUSED = "chat.funnel_paused"
+    CHAT_FUNNEL_RESUMED = "chat.funnel_resumed"
 
 
 class EntityType:

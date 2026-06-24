@@ -23,6 +23,7 @@ export type Chat = {
   last_client_message_at: string | null
   last_operator_message_at: string | null
   is_read: boolean
+  is_blocked: boolean
   unanswered_minutes: number
   last_incoming_at: string | null
   last_outgoing_at: string | null
@@ -51,8 +52,9 @@ export type Chat = {
   current_step_id: string | null
   current_step_title: string | null
   waiting_for_answer: boolean
+  is_paused: boolean
   completed_at: string | null
-  lifecycle_status: 'in_progress' | 'waiting_for_answer' | 'completed' | 'manual'
+  lifecycle_status: 'in_progress' | 'waiting_for_answer' | 'completed' | 'paused' | 'manual'
   updated_at: string
   created_at: string
   is_deleted: boolean
@@ -112,6 +114,9 @@ function getInitials(label: string) {
 }
 
 function getLifecycleLabel(chat: Chat) {
+  if (chat.lifecycle_status === 'paused') {
+    return 'На паузе у менеджера'
+  }
   if (chat.lifecycle_status === 'waiting_for_answer') {
     return 'Ждёт ответ'
   }

@@ -26,10 +26,11 @@ from app.schemas.chat_filter_preset import (
     ChatFilterPresetUpdate,
 )
 from app.schemas.common import PaginatedResponse
-from app.schemas.funnel import FunnelRuntimeLogOut
+from app.schemas.funnel import ChatFunnelControlOut, ChatFunnelResumeIn, FunnelRuntimeLogOut
 from app.services.chat_filter_preset_service import ChatFilterPresetService
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_service import ChatService
+from app.services.funnel_runtime_service import FunnelRuntimeService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -54,6 +55,19 @@ def _ensure_chat_language_access(current_user: User) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only operator, manager, admin or super_admin can update chat language",
+        )
+
+
+def _ensure_chat_destructive_access(current_user: User) -> None:
+    if current_user.role_name not in RoleName.ALL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current user cannot manage dialog lifecycle",
+        )
+    if current_user.role_name == RoleName.MANAGER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managers cannot reset or block dialogs",
         )
 
 
@@ -85,7 +99,7 @@ async def list_chats(
     ),
     funnel_state: Optional[str] = Query(
         default=None,
-        pattern="^(in_funnel|waiting_for_answer|completed|manual)$",
+        pattern="^(in_funnel|waiting_for_answer|paused|completed|manual)$",
     ),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
@@ -108,7 +122,7 @@ async def list_chats(
       - tag_ids=<csv>    — only chats whose lead has selected tags
       - tag_mode=any|all — tag matching mode
       - lead_statuses=<csv> — only chats whose lead status code matches
-      - funnel_state=in_funnel|waiting_for_answer|completed|manual
+      - funnel_state=in_funnel|waiting_for_answer|paused|completed|manual
 
     Sort order (fixed): is_red DESC → unanswered DESC → last_message_at DESC
     """
@@ -319,6 +333,51 @@ async def get_funnel_trace(
     return [FunnelRuntimeLogOut.from_runtime_log(log) for log in logs]
 
 
+@router.get("/{chat_id}/funnel-control", response_model=ChatFunnelControlOut)
+async def get_chat_funnel_control(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatFunnelControlOut:
+    _ensure_chat_trace_access(current_user)
+    control = await FunnelRuntimeService(db).get_manager_funnel_control(
+        chat_id=chat_id,
+        project_id=project_id,
+    )
+    return ChatFunnelControlOut.model_validate(control)
+
+
+@router.post("/{chat_id}/funnel-resume", response_model=ChatFunnelControlOut)
+async def resume_chat_funnel(
+    chat_id: UUID,
+    data: ChatFunnelResumeIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatFunnelControlOut:
+    _ensure_chat_trace_access(current_user)
+    try:
+        resumed = await FunnelRuntimeService(db).resume_from_manager_step(
+            chat_id=chat_id,
+            project_id=project_id,
+            step_id=data.step_id,
+            actor=current_user,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if resumed is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The funnel is not paused or the selected step is unavailable.",
+        )
+    control = await FunnelRuntimeService(db).get_manager_funnel_control(
+        chat_id=chat_id,
+        project_id=project_id,
+    )
+    return ChatFunnelControlOut.model_validate(control)
+
+
 @router.post("", response_model=ChatOut, status_code=status.HTTP_201_CREATED)
 async def create_chat(
     data: ChatCreate,
@@ -346,8 +405,41 @@ async def reset_chat(
     db: AsyncSession = Depends(get_db),
 ) -> ChatOut:
     """Soft-clears the active dialog cycle without deleting Telegram history."""
+    _ensure_chat_destructive_access(current_user)
     return await ChatService(db).reset_chat(
         chat_id=chat_id,
         project_id=project_id,
         actor_id=current_user.id,
+    )
+
+
+@router.post("/{chat_id}/block", response_model=ChatOut)
+async def block_chat(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatOut:
+    _ensure_chat_destructive_access(current_user)
+    return await ChatService(db).set_chat_blocked(
+        chat_id=chat_id,
+        project_id=project_id,
+        actor_id=current_user.id,
+        is_blocked=True,
+    )
+
+
+@router.post("/{chat_id}/unblock", response_model=ChatOut)
+async def unblock_chat(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatOut:
+    _ensure_chat_destructive_access(current_user)
+    return await ChatService(db).set_chat_blocked(
+        chat_id=chat_id,
+        project_id=project_id,
+        actor_id=current_user.id,
+        is_blocked=False,
     )

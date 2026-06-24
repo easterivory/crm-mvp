@@ -314,7 +314,7 @@ class FunnelService:
         data: BotActiveFunnelSetIn,
         current_user: User,
     ) -> BotActiveFunnelOut:
-        self._ensure_write_allowed(current_user)
+        self._ensure_activation_allowed(current_user)
         await self._ensure_bot_in_project(bot_id, project_id)
         version = await self._get_version_or_404(data.funnel_id, data.version_id, project_id)
         funnel = await self._get_funnel_or_404(data.funnel_id, project_id)
@@ -1228,11 +1228,22 @@ class FunnelService:
         if current_user.role_name not in {
             RoleName.SUPER_ADMIN,
             RoleName.ADMIN,
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admins can edit funnels",
+            )
+
+    @staticmethod
+    def _ensure_activation_allowed(current_user: User) -> None:
+        if current_user.role_name not in {
+            RoleName.SUPER_ADMIN,
+            RoleName.ADMIN,
             RoleName.MANAGER,
         }:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admins and managers can edit funnels",
+                detail="Only admins and managers can select an active funnel",
             )
 
     @staticmethod

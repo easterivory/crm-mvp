@@ -190,6 +190,14 @@ class TelegramService:
             msg.id,
             message.text,
         )
+        if chat.is_blocked:
+            logger.info(
+                "Ignored blocked Telegram chat bot_id=%s project_id=%s chat_id=%s",
+                bot_id,
+                project_id,
+                chat.id,
+            )
+            return
         lead = await self._find_or_create_lead(
             chat.id,
             project_id,
@@ -607,6 +615,15 @@ class TelegramService:
         token = await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
         if token:
             await self.telegram_sender.answer_callback_query(token, callback_query.id)
+
+        if chat.is_blocked:
+            logger.info(
+                "Ignored callback from blocked Telegram chat bot_id=%s project_id=%s chat_id=%s",
+                bot_id,
+                project_id,
+                chat.id,
+            )
+            return
 
         active_funnel, active_version = await self.funnel_runtime.get_active_published_funnel_for_bot(
             bot_id,

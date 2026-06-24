@@ -126,11 +126,13 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         lead_id: UUID,
         partner_integration_id: UUID,
         status: str,
+        submitted_by_user_id: UUID | None = None,
     ) -> LeadSubmission:
         submission = LeadSubmission(
             lead_id=lead_id,
             partner_integration_id=partner_integration_id,
             status=status,
+            submitted_by_user_id=submitted_by_user_id,
         )
         self.db.add(submission)
         await self.db.flush()

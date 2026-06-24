@@ -228,5 +228,8 @@ class LeadSubmissionOut(OrmBase):
     partner_feedback: Optional[str]
     partner_status: Optional[str]
     partner_status_updated_at: Optional[datetime]
+    submitted_by_user_id: Optional[UUID]
+    is_valid: Optional[bool]
+    validated_at: Optional[datetime]
     submitted_at: datetime
     completed_at: Optional[datetime]

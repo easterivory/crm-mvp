@@ -41,6 +41,7 @@ import { fetchLeadStatuses } from '../features/leads/api'
 import { fetchTrackingLinks } from '../features/tracking/api'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
 import type { PaginatedResponse } from '../shared/types'
+import { useAuthStore } from '../store/authStore'
 
 type ProjectTag = {
   id: string
@@ -89,6 +90,7 @@ function contentHasMedia(content: BroadcastContent) {
 export default function BroadcastsPage() {
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
   const notify = useNotificationStore((state) => state.notify)
+  const canDeleteBroadcasts = useAuthStore((state) => state.user?.role_name !== 'manager')
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
   const [tags, setTags] = useState<BroadcastOption[]>([])
@@ -542,6 +544,7 @@ export default function BroadcastsPage() {
             expandedAnalyticsIds={expandedAnalyticsIds}
             loadingAnalyticsIds={loadingAnalyticsIds}
             loadingErrorLogIds={loadingErrorLogIds}
+            canDelete={canDeleteBroadcasts}
             onOpen={(broadcast) => {
               setEditingBroadcast(broadcast)
               setIsWizardOpen(true)

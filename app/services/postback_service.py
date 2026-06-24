@@ -204,11 +204,12 @@ class PostbackService:
 
         lead = submission.lead
         if lead is not None:
-            await self._apply_partner_status_to_lead(
+            local_status_code = await self._apply_partner_status_to_lead(
                 lead=lead,
                 integration=integration,
                 partner_status=partner_status,
             )
+            self._apply_validation_outcome(submission, local_status_code)
             await self._log_partner_status_event(
                 lead=lead,
                 old_status=old_status,
@@ -450,21 +451,23 @@ class PostbackService:
             self.COMPLETED_STATUS,
             self.DUPLICATE_STATUS,
         }:
-            await self._apply_partner_status_to_lead(
+            local_status_code = await self._apply_partner_status_to_lead(
                 lead=lead,
                 integration=integration,
                 partner_status=submission.partner_status or submission.status,
             )
+            self._apply_validation_outcome(submission, local_status_code)
         elif (
             not forced_http_failure
             and submission.status == self.FAILED_STATUS
             and submission.partner_status
         ):
-            await self._apply_partner_status_to_lead(
+            local_status_code = await self._apply_partner_status_to_lead(
                 lead=lead,
                 integration=integration,
                 partner_status=submission.partner_status,
             )
+            self._apply_validation_outcome(submission, local_status_code)
         logger.info(
             "Postback HTTP response parsed lead_id=%s integration_id=%s status=%s",
             lead.id,
@@ -478,7 +481,7 @@ class PostbackService:
         lead: Lead,
         integration: PartnerIntegration,
         partner_status: str,
-    ) -> None:
+    ) -> str | None:
         old_status_id = lead.status_id
         for status_code in self._lead_status_candidates(integration, partner_status):
             updated = await self.lead_repo.set_status_by_code(
@@ -493,13 +496,26 @@ class PostbackService:
                         project_id=updated.project_id,
                         status_id=updated.status_id,
                     )
-                return
+                return status_code
         logger.warning(
             "Partner status could not be mapped to an existing lead status "
             "lead_id=%s partner_status=%s",
             lead.id,
             partner_status,
         )
+        return None
+
+    @staticmethod
+    def _apply_validation_outcome(
+        submission: LeadSubmission,
+        local_status_code: str | None,
+    ) -> None:
+        if local_status_code == LeadStatusCode.QUALIFIED:
+            submission.is_valid = True
+            submission.validated_at = datetime.now(timezone.utc)
+        elif local_status_code == LeadStatusCode.LOST:
+            submission.is_valid = False
+            submission.validated_at = datetime.now(timezone.utc)
 
     async def _log_partner_status_event(
         self,

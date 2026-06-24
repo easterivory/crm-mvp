@@ -312,6 +312,9 @@ class FunnelRepository(BaseRepository[Funnel]):
             .where(ChatFunnelState.chat_id == chat_id)
             .values(
                 waiting_for_answer=False,
+                is_paused=False,
+                paused_at=None,
+                paused_by_user_id=None,
                 completed_at=func.now(),
                 runtime_json={},
                 updated_at=func.now(),
@@ -540,6 +543,9 @@ class FunnelRepository(BaseRepository[Funnel]):
         current_step_id: UUID,
         entered_step_at: datetime,
         waiting_for_answer: bool = False,
+        is_paused: bool | None = None,
+        paused_at: datetime | None = None,
+        paused_by_user_id: UUID | None = None,
         completed_at: Optional[datetime] = None,
         runtime_json: Optional[dict] = None,
     ) -> ChatFunnelState:
@@ -552,6 +558,9 @@ class FunnelRepository(BaseRepository[Funnel]):
                 current_step_id=current_step_id,
                 entered_step_at=entered_step_at,
                 waiting_for_answer=waiting_for_answer,
+                is_paused=bool(is_paused),
+                paused_at=paused_at if is_paused else None,
+                paused_by_user_id=paused_by_user_id if is_paused else None,
                 completed_at=completed_at,
                 runtime_json=runtime_json or {},
             )
@@ -569,6 +578,14 @@ class FunnelRepository(BaseRepository[Funnel]):
             "completed_at": completed_at,
             "updated_at": func.now(),
         }
+        if is_paused is not None:
+            values.update(
+                {
+                    "is_paused": is_paused,
+                    "paused_at": paused_at if is_paused else None,
+                    "paused_by_user_id": paused_by_user_id if is_paused else None,
+                }
+            )
         if runtime_json is not None:
             values["runtime_json"] = runtime_json
         await self.db.execute(
@@ -598,6 +615,28 @@ class FunnelRepository(BaseRepository[Funnel]):
             update(ChatFunnelState)
             .where(ChatFunnelState.chat_id == chat_id)
             .values(runtime_json=runtime_json, updated_at=func.now())
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_chat_funnel_state(chat_id)
+
+    async def set_chat_funnel_paused(
+        self,
+        *,
+        chat_id: UUID,
+        is_paused: bool,
+        paused_at: datetime | None = None,
+        paused_by_user_id: UUID | None = None,
+    ) -> Optional[ChatFunnelState]:
+        result = await self.db.execute(
+            update(ChatFunnelState)
+            .where(ChatFunnelState.chat_id == chat_id)
+            .values(
+                is_paused=is_paused,
+                paused_at=paused_at if is_paused else None,
+                paused_by_user_id=paused_by_user_id if is_paused else None,
+                updated_at=func.now(),
+            )
         )
         if result.rowcount == 0:
             return None
@@ -716,6 +755,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                 ChatFunnelState.current_step_id.label("current_step_id"),
                 FunnelStep.title.label("current_step_title"),
                 ChatFunnelState.waiting_for_answer.label("waiting_for_answer"),
+                ChatFunnelState.is_paused.label("is_paused"),
                 ChatFunnelState.completed_at.label("completed_at"),
             )
             .select_from(Chat)
@@ -748,6 +788,32 @@ class FunnelRepository(BaseRepository[Funnel]):
         contexts: dict[UUID, dict] = {}
         for row in result.mappings().all():
             contexts[row["chat_id"]] = dict(row)
+
+        runtime_result = await self.db.execute(
+            select(
+                ChatFunnelState.chat_id.label("chat_id"),
+                Funnel.id.label("active_funnel_id"),
+                Funnel.name.label("active_funnel_name"),
+                FunnelVersion.id.label("active_funnel_version_id"),
+                FunnelVersion.version_number.label("active_funnel_version_number"),
+                FunnelVersion.status.label("active_funnel_version_status"),
+                ChatFunnelState.current_step_id.label("current_step_id"),
+                FunnelStep.title.label("current_step_title"),
+                ChatFunnelState.waiting_for_answer.label("waiting_for_answer"),
+                ChatFunnelState.is_paused.label("is_paused"),
+                ChatFunnelState.completed_at.label("completed_at"),
+            )
+            .select_from(ChatFunnelState)
+            .join(Funnel, Funnel.id == ChatFunnelState.funnel_id)
+            .join(FunnelVersion, FunnelVersion.id == ChatFunnelState.funnel_version_id)
+            .outerjoin(FunnelStep, FunnelStep.id == ChatFunnelState.current_step_id)
+            .where(
+                ChatFunnelState.chat_id.in_(chat_ids),
+                Funnel.project_id == project_id,
+            )
+        )
+        for row in runtime_result.mappings().all():
+            contexts.setdefault(row["chat_id"], {"chat_id": row["chat_id"]}).update(dict(row))
         return contexts
 
     async def create_step_log(

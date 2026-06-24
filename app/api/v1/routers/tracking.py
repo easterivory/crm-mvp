@@ -2,10 +2,11 @@ from datetime import date
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.core.constants import RoleName
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.tracking import (
@@ -51,8 +52,10 @@ async def list_tracking_links(
 async def create_tracking_link(
     data: TrackingLinkCreate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkOut:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).create_link(project_id=project_id, data=data)
 
 
@@ -70,8 +73,10 @@ async def update_tracking_link(
     link_id: UUID,
     data: TrackingLinkUpdate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkOut:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).update_link(
         link_id=link_id,
         project_id=project_id,
@@ -83,8 +88,10 @@ async def update_tracking_link(
 async def delete_tracking_link(
     link_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_tracking_management_access(current_user)
     await TrackingService(db).delete_link(link_id=link_id, project_id=project_id)
 
 
@@ -119,6 +126,7 @@ async def create_tracking_link_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkRead:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).create_tracking_link(
         data=data,
         actor=current_user,
@@ -158,6 +166,7 @@ async def update_tracking_link_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkRead:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).update_tracking_link(
         link_id=link_id,
         data=data,
@@ -171,6 +180,7 @@ async def archive_tracking_link_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkRead:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).set_tracking_link_active(
         link_id=link_id,
         is_active=False,
@@ -184,6 +194,7 @@ async def restore_tracking_link_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkRead:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).set_tracking_link_active(
         link_id=link_id,
         is_active=True,
@@ -218,6 +229,7 @@ async def add_tracking_spend_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingSpendRead:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).add_spend(
         link_id=link_id,
         data=data,
@@ -232,6 +244,7 @@ async def update_tracking_spend_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingSpendRead:
+    _ensure_tracking_management_access(current_user)
     return await TrackingService(db).update_spend(
         spend_id=spend_id,
         data=data,
@@ -245,6 +258,7 @@ async def delete_tracking_spend_v1(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_tracking_management_access(current_user)
     await TrackingService(db).delete_spend(
         spend_id=spend_id,
         actor=current_user,
@@ -302,3 +316,11 @@ async def get_link_tracking_metrics_v1(
         date_from=date_from,
         date_to=date_to,
     )
+
+
+def _ensure_tracking_management_access(current_user: User) -> None:
+    if current_user.role_name == RoleName.MANAGER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managers cannot manage tracking links or spend",
+        )

@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,11 @@ ALLOWED_BROADCAST_MEDIA: dict[str, str] = {
     "image/webp": "photo",
     "video/mp4": "video",
     "video/quicktime": "video",
+    "video/webm": "video",
+    "video/x-matroska": "video",
+    "video/x-msvideo": "video",
+    "video/mpeg": "video",
+    "video/3gpp": "video",
     "audio/ogg": "voice",
     "audio/mpeg": "voice",
     "audio/mp4": "voice",
@@ -319,7 +324,7 @@ class BroadcastService:
         actor: User,
         project_id: UUID,
     ) -> None:
-        self._ensure_can_manage(actor)
+        self._ensure_can_delete(actor)
         deleted = await self.repo.soft_delete_in_project(broadcast_id, project_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Broadcast not found")
@@ -338,7 +343,7 @@ class BroadcastService:
         actor: User,
         project_id: UUID,
     ) -> None:
-        self._ensure_can_manage(actor)
+        self._ensure_can_delete(actor)
         broadcast = await self.repo.get_any_in_project(broadcast_id, project_id)
         if broadcast is None:
             raise HTTPException(status_code=404, detail="Broadcast not found")
@@ -385,7 +390,7 @@ class BroadcastService:
         project_dir.mkdir(parents=True, exist_ok=True)
 
         upload_id = UUID(int=0)
-        temp_path = project_dir / f"tmp_{actor.id}_{file_name}"
+        temp_path = project_dir / f".tmp_{uuid4().hex}"
         size = 0
         try:
             with temp_path.open("wb") as output:
@@ -1352,3 +1357,12 @@ class BroadcastService:
             RoleName.OPERATOR,
         }:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    @staticmethod
+    def _ensure_can_delete(actor: User) -> None:
+        BroadcastService._ensure_can_manage(actor)
+        if actor.role_name == RoleName.MANAGER:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers cannot delete broadcasts",
+            )

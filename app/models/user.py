@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import BigInteger, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,18 @@ from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKe
 
 class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "handler_code IS NULL OR handler_code ~ '^[0-9]{4}$'",
+            name="ck_users_handler_code_format",
+        ),
+        Index(
+            "uq_users_handler_code",
+            "handler_code",
+            unique=True,
+            postgresql_where=text("handler_code IS NOT NULL"),
+        ),
+    )
 
     # project_id is NULL for super_admin
     project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -42,6 +54,7 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
         unique=True,
         index=True,
     )
+    handler_code: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
 
     # Relationships
     project: Mapped[Optional[Project]] = relationship("Project", back_populates="users")

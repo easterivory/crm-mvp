@@ -6,6 +6,7 @@ import type { Funnel } from '../types'
 type FunnelCardProps = {
   funnel: Funnel
   bot: BotRecord | undefined
+  canEdit: boolean
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
@@ -15,6 +16,7 @@ type FunnelCardProps = {
 export default function FunnelCard({
   funnel,
   bot,
+  canEdit,
   onOpen,
   onCopy,
   onArchive,
@@ -55,22 +57,26 @@ export default function FunnelCard({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onOpen(funnel)}
-          className="inline-flex h-9 items-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 text-sm font-medium text-accent-50 transition hover:border-accent-300/50"
-        >
-          <Edit3 size={15} />
-          Открыть
-        </button>
-        <button
-          type="button"
-          onClick={() => onCopy(funnel)}
-          className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-gray-200 transition hover:border-white/20"
-        >
-          <Copy size={15} />
-          Копировать
-        </button>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => onOpen(funnel)}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 text-sm font-medium text-accent-50 transition hover:border-accent-300/50"
+          >
+            <Edit3 size={15} />
+            Открыть
+          </button>
+        ) : null}
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => onCopy(funnel)}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-gray-200 transition hover:border-white/20"
+          >
+            <Copy size={15} />
+            Копировать
+          </button>
+        ) : null}
         {hasPublished && !funnel.is_active_for_bot ? (
           <button
             type="button"
@@ -81,15 +87,17 @@ export default function FunnelCard({
             Сделать активной
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() => onArchive(funnel)}
-          disabled={funnel.status === 'archived'}
-          className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-300/15 bg-transparent px-3 text-sm text-red-200 transition hover:border-red-300/35 disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <Archive size={15} />
-          Архив
-        </button>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => onArchive(funnel)}
+            disabled={funnel.status === 'archived'}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-300/15 bg-transparent px-3 text-sm text-red-200 transition hover:border-red-300/35 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <Archive size={15} />
+            Архив
+          </button>
+        ) : null}
       </div>
 
       {hasPublished ? (

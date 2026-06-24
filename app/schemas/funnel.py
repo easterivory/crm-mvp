@@ -286,6 +286,27 @@ class FunnelRuntimeLogOut(BaseModel):
         )
 
 
+class ChatFunnelStepChoiceOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    step_type: str
+    block_type: str
+
+
+class ChatFunnelControlOut(BaseModel):
+    is_available: bool
+    is_paused: bool
+    funnel_id: Optional[uuid.UUID] = None
+    funnel_name: Optional[str] = None
+    current_step_id: Optional[uuid.UUID] = None
+    current_step_title: Optional[str] = None
+    steps: list[ChatFunnelStepChoiceOut] = Field(default_factory=list)
+
+
+class ChatFunnelResumeIn(BaseModel):
+    step_id: uuid.UUID
+
+
 class FunnelBlockDefinitionOut(BaseModel):
     step_type: str
     block_type: str

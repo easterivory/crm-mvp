@@ -39,9 +39,9 @@ const mediaModes: Array<{
 }> = [
   { type: 'document', label: 'Документ', accept: '*/*' },
   { type: 'photo', label: 'Фото', accept: 'image/jpeg,image/png,image/webp' },
-  { type: 'video', label: 'Видео', accept: 'video/mp4,video/quicktime,video/webm' },
+  { type: 'video', label: 'Видео', accept: 'video/*' },
   { type: 'voice', label: 'Голосовое', accept: 'audio/ogg,audio/mpeg,audio/mp4,audio/webm,audio/wav' },
-  { type: 'video_note', label: 'Кружок', accept: 'video/mp4,video/quicktime,video/webm' },
+  { type: 'video_note', label: 'Кружок', accept: 'video/*' },
 ]
 
 function primaryMessage(content: BroadcastContent) {

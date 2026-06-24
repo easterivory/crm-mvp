@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { fetchBots, type Bot as BotRecord } from '../features/bots'
 import {
@@ -14,7 +14,8 @@ import CopyFunnelModal from '../features/funnels/components/CopyFunnelModal'
 import FunnelBuilder from '../features/funnels/components/FunnelBuilder'
 import FunnelList from '../features/funnels/components/FunnelList'
 import { fetchProjects, type Project } from '../features/projects'
-import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
+import { isManagerRole, useNotificationStore, useProjectBotSelection } from '../shared/lib'
+import { useAuthStore } from '../store/authStore'
 
 function getErrorMessage(err: unknown) {
   if (axios.isAxiosError(err)) {
@@ -49,6 +50,7 @@ export default function FunnelsPage() {
     setSelectedProjectId,
   } = useProjectBotSelection()
   const notify = useNotificationStore((state) => state.notify)
+  const isManager = useAuthStore((state) => isManagerRole(state.user?.role_name))
 
   const [funnels, setFunnels] = useState<Funnel[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
@@ -141,12 +143,21 @@ export default function FunnelsPage() {
     if (!selectedProjectId || !funnel.published_version_id) {
       return
     }
+    const confirmed = window.confirm(
+      `Сделать «${funnel.name}» активной? Новые и сброшенные диалоги начнутся в этой воронке. Уже начатые диалоги продолжат свою текущую версию, чтобы не потерять сценарий.`,
+    )
+    if (!confirmed) {
+      return
+    }
     try {
       await setBotActiveFunnel(funnel.bot_id, selectedProjectId, {
         funnel_id: funnel.id,
         version_id: funnel.published_version_id,
       })
-      notify({ tone: 'success', message: 'Воронка назначена активной для бота.' })
+      notify({
+        tone: 'success',
+        message: 'Воронка активирована. Текущие диалоги продолжают прежнюю версию.',
+      })
       await loadData()
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
@@ -164,6 +175,9 @@ export default function FunnelsPage() {
   )
 
   if (funnelId && selectedProjectId) {
+    if (isManager) {
+      return <Navigate to="/funnels" replace />
+    }
     return (
       <section className="min-h-full text-gray-200 md:h-full md:min-h-0 md:overflow-hidden">
         <FunnelBuilder
@@ -186,6 +200,7 @@ export default function FunnelsPage() {
         selectedBotIds={selectedBotIds}
         isLoading={isLoading}
         isCreating={isCreating}
+        canEdit={!isManager}
         onCreate={handleCreate}
         onOpen={(funnel) =>
           navigate(

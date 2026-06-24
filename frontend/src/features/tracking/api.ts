@@ -7,6 +7,7 @@ import type {
   TrackingLinkMetricsResponse,
   TrackingLinkUpdatePayload,
   TrackingFunnelStepOption,
+  ManagerPerformance,
   TrackingMetricSummary,
   TrackingProjectMetricsResponse,
   TrackingSpend,
@@ -139,5 +140,12 @@ export async function fetchTrackingHeaderMetrics(
   const { data } = await api.get<TrackingMetricSummary>('/tracking/metrics/header', {
     params,
   })
+  return data
+}
+
+export async function fetchManagerPerformance(
+  params?: TrackingDateRangeParams,
+): Promise<ManagerPerformance[]> {
+  const { data } = await api.get<ManagerPerformance[]>('/analytics/managers', { params })
   return data
 }

@@ -44,6 +44,7 @@ from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import TelegramSenderService
 from app.services.translation_service import TranslationService, TranslationUnavailableError
+from app.utils.video_processor import VideoProcessingError
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,10 @@ ALLOWED_CHAT_MEDIA: dict[str, str] = {
     "video/mp4": MessageType.VIDEO,
     "video/quicktime": MessageType.VIDEO,
     "video/webm": MessageType.VIDEO,
+    "video/x-matroska": MessageType.VIDEO,
+    "video/x-msvideo": MessageType.VIDEO,
+    "video/mpeg": MessageType.VIDEO,
+    "video/3gpp": MessageType.VIDEO,
     "application/pdf": MessageType.DOCUMENT,
     "text/plain": MessageType.DOCUMENT,
     "application/msword": MessageType.DOCUMENT,
@@ -818,15 +823,21 @@ class MessageService:
                 mime_type=mime_type,
             )
         if media_type == MessageType.VIDEO_NOTE:
-            return await self.telegram_sender.send_video_note(
-                project_id=project_id,
-                bot_id=bot_id,
-                external_chat_id=external_chat_id,
-                video_note=media,
-                reply_markup=reply_markup,
-                file_name=file_name,
-                mime_type=mime_type,
-            )
+            try:
+                return await self.telegram_sender.send_video_note(
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                    video_note=media,
+                    reply_markup=reply_markup,
+                    file_name=file_name,
+                    mime_type=mime_type,
+                )
+            except VideoProcessingError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Не удалось подготовить ролик как Telegram-кружок. Попробуйте другой видеофайл.",
+                ) from exc
         return await self.telegram_sender.send_document(
             project_id=project_id,
             bot_id=bot_id,

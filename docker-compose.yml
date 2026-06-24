@@ -34,8 +34,11 @@ services:
       - "${API_PORT}:8000"
     env_file:
       - .env
+    environment:
+      BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
     volumes:
       - landers_data:/app/storage/landers
+      - broadcast_uploads_data:/app/storage/broadcast_uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +51,10 @@ services:
     command: python -m app.workers
     env_file:
       - .env
+    environment:
+      BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
+    volumes:
+      - broadcast_uploads_data:/app/storage/broadcast_uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,3 +78,4 @@ volumes:
   redis_data:
   backups_data:
   landers_data:
+  broadcast_uploads_data:

@@ -13,6 +13,7 @@ import {
   MessageSquareText,
   Music,
   Paperclip,
+  Plus,
   Search,
   Send,
   UserRound,
@@ -53,7 +54,7 @@ import {
   type FilterOption,
 } from '../features/chats/types'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
-import { ConfirmDialog } from '../shared/ui'
+import { ConfirmDialog, Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
 type PaginatedResponse<T> = {
@@ -103,6 +104,11 @@ type ProjectSnippet = {
   content: string | null
   file_id: string | null
   created_at: string
+}
+
+type SnippetEditorDraft = {
+  snippet: ProjectSnippet
+  text: string
 }
 
 type ProjectTranslationConfig = {
@@ -259,8 +265,8 @@ const attachmentModes: Array<{
   {
     type: 'video_note',
     label: 'Кружок',
-    description: 'Отправить через sendVideoNote',
-    accept: 'video/mp4,video/quicktime,video/webm',
+    description: 'Видео будет приведено к формату Telegram-кружка',
+    accept: 'video/*',
   },
 ]
 
@@ -411,6 +417,9 @@ function auditEventText(event: ChatAuditLog) {
 }
 
 function getLifecycleLabel(chat: Chat) {
+  if (chat.lifecycle_status === 'paused') {
+    return 'На паузе у менеджера'
+  }
   if (chat.lifecycle_status === 'waiting_for_answer') {
     return 'Ждёт ответ'
   }
@@ -601,9 +610,16 @@ export default function ChatsPage() {
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
   const [isSnippetsOpen, setIsSnippetsOpen] = useState(false)
   const [snippetSearch, setSnippetSearch] = useState('')
+  const [snippetEditor, setSnippetEditor] = useState<SnippetEditorDraft | null>(null)
+  const [isSnippetCreateOpen, setIsSnippetCreateOpen] = useState(false)
+  const [newSnippetName, setNewSnippetName] = useState('')
+  const [newSnippetContent, setNewSnippetContent] = useState('')
+  const [isCreatingSnippet, setIsCreatingSnippet] = useState(false)
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
+  const [isBlockConfirmOpen, setIsBlockConfirmOpen] = useState(false)
+  const [isUpdatingChatBlock, setIsUpdatingChatBlock] = useState(false)
   const [isLeadOpen, setIsLeadOpen] = useState(false)
   const [alternateMessageTextIds, setAlternateMessageTextIds] = useState<Set<string>>(
     () => new Set(),
@@ -658,6 +674,7 @@ export default function ChatsPage() {
     return JSON.stringify(normalizeChatFilters(selectedPreset.filters_json)) !== JSON.stringify(chatFilters)
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
+  const canManageSnippets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
   const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users])
   const timelineItems = useMemo<TimelineItem[]>(
@@ -863,17 +880,34 @@ export default function ChatsPage() {
       if (controller.signal.aborted) {
         return
       }
+      const hasActiveSearch = Boolean(debouncedChatFilters.q.trim())
+      const selectedChatIsOutsideSearch = Boolean(
+        hasActiveSearch
+        && selectedChatIdRef.current
+        && !data.items.some((chat) => chat.id === selectedChatIdRef.current),
+      )
       setChats((current) => {
         const currentSelectedChatId = selectedChatIdRef.current
         const selected = currentSelectedChatId
           ? current.find((chat) => chat.id === currentSelectedChatId)
           : null
-        if (selected && !data.items.some((chat) => chat.id === selected.id)) {
+        if (
+          selected
+          && !hasActiveSearch
+          && !data.items.some((chat) => chat.id === selected.id)
+        ) {
           return [selected, ...data.items]
         }
         return data.items
       })
       setTotal(data.total)
+      if (selectedChatIsOutsideSearch) {
+        selectedChatIdRef.current = null
+        setSelectedChatId(null)
+        setMessages([])
+        setAuditLogs([])
+        syncChatSearchParams(debouncedChatFilters, null)
+      }
       if (!selectedChatIdRef.current && isDesktopChatLayout) {
         const nextChatId = data.items[0]?.id ?? null
         if (nextChatId) {
@@ -1231,6 +1265,7 @@ export default function ChatsPage() {
     setIsAttachmentMenuOpen(false)
     setIsSnippetsOpen(false)
     setSnippetSearch('')
+    setSnippetEditor(null)
     setPendingTranslation(null)
     setAlternateMessageTextIds(new Set<string>())
     if (attachmentPreviewUrl) {
@@ -1395,14 +1430,28 @@ export default function ChatsPage() {
     }
   }
 
-  const sendSnippet = async (snippet: ProjectSnippet) => {
-    if (!selectedChatId || isSending) {
+  const openSnippetEditor = (snippet: ProjectSnippet) => {
+    if (!selectedChatId || isSending || isPreparingTranslation) {
       return
     }
-    if (snippet.type === 'text') {
-      setDraft(snippet.content ?? '')
-      setIsSnippetsOpen(false)
+    if (attachment) {
+      notify({
+        tone: 'error',
+        message: 'Сначала отправьте или уберите вложение, затем выберите заготовку.',
+      })
       return
+    }
+
+    setSnippetEditor({
+      snippet,
+      text: snippet.content ?? '',
+    })
+    setIsSnippetsOpen(false)
+  }
+
+  const sendSnippet = async (snippet: ProjectSnippet, text: string | null) => {
+    if (!selectedChatId || isSending) {
+      return false
     }
 
     setIsSending(true)
@@ -1411,23 +1460,96 @@ export default function ChatsPage() {
         ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
         auto_translate: isAutoTranslateEnabled,
       }
+      const payload: { snippet_id: string; text?: string } = { snippet_id: snippet.id }
+      if (text !== null) {
+        payload.text = text
+      }
       const { data } = await api.post<Message>(
         `/chats/${selectedChatId}/messages`,
-        {
-          snippet_id: snippet.id,
-          ...(draft.trim() ? { text: draft.trim() } : {}),
-        },
+        payload,
         { params },
       )
       setMessages((current) => sortMessagesByDate([...current, data]))
-      setDraft('')
-      clearAttachment()
-      setIsSnippetsOpen(false)
+      setSnippetEditor(null)
       await loadChats()
+      return true
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+      return false
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  const handleSendSnippet = async () => {
+    if (!snippetEditor) {
+      return
+    }
+
+    const { snippet } = snippetEditor
+    const text = snippetEditor.text.trim()
+    if (snippet.type === 'text' && !text) {
+      notify({ tone: 'error', message: 'Текст заготовки не может быть пустым.' })
+      return
+    }
+
+    if (
+      snippet.type === 'text'
+      && isAutoTranslateEnabled
+      && projectTranslation?.is_translation_enabled !== false
+    ) {
+      const translationPrepared = await prepareTranslationApproval(text)
+      if (translationPrepared) {
+        setDraft(text)
+        setSnippetEditor(null)
+      }
+      return
+    }
+
+    await sendSnippet(
+      snippet,
+      snippet.type === 'video_note' ? null : text,
+    )
+  }
+
+  const openSnippetCreate = () => {
+    setNewSnippetName('')
+    setNewSnippetContent(draft)
+    setIsSnippetCreateOpen(true)
+  }
+
+  const handleCreateSnippet = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selectedProjectId || isCreatingSnippet) {
+      return
+    }
+
+    const name = newSnippetName.trim()
+    const content = newSnippetContent.trim()
+    if (!name || !content) {
+      notify({ tone: 'error', message: 'Укажите название и текст заготовки.' })
+      return
+    }
+
+    setIsCreatingSnippet(true)
+    try {
+      const { data } = await api.post<ProjectSnippet>(
+        `/projects/${selectedProjectId}/snippets`,
+        {
+          name,
+          type: 'text',
+          content,
+          channel: 'telegram',
+        },
+      )
+      setSnippets((current) => [data, ...current.filter((snippet) => snippet.id !== data.id)])
+      setIsSnippetCreateOpen(false)
+      setIsSnippetsOpen(true)
+      notify({ tone: 'success', message: 'Заготовка добавлена.' })
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
-      setIsSending(false)
+      setIsCreatingSnippet(false)
     }
   }
 
@@ -1585,6 +1707,31 @@ export default function ChatsPage() {
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       setIsResettingChat(false)
+    }
+  }
+
+  const handleSetChatBlocked = async (isBlocked: boolean) => {
+    if (!selectedChatId || !selectedProjectId || isUpdatingChatBlock) {
+      return
+    }
+    setIsUpdatingChatBlock(true)
+    try {
+      const { data } = await api.post<Chat>(
+        `/chats/${selectedChatId}/${isBlocked ? 'block' : 'unblock'}`,
+        null,
+        { params: { project_id: selectedProjectId } },
+      )
+      setChats((current) => current.map((chat) => (chat.id === data.id ? { ...chat, ...data } : chat)))
+      setIsBlockConfirmOpen(false)
+      notify({
+        tone: 'success',
+        message: isBlocked ? 'Диалог заблокирован в CRM.' : 'Диалог разблокирован.',
+      })
+      await loadChats()
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      setIsUpdatingChatBlock(false)
     }
   }
 
@@ -1803,6 +1950,11 @@ export default function ChatsPage() {
                       {getChatTitle(selectedChat)}
                     </h2>
                     {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
+                    {selectedChat.is_blocked ? (
+                      <span className="rounded-full border border-red-300/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-100">
+                        Заблокирован
+                      </span>
+                    ) : null}
                   </div>
                   <p className="hidden truncate text-sm text-gray-500 sm:block">
                     {getBotLabel(selectedChat)} · Telegram ID {selectedChat.external_chat_id}
@@ -2164,6 +2316,20 @@ export default function ChatsPage() {
               </button>
               {isSnippetsOpen ? (
                 <div className="absolute bottom-full left-0 z-30 mb-2 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-3 shadow-card backdrop-blur-xl">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-white">Заготовки</p>
+                    {canManageSnippets ? (
+                      <button
+                        type="button"
+                        onClick={openSnippetCreate}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-accent-300/30 bg-accent-300/10 px-2.5 text-xs font-semibold text-accent-100 transition hover:border-accent-300/60 hover:bg-accent-300/15"
+                        title="Добавить заготовку"
+                      >
+                        <Plus size={15} />
+                        Новая
+                      </button>
+                    ) : null}
+                  </div>
                   <label className="relative block">
                     <Search
                       size={15}
@@ -2185,7 +2351,7 @@ export default function ChatsPage() {
                             <button
                               key={snippet.id}
                               type="button"
-                              onClick={() => void sendSnippet(snippet)}
+                              onClick={() => openSnippetEditor(snippet)}
                               disabled={isSending}
                               className="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -2260,11 +2426,145 @@ export default function ChatsPage() {
           activeBotName={botScopeLabel}
           activeChatId={selectedChatId}
           hasActiveScope={Boolean(selectedProjectId)}
+          isChatBlocked={Boolean(selectedChat?.is_blocked)}
+          isUpdatingChatBlock={isUpdatingChatBlock}
           currentUserId={user?.id ?? null}
-          onResetRequest={() => setIsResetConfirmOpen(true)}
+          currentUserRole={user?.role_name ?? null}
+          onSetBlocked={user?.role_name === 'manager'
+            ? undefined
+            : (isBlocked) => {
+                if (isBlocked) {
+                  setIsBlockConfirmOpen(true)
+                  return
+                }
+                void handleSetChatBlocked(false)
+              }}
+          onResetRequest={user?.role_name === 'manager' ? undefined : () => setIsResetConfirmOpen(true)}
           onLeadStatusChanged={() => void loadChats()}
         />
       </div>
+
+      {snippetEditor ? (
+        <Modal
+          title="Перед отправкой"
+          description={`Заготовка «${snippetEditor.snippet.name}» будет изменена только для этого диалога.`}
+          maxWidthClassName="max-w-lg"
+          onClose={() => {
+            if (!isSending && !isPreparingTranslation) {
+              setSnippetEditor(null)
+            }
+          }}
+        >
+          <form className="space-y-4" onSubmit={(event) => {
+            event.preventDefault()
+            void handleSendSnippet()
+          }}>
+            {snippetEditor.snippet.type === 'video_note' ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm leading-6 text-gray-400">
+                Кружок отправится без подписи. Если исходный ролик не квадратный, сервер приведёт его к формату Telegram video note.
+              </div>
+            ) : (
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-gray-200">
+                  {snippetEditor.snippet.type === 'text' ? 'Текст сообщения' : 'Подпись к вложению'}
+                </span>
+                <textarea
+                  value={snippetEditor.text}
+                  onChange={(event) => setSnippetEditor((current) => (
+                    current ? { ...current, text: event.target.value } : current
+                  ))}
+                  rows={7}
+                  autoFocus
+                  className="touch-scroll w-full resize-y rounded-xl border border-accent-300/25 bg-background/80 px-3 py-2.5 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                  placeholder="Текст к отправке"
+                  disabled={isSending || isPreparingTranslation}
+                />
+              </label>
+            )}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setSnippetEditor(null)}
+                disabled={isSending || isPreparingTranslation}
+                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  isSending
+                  || isPreparingTranslation
+                  || (snippetEditor.snippet.type === 'text' && !snippetEditor.text.trim())
+                }
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSending || isPreparingTranslation ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
+                {snippetEditor.snippet.type === 'text' && isAutoTranslateEnabled && projectTranslation?.is_translation_enabled !== false
+                  ? 'Проверить перевод'
+                  : 'Отправить'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {isSnippetCreateOpen ? (
+        <Modal
+          title="Новая заготовка"
+          description="Её смогут использовать операторы этого проекта. Редактировать и добавлять заготовки могут только администраторы."
+          maxWidthClassName="max-w-lg"
+          onClose={() => {
+            if (!isCreatingSnippet) {
+              setIsSnippetCreateOpen(false)
+            }
+          }}
+        >
+          <form className="space-y-4" onSubmit={(event) => void handleCreateSnippet(event)}>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-gray-200">Название</span>
+              <input
+                value={newSnippetName}
+                onChange={(event) => setNewSnippetName(event.target.value)}
+                autoFocus
+                maxLength={255}
+                placeholder="Например, Приветствие LATAM"
+                className="h-11 w-full rounded-xl border border-white/10 bg-background/80 px-3 text-base text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                disabled={isCreatingSnippet}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-gray-200">Текст</span>
+              <textarea
+                value={newSnippetContent}
+                onChange={(event) => setNewSnippetContent(event.target.value)}
+                rows={8}
+                placeholder="Текст быстрого ответа"
+                className="touch-scroll w-full resize-y rounded-xl border border-white/10 bg-background/80 px-3 py-2.5 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                disabled={isCreatingSnippet}
+              />
+            </label>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setIsSnippetCreateOpen(false)}
+                disabled={isCreatingSnippet}
+                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={isCreatingSnippet || !newSnippetName.trim() || !newSnippetContent.trim()}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isCreatingSnippet ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
+                Добавить
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
 
       {pendingTranslation ? (
         <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm md:items-center">
@@ -2367,8 +2667,20 @@ export default function ChatsPage() {
               activeBotName={botScopeLabel}
               activeChatId={selectedChatId}
               hasActiveScope={Boolean(selectedProjectId)}
+              isChatBlocked={Boolean(selectedChat?.is_blocked)}
+              isUpdatingChatBlock={isUpdatingChatBlock}
               currentUserId={user?.id ?? null}
-              onResetRequest={() => setIsResetConfirmOpen(true)}
+              currentUserRole={user?.role_name ?? null}
+              onSetBlocked={user?.role_name === 'manager'
+                ? undefined
+                : (isBlocked) => {
+                    if (isBlocked) {
+                      setIsBlockConfirmOpen(true)
+                      return
+                    }
+                    void handleSetChatBlocked(false)
+                  }}
+              onResetRequest={user?.role_name === 'manager' ? undefined : () => setIsResetConfirmOpen(true)}
               onLeadStatusChanged={() => void loadChats()}
             />
           </div>
@@ -2385,6 +2697,18 @@ export default function ChatsPage() {
           isLoading={isResettingChat}
           onCancel={() => setIsResetConfirmOpen(false)}
           onConfirm={() => void handleResetChat()}
+        />
+      ) : null}
+
+      {isBlockConfirmOpen ? (
+        <ConfirmDialog
+          title="Заблокировать клиента в боте?"
+          description="Новые сообщения и нажатия на старые кнопки останутся без реакции сценария. Разблокировать можно в карточке лида."
+          confirmLabel="Заблокировать"
+          tone="danger"
+          isLoading={isUpdatingChatBlock}
+          onCancel={() => setIsBlockConfirmOpen(false)}
+          onConfirm={() => void handleSetChatBlocked(true)}
         />
       ) : null}
     </section>

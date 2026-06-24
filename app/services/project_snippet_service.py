@@ -25,7 +25,6 @@ class ProjectSnippetService:
 
     async def list_snippets(self, *, project_id: UUID, actor: User) -> list[SnippetOut]:
         await self._ensure_access(project_id, actor)
-        self._ensure_can_manage(actor)
         snippets = await self.snippet_repo.list_by_project(project_id)
         return [SnippetOut.model_validate(snippet) for snippet in snippets]
 
@@ -84,8 +83,8 @@ class ProjectSnippetService:
 
     @staticmethod
     def _ensure_can_manage(actor: User) -> None:
-        if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER}:
+        if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admin/manager can manage project snippets",
+                detail="Only admin can manage project snippets",
             )

@@ -19,3 +19,7 @@ export function isKnownRole(roleName?: string | null): boolean {
 export function isSuperAdminRole(roleName?: string | null): boolean {
   return normalizeRoleName(roleName) === 'super_admin'
 }
+
+export function isManagerRole(roleName?: string | null): boolean {
+  return normalizeRoleName(roleName) === 'manager'
+}

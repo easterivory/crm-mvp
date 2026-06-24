@@ -67,8 +67,9 @@ async def create_message(
             snippet_id=snippet_id,
             actor=current_user,
         )
+        has_text_override = any(key in payload for key in ("text", "caption", "body"))
         override_text = _optional_text(payload.get("text") or payload.get("caption") or payload.get("body"))
-        text = override_text if override_text is not None else snippet.content
+        text = override_text if has_text_override else snippet.content
         return await message_service.send_message_to_client(
             chat_id=chat_id,
             project_id=project_id,
