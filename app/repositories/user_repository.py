@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import RoleName
 from app.models.role import Role
 from app.models.user import User, UserProjectAccess
 from app.repositories.base import BaseRepository
@@ -155,6 +156,7 @@ class UserRepository(BaseRepository[User]):
         limit: int = 50,
         offset: int = 0,
         project_id: Optional[UUID] = None,
+        include_super_admins: bool = False,
     ) -> list[User]:
         stmt = (
             select(User)
@@ -162,33 +164,51 @@ class UserRepository(BaseRepository[User]):
             .where(User.is_deleted.is_(False))
         )
         if project_id is not None:
-            stmt = stmt.where(
-                or_(
-                    User.project_id == project_id,
-                    User.id.in_(
-                        select(UserProjectAccess.user_id).where(
-                            UserProjectAccess.project_id == project_id
-                        )
-                    ),
-                )
+            project_membership = or_(
+                User.project_id == project_id,
+                User.id.in_(
+                    select(UserProjectAccess.user_id).where(
+                        UserProjectAccess.project_id == project_id
+                    )
+                ),
             )
+            scope_filter = (
+                or_(
+                    project_membership,
+                    User.role.has(Role.name == RoleName.SUPER_ADMIN),
+                )
+                if include_super_admins
+                else project_membership
+            )
+            stmt = stmt.where(scope_filter)
         stmt = stmt.order_by(User.created_at.desc()).limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def count_active(self, project_id: Optional[UUID] = None) -> int:
+    async def count_active(
+        self,
+        project_id: Optional[UUID] = None,
+        include_super_admins: bool = False,
+    ) -> int:
         stmt = select(func.count(User.id)).where(User.is_deleted.is_(False))
         if project_id is not None:
-            stmt = stmt.where(
-                or_(
-                    User.project_id == project_id,
-                    User.id.in_(
-                        select(UserProjectAccess.user_id).where(
-                            UserProjectAccess.project_id == project_id
-                        )
-                    ),
-                )
+            project_membership = or_(
+                User.project_id == project_id,
+                User.id.in_(
+                    select(UserProjectAccess.user_id).where(
+                        UserProjectAccess.project_id == project_id
+                    )
+                ),
             )
+            scope_filter = (
+                or_(
+                    project_membership,
+                    User.role.has(Role.name == RoleName.SUPER_ADMIN),
+                )
+                if include_super_admins
+                else project_membership
+            )
+            stmt = stmt.where(scope_filter)
         result = await self.db.execute(stmt)
         return result.scalar_one()
 

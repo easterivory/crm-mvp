@@ -30,6 +30,10 @@ type ProjectMetricsParams = TrackingDateRangeParams & {
 
 type SpendListParams = TrackingDateRangeParams
 
+type ManagerPerformanceParams = TrackingDateRangeParams & {
+  project_id: string
+}
+
 export async function fetchTrackingLinks(
   params: TrackingLinksParams,
 ): Promise<PaginatedResponse<TrackingLink>> {
@@ -144,7 +148,7 @@ export async function fetchTrackingHeaderMetrics(
 }
 
 export async function fetchManagerPerformance(
-  params?: TrackingDateRangeParams,
+  params: ManagerPerformanceParams,
 ): Promise<ManagerPerformance[]> {
   const { data } = await api.get<ManagerPerformance[]>('/analytics/managers', { params })
   return data

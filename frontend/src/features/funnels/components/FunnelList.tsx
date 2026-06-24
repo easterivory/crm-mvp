@@ -127,6 +127,9 @@ export default function FunnelList({
               {visibleBots.map((bot) => {
                 const botFunnels = funnelsByBot.get(bot.id) ?? []
                 const active = botFunnels.find((funnel) => funnel.is_active_for_bot)
+                const publishedFunnels = botFunnels.filter(
+                  (funnel) => Boolean(funnel.published_version_id),
+                )
                 const isCreatingForBot = creatingBotId === bot.id
                 return (
                   <section
@@ -152,9 +155,43 @@ export default function FunnelList({
                           </button>
                         ) : null}
                       </div>
-                      <p className="mt-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-gray-400">
-                        {active ? `Активная: ${active.name}` : 'Активная воронка не назначена'}
-                      </p>
+                      <div className="mt-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2">
+                        <label className="block text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                          Активная воронка
+                          {canEdit && publishedFunnels.length > 0 ? (
+                            <select
+                              value={active?.id ?? ''}
+                              onChange={(event) => {
+                                const nextFunnel = publishedFunnels.find(
+                                  (funnel) => funnel.id === event.target.value,
+                                )
+                                event.currentTarget.value = active?.id ?? ''
+                                if (nextFunnel && nextFunnel.id !== active?.id) {
+                                  onMakeActive(nextFunnel)
+                                }
+                              }}
+                              className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                              aria-label={`Активная воронка бота ${bot.name}`}
+                            >
+                              <option value="" disabled>
+                                Активная воронка не назначена
+                              </option>
+                              {publishedFunnels.map((funnel) => (
+                                <option key={funnel.id} value={funnel.id}>
+                                  {funnel.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <p className="mt-1.5 text-sm text-gray-400">
+                              {active?.name ??
+                                (canEdit
+                                  ? 'Опубликуйте воронку, чтобы сделать её активной'
+                                  : 'Активная воронка не назначена')}
+                            </p>
+                          )}
+                        </label>
+                      </div>
                     </header>
 
                     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">

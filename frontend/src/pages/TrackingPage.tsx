@@ -454,6 +454,7 @@ export default function TrackingPage() {
         }),
         fetchProjectTrackingMetrics(params),
         fetchManagerPerformance({
+          project_id: selectedProjectId,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         }),

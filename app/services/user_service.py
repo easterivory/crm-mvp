@@ -58,12 +58,19 @@ class UserService:
         project_id: UUID | None = None,
     ) -> tuple[list[UserOut], int]:
         scoped_project_id = self._resolve_staff_project_scope(actor, project_id)
+        include_super_admins = (
+            actor.role_name == RoleName.SUPER_ADMIN and scoped_project_id is not None
+        )
         users = await self.user_repo.list_active(
             project_id=scoped_project_id,
             limit=limit,
             offset=offset,
+            include_super_admins=include_super_admins,
         )
-        total = await self.user_repo.count_active(project_id=scoped_project_id)
+        total = await self.user_repo.count_active(
+            project_id=scoped_project_id,
+            include_super_admins=include_super_admins,
+        )
         return [UserOut.model_validate(user) for user in users], total
 
     async def list_roles(self) -> list[RoleOut]:
