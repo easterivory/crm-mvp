@@ -75,12 +75,6 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_funnel_versions_status", "status"),
         Index("ix_funnel_versions_created_by_id", "created_by_id"),
         Index("ix_funnel_versions_published_at", "published_at"),
-        Index(
-            "uq_funnel_versions_one_published_per_funnel",
-            "funnel_id",
-            unique=True,
-            postgresql_where=text("status = 'published'"),
-        ),
     )
 
     funnel_id: Mapped[uuid.UUID] = mapped_column(

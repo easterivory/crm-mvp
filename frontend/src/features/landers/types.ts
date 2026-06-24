@@ -13,7 +13,7 @@ export type ProjectDomainCreatePayload = {
 
 export type LanderType = 'default_tg_redirect' | 'custom_upload'
 
-export type LanderPixelProvider = 'meta' | 'tiktok' | 'google_tag'
+export type LanderPixelProvider = 'meta'
 
 export type LanderPixel = {
   provider: LanderPixelProvider

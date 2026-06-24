@@ -34,6 +34,7 @@ type FunnelCanvasProps = {
   onMoveStep: (stepId: string, position: { x: number; y: number }) => void
   onConnect: (fromStepId: string, toStepId: string, sourceKey: string | null) => void
   onDeleteStep: (stepId: string) => void
+  readOnly?: boolean
 }
 
 type FlowEdge = Edge<Record<string, unknown>, 'smoothstep'>
@@ -52,6 +53,7 @@ function FunnelCanvasInner({
   onMoveStep,
   onConnect,
   onDeleteStep,
+  readOnly = false,
 }: FunnelCanvasProps) {
   const { fitView, zoomIn, zoomOut } = useReactFlow()
   const [zoom, setZoom] = useState(1)
@@ -62,11 +64,11 @@ function FunnelCanvasInner({
         id: step.id,
         type: 'funnelStep',
         position: { x: step.position_x, y: step.position_y },
-        data: { step, onDelete: onDeleteStep },
+        data: { step, onDelete: readOnly ? undefined : onDeleteStep },
         selected: selectedStepId === step.id,
-        draggable: true,
+        draggable: !readOnly,
       })),
-    [onDeleteStep, selectedStepId, steps],
+    [onDeleteStep, readOnly, selectedStepId, steps],
   )
 
   const flowEdges = useMemo<FlowEdge[]>(
@@ -121,7 +123,9 @@ function FunnelCanvasInner({
     (changes: NodeChange<FunnelFlowNode>[]) => {
       for (const change of changes) {
         if (change.type === 'position' && change.position) {
-          onMoveStep(change.id, change.position)
+          if (!readOnly) {
+            onMoveStep(change.id, change.position)
+          }
         }
         if (change.type === 'select' && change.selected) {
           onSelectStep(change.id)
@@ -129,7 +133,7 @@ function FunnelCanvasInner({
         }
       }
     },
-    [onMoveStep, onSelectEdge, onSelectStep],
+    [onMoveStep, onSelectEdge, onSelectStep, readOnly],
   )
 
   const handleConnect = useCallback(
@@ -137,13 +141,15 @@ function FunnelCanvasInner({
       if (!connection.source || !connection.target || connection.source === connection.target) {
         return
       }
-      onConnect(
-        connection.source,
-        connection.target,
-        outcomeFromSourceHandle(connection.sourceHandle),
-      )
+      if (!readOnly) {
+        onConnect(
+          connection.source,
+          connection.target,
+          outcomeFromSourceHandle(connection.sourceHandle),
+        )
+      }
     },
-    [onConnect],
+    [onConnect, readOnly],
   )
 
   return (
@@ -184,8 +190,8 @@ function FunnelCanvasInner({
         }}
         minZoom={0.45}
         maxZoom={1.7}
-        nodesDraggable
-        nodesConnectable
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
         edgesFocusable
         edgesReconnectable={false}
         className="funnel-react-flow"

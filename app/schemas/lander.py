@@ -36,7 +36,7 @@ class ProjectDomainOut(OrmBase):
 
 
 class LanderPixel(BaseModel):
-    provider: Literal["meta", "tiktok", "google_tag"]
+    provider: Literal["meta"]
     pixel_id: str = Field(..., min_length=1, max_length=120)
 
     @field_validator("pixel_id")
@@ -69,7 +69,7 @@ class ProjectLanderBase(BaseModel):
     slug: str = Field(..., min_length=1, max_length=100)
     tracking_link_id: Optional[UUID] = None
     campaign: Optional[LanderTrackingCampaignCreate] = None
-    pixels: list[LanderPixel] = Field(default_factory=list, max_length=3)
+    pixels: list[LanderPixel] = Field(default_factory=list, max_length=1)
     utm_defaults: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("name", "type", "slug")

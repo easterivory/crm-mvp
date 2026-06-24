@@ -4,7 +4,12 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import type { Bot as BotRecord } from '../../bots'
 import { EmptyState } from '../../../shared/ui'
 import FunnelCard from './FunnelCard'
-import type { Funnel } from '../types'
+import type { Funnel, FunnelPublishedVersion } from '../types'
+
+export type ActiveFunnelSelection = {
+  funnel: Funnel
+  version: FunnelPublishedVersion
+}
 
 type FunnelListProps = {
   funnels: Funnel[]
@@ -14,11 +19,12 @@ type FunnelListProps = {
   isLoading: boolean
   isCreating: boolean
   canEdit: boolean
+  canActivate: boolean
   onCreate: (payload: { name: string; description: string; botId: string }) => void
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
-  onMakeActive: (funnel: Funnel) => void
+  onMakeActive: (selection: ActiveFunnelSelection) => void
 }
 
 export default function FunnelList({
@@ -29,6 +35,7 @@ export default function FunnelList({
   isLoading,
   isCreating,
   canEdit,
+  canActivate,
   onCreate,
   onOpen,
   onCopy,
@@ -126,9 +133,11 @@ export default function FunnelList({
             <div className="flex h-full min-w-max gap-4">
               {visibleBots.map((bot) => {
                 const botFunnels = funnelsByBot.get(bot.id) ?? []
-                const active = botFunnels.find((funnel) => funnel.is_active_for_bot)
-                const publishedFunnels = botFunnels.filter(
-                  (funnel) => Boolean(funnel.published_version_id),
+                const publishedSelections = botFunnels.flatMap((funnel) =>
+                  (funnel.published_versions ?? []).map((version) => ({ funnel, version })),
+                )
+                const activeSelection = publishedSelections.find(
+                  (selection) => selection.version.is_active_for_bot,
                 )
                 const isCreatingForBot = creatingBotId === bot.id
                 return (
@@ -158,16 +167,19 @@ export default function FunnelList({
                       <div className="mt-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2">
                         <label className="block text-[11px] font-medium uppercase tracking-wide text-gray-500">
                           Активная воронка
-                          {canEdit && publishedFunnels.length > 0 ? (
+                          {canActivate && publishedSelections.length > 0 ? (
                             <select
-                              value={active?.id ?? ''}
+                              value={activeSelection?.version.id ?? ''}
                               onChange={(event) => {
-                                const nextFunnel = publishedFunnels.find(
-                                  (funnel) => funnel.id === event.target.value,
+                                const nextSelection = publishedSelections.find(
+                                  (selection) => selection.version.id === event.target.value,
                                 )
-                                event.currentTarget.value = active?.id ?? ''
-                                if (nextFunnel && nextFunnel.id !== active?.id) {
-                                  onMakeActive(nextFunnel)
+                                event.currentTarget.value = activeSelection?.version.id ?? ''
+                                if (
+                                  nextSelection &&
+                                  nextSelection.version.id !== activeSelection?.version.id
+                                ) {
+                                  onMakeActive(nextSelection)
                                 }
                               }}
                               className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
@@ -176,18 +188,19 @@ export default function FunnelList({
                               <option value="" disabled>
                                 Активная воронка не назначена
                               </option>
-                              {publishedFunnels.map((funnel) => (
-                                <option key={funnel.id} value={funnel.id}>
-                                  {funnel.name}
+                              {publishedSelections.map(({ funnel, version }) => (
+                                <option key={version.id} value={version.id}>
+                                  {funnel.name} · v{version.version_number}
                                 </option>
                               ))}
                             </select>
                           ) : (
                             <p className="mt-1.5 text-sm text-gray-400">
-                              {active?.name ??
-                                (canEdit
+                              {activeSelection
+                                ? `${activeSelection.funnel.name} · v${activeSelection.version.version_number}`
+                                : canEdit
                                   ? 'Опубликуйте воронку, чтобы сделать её активной'
-                                  : 'Активная воронка не назначена')}
+                                  : 'Активная воронка не назначена'}
                             </p>
                           )}
                         </label>
@@ -257,7 +270,6 @@ export default function FunnelList({
                             onOpen={onOpen}
                             onCopy={onCopy}
                             onArchive={onArchive}
-                            onMakeActive={onMakeActive}
                           />
                         ))
                       )}

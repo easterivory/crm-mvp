@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, LoaderCircle, RotateCcw } from 'lucide-react'
+import { CheckCircle2, Clock3 } from 'lucide-react'
 import { useMemo } from 'react'
 
 import type { FunnelVersion } from '../types'
@@ -8,9 +8,7 @@ type VersionHistoryPanelProps = {
   versions: FunnelVersion[]
   users: FunnelUser[]
   activeVersionId: string
-  isRollingBackVersionId: string | null
   onOpenVersion: (versionId: string) => void
-  onRollback: (versionId: string) => void
 }
 
 function formatVersionDate(version: FunnelVersion) {
@@ -53,9 +51,7 @@ export default function VersionHistoryPanel({
   versions,
   users,
   activeVersionId,
-  isRollingBackVersionId,
   onOpenVersion,
-  onRollback,
 }: VersionHistoryPanelProps) {
   const usersById = useMemo(
     () => new Map(users.map((user) => [user.id, user])),
@@ -77,7 +73,7 @@ export default function VersionHistoryPanel({
         <div>
           <h2 className="text-base font-semibold text-white">История версий</h2>
           <p className="mt-1 text-sm text-gray-500">
-            Откат переключает активную версию бота на выбранную сохраненную версию.
+            Опубликованные версии неизменяемы. Активную версию выбирают на странице «Воронки».
           </p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-400">
@@ -93,13 +89,12 @@ export default function VersionHistoryPanel({
             <span>Автор</span>
             <span>Дата</span>
             <span>Описание</span>
-            <span className="text-right">Действие</span>
+            <span className="text-right">Статус на боте</span>
           </div>
 
           {sortedVersions.map((version) => {
             const isActiveForBot = version.is_active_for_bot
             const isOpened = version.id === activeVersionId
-            const isRollingBack = isRollingBackVersionId === version.id
             return (
               <div
                 key={version.id}
@@ -147,20 +142,12 @@ export default function VersionHistoryPanel({
                 <span className="flex min-h-9 items-center justify-end">
                   {isActiveForBot ? (
                     <span className="text-xs text-emerald-200">Текущая активная</span>
+                  ) : version.status === 'published' ? (
+                    <span className="text-right text-xs text-gray-500">
+                      Доступна для выбора
+                    </span>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => onRollback(version.id)}
-                      disabled={Boolean(isRollingBackVersionId)}
-                      className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/25 bg-sky-400/10 px-3 text-xs font-semibold text-sky-50 transition hover:border-sky-300/45 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isRollingBack ? (
-                        <LoaderCircle size={14} className="animate-spin" />
-                      ) : (
-                        <RotateCcw size={14} />
-                      )}
-                      Откатить
-                    </button>
+                    <span className="text-right text-xs text-gray-600">Историческая</span>
                   )}
                 </span>
               </div>

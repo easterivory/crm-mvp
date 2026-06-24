@@ -19,6 +19,7 @@ import { blockGroups, type BlockMenuItem } from '../blockCatalog'
 
 type BlockLibraryProps = {
   onAdd: (item: BlockMenuItem) => void
+  readOnly?: boolean
 }
 
 const iconByBlock: Record<string, typeof MessageSquare> = {
@@ -45,7 +46,7 @@ const accentClass = {
   rose: 'border-rose-300/25 bg-rose-300/10 text-rose-100',
 }
 
-export default function BlockLibrary({ onAdd }: BlockLibraryProps) {
+export default function BlockLibrary({ onAdd, readOnly = false }: BlockLibraryProps) {
   const [openGroups, setOpenGroups] = useState(() => new Set(blockGroups.map((group) => group.title)))
 
   const toggleGroup = (title: string) => {
@@ -102,7 +103,7 @@ export default function BlockLibrary({ onAdd }: BlockLibraryProps) {
                             onAdd(item)
                           }
                         }}
-                        disabled={item.disabled}
+                        disabled={item.disabled || readOnly}
                         className="group flex w-full min-w-0 items-start gap-3 rounded-xl border border-white/8 bg-[#101827]/80 p-3 text-left transition hover:border-accent-300/35 hover:bg-accent-300/10 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-white/8 disabled:hover:bg-[#101827]/80"
                       >
                         <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${accent}`}>

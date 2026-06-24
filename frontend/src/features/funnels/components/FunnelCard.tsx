@@ -1,4 +1,4 @@
-import { Archive, Bot, Copy, Edit3, RadioTower } from 'lucide-react'
+import { Archive, Bot, Copy, Edit3 } from 'lucide-react'
 
 import type { Bot as BotRecord } from '../../bots'
 import type { Funnel } from '../types'
@@ -10,7 +10,6 @@ type FunnelCardProps = {
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
-  onMakeActive: (funnel: Funnel) => void
 }
 
 export default function FunnelCard({
@@ -20,9 +19,10 @@ export default function FunnelCard({
   onOpen,
   onCopy,
   onArchive,
-  onMakeActive,
 }: FunnelCardProps) {
-  const hasPublished = Boolean(funnel.published_version_id)
+  const publishedVersions = funnel.published_versions ?? []
+  const hasPublished = publishedVersions.length > 0
+  const activeVersion = publishedVersions.find((version) => version.is_active_for_bot)
 
   return (
     <article className="rounded-lg border border-white/8 bg-white/[0.035] p-4">
@@ -40,7 +40,7 @@ export default function FunnelCard({
               : 'border-amber-300/25 bg-amber-300/10 text-amber-100'
           }`}
         >
-          {hasPublished ? 'Опубликована' : 'Черновик'}
+          {hasPublished ? `Версий: ${publishedVersions.length}` : 'Черновик'}
         </span>
         {funnel.is_active_for_bot ? (
           <span className="shrink-0 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-xs text-cyan-100">
@@ -77,16 +77,6 @@ export default function FunnelCard({
             Копировать
           </button>
         ) : null}
-        {hasPublished && !funnel.is_active_for_bot ? (
-          <button
-            type="button"
-            onClick={() => onMakeActive(funnel)}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 text-sm text-emerald-50 transition hover:border-emerald-300/40"
-          >
-            <RadioTower size={15} />
-            Сделать активной
-          </button>
-        ) : null}
         {canEdit ? (
           <button
             type="button"
@@ -101,9 +91,10 @@ export default function FunnelCard({
       </div>
 
       {hasPublished ? (
-        <div className="mt-3 flex items-center gap-2 text-xs text-emerald-200/80">
-          <RadioTower size={13} />
-          {funnel.is_active_for_bot ? 'Эта воронка активна на боте' : 'Есть опубликованная версия'}
+        <div className="mt-3 text-xs text-emerald-200/80">
+          {activeVersion
+            ? `На боте активна версия v${activeVersion.version_number}`
+            : `Последняя опубликованная: v${publishedVersions[0].version_number}`}
         </div>
       ) : null}
     </article>

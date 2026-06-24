@@ -22,7 +22,6 @@ import {
   fetchFunnelUsers,
   fetchGraph,
   fetchVersions,
-  rollbackFunnelVersion,
   saveGraph,
   validateFunnelVersion,
   type FunnelUser,
@@ -223,7 +222,6 @@ export default function FunnelBuilder({
   const [compactPanel, setCompactPanel] = useState<CompactBuilderPanel>('canvas')
   const [analyticsData, setAnalyticsData] = useState<FunnelDropOffStep[]>([])
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
-  const [isRollingBackVersionId, setIsRollingBackVersionId] = useState<string | null>(null)
   const isLoadingAnalyticsRef = useRef(false)
 
   const loadAnalytics = useCallback(async () => {
@@ -329,6 +327,7 @@ export default function FunnelBuilder({
     () => versions.find((version) => version.id === activeVersionId) ?? null,
     [activeVersionId, versions],
   )
+  const isEditableDraft = selectedVersion?.status === 'draft'
 
   const revealCompactPanel = useCallback((panel: CompactBuilderPanel) => {
     if (isCompactBuilderViewport()) {
@@ -357,6 +356,9 @@ export default function FunnelBuilder({
   )
 
   const updateStep = useCallback((stepId: string, patch: Partial<FunnelStep>) => {
+    if (!isEditableDraft) {
+      return
+    }
     setGraph((current) => {
       if (!current) {
         return current
@@ -374,9 +376,12 @@ export default function FunnelBuilder({
             : current.edges,
       }
     })
-  }, [])
+  }, [isEditableDraft])
 
   const deleteStep = (stepId: string) => {
+    if (!isEditableDraft) {
+      return
+    }
     setGraph((current) =>
       current
         ? {
@@ -397,6 +402,9 @@ export default function FunnelBuilder({
   }
 
   const addBlock = (item: BlockMenuItem) => {
+    if (!isEditableDraft) {
+      return
+    }
     setGraph((current) => {
       if (!current) {
         return current
@@ -421,6 +429,9 @@ export default function FunnelBuilder({
   }
 
   const updateEdge = (edgeId: string, patch: Partial<FunnelEdge>) => {
+    if (!isEditableDraft) {
+      return
+    }
     setGraph((current) =>
       current
         ? {
@@ -434,6 +445,9 @@ export default function FunnelBuilder({
   }
 
   const removeEdge = useCallback((edgeId: string) => {
+    if (!isEditableDraft) {
+      return
+    }
     setGraph((current) =>
       current
         ? {
@@ -452,9 +466,12 @@ export default function FunnelBuilder({
         : current,
     )
     setSelectedEdgeId((current) => (current === edgeId ? null : current))
-  }, [])
+  }, [isEditableDraft])
 
   const connectSteps = (fromStepId: string, toStepId: string, sourceKey: string | null) => {
+    if (!isEditableDraft) {
+      return
+    }
     if (fromStepId === toStepId) {
       return
     }
@@ -530,7 +547,7 @@ export default function FunnelBuilder({
   }
 
   const saveDraft = async () => {
-    if (!graph || !activeVersionId || isSaving) {
+    if (!graph || !activeVersionId || isSaving || !isEditableDraft) {
       return
     }
     setIsSaving(true)
@@ -550,7 +567,7 @@ export default function FunnelBuilder({
   }
 
   const validate = async () => {
-    if (!activeVersionId || isValidating) {
+    if (!activeVersionId || isValidating || !isEditableDraft) {
       return
     }
     setIsValidating(true)
@@ -576,6 +593,9 @@ export default function FunnelBuilder({
   }
 
   const openPublish = async () => {
+    if (!isEditableDraft) {
+      return
+    }
     if (graph && activeVersionId) {
       try {
         await saveGraph(funnelId, activeVersionId, projectId, graph)
@@ -593,11 +613,25 @@ export default function FunnelBuilder({
     setIsPublishOpen(true)
   }
 
-  const handlePublished = () => {
-    notify({ tone: 'success', message: 'Воронка опубликована.' })
+  const handlePublished = (publishedVersion: { id: string; version_number: number }) => {
+    notify({
+      tone: 'success',
+      message: `Версия v${publishedVersion.version_number} опубликована. Выберите её активной на странице «Воронки».`,
+    })
     setIsPublishOpen(false)
-    void fetchFunnel(funnelId, projectId).then(setFunnel)
-    void fetchVersions(funnelId, projectId).then(setVersions)
+    void Promise.all([
+      fetchFunnel(funnelId, projectId),
+      fetchVersions(funnelId, projectId),
+      fetchGraph(funnelId, publishedVersion.id, projectId),
+    ]).then(([loadedFunnel, loadedVersions, loadedGraph]) => {
+      setFunnel(loadedFunnel)
+      setVersions(loadedVersions)
+      setActiveVersionId(publishedVersion.id)
+      onVersionReady(publishedVersion.id)
+      setGraph(graphWithDefaults(loadedGraph))
+      setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
+      setSelectedEdgeId(null)
+    })
   }
 
   const switchVersion = async (nextVersionId: string) => {
@@ -617,7 +651,7 @@ export default function FunnelBuilder({
   }
 
   const createDraftFromCurrent = async () => {
-    if (!activeVersionId) {
+    if (!activeVersionId || isEditableDraft) {
       return
     }
     try {
@@ -630,34 +664,6 @@ export default function FunnelBuilder({
       notify({ tone: 'success', message: 'Черновик из версии создан.' })
     } catch {
       notify({ tone: 'error', message: 'Не удалось создать черновик из версии.' })
-    }
-  }
-
-  const rollbackToVersion = async (targetVersionId: string) => {
-    const targetVersion = versions.find((version) => version.id === targetVersionId)
-    if (isRollingBackVersionId || targetVersion?.is_active_for_bot) {
-      return
-    }
-    setIsRollingBackVersionId(targetVersionId)
-    try {
-      const rolledBackVersion = await rollbackFunnelVersion(funnelId, targetVersionId, projectId)
-      const [loadedFunnel, loadedGraph, loadedVersions] = await Promise.all([
-        fetchFunnel(funnelId, projectId),
-        fetchGraph(funnelId, rolledBackVersion.id, projectId),
-        fetchVersions(funnelId, projectId),
-      ])
-      setFunnel(loadedFunnel)
-      setVersions(loadedVersions)
-      setActiveVersionId(rolledBackVersion.id)
-      onVersionReady(rolledBackVersion.id)
-      setGraph(graphWithDefaults(loadedGraph))
-      setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
-      setSelectedEdgeId(null)
-      notify({ tone: 'success', message: `Активирована версия v${rolledBackVersion.version_number}.` })
-    } catch {
-      notify({ tone: 'error', message: 'Не удалось откатить воронку к выбранной версии.' })
-    } finally {
-      setIsRollingBackVersionId(null)
     }
   }
 
@@ -762,14 +768,16 @@ export default function FunnelBuilder({
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={() => void createDraftFromCurrent()}
-                className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-xs text-gray-300 transition hover:border-accent-300/35"
-              >
-                <CopyPlus size={13} />
-                Черновик
-              </button>
+              {!isEditableDraft ? (
+                <button
+                  type="button"
+                  onClick={() => void createDraftFromCurrent()}
+                  className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-xs text-gray-300 transition hover:border-accent-300/35"
+                >
+                  <CopyPlus size={13} />
+                  Создать черновик
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -796,32 +804,40 @@ export default function FunnelBuilder({
               </button>
             )
           })}
-          <button
-            type="button"
-            onClick={() => void validate()}
-            disabled={isValidating}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isValidating ? <LoaderCircle size={15} className="animate-spin" /> : <PlayCircle size={15} />}
-            Тестировать
-          </button>
-          <button
-            type="button"
-            onClick={() => void saveDraft()}
-            disabled={isSaving}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 transition hover:border-accent-300/35 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isSaving ? <LoaderCircle size={15} className="animate-spin" /> : <Save size={15} />}
-            Сохранить
-          </button>
-          <button
-            type="button"
-            onClick={() => void openPublish()}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
-          >
-            <Send size={15} />
-            Опубликовать
-          </button>
+          {isEditableDraft ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void validate()}
+                disabled={isValidating}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 text-sm text-amber-50 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isValidating ? <LoaderCircle size={15} className="animate-spin" /> : <PlayCircle size={15} />}
+                Проверить
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveDraft()}
+                disabled={isSaving}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 transition hover:border-accent-300/35 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSaving ? <LoaderCircle size={15} className="animate-spin" /> : <Save size={15} />}
+                Сохранить
+              </button>
+              <button
+                type="button"
+                onClick={() => void openPublish()}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-3 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent"
+              >
+                <Send size={15} />
+                Опубликовать
+              </button>
+            </>
+          ) : (
+            <span className="flex h-9 shrink-0 items-center px-2 text-xs text-gray-500">
+              Версия доступна только для просмотра
+            </span>
+          )}
         </div>
       </header>
 
@@ -881,7 +897,7 @@ export default function FunnelBuilder({
                 compactPanel === 'library' ? 'block' : 'hidden'
               }`}
             >
-              <BlockLibrary onAdd={addBlock} />
+              <BlockLibrary onAdd={addBlock} readOnly={!isEditableDraft} />
             </div>
             <div
               className={`min-h-0 lg:block lg:overflow-hidden ${
@@ -900,6 +916,7 @@ export default function FunnelBuilder({
                 }
                 onConnect={connectSteps}
                 onDeleteStep={deleteStep}
+                readOnly={!isEditableDraft}
               />
             </div>
             <div
@@ -916,17 +933,22 @@ export default function FunnelBuilder({
                 fieldMappings={graph.field_mappings}
                 pushRules={graph.push_rules}
                 hasPublishedVersion={Boolean(funnel.published_version_id)}
+                readOnly={!isEditableDraft}
                 onUpdateStep={updateStep}
                 onDeleteStep={deleteStep}
                 onUpdateEdge={updateEdge}
                 onRemoveEdge={removeEdge}
                 onSelectEdge={handleSelectEdge}
-                onFieldMappingsChange={(field_mappings) =>
-                  setGraph((current) => (current ? { ...current, field_mappings } : current))
-                }
-                onPushRulesChange={(push_rules) =>
-                  setGraph((current) => (current ? { ...current, push_rules } : current))
-                }
+                onFieldMappingsChange={(field_mappings) => {
+                  if (isEditableDraft) {
+                    setGraph((current) => (current ? { ...current, field_mappings } : current))
+                  }
+                }}
+                onPushRulesChange={(push_rules) => {
+                  if (isEditableDraft) {
+                    setGraph((current) => (current ? { ...current, push_rules } : current))
+                  }
+                }}
               />
             </div>
           </div>
@@ -951,9 +973,7 @@ export default function FunnelBuilder({
           versions={versions}
           users={versionUsers}
           activeVersionId={activeVersionId}
-          isRollingBackVersionId={isRollingBackVersionId}
           onOpenVersion={(nextVersionId) => void switchVersion(nextVersionId)}
-          onRollback={(targetVersionId) => void rollbackToVersion(targetVersionId)}
         />
       )}
 

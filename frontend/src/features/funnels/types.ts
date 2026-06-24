@@ -1,6 +1,13 @@
 export type FunnelStatus = 'active' | 'archived'
 export type FunnelVersionStatus = 'draft' | 'published' | 'archived'
 
+export type FunnelPublishedVersion = {
+  id: string
+  version_number: number
+  published_at: string | null
+  is_active_for_bot: boolean
+}
+
 export type FunnelStepType =
   | 'trigger'
   | 'message'
@@ -24,6 +31,7 @@ export type Funnel = {
   updated_at: string
   draft_version_id: string | null
   published_version_id: string | null
+  published_versions: FunnelPublishedVersion[]
   is_active_for_bot: boolean
 }
 

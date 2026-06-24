@@ -29,6 +29,7 @@ from app.schemas.funnel import (
     FunnelGraphOut,
     FunnelHoldModeUpdate,
     FunnelOut,
+    FunnelPublishedVersionOut,
     FunnelPushRuleOut,
     FunnelStepIn,
     FunnelStepOut,
@@ -221,6 +222,9 @@ class FunnelService:
     ) -> FunnelVersionOut:
         self._ensure_write_allowed(current_user)
         await self._get_version_or_404(funnel_id, source_version_id, project_id)
+        existing_draft = await self.repo.get_latest_draft(funnel_id)
+        if existing_draft is not None:
+            return FunnelVersionOut.model_validate(existing_draft)
         draft = await self.repo.create_version(
             funnel_id=funnel_id,
             version_number=await self.repo.next_version_number(funnel_id),
@@ -433,29 +437,13 @@ class FunnelService:
                 ),
             )
 
-        funnel = await self._get_funnel_or_404(funnel_id, project_id)
         try:
-            await self.repo.archive_published_versions_for_bot(
-                bot_id=funnel.bot_id,
-                exclude_version_id=version_id,
-            )
-            await self.repo.archive_published_versions(
-                funnel_id=funnel_id,
-                exclude_version_id=version_id,
-            )
             published = await self.repo.update_version_status(
                 version_id,
                 "published",
                 published_at=datetime.now(timezone.utc),
             )
             assert published is not None
-            await self.repo.set_active_funnel_for_bot(
-                bot_id=funnel.bot_id,
-                project_id=project_id,
-                funnel_id=funnel.id,
-                version_id=published.id,
-            )
-            await self.repo.update_in_project(funnel_id, project_id)
         except SQLAlchemyError as exc:
             logger.exception(
                 "Failed to publish funnel funnel_id=%s version_id=%s",
@@ -466,9 +454,7 @@ class FunnelService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Ошибка публикации воронки: база данных отклонила изменения версии.",
             ) from exc
-        return FunnelVersionOut.model_validate(published).model_copy(
-            update={"is_active_for_bot": True}
-        )
+        return FunnelVersionOut.model_validate(published)
 
     async def rollback_to_version(
         self,
@@ -478,7 +464,7 @@ class FunnelService:
         project_id: UUID,
         current_user: User,
     ) -> FunnelVersionOut:
-        self._ensure_write_allowed(current_user)
+        self._ensure_activation_allowed(current_user)
         version = await self._get_version_or_404(funnel_id, version_id, project_id)
         funnel = await self._get_funnel_or_404(funnel_id, project_id)
 
@@ -501,35 +487,33 @@ class FunnelService:
                 update={"is_active_for_bot": True}
             )
 
-        await self.repo.archive_published_versions_for_bot(
-            bot_id=funnel.bot_id,
-            exclude_version_id=version.id,
-        )
-        await self.repo.archive_published_versions(
-            funnel_id=funnel.id,
-            exclude_version_id=version.id,
-        )
-        published = await self.repo.update_version_status(
-            version.id,
-            "published",
-            published_at=datetime.now(timezone.utc),
-        )
-        assert published is not None
-        await self.repo.set_active_funnel_for_bot(
-            bot_id=funnel.bot_id,
+        if version.status == "archived":
+            restored = await self.repo.update_version_status(
+                version.id,
+                "published",
+                published_at=version.published_at or datetime.now(timezone.utc),
+            )
+            assert restored is not None
+            version = restored
+        elif version.status != "published":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only published versions can be activated",
+            )
+
+        await self._activate_version_for_bot(
+            funnel=funnel,
+            version=version,
             project_id=project_id,
-            funnel_id=funnel.id,
-            version_id=published.id,
         )
-        await self.repo.update_in_project(funnel.id, project_id)
         await self._log_rollback_audit(
             funnel=funnel,
             previous_version=active_version,
-            new_version=published,
+            new_version=version,
             project_id=project_id,
             current_user_id=current_user.id,
         )
-        return FunnelVersionOut.model_validate(published).model_copy(
+        return FunnelVersionOut.model_validate(version).model_copy(
             update={"is_active_for_bot": True}
         )
 
@@ -594,14 +578,6 @@ class FunnelService:
         version: FunnelVersion,
         project_id: UUID,
     ) -> None:
-        await self.repo.archive_published_versions_for_bot(
-            bot_id=funnel.bot_id,
-            exclude_version_id=version.id,
-        )
-        await self.repo.archive_published_versions(
-            funnel_id=funnel.id,
-            exclude_version_id=version.id,
-        )
         await self.repo.set_active_funnel_for_bot(
             bot_id=funnel.bot_id,
             project_id=project_id,
@@ -694,6 +670,7 @@ class FunnelService:
     async def _funnel_out(self, funnel: Funnel) -> FunnelOut:
         draft = await self.repo.get_latest_draft(funnel.id)
         published = await self.repo.get_published(funnel.id)
+        published_versions = await self.repo.list_published_versions(funnel.id)
         _, active_version = await self.repo.get_active_funnel_for_bot(
             funnel.bot_id,
             funnel.project_id,
@@ -702,10 +679,20 @@ class FunnelService:
             update={
                 "draft_version_id": draft.id if draft else None,
                 "published_version_id": published.id if published else None,
+                "published_versions": [
+                    FunnelPublishedVersionOut(
+                        id=version.id,
+                        version_number=version.version_number,
+                        published_at=version.published_at,
+                        is_active_for_bot=(
+                            active_version is not None and active_version.id == version.id
+                        ),
+                    )
+                    for version in published_versions
+                ],
                 "is_active_for_bot": bool(
                     active_version is not None
-                    and published is not None
-                    and active_version.id == published.id
+                    and active_version.funnel_id == funnel.id
                 ),
             }
         )

@@ -19,7 +19,7 @@ type PublishReviewModalProps = {
   projectId: string
   graph: FunnelGraph
   onClose: () => void
-  onPublished: () => void
+  onPublished: (version: { id: string; version_number: number }) => void
 }
 
 type PublishValidationState = {
@@ -132,8 +132,8 @@ export default function PublishReviewModal({
     }
     setIsPublishing(true)
     try {
-      await publishFunnelVersion(funnelId, versionId, projectId)
-      onPublished()
+      const published = await publishFunnelVersion(funnelId, versionId, projectId)
+      onPublished(published)
     } catch (error) {
       notify({
         tone: 'error',

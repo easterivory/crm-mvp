@@ -12,9 +12,9 @@ import {
 } from '../features/funnels'
 import CopyFunnelModal from '../features/funnels/components/CopyFunnelModal'
 import FunnelBuilder from '../features/funnels/components/FunnelBuilder'
-import FunnelList from '../features/funnels/components/FunnelList'
+import FunnelList, { type ActiveFunnelSelection } from '../features/funnels/components/FunnelList'
 import { fetchProjects, type Project } from '../features/projects'
-import { isManagerRole, useNotificationStore, useProjectBotSelection } from '../shared/lib'
+import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
 function getErrorMessage(err: unknown) {
@@ -50,7 +50,9 @@ export default function FunnelsPage() {
     setSelectedProjectId,
   } = useProjectBotSelection()
   const notify = useNotificationStore((state) => state.notify)
-  const isManager = useAuthStore((state) => isManagerRole(state.user?.role_name))
+  const roleName = useAuthStore((state) => state.user?.role_name)
+  const canEdit = roleName === 'super_admin' || roleName === 'admin'
+  const canActivate = roleName === 'super_admin' || roleName === 'admin' || roleName === 'manager'
 
   const [funnels, setFunnels] = useState<Funnel[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
@@ -139,12 +141,12 @@ export default function FunnelsPage() {
     }
   }
 
-  const handleMakeActive = async (funnel: Funnel) => {
-    if (!selectedProjectId || !funnel.published_version_id) {
+  const handleMakeActive = async ({ funnel, version }: ActiveFunnelSelection) => {
+    if (!selectedProjectId) {
       return
     }
     const confirmed = window.confirm(
-      `Сделать «${funnel.name}» активной? Новые и сброшенные диалоги начнутся в этой воронке. Уже начатые диалоги продолжат свою текущую версию, чтобы не потерять сценарий.`,
+      `Сделать «${funnel.name}» версии v${version.version_number} активной? Новые и сброшенные диалоги начнутся в этой версии. Уже начатые диалоги продолжат свою текущую версию, чтобы не потерять сценарий.`,
     )
     if (!confirmed) {
       return
@@ -152,7 +154,7 @@ export default function FunnelsPage() {
     try {
       await setBotActiveFunnel(funnel.bot_id, selectedProjectId, {
         funnel_id: funnel.id,
-        version_id: funnel.published_version_id,
+        version_id: version.id,
       })
       notify({
         tone: 'success',
@@ -175,7 +177,7 @@ export default function FunnelsPage() {
   )
 
   if (funnelId && selectedProjectId) {
-    if (isManager) {
+    if (!canEdit) {
       return <Navigate to="/funnels" replace />
     }
     return (
@@ -200,7 +202,8 @@ export default function FunnelsPage() {
         selectedBotIds={selectedBotIds}
         isLoading={isLoading}
         isCreating={isCreating}
-        canEdit={!isManager}
+        canEdit={canEdit}
+        canActivate={canActivate}
         onCreate={handleCreate}
         onOpen={(funnel) =>
           navigate(
@@ -211,7 +214,7 @@ export default function FunnelsPage() {
         }
         onCopy={setCopyTarget}
         onArchive={(funnel) => void handleArchive(funnel)}
-        onMakeActive={(funnel) => void handleMakeActive(funnel)}
+        onMakeActive={(selection) => void handleMakeActive(selection)}
       />
 
       {copyTarget ? (

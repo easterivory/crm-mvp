@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronDown,
   KeyRound,
   Languages,
   LoaderCircle,
@@ -12,7 +13,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react'
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
@@ -147,6 +148,103 @@ function roleLabel(roleName: string) {
     operator: 'Оператор',
   }
   return labels[roleName] ?? roleName
+}
+
+type ProjectAccessDropdownProps = {
+  projects: Project[]
+  selectedProjectIds: string[]
+  disabled?: boolean
+  requireOne?: boolean
+  onChange: (projectIds: string[]) => void
+}
+
+function ProjectAccessDropdown({
+  projects,
+  selectedProjectIds,
+  disabled = false,
+  requireOne = false,
+  onChange,
+}: ProjectAccessDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const selectedSet = useMemo(() => new Set(selectedProjectIds), [selectedProjectIds])
+  const selectedNames = projects
+    .filter((project) => selectedSet.has(project.id))
+    .map((project) => project.name)
+  const label = selectedNames.length === 0
+    ? 'Выберите проекты'
+    : selectedNames.length === 1
+      ? selectedNames[0]
+      : `${selectedNames[0]} +${selectedNames.length - 1}`
+
+  useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', handleOutsidePointerDown)
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown)
+  }, [isOpen])
+
+  const toggleProject = (projectId: string) => {
+    const isSelected = selectedSet.has(projectId)
+    if (isSelected && requireOne && selectedProjectIds.length <= 1) {
+      return
+    }
+    onChange(
+      isSelected
+        ? selectedProjectIds.filter((currentId) => currentId !== projectId)
+        : [...selectedProjectIds, projectId],
+    )
+  }
+
+  return (
+    <div ref={rootRef} className="relative min-w-[220px]">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        disabled={disabled}
+        className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-left text-sm text-zinc-100 outline-none ring-emerald-500 transition hover:border-emerald-500/60 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-expanded={isOpen}
+      >
+        <span className="truncate" title={selectedNames.join(', ')}>{label}</span>
+        <ChevronDown size={16} className={`shrink-0 text-zinc-500 transition ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isOpen ? (
+        <div className="absolute left-0 z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950 shadow-xl">
+          <div className="border-b border-zinc-800 px-3 py-2 text-xs text-zinc-500">
+            Выбрано: {selectedNames.length}
+          </div>
+          <div className="max-h-64 overflow-y-auto p-1.5">
+            {projects.map((project) => {
+              const isSelected = selectedSet.has(project.id)
+              const cannotRemoveLast = requireOne && isSelected && selectedProjectIds.length <= 1
+              return (
+                <label
+                  key={project.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm text-zinc-200 transition hover:bg-zinc-900"
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    disabled={disabled || cannotRemoveLast}
+                    onChange={() => toggleProject(project.id)}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span className="min-w-0 flex-1 truncate" title={project.name}>{project.name}</span>
+                  {isSelected ? <Check size={15} className="shrink-0 text-emerald-300" /> : null}
+                </label>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 export default function SettingsPage() {
@@ -710,10 +808,9 @@ export default function SettingsPage() {
     }
   }
 
-  const handleUserProjectAccessToggle = async (
+  const handleUserProjectAccessChange = async (
     user: User,
-    projectId: string,
-    isChecked: boolean,
+    nextProjectIds: string[],
   ) => {
     const roleName = getUserRoleName(user)
     if (roleName === 'super_admin') {
@@ -725,12 +822,11 @@ export default function SettingsPage() {
       return
     }
 
-    const currentIds = getUserProjectIds(user)
-    const nextProjectIds = isChecked
-      ? [...currentIds, projectId].filter((item, index, items) => items.indexOf(item) === index)
-      : currentIds.filter((item) => item !== projectId)
+    const uniqueProjectIds = nextProjectIds.filter(
+      (projectId, index, projectIds) => projectIds.indexOf(projectId) === index,
+    )
 
-    if (nextProjectIds.length === 0) {
+    if (uniqueProjectIds.length === 0) {
       setError('У пользователя должен остаться хотя бы один проект.')
       return
     }
@@ -741,8 +837,8 @@ export default function SettingsPage() {
 
     try {
       await api.patch<User>(`/users/${user.id}`, {
-        project_id: nextProjectIds[0],
-        project_ids: nextProjectIds,
+        project_id: uniqueProjectIds[0],
+        project_ids: uniqueProjectIds,
       })
       await loadUsers()
       setNotice('Доступы пользователя обновлены.')
@@ -1303,34 +1399,15 @@ export default function SettingsPage() {
                                 Все проекты
                               </span>
                             ) : canEditProjectAccess ? (
-                              <div className="grid gap-2 md:grid-cols-2">
-                                {activeProjects.map((item) => {
-                                  const checked = userProjectIds.includes(item.id)
-                                  return (
-                                    <label
-                                      key={item.id}
-                                      className="flex min-w-0 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-2 text-xs text-zinc-300 transition hover:border-emerald-500/50"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        disabled={updatingUserId === user.id}
-                                        onChange={(event) =>
-                                          void handleUserProjectAccessToggle(
-                                            user,
-                                            item.id,
-                                            event.target.checked,
-                                          )
-                                        }
-                                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
-                                      />
-                                      <span className="truncate" title={item.name}>
-                                        {item.name}
-                                      </span>
-                                    </label>
-                                  )
-                                })}
-                              </div>
+                              <ProjectAccessDropdown
+                                projects={activeProjects}
+                                selectedProjectIds={userProjectIds}
+                                disabled={updatingUserId === user.id}
+                                requireOne
+                                onChange={(nextProjectIds) =>
+                                  void handleUserProjectAccessChange(user, nextProjectIds)
+                                }
+                              />
                             ) : userProjectIds.length > 0 ? (
                               <div className="flex flex-wrap gap-1.5">
                                 {userProjectIds.map((projectId) => (
@@ -1450,47 +1527,20 @@ export default function SettingsPage() {
                     Суперадмин получает доступ ко всем проектам автоматически.
                   </div>
                 ) : (
-                  <fieldset className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 md:col-span-2 xl:col-span-5">
-                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  <div className="md:col-span-2 xl:col-span-5">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
                       Доступы к проектам
-                    </legend>
+                    </span>
                     {activeProjects.length > 0 ? (
-                      <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                        {activeProjects.map((item) => {
-                          const checked = newUserProjectIds.includes(item.id)
-                          return (
-                            <label
-                              key={item.id}
-                              className="flex min-w-0 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-sm text-zinc-300 transition hover:border-emerald-500/50"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(event) => {
-                                  const isChecked = event.target.checked
-                                  setNewUserProjectIds((currentIds) => {
-                                    if (isChecked) {
-                                      return [...currentIds, item.id].filter(
-                                        (projectId, index, projectIds) =>
-                                          projectIds.indexOf(projectId) === index,
-                                      )
-                                    }
-                                    return currentIds.filter((projectId) => projectId !== item.id)
-                                  })
-                                }}
-                                className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
-                              />
-                              <span className="truncate" title={item.name}>
-                                {item.name}
-                              </span>
-                            </label>
-                          )
-                        })}
-                      </div>
+                      <ProjectAccessDropdown
+                        projects={activeProjects}
+                        selectedProjectIds={newUserProjectIds}
+                        onChange={setNewUserProjectIds}
+                      />
                     ) : (
-                      <p className="mt-2 text-sm text-zinc-500">Активных проектов нет.</p>
+                      <p className="text-sm text-zinc-500">Активных проектов нет.</p>
                     )}
-                  </fieldset>
+                  </div>
                 )}
                 </form>
               ) : null}

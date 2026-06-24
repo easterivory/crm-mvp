@@ -169,12 +169,32 @@ class FunnelRepository(BaseRepository[Funnel]):
 
     async def get_published(self, funnel_id: UUID) -> Optional[FunnelVersion]:
         result = await self.db.execute(
-            select(FunnelVersion).where(
+            select(FunnelVersion)
+            .where(
                 FunnelVersion.funnel_id == funnel_id,
                 FunnelVersion.status == "published",
             )
+            .order_by(
+                FunnelVersion.published_at.desc().nullslast(),
+                FunnelVersion.version_number.desc(),
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def list_published_versions(self, funnel_id: UUID) -> list[FunnelVersion]:
+        result = await self.db.execute(
+            select(FunnelVersion)
+            .where(
+                FunnelVersion.funnel_id == funnel_id,
+                FunnelVersion.status == "published",
+            )
+            .order_by(
+                FunnelVersion.published_at.desc().nullslast(),
+                FunnelVersion.version_number.desc(),
+            )
+        )
+        return list(result.scalars().all())
 
     async def get_published_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         result = await self.db.execute(

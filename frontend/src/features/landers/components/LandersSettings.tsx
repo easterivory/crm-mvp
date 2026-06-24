@@ -30,7 +30,6 @@ import {
 import type {
   LanderType,
   LanderPixel,
-  LanderPixelProvider,
   LanderTargetStep,
   ProjectDomain,
   ProjectLander,
@@ -60,8 +59,6 @@ type LanderForm = {
   campaignPaymentType: string
   campaignTargetStepKey: string
   metaPixelId: string
-  tiktokPixelId: string
-  googleTagId: string
   utmSource: string
   utmMedium: string
   utmCampaign: string
@@ -85,8 +82,6 @@ const emptyLanderForm: LanderForm = {
   campaignPaymentType: '',
   campaignTargetStepKey: '',
   metaPixelId: '',
-  tiktokPixelId: '',
-  googleTagId: '',
   utmSource: '',
   utmMedium: '',
   utmCampaign: '',
@@ -146,14 +141,8 @@ function buildLanderUrl(domainName: string, slug: string) {
 }
 
 function buildPixels(form: LanderForm): LanderPixel[] {
-  const values: Array<[LanderPixelProvider, string]> = [
-    ['meta', form.metaPixelId],
-    ['tiktok', form.tiktokPixelId],
-    ['google_tag', form.googleTagId],
-  ]
-  return values
-    .map(([provider, pixelId]) => ({ provider, pixel_id: pixelId.trim() }))
-    .filter((pixel) => pixel.pixel_id.length > 0)
+  const pixelId = form.metaPixelId.trim()
+  return pixelId ? [{ provider: 'meta', pixel_id: pixelId }] : []
 }
 
 function buildUtmDefaults(form: LanderForm): Record<string, string> {
@@ -969,20 +958,12 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             <fieldset className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
               <legend className="px-1 text-sm font-semibold text-zinc-100">Пиксели и UTM</legend>
               <p className="mt-1 text-xs leading-5 text-zinc-500">
-                Пиксели получают PageView на открытии и событие TelegramOpen при переходе. UTM из URL сохраняются у лида автоматически; значения ниже подставляются, только если в URL их нет.
+                Meta Pixel получает PageView на открытии и стандартный Lead при переходе в Telegram. UTM из URL сохраняются у лида автоматически; значения ниже подставляются, только если в URL их нет.
               </p>
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <div className="mt-3">
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Meta Pixel ID</span>
                   <input value={form.metaPixelId} onChange={(event) => setForm((current) => ({ ...current, metaPixelId: event.target.value }))} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">TikTok Pixel ID</span>
-                  <input value={form.tiktokPixelId} onChange={(event) => setForm((current) => ({ ...current, tiktokPixelId: event.target.value }))} placeholder="C123ABC..." className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Google Tag ID</span>
-                  <input value={form.googleTagId} onChange={(event) => setForm((current) => ({ ...current, googleTagId: event.target.value }))} placeholder="G-XXXXXXX" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
                 </label>
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -1012,7 +993,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                   className="mt-3 block w-full text-sm text-zinc-400 file:mr-4 file:rounded-lg file:border-0 file:bg-emerald-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-zinc-950 hover:file:bg-emerald-400"
                 />
                 <span className="mt-2 block text-xs text-zinc-500">
-                  В архиве должен быть файл index.html на верхнем уровне.
+                  В корне архива должны быть index.html и кнопка Telegram: <code>&lt;a data-crm-telegram-link href=&quot;#&quot;&gt;...&lt;/a&gt;</code>.
+                  Для Meta-события на элементе добавьте <code>data-crm-meta-event=&quot;CompleteRegistration&quot;</code>.
                 </span>
                 {form.zipFile ? (
                   <span className="mt-2 block text-sm text-emerald-200">

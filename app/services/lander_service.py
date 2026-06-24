@@ -34,6 +34,14 @@ class LanderService:
     DEFAULT_TG_REDIRECT = "default_tg_redirect"
     CUSTOM_UPLOAD = "custom_upload"
     SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+    CUSTOM_TELEGRAM_LINK_RE = re.compile(
+        r"(?P<open><a\b(?=[^>]*\bdata-crm-telegram-link(?=\s|=|/|>))[^>]*)(?P<close>>)",
+        re.IGNORECASE,
+    )
+    HREF_ATTRIBUTE_RE = re.compile(
+        r"(?P<prefix>\bhref\s*=\s*)(?P<quote>[\"'])(?P<url>[^\"']*)(?P=quote)",
+        re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -188,7 +196,23 @@ class LanderService:
             if item
         }
         escaped_url = html.escape(telegram_url, quote=True)
-        updated = html_body
+        def replace_marked_link(match: re.Match[str]) -> str:
+            opening_tag = match.group("open")
+            href_match = self.HREF_ATTRIBUTE_RE.search(opening_tag)
+            if href_match is None:
+                opening_tag = f'{opening_tag} href="{escaped_url}"'
+            else:
+                opening_tag = self.HREF_ATTRIBUTE_RE.sub(
+                    lambda href: (
+                        f"{href.group('prefix')}{href.group('quote')}"
+                        f"{escaped_url}{href.group('quote')}"
+                    ),
+                    opening_tag,
+                    count=1,
+                )
+            return f"{opening_tag}{match.group('close')}"
+
+        updated = self.CUSTOM_TELEGRAM_LINK_RE.sub(replace_marked_link, html_body)
         for username in usernames:
             username_re = re.escape(username)
             href_re = re.compile(
@@ -291,6 +315,7 @@ class LanderService:
                     with archive.open(member) as source, target_path.open("wb") as target:
                         shutil.copyfileobj(source, target)
 
+            cls._validate_custom_index_contract(temp_dir / "index.html")
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.move(temp_dir.as_posix(), destination.as_posix())
@@ -309,6 +334,18 @@ class LanderService:
                 raise ValueError("Попытка уязвимости: недопустимые пути в архиве")
         if not has_top_level_index:
             raise ValueError("В архиве должен быть файл index.html")
+
+    @classmethod
+    def _validate_custom_index_contract(cls, index_path: Path) -> None:
+        try:
+            index_html = index_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("index.html должен быть в UTF-8") from exc
+        if not cls.CUSTOM_TELEGRAM_LINK_RE.search(index_html):
+            raise ValueError(
+                "В index.html нужна Telegram-кнопка: "
+                '<a data-crm-telegram-link href="#">Открыть Telegram</a>'
+            )
 
     @staticmethod
     def _safe_member_path(filename: str) -> PurePosixPath:
@@ -360,7 +397,7 @@ class LanderService:
         if not isinstance(pixels, list):
             return ""
 
-        scripts: list[str] = []
+        meta_pixel_id: str | None = None
         for raw_pixel in pixels:
             if not isinstance(raw_pixel, dict):
                 continue
@@ -369,29 +406,59 @@ class LanderService:
             if not cls._is_safe_pixel_id(pixel_id):
                 logger.warning("Skipped invalid landing pixel provider=%s", provider)
                 continue
-            pixel_json = json.dumps(pixel_id).replace("<", "\\u003c")
-            pixel_attr = html.escape(pixel_id, quote=True)
-            if provider == "meta":
-                scripts.append(
-                    "<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?"
-                    "n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;"
-                    "n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];"
-                    "s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');"
-                    f"fbq('init',{pixel_json});fbq('track','PageView');</script>"
-                    f"<noscript><img height=\"1\" width=\"1\" style=\"display:none\" src=\"https://www.facebook.com/tr?id={pixel_attr}&ev=PageView&noscript=1\" alt=\"\"></noscript>"
-                )
-            elif provider == "tiktok":
-                scripts.append(
-                    "<script>!function(w,d,t){w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=['page','track','identify','instances','debug','on','off','once','ready','alias','group','enableCookie','disableCookie'];ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat([].slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.load=function(e){var i='https://analytics.tiktok.com/i18n/pixel/events.js';ttq._i=ttq._i||{};ttq._i[e]=[];ttq._i[e]._u=i;ttq._t=ttq._t||{};ttq._t[e]=+new Date;ttq._o=ttq._o||{};ttq._o[e]={};var o=d.createElement('script');o.type='text/javascript';o.async=!0;o.src=i+'?sdkid='+e+'&lib='+t;var a=d.getElementsByTagName('script')[0];a.parentNode.insertBefore(o,a)};"
-                    f"ttq.load({pixel_json});ttq.page();}}(window,document,'ttq');</script>"
-                )
-            elif provider == "google_tag":
-                scripts.append(
-                    f"<script async src=\"https://www.googletagmanager.com/gtag/js?id={pixel_attr}\"></script>"
-                    "<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}"
-                    f"gtag('js',new Date());gtag('config',{pixel_json});</script>"
-                )
-        return "\n".join(scripts)
+            if provider == "meta" and meta_pixel_id is None:
+                meta_pixel_id = pixel_id
+
+        if meta_pixel_id is None:
+            return ""
+
+        pixel_json = json.dumps(meta_pixel_id).replace("<", "\\u003c")
+        pixel_attr = html.escape(meta_pixel_id, quote=True)
+        return (
+            "<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?"
+            "n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;"
+            "n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];"
+            "s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');"
+            f"fbq('init',{pixel_json});fbq('track','PageView');</script>"
+            f"<noscript><img height=\"1\" width=\"1\" style=\"display:none\" src=\"https://www.facebook.com/tr?id={pixel_attr}&ev=PageView&noscript=1\" alt=\"\"></noscript>"
+            f"{cls._render_meta_event_bridge()}"
+        )
+
+    @staticmethod
+    def _render_meta_event_bridge() -> str:
+        return (
+            "<script>"
+            "var crmMetaStandardEvents={pageview:'PageView',viewcontent:'ViewContent',search:'Search',"
+            "addtocart:'AddToCart',addtowishlist:'AddToWishlist',initiatecheckout:'InitiateCheckout',"
+            "addpaymentinfo:'AddPaymentInfo',purchase:'Purchase',lead:'Lead',"
+            "completeregistration:'CompleteRegistration',contact:'Contact',"
+            "customizeproduct:'CustomizeProduct',donate:'Donate',findlocation:'FindLocation',"
+            "schedule:'Schedule',starttrial:'StartTrial',submitapplication:'SubmitApplication',"
+            "subscribe:'Subscribe'};"
+            "var crmMetaAliases={registration:'CompleteRegistration',reg:'CompleteRegistration',"
+            "complete_registration:'CompleteRegistration',application:'SubmitApplication'};"
+            "window.__crmTrackMetaEvent=window.__crmTrackMetaEvent||function(rawName){"
+            "var raw=String(rawName||'').trim();"
+            "if(!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(raw)){return;}"
+            "var normalized=crmMetaAliases[raw.toLowerCase()]||crmMetaStandardEvents[raw.toLowerCase()]||raw;"
+            "if(!window.fbq){return;}"
+            "if(crmMetaStandardEvents[normalized.toLowerCase()]){window.fbq('track',normalized);"
+            "}else{window.fbq('trackCustom',normalized);}};"
+            "window.__crmTrackTelegramOpen=window.__crmTrackTelegramOpen||(function(){"
+            "var tracked=false;return function(){if(tracked){return;}tracked=true;"
+            "if(window.fbq){window.fbq('track','Lead',{content_name:'Telegram',content_category:'landing'});"
+            "window.fbq('trackCustom','TelegramOpen');}};}());"
+            "document.addEventListener('click',function(event){var target=event.target;"
+            "var eventTarget=target&&target.closest?target.closest('[data-crm-meta-event]'):null;"
+            "if(eventTarget){window.__crmTrackMetaEvent(eventTarget.getAttribute('data-crm-meta-event'));}"
+            "var link=target&&target.closest?target.closest('a[data-crm-telegram-link]'):null;"
+            "if(!link){return;}window.__crmTrackTelegramOpen();"
+            "if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.target){return;}"
+            "event.preventDefault();window.setTimeout(function(){window.location.assign(link.href);},80);});"
+            "document.addEventListener('submit',function(event){var form=event.target;"
+            "if(form&&form.getAttribute){window.__crmTrackMetaEvent(form.getAttribute('data-crm-meta-event'));}});"
+            "</script>"
+        )
 
     @staticmethod
     def _is_safe_pixel_id(value: str) -> bool:
@@ -487,7 +554,7 @@ class LanderService:
     <img class="logo" src="https://telegram.org/img/t_logo.png" alt="Telegram">
     <h1>Open Telegram</h1>
     <p>{title}</p>
-    <a id="open-telegram" href="{safe_url}" rel="noopener noreferrer">Open in Telegram</a>
+    <a id="open-telegram" data-crm-telegram-link href="{safe_url}" rel="noopener noreferrer">Open in Telegram</a>
     <div class="hint">Redirecting to Telegram...</div>
   </main>
   <script>
@@ -497,9 +564,7 @@ class LanderService:
       function openTelegram() {{
         if (opened) return;
         opened = true;
-        if (window.fbq) window.fbq('trackCustom', 'TelegramOpen');
-        if (window.ttq) window.ttq.track('ClickButton', {{ content_name: 'TelegramOpen' }});
-        if (window.gtag) window.gtag('event', 'telegram_open');
+        if (window.__crmTrackTelegramOpen) window.__crmTrackTelegramOpen();
         window.location.href = target;
       }}
       document.getElementById('open-telegram').addEventListener('click', function (event) {{

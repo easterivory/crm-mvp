@@ -15,6 +15,7 @@ type InspectorPanelProps = {
   fieldMappings: FunnelFieldMapping[]
   pushRules: FunnelPushRule[]
   hasPublishedVersion: boolean
+  readOnly?: boolean
   onUpdateStep: (stepId: string, patch: Partial<FunnelStep>) => void
   onDeleteStep: (stepId: string) => void
   onUpdateEdge: (edgeId: string, patch: Partial<FunnelEdge>) => void
@@ -33,6 +34,7 @@ export default function InspectorPanel({
   fieldMappings,
   pushRules,
   hasPublishedVersion,
+  readOnly = false,
   onUpdateStep,
   onDeleteStep,
   onUpdateEdge,
@@ -46,11 +48,17 @@ export default function InspectorPanel({
       <div className="border-b border-white/8 px-4 py-3">
         <h2 className="text-sm font-semibold text-white">Настройки</h2>
         <p className="mt-1 text-xs text-gray-500">
-          Выбранный блок, связь и служебные действия.
+          {readOnly
+            ? 'Опубликованная версия открыта только для просмотра.'
+            : 'Выбранный блок, связь и служебные действия.'}
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+      <div
+        className={`min-h-0 flex-1 space-y-3 overflow-y-auto p-3 ${
+          readOnly ? 'pointer-events-none opacity-70' : ''
+        }`}
+      >
         {selectedEdge ? (
           <EdgeSettingsPanel
             selectedEdge={selectedEdge}

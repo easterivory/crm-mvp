@@ -46,6 +46,13 @@ class FunnelUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=2000)
 
 
+class FunnelPublishedVersionOut(BaseModel):
+    id: uuid.UUID
+    version_number: int
+    published_at: Optional[datetime]
+    is_active_for_bot: bool = False
+
+
 class FunnelOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
@@ -58,6 +65,7 @@ class FunnelOut(OrmBase):
     updated_at: datetime
     draft_version_id: Optional[uuid.UUID] = None
     published_version_id: Optional[uuid.UUID] = None
+    published_versions: list[FunnelPublishedVersionOut] = Field(default_factory=list)
     is_active_for_bot: bool = False
 
 

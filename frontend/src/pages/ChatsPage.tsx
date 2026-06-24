@@ -881,8 +881,11 @@ export default function ChatsPage() {
         return
       }
       const hasActiveSearch = Boolean(debouncedChatFilters.q.trim())
-      const selectedChatIsOutsideSearch = Boolean(
-        hasActiveSearch
+      const hasAssignmentFilter = Boolean(
+        debouncedChatFilters.assignedUserId || debouncedChatFilters.unassigned,
+      )
+      const selectedChatIsOutsideFilter = Boolean(
+        (hasActiveSearch || hasAssignmentFilter)
         && selectedChatIdRef.current
         && !data.items.some((chat) => chat.id === selectedChatIdRef.current),
       )
@@ -894,6 +897,7 @@ export default function ChatsPage() {
         if (
           selected
           && !hasActiveSearch
+          && !hasAssignmentFilter
           && !data.items.some((chat) => chat.id === selected.id)
         ) {
           return [selected, ...data.items]
@@ -901,7 +905,7 @@ export default function ChatsPage() {
         return data.items
       })
       setTotal(data.total)
-      if (selectedChatIsOutsideSearch) {
+      if (selectedChatIsOutsideFilter) {
         selectedChatIdRef.current = null
         setSelectedChatId(null)
         setMessages([])
