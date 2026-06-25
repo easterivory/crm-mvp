@@ -49,11 +49,27 @@ class Funnel(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
+    current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "funnel_versions.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_funnels_current_version_id_funnel_versions",
+        ),
+        nullable=True,
+    )
 
     versions: Mapped[list[FunnelVersion]] = relationship(
         "FunnelVersion",
         back_populates="funnel",
         cascade="all, delete-orphan",
+        foreign_keys="FunnelVersion.funnel_id",
+    )
+    current_version: Mapped[Optional[FunnelVersion]] = relationship(
+        "FunnelVersion",
+        foreign_keys=[current_version_id],
+        post_update=True,
     )
 
 
@@ -96,7 +112,11 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
-    funnel: Mapped[Funnel] = relationship("Funnel", back_populates="versions")
+    funnel: Mapped[Funnel] = relationship(
+        "Funnel",
+        back_populates="versions",
+        foreign_keys=[funnel_id],
+    )
     steps: Mapped[list[FunnelStep]] = relationship(
         "FunnelStep",
         back_populates="version",

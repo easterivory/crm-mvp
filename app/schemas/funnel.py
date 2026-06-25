@@ -51,6 +51,7 @@ class FunnelPublishedVersionOut(BaseModel):
     version_number: int
     published_at: Optional[datetime]
     is_active_for_bot: bool = False
+    is_current_for_funnel: bool = False
 
 
 class FunnelOut(OrmBase):
@@ -65,6 +66,7 @@ class FunnelOut(OrmBase):
     updated_at: datetime
     draft_version_id: Optional[uuid.UUID] = None
     published_version_id: Optional[uuid.UUID] = None
+    current_version_id: Optional[uuid.UUID] = None
     published_versions: list[FunnelPublishedVersionOut] = Field(default_factory=list)
     is_active_for_bot: bool = False
 
@@ -82,6 +84,7 @@ class FunnelVersionOut(OrmBase):
     published_at: Optional[datetime]
     is_hold_active: bool = False
     is_active_for_bot: bool = False
+    is_current_for_funnel: bool = False
 
 
 class FunnelVersionUpdate(BaseModel):
@@ -253,6 +256,10 @@ class FunnelValidationIssue(BaseModel):
     message: str
     severity: Literal["error", "warning"]
     step_id: Optional[uuid.UUID] = None
+    step_key: Optional[str] = None
+    step_title: Optional[str] = None
+    step_type: Optional[str] = None
+    block_type: Optional[str] = None
     edge_id: Optional[uuid.UUID] = None
 
 

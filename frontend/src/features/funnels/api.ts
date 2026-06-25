@@ -194,6 +194,19 @@ export async function publishFunnelVersion(
   return data
 }
 
+export async function setFunnelCurrentVersion(
+  funnelId: string,
+  versionId: string,
+  projectId: string,
+): Promise<FunnelVersion> {
+  const { data } = await api.post<FunnelVersion>(
+    `/funnels/${funnelId}/versions/${versionId}/current`,
+    null,
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
 export async function rollbackFunnelVersion(
   funnelId: string,
   versionId: string,

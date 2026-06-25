@@ -246,6 +246,7 @@ export default function FunnelBuilder({
   const [analyticsData, setAnalyticsData] = useState<FunnelDropOffStep[]>([])
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
   const isLoadingAnalyticsRef = useRef(false)
+  const hasLoadedInitialVersionRef = useRef(false)
 
   const loadAnalytics = useCallback(async () => {
     if (!activeVersionId || isLoadingAnalyticsRef.current) {
@@ -304,19 +305,30 @@ export default function FunnelBuilder({
       setIsLoading(true)
       try {
         const loadedFunnel = await fetchFunnel(funnelId, projectId)
-        const draftId =
+        let loadedVersions = await fetchVersions(funnelId, projectId)
+        let resolvedVersionId =
           activeVersionId ?? loadedFunnel.draft_version_id ?? loadedFunnel.published_version_id
-        let resolvedVersionId = draftId
         if (!resolvedVersionId) {
           const draft = await createDraftVersion(funnelId, projectId)
           resolvedVersionId = draft.id
+          loadedVersions = await fetchVersions(funnelId, projectId)
         }
         if (!resolvedVersionId) {
           throw new Error('version_not_found')
         }
+        const selectedVersion = loadedVersions.find((version) => version.id === resolvedVersionId)
+        if (
+          !hasLoadedInitialVersionRef.current &&
+          selectedVersion &&
+          selectedVersion.status !== 'draft'
+        ) {
+          const draft = await createDraftFromVersion(funnelId, resolvedVersionId, projectId)
+          resolvedVersionId = draft.id
+          loadedVersions = await fetchVersions(funnelId, projectId)
+        }
         const loadedGraph = await fetchGraph(funnelId, resolvedVersionId, projectId)
-        const loadedVersions = await fetchVersions(funnelId, projectId)
         if (isMounted) {
+          hasLoadedInitialVersionRef.current = true
           setFunnel(loadedFunnel)
           setActiveVersionId(resolvedVersionId)
           setVersions(loadedVersions)
@@ -641,22 +653,44 @@ export default function FunnelBuilder({
   const handlePublished = (publishedVersion: { id: string; version_number: number }) => {
     notify({
       tone: 'success',
-      message: `Версия v${publishedVersion.version_number} опубликована. Выберите её активной на странице «Воронки».`,
+      message: `Версия v${publishedVersion.version_number} опубликована. Для следующих правок открыт новый черновик.`,
     })
     setIsPublishOpen(false)
-    void Promise.all([
-      fetchFunnel(funnelId, projectId),
-      fetchVersions(funnelId, projectId),
-      fetchGraph(funnelId, publishedVersion.id, projectId),
-    ]).then(([loadedFunnel, loadedVersions, loadedGraph]) => {
-      setFunnel(loadedFunnel)
-      setVersions(loadedVersions)
-      setActiveVersionId(publishedVersion.id)
-      onVersionReady(publishedVersion.id)
-      setGraph(graphWithDefaults(loadedGraph))
-      setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
-      setSelectedEdgeId(null)
-    })
+    void (async () => {
+      try {
+        const draft = await createDraftFromVersion(funnelId, publishedVersion.id, projectId)
+        const [loadedFunnel, loadedVersions, loadedGraph] = await Promise.all([
+          fetchFunnel(funnelId, projectId),
+          fetchVersions(funnelId, projectId),
+          fetchGraph(funnelId, draft.id, projectId),
+        ])
+        setFunnel(loadedFunnel)
+        setVersions(loadedVersions)
+        setActiveVersionId(draft.id)
+        onVersionReady(draft.id)
+        setGraph(graphWithDefaults(loadedGraph))
+        setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
+        setSelectedEdgeId(null)
+      } catch {
+        notify({
+          tone: 'warning',
+          message: 'Версия опубликована, но новый черновик открыть не удалось.',
+        })
+        void Promise.all([
+          fetchFunnel(funnelId, projectId),
+          fetchVersions(funnelId, projectId),
+          fetchGraph(funnelId, publishedVersion.id, projectId),
+        ]).then(([loadedFunnel, loadedVersions, loadedGraph]) => {
+          setFunnel(loadedFunnel)
+          setVersions(loadedVersions)
+          setActiveVersionId(publishedVersion.id)
+          onVersionReady(publishedVersion.id)
+          setGraph(graphWithDefaults(loadedGraph))
+          setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
+          setSelectedEdgeId(null)
+        })
+      }
+    })()
   }
 
   const switchVersion = async (nextVersionId: string) => {
@@ -771,6 +805,11 @@ export default function FunnelBuilder({
                   Активна
                 </span>
               ) : null}
+              {selectedVersion?.is_current_for_funnel ? (
+                <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-xs text-cyan-100">
+                  Актуальная
+                </span>
+              ) : null}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
               <span>{graph.steps.length} блоков</span>
@@ -800,7 +839,7 @@ export default function FunnelBuilder({
                   className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-xs text-gray-300 transition hover:border-accent-300/35"
                 >
                   <CopyPlus size={13} />
-                  Создать черновик
+                  Редактировать в черновике
                 </button>
               ) : null}
             </div>

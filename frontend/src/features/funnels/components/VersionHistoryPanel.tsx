@@ -24,7 +24,10 @@ function formatVersionDate(version: FunnelVersion) {
 
 function statusLabel(version: FunnelVersion) {
   if (version.is_active_for_bot) {
-    return 'Активна'
+    return version.is_current_for_funnel ? 'Активна · актуальная' : 'Активна'
+  }
+  if (version.is_current_for_funnel) {
+    return 'Актуальная'
   }
   if (version.status === 'published') {
     return 'Опубликована'
@@ -73,7 +76,7 @@ export default function VersionHistoryPanel({
         <div>
           <h2 className="text-base font-semibold text-white">История версий</h2>
           <p className="mt-1 text-sm text-gray-500">
-            Опубликованные версии неизменяемы. Активную версию выбирают на странице «Воронки».
+            Опубликованные версии неизменяемы. Актуальную версию воронки выбирают в её карточке.
           </p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-gray-400">
@@ -94,6 +97,7 @@ export default function VersionHistoryPanel({
 
           {sortedVersions.map((version) => {
             const isActiveForBot = version.is_active_for_bot
+            const isCurrentForFunnel = version.is_current_for_funnel
             const isOpened = version.id === activeVersionId
             return (
               <div
@@ -114,14 +118,18 @@ export default function VersionHistoryPanel({
 
                 <span
                   className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 ${
-                    isActiveForBot
+                    isActiveForBot || isCurrentForFunnel
                       ? 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100'
                       : version.status === 'draft'
                         ? 'border-amber-300/20 bg-amber-300/10 text-amber-100'
                         : 'border-white/10 bg-white/[0.03] text-gray-300'
                   }`}
                 >
-                  {isActiveForBot ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
+                  {isActiveForBot || isCurrentForFunnel ? (
+                    <CheckCircle2 size={14} />
+                  ) : (
+                    <Clock3 size={14} />
+                  )}
                   {statusLabel(version)}
                 </span>
 
@@ -142,6 +150,8 @@ export default function VersionHistoryPanel({
                 <span className="flex min-h-9 items-center justify-end">
                   {isActiveForBot ? (
                     <span className="text-xs text-emerald-200">Текущая активная</span>
+                  ) : isCurrentForFunnel ? (
+                    <span className="text-xs text-cyan-200">Актуальная для воронки</span>
                   ) : version.status === 'published' ? (
                     <span className="text-right text-xs text-gray-500">
                       Доступна для выбора

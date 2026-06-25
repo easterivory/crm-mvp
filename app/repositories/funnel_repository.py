@@ -182,6 +182,25 @@ class FunnelRepository(BaseRepository[Funnel]):
         )
         return result.scalar_one_or_none()
 
+    async def get_current_published_version(
+        self,
+        funnel_id: UUID,
+    ) -> Optional[FunnelVersion]:
+        result = await self.db.execute(
+            select(FunnelVersion)
+            .join(Funnel, Funnel.current_version_id == FunnelVersion.id)
+            .where(
+                Funnel.id == funnel_id,
+                FunnelVersion.funnel_id == funnel_id,
+                FunnelVersion.status == "published",
+            )
+            .limit(1)
+        )
+        current = result.scalar_one_or_none()
+        if current is not None:
+            return current
+        return await self.get_published(funnel_id)
+
     async def list_published_versions(self, funnel_id: UUID) -> list[FunnelVersion]:
         result = await self.db.execute(
             select(FunnelVersion)
@@ -290,6 +309,36 @@ class FunnelRepository(BaseRepository[Funnel]):
             return None
         bot_result = await self.db.execute(select(Bot).where(Bot.id == bot_id))
         return bot_result.scalar_one_or_none()
+
+    async def set_current_version_for_funnel(
+        self,
+        *,
+        funnel_id: UUID,
+        version_id: UUID,
+    ) -> Optional[Funnel]:
+        result = await self.db.execute(
+            update(Funnel)
+            .where(Funnel.id == funnel_id)
+            .values(current_version_id=version_id, updated_at=func.now())
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_by_id(funnel_id)
+
+    async def sync_active_bot_version_for_funnel(
+        self,
+        *,
+        funnel_id: UUID,
+        version_id: UUID,
+    ) -> None:
+        await self.db.execute(
+            update(Bot)
+            .where(
+                Bot.active_funnel_id == funnel_id,
+                Bot.is_deleted.is_(False),
+            )
+            .values(active_funnel_version_id=version_id, updated_at=func.now())
+        )
 
     async def clear_active_funnel_for_bot(
         self,
@@ -471,6 +520,28 @@ class FunnelRepository(BaseRepository[Funnel]):
         )
         existing_step_ids = set(existing_result.scalars().all())
         incoming_step_ids = {step.id for step in graph.steps if step.id is not None}
+        removed_step_ids = existing_step_ids - incoming_step_ids
+        if removed_step_ids:
+            await self.db.execute(
+                delete(FunnelStep).where(
+                    FunnelStep.funnel_version_id == version_id,
+                    FunnelStep.id.in_(removed_step_ids),
+                )
+            )
+            await self.db.flush()
+
+        existing_incoming_step_ids = existing_step_ids & incoming_step_ids
+        for step_id in existing_incoming_step_ids:
+            await self.db.execute(
+                update(FunnelStep)
+                .where(
+                    FunnelStep.id == step_id,
+                    FunnelStep.funnel_version_id == version_id,
+                )
+                .values(key=f"__tmp_{step_id}", updated_at=func.now())
+            )
+        if existing_incoming_step_ids:
+            await self.db.flush()
 
         for step_in in graph.steps:
             values = step_in.model_dump()
@@ -487,16 +558,6 @@ class FunnelRepository(BaseRepository[Funnel]):
                 continue
             self.db.add(self._step_from_values(version_id, step_id, values))
         await self.db.flush()
-
-        removed_step_ids = existing_step_ids - incoming_step_ids
-        if removed_step_ids:
-            await self.db.execute(
-                delete(FunnelStep).where(
-                    FunnelStep.funnel_version_id == version_id,
-                    FunnelStep.id.in_(removed_step_ids),
-                )
-            )
-            await self.db.flush()
 
         for edge_in in graph.edges:
             self.db.add(self._edge_from_in(version_id, edge_in))

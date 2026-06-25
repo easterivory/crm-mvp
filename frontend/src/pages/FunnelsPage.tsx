@@ -7,6 +7,7 @@ import {
   archiveFunnel,
   createFunnel,
   fetchFunnels,
+  setFunnelCurrentVersion,
   setBotActiveFunnel,
   type Funnel,
 } from '../features/funnels'
@@ -166,6 +167,36 @@ export default function FunnelsPage() {
     }
   }
 
+  const handleSetCurrentVersion = async (funnel: Funnel, versionId: string) => {
+    if (!selectedProjectId) {
+      return
+    }
+    const version = funnel.published_versions.find((item) => item.id === versionId)
+    if (!version) {
+      return
+    }
+    const confirmed = window.confirm(
+      funnel.is_active_for_bot
+        ? `Сделать v${version.version_number} актуальной для «${funnel.name}»? Так как эта воронка активна на боте, новые и сброшенные диалоги начнутся в этой версии.`
+        : `Сделать v${version.version_number} актуальной для «${funnel.name}»? В селекторе активной воронки будет использоваться именно она.`,
+    )
+    if (!confirmed) {
+      return
+    }
+    try {
+      await setFunnelCurrentVersion(funnel.id, version.id, selectedProjectId)
+      notify({
+        tone: 'success',
+        message: funnel.is_active_for_bot
+          ? 'Актуальная версия обновлена, активный бот переключён на неё.'
+          : 'Актуальная версия воронки обновлена.',
+      })
+      await loadData()
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }
+
   const handleVersionReady = useCallback(
     (resolvedVersionId: string) => {
       if (versionId === resolvedVersionId) {
@@ -215,6 +246,9 @@ export default function FunnelsPage() {
         onCopy={setCopyTarget}
         onArchive={(funnel) => void handleArchive(funnel)}
         onMakeActive={(selection) => void handleMakeActive(selection)}
+        onSetCurrentVersion={(funnel, versionId) =>
+          void handleSetCurrentVersion(funnel, versionId)
+        }
       />
 
       {copyTarget ? (

@@ -6,6 +6,7 @@ export type FunnelPublishedVersion = {
   version_number: number
   published_at: string | null
   is_active_for_bot: boolean
+  is_current_for_funnel: boolean
 }
 
 export type FunnelStepType =
@@ -31,6 +32,7 @@ export type Funnel = {
   updated_at: string
   draft_version_id: string | null
   published_version_id: string | null
+  current_version_id: string | null
   published_versions: FunnelPublishedVersion[]
   is_active_for_bot: boolean
 }
@@ -47,6 +49,7 @@ export type FunnelVersion = {
   updated_at: string
   published_at: string | null
   is_active_for_bot: boolean
+  is_current_for_funnel: boolean
   is_hold_active: boolean
 }
 
@@ -114,6 +117,10 @@ export type FunnelValidationIssue = {
   message: string
   severity: 'error' | 'warning'
   step_id: string | null
+  step_key: string | null
+  step_title: string | null
+  step_type: string | null
+  block_type: string | null
   edge_id: string | null
 }
 

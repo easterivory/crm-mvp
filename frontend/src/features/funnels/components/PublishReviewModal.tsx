@@ -59,6 +59,16 @@ function issueKey(issue: FunnelValidationIssue, index: number) {
   return `${issue.code}:${issue.step_id ?? issue.edge_id ?? index}`
 }
 
+function issueMeta(issue: FunnelValidationIssue) {
+  return [
+    issue.step_id ? `step_id: ${issue.step_id}` : null,
+    issue.step_key ? `key: ${issue.step_key}` : null,
+    issue.step_title ? `title: ${issue.step_title}` : null,
+    issue.block_type ? `block: ${issue.block_type}` : null,
+    issue.edge_id ? `edge_id: ${issue.edge_id}` : null,
+  ].filter((item): item is string => Boolean(item))
+}
+
 export default function PublishReviewModal({
   funnelId,
   versionId,
@@ -197,6 +207,11 @@ export default function PublishReviewModal({
                     Ошибка конфигурации
                   </div>
                   <p className="mt-1 leading-5 opacity-90">{issue.message}</p>
+                  {issueMeta(issue).length > 0 ? (
+                    <p className="mt-2 break-all font-mono text-xs leading-5 opacity-70">
+                      {issueMeta(issue).join(' · ')}
+                    </p>
+                  ) : null}
                 </div>
               ))}
               {graphWarnings.map((message, index) => (
@@ -221,6 +236,11 @@ export default function PublishReviewModal({
                     Предупреждение конфигурации
                   </div>
                   <p className="mt-1 leading-5 opacity-90">{issue.message}</p>
+                  {issueMeta(issue).length > 0 ? (
+                    <p className="mt-2 break-all font-mono text-xs leading-5 opacity-70">
+                      {issueMeta(issue).join(' · ')}
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </div>

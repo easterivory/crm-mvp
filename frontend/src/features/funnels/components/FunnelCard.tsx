@@ -10,6 +10,7 @@ type FunnelCardProps = {
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
+  onSetCurrentVersion: (funnel: Funnel, versionId: string) => void
 }
 
 export default function FunnelCard({
@@ -19,10 +20,15 @@ export default function FunnelCard({
   onOpen,
   onCopy,
   onArchive,
+  onSetCurrentVersion,
 }: FunnelCardProps) {
   const publishedVersions = funnel.published_versions ?? []
   const hasPublished = publishedVersions.length > 0
   const activeVersion = publishedVersions.find((version) => version.is_active_for_bot)
+  const currentVersion =
+    publishedVersions.find((version) => version.is_current_for_funnel) ??
+    publishedVersions[0] ??
+    null
 
   return (
     <article className="rounded-lg border border-white/8 bg-white/[0.035] p-4">
@@ -55,6 +61,39 @@ export default function FunnelCard({
           {bot ? `${bot.name}${bot.bot_username ? ` · @${bot.bot_username}` : ''}` : 'Бот не найден'}
         </span>
       </div>
+
+      {hasPublished ? (
+        <div className="mt-4 rounded-lg border border-white/8 bg-background/45 px-3 py-2">
+          <label className="block text-[11px] font-medium uppercase tracking-wide text-gray-500">
+            Актуальная версия
+          </label>
+          {canEdit ? (
+            <select
+              value={currentVersion?.id ?? ''}
+              onChange={(event) => {
+                const nextVersionId = event.target.value
+                event.currentTarget.value = currentVersion?.id ?? ''
+                if (nextVersionId && nextVersionId !== currentVersion?.id) {
+                  onSetCurrentVersion(funnel, nextVersionId)
+                }
+              }}
+              className="mt-1.5 h-9 w-full rounded-lg border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+              aria-label={`Актуальная версия воронки ${funnel.name}`}
+            >
+              {publishedVersions.map((version) => (
+                <option key={version.id} value={version.id}>
+                  v{version.version_number}
+                  {version.is_active_for_bot ? ' · активна на боте' : ''}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="mt-1.5 text-sm text-gray-300">
+              {currentVersion ? `v${currentVersion.version_number}` : 'Не выбрана'}
+            </p>
+          )}
+        </div>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
         {canEdit ? (
@@ -94,7 +133,9 @@ export default function FunnelCard({
         <div className="mt-3 text-xs text-emerald-200/80">
           {activeVersion
             ? `На боте активна версия v${activeVersion.version_number}`
-            : `Последняя опубликованная: v${publishedVersions[0].version_number}`}
+            : currentVersion
+              ? `Актуальная версия: v${currentVersion.version_number}`
+              : `Последняя опубликованная: v${publishedVersions[0].version_number}`}
         </div>
       ) : null}
     </article>
