@@ -18,6 +18,7 @@ from app.schemas.lander import (
     ProjectDomainOut,
     ProjectLanderCreate,
     ProjectLanderOut,
+    ProjectLanderUpdate,
 )
 from app.services.access_control import require_project_access
 from app.schemas.tracking import TrackingLinkCreate
@@ -148,9 +149,32 @@ class LanderAdminService:
             slug=slug,
             tracking_link_id=tracking_link_id,
             pixels_json=[pixel.model_dump() for pixel in data.pixels],
+            meta_events_json=[event.model_dump() for event in data.meta_events],
             utm_defaults_json=data.utm_defaults,
+            auto_redirect_enabled=data.auto_redirect_enabled,
         )
         self.db.add(lander)
+        await self.db.flush()
+        await self.db.refresh(lander)
+        return ProjectLanderOut.model_validate(lander)
+
+    async def update_lander(
+        self,
+        *,
+        project_id: UUID,
+        lander_id: UUID,
+        data: ProjectLanderUpdate,
+        actor: User,
+    ) -> ProjectLanderOut:
+        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
+        values = data.model_dump(exclude_unset=True)
+        if "pixels" in values:
+            lander.pixels_json = [pixel.model_dump() for pixel in values["pixels"]]
+        if "meta_events" in values:
+            lander.meta_events_json = [event.model_dump() for event in values["meta_events"]]
+        if "auto_redirect_enabled" in values:
+            lander.auto_redirect_enabled = values["auto_redirect_enabled"]
         await self.db.flush()
         await self.db.refresh(lander)
         return ProjectLanderOut.model_validate(lander)

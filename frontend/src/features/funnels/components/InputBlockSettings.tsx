@@ -90,23 +90,38 @@ export default function InputBlockSettings({
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         <label className="block">
+          <span className="mb-1 block text-xs text-gray-500">Задержка перед вопросом, сек</span>
+          <input
+            type="number"
+            min={0}
+            value={numberValue(step.config_json, 'delay_before_seconds', 0)}
+            onChange={(event) =>
+              patchConfig({ delay_before_seconds: Number(event.target.value) || 0 })
+            }
+            className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs text-gray-500">Таймаут ответа, сек</span>
+          <input
+            type="number"
+            min={0}
+            value={numberValue(step.config_json, 'timeout_seconds', 0)}
+            onChange={(event) => patchConfig({ timeout_seconds: Number(event.target.value) || 0 })}
+            className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+          />
+        </label>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+        <label className="block">
           <span className="mb-1 block text-xs text-gray-500">Max retries</span>
           <input
             type="number"
             min={0}
             value={numberValue(step.config_json, 'max_retries', 2)}
             onChange={(event) => patchConfig({ max_retries: Number(event.target.value) || 0 })}
-            className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-          />
-        </label>
-
-        <label className="block">
-          <span className="mb-1 block text-xs text-gray-500">Timeout, сек</span>
-          <input
-            type="number"
-            min={0}
-            value={numberValue(step.config_json, 'timeout_seconds', 0)}
-            onChange={(event) => patchConfig({ timeout_seconds: Number(event.target.value) || 0 })}
             className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
           />
         </label>

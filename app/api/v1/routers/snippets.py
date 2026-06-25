@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user, get_db
@@ -33,6 +33,26 @@ async def create_project_snippet(
         project_id=project_id,
         actor=current_user,
         data=data,
+    )
+
+
+@router.post("/media", response_model=SnippetOut, status_code=status.HTTP_201_CREATED)
+async def create_project_media_snippet(
+    project_id: UUID,
+    name: str = Form(...),
+    type: str = Form(...),
+    content: str | None = Form(default=None),
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SnippetOut:
+    return await ProjectSnippetService(db).create_uploaded_snippet(
+        project_id=project_id,
+        actor=current_user,
+        name=name,
+        snippet_type=type,
+        content=content,
+        file=file,
     )
 
 

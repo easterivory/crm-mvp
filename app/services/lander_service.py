@@ -117,7 +117,10 @@ class LanderService:
     ) -> str:
         lander = await self.resolve_lander_request(host=host, slug=slug)
         telegram_url = await self.build_telegram_url(lander, query_params)
-        pixel_markup = self._render_pixel_markup(lander.pixels_json)
+        pixel_markup = self._render_pixel_markup(
+            lander.pixels_json,
+            lander.meta_events_json,
+        )
 
         if lander.type == self.DEFAULT_TG_REDIRECT:
             return self._render_default_redirect_html(lander, telegram_url, pixel_markup)
@@ -393,7 +396,7 @@ class LanderService:
         return (bot_username or settings.CLIENT_BOT_USERNAME or "").removeprefix("@").strip()
 
     @classmethod
-    def _render_pixel_markup(cls, pixels: object) -> str:
+    def _render_pixel_markup(cls, pixels: object, meta_events: object = None) -> str:
         if not isinstance(pixels, list):
             return ""
 
@@ -421,11 +424,23 @@ class LanderService:
             "s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');"
             f"fbq('init',{pixel_json});fbq('track','PageView');</script>"
             f"<noscript><img height=\"1\" width=\"1\" style=\"display:none\" src=\"https://www.facebook.com/tr?id={pixel_attr}&ev=PageView&noscript=1\" alt=\"\"></noscript>"
-            f"{cls._render_meta_event_bridge()}"
+            f"{cls._render_meta_event_bridge(meta_events)}"
         )
 
     @staticmethod
-    def _render_meta_event_bridge() -> str:
+    def _render_meta_event_bridge(meta_events: object) -> str:
+        event_names: list[str] = []
+        if isinstance(meta_events, list):
+            for raw_event in meta_events:
+                raw_name = raw_event.get("name") if isinstance(raw_event, dict) else raw_event
+                name = str(raw_name or "").strip()
+                if (
+                    len(name) <= 40
+                    and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+                    and name not in event_names
+                ):
+                    event_names.append(name)
+        event_names_json = json.dumps(event_names).replace("<", "\\u003c")
         return (
             "<script>"
             "var crmMetaStandardEvents={pageview:'PageView',viewcontent:'ViewContent',search:'Search',"
@@ -447,7 +462,9 @@ class LanderService:
             "window.__crmTrackTelegramOpen=window.__crmTrackTelegramOpen||(function(){"
             "var tracked=false;return function(){if(tracked){return;}tracked=true;"
             "if(window.fbq){window.fbq('track','Lead',{content_name:'Telegram',content_category:'landing'});"
-            "window.fbq('trackCustom','TelegramOpen');}};}());"
+            "window.fbq('trackCustom','TelegramOpen');}"
+            f"var extraEvents={event_names_json};for(var index=0;index<extraEvents.length;index+=1){{window.__crmTrackMetaEvent(extraEvents[index]);}}"
+            "};}());"
             "document.addEventListener('click',function(event){var target=event.target;"
             "var eventTarget=target&&target.closest?target.closest('[data-crm-meta-event]'):null;"
             "if(eventTarget){window.__crmTrackMetaEvent(eventTarget.getAttribute('data-crm-meta-event'));}"
@@ -472,15 +489,15 @@ class LanderService:
         telegram_url: str,
         pixel_markup: str,
     ) -> str:
-        title = html.escape(lander.name or "Telegram", quote=True)
         safe_url = html.escape(telegram_url, quote=True)
         safe_url_json = json.dumps(telegram_url).replace("<", "\\u003c")
+        auto_redirect_script = "window.setTimeout(openTelegram, 650);" if lander.auto_redirect_enabled else ""
         return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title}</title>
+  <title>Telegram</title>
   {pixel_markup}
   <style>
     :root {{
@@ -553,9 +570,8 @@ class LanderService:
   <main>
     <img class="logo" src="https://telegram.org/img/t_logo.png" alt="Telegram">
     <h1>Open Telegram</h1>
-    <p>{title}</p>
     <a id="open-telegram" data-crm-telegram-link href="{safe_url}" rel="noopener noreferrer">Open in Telegram</a>
-    <div class="hint">Redirecting to Telegram...</div>
+    <div class="hint">Tap the button to continue.</div>
   </main>
   <script>
     (function () {{
@@ -571,7 +587,7 @@ class LanderService:
         event.preventDefault();
         window.setTimeout(openTelegram, 80);
       }});
-      window.setTimeout(openTelegram, 650);
+      {auto_redirect_script}
     }}());
   </script>
 </body>

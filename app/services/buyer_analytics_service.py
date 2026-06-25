@@ -13,6 +13,7 @@ from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
+from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User, UserProjectAccess
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
@@ -43,6 +44,7 @@ class BuyerAnalyticsService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="date_from must be before or equal to date_to",
             )
+        tracking_lead_status_codes = await self._get_tracking_lead_status_codes(project_id)
         start_at, end_at = self._date_bounds(date_from=date_from, date_to=date_to)
         link_counts_stmt = (
             select(
@@ -103,12 +105,14 @@ class BuyerAnalyticsService:
             )
             .join(Chat, Chat.id == Lead.chat_id)
             .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
             .where(
                 TrackingLink.project_id == project_id,
                 TrackingLink.buyer_id.is_not(None),
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
+                LeadStatus.code.in_(tracking_lead_status_codes),
             )
         )
         if start_at is not None:
@@ -203,6 +207,20 @@ class BuyerAnalyticsService:
                 )
             )
         return items
+
+    async def _get_tracking_lead_status_codes(self, project_id: UUID) -> tuple[str, ...]:
+        result = await self.db.execute(
+            select(Project.tracking_lead_status_codes).where(Project.id == project_id)
+        )
+        raw_codes = result.scalar_one_or_none() or list(
+            LeadStatusCode.TRACKING_LEAD_DEFAULT
+        )
+        normalized: list[str] = []
+        for raw_code in raw_codes:
+            code = str(raw_code).strip().lower()
+            if code and code not in normalized:
+                normalized.append(code)
+        return tuple(normalized or LeadStatusCode.TRACKING_LEAD_DEFAULT)
 
     @staticmethod
     def _date_bounds(

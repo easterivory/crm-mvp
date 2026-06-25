@@ -103,6 +103,29 @@ function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
   }
 }
 
+function uniqueStepKey(baseKey: string, usedKeys: Set<string>) {
+  const normalized = baseKey.trim() || 'step'
+  let candidate = normalized
+  let suffix = 2
+  while (usedKeys.has(candidate)) {
+    candidate = `${normalized}_${suffix}`
+    suffix += 1
+  }
+  usedKeys.add(candidate)
+  return candidate
+}
+
+function graphForSave(graph: FunnelGraph): FunnelGraph {
+  const usedKeys = new Set<string>()
+  return {
+    ...graph,
+    steps: graph.steps.map((step, index) => {
+      const key = uniqueStepKey(step.key || `${step.block_type}_${index + 1}`, usedKeys)
+      return key === step.key ? step : { ...step, key }
+    }),
+  }
+}
+
 function setManagedTarget(step: FunnelStep, sourceKey: string, targetStepId: string): FunnelStep {
   if (step.block_type === 'generic_ab_test') {
     return {
@@ -410,9 +433,10 @@ export default function FunnelBuilder({
         return current
       }
       const nextIndex = current.steps.length + 1
+      const usedKeys = new Set(current.steps.map((step) => step.key))
       const step: FunnelStep = {
         id: crypto.randomUUID(),
-        key: `${item.blockType}_${nextIndex}`,
+        key: uniqueStepKey(`${item.blockType}_${nextIndex}`, usedKeys),
         title: item.defaultTitle,
         step_type: item.stepType,
         block_type: item.blockType,
@@ -552,7 +576,8 @@ export default function FunnelBuilder({
     }
     setIsSaving(true)
     try {
-      const saved = await saveGraph(funnelId, activeVersionId, projectId, graph)
+      const normalizedGraph = graphForSave(graph)
+      const saved = await saveGraph(funnelId, activeVersionId, projectId, normalizedGraph)
       setGraph(graphWithDefaults(saved))
       void fetchVersions(funnelId, projectId).then(setVersions)
       notify({ tone: 'success', message: 'Черновик сохранён.' })
@@ -573,7 +598,7 @@ export default function FunnelBuilder({
     setIsValidating(true)
     try {
       if (graph) {
-        await saveGraph(funnelId, activeVersionId, projectId, graph)
+        await saveGraph(funnelId, activeVersionId, projectId, graphForSave(graph))
       }
       const result = await validateFunnelVersion(funnelId, activeVersionId, projectId)
       notify({
@@ -598,7 +623,7 @@ export default function FunnelBuilder({
     }
     if (graph && activeVersionId) {
       try {
-        await saveGraph(funnelId, activeVersionId, projectId, graph)
+        await saveGraph(funnelId, activeVersionId, projectId, graphForSave(graph))
       } catch (error) {
         notify({
           tone: 'error',

@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import LeadStatusCode
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
@@ -50,7 +51,8 @@ class TrackingMetricsService:
     ) -> TrackingProjectMetricsResponse:
         date_from, date_to = self._resolve_date_range(date_from, date_to)
         await self._ensure_project_access(current_user, project_id)
-        await self._get_active_project_or_404(project_id)
+        project = await self._get_active_project_or_404(project_id)
+        lead_status_codes = self._tracking_lead_status_codes(project)
         if bot_id is not None:
             await self._ensure_bot_in_project(bot_id, project_id)
 
@@ -59,6 +61,7 @@ class TrackingMetricsService:
             bot_id=bot_id,
             date_from=date_from,
             date_to=date_to,
+            lead_status_codes=lead_status_codes,
         )
         links: list[TrackingLinkMetric] = []
         for row in link_rows:
@@ -100,6 +103,7 @@ class TrackingMetricsService:
                 bot_id=bot_id,
                 date_from=date_from,
                 date_to=date_to,
+                lead_status_codes=lead_status_codes,
             ),
             date_from,
             date_to,
@@ -110,6 +114,7 @@ class TrackingMetricsService:
             bot_id=bot_id,
             date_from=date_from,
             date_to=date_to,
+            tracking_lead_status_codes=lead_status_codes,
             summary=summary,
             links=links,
             daily=daily,
@@ -130,7 +135,8 @@ class TrackingMetricsService:
                 detail="Tracking link not found",
             )
         await self._ensure_project_access(current_user, link.project_id)
-        await self._get_active_project_or_404(link.project_id)
+        project = await self._get_active_project_or_404(link.project_id)
+        lead_status_codes = self._tracking_lead_status_codes(project)
 
         clicks = await self._aggregate_clicks_by_link(link_id, date_from, date_to)
         starts = await self.metrics_repo.aggregate_starts_by_link(
@@ -142,6 +148,7 @@ class TrackingMetricsService:
             link_id,
             date_from,
             date_to,
+            lead_status_codes=lead_status_codes,
         )
         submitted = await self.metrics_repo.aggregate_submitted_by_link(
             link_id,
@@ -158,6 +165,7 @@ class TrackingMetricsService:
                 link_id=link_id,
                 date_from=date_from,
                 date_to=date_to,
+                lead_status_codes=lead_status_codes,
             ),
             date_from,
             date_to,
@@ -198,6 +206,7 @@ class TrackingMetricsService:
             ),
             date_from=date_from,
             date_to=date_to,
+            tracking_lead_status_codes=lead_status_codes,
             summary=summary,
             daily=daily,
             funnel_steps=funnel_steps,
@@ -288,6 +297,18 @@ class TrackingMetricsService:
             cpsl=cls._cost(spend, submitted),
             cpd=cls._cost(spend, deposits),
         )
+
+    @staticmethod
+    def _tracking_lead_status_codes(project) -> list[str]:
+        raw_codes = project.tracking_lead_status_codes or list(
+            LeadStatusCode.TRACKING_LEAD_DEFAULT
+        )
+        normalized: list[str] = []
+        for raw_code in raw_codes:
+            code = str(raw_code).strip().lower()
+            if code and code not in normalized:
+                normalized.append(code)
+        return normalized or list(LeadStatusCode.TRACKING_LEAD_DEFAULT)
 
     @classmethod
     def _fill_daily_range(

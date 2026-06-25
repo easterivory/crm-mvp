@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Integer, String, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import LeadStatusCode
 from app.models.base import (
     Base,
     SoftDeleteMixin,
@@ -58,6 +61,12 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         nullable=False,
         default=False,
         server_default="false",
+    )
+    tracking_lead_status_codes: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=lambda: list(LeadStatusCode.TRACKING_LEAD_DEFAULT),
+        server_default=text("'[\"submitted\",\"qualified\"]'::jsonb"),
     )
 
     # Relationships

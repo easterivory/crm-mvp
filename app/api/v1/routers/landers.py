@@ -10,6 +10,7 @@ from app.models.user import User
 from app.schemas.lander import (
     ProjectLanderCreate,
     ProjectLanderOut,
+    ProjectLanderUpdate,
     ProjectLanderUploadOut,
 )
 from app.services.lander_admin_service import LanderAdminService
@@ -39,6 +40,22 @@ async def create_project_lander(
 ) -> ProjectLanderOut:
     return await LanderAdminService(db).create_lander(
         project_id=project_id,
+        data=data,
+        actor=current_user,
+    )
+
+
+@router.patch("/{lander_id}", response_model=ProjectLanderOut)
+async def update_project_lander(
+    project_id: UUID,
+    lander_id: UUID,
+    data: ProjectLanderUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ProjectLanderOut:
+    return await LanderAdminService(db).update_lander(
+        project_id=project_id,
+        lander_id=lander_id,
         data=data,
         actor=current_user,
     )

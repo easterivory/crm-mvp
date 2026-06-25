@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Globe2,
   LoaderCircle,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -25,11 +26,13 @@ import {
   fetchLanderTargetSteps,
   fetchProjectDomains,
   fetchProjectLanders,
+  updateProjectLander,
   uploadProjectLanderZip,
 } from '../api'
 import type {
   LanderType,
   LanderPixel,
+  LanderMetaEvent,
   LanderTargetStep,
   ProjectDomain,
   ProjectLander,
@@ -59,6 +62,8 @@ type LanderForm = {
   campaignPaymentType: string
   campaignTargetStepKey: string
   metaPixelId: string
+  metaEvents: string
+  autoRedirectEnabled: boolean
   utmSource: string
   utmMedium: string
   utmCampaign: string
@@ -82,6 +87,8 @@ const emptyLanderForm: LanderForm = {
   campaignPaymentType: '',
   campaignTargetStepKey: '',
   metaPixelId: '',
+  metaEvents: '',
+  autoRedirectEnabled: true,
   utmSource: '',
   utmMedium: '',
   utmCampaign: '',
@@ -145,6 +152,14 @@ function buildPixels(form: LanderForm): LanderPixel[] {
   return pixelId ? [{ provider: 'meta', pixel_id: pixelId }] : []
 }
 
+function buildMetaEvents(value: string): LanderMetaEvent[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index)
+    .map((name) => ({ name }))
+}
+
 function buildUtmDefaults(form: LanderForm): Record<string, string> {
   const values: Array<[string, string]> = [
     ['utm_source', form.utmSource],
@@ -174,6 +189,11 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const [deletingLanderId, setDeletingLanderId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isSavingLander, setIsSavingLander] = useState(false)
+  const [editingLander, setEditingLander] = useState<ProjectLander | null>(null)
+  const [editingMetaPixelId, setEditingMetaPixelId] = useState('')
+  const [editingMetaEvents, setEditingMetaEvents] = useState('')
+  const [editingAutoRedirectEnabled, setEditingAutoRedirectEnabled] = useState(true)
+  const [isUpdatingLander, setIsUpdatingLander] = useState(false)
   const [banner, setBanner] = useState<Banner | null>(null)
   const [copiedValue, setCopiedValue] = useState('')
   const [form, setForm] = useState<LanderForm>(emptyLanderForm)
@@ -274,6 +294,40 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     resetForm()
     setBanner(null)
     setIsModalOpen(true)
+  }
+
+  const openEditLander = (lander: ProjectLander) => {
+    const metaPixel = lander.pixels_json.find((pixel) => pixel.provider === 'meta')
+    setEditingLander(lander)
+    setEditingMetaPixelId(metaPixel?.pixel_id ?? '')
+    setEditingMetaEvents((lander.meta_events_json ?? []).map((event) => event.name).join(', '))
+    setEditingAutoRedirectEnabled(lander.auto_redirect_enabled)
+    setBanner(null)
+  }
+
+  const handleUpdateLander = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!projectId || !editingLander || isUpdatingLander) {
+      return
+    }
+    setIsUpdatingLander(true)
+    setBanner(null)
+    try {
+      await updateProjectLander(projectId, editingLander.id, {
+        pixels: editingMetaPixelId.trim()
+          ? [{ provider: 'meta', pixel_id: editingMetaPixelId.trim() }]
+          : [],
+        meta_events: buildMetaEvents(editingMetaEvents),
+        auto_redirect_enabled: editingAutoRedirectEnabled,
+      })
+      setEditingLander(null)
+      await loadData()
+      setBanner({ tone: 'success', message: 'Настройки Meta и перехода сохранены.' })
+    } catch (err) {
+      setBanner({ tone: 'error', message: getErrorMessage(err, 'Не удалось обновить лендинг.') })
+    } finally {
+      setIsUpdatingLander(false)
+    }
   }
 
   const handleCopy = async (value: string) => {
@@ -409,7 +463,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             }
           : null,
         pixels: buildPixels(form),
+        meta_events: buildMetaEvents(form.metaEvents),
         utm_defaults: buildUtmDefaults(form),
+        auto_redirect_enabled: form.autoRedirectEnabled,
       })
       if (form.type === 'custom_upload' && form.zipFile) {
         await uploadProjectLanderZip(projectId, created.id, form.zipFile)
@@ -694,6 +750,19 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                             ) : (
                               <span className="text-zinc-600">Без пикселей</span>
                             )}
+                            {(lander.meta_events_json ?? []).map((event) => (
+                              <span
+                                key={event.name}
+                                className="rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-emerald-100"
+                              >
+                                event: {event.name}
+                              </span>
+                            ))}
+                            {!lander.auto_redirect_enabled ? (
+                              <span className="rounded-md border border-amber-400/20 bg-amber-400/10 px-2 py-0.5 text-amber-100">
+                                Без авторедиректа
+                              </span>
+                            ) : null}
                             {Object.keys(lander.utm_defaults_json).length > 0 ? (
                               <span className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">
                                 UTM defaults
@@ -703,7 +772,15 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex justify-end">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            title="Настройки Meta и перехода"
+                            onClick={() => openEditLander(lander)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/5 text-zinc-400 transition hover:border-emerald-500/50 hover:text-emerald-200"
+                          >
+                            <Pencil size={15} />
+                          </button>
                           <button
                             type="button"
                             title="Удалить лендинг"
@@ -966,6 +1043,18 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                   <input value={form.metaPixelId} onChange={(event) => setForm((current) => ({ ...current, metaPixelId: event.target.value }))} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
                 </label>
               </div>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">События Meta на переходе в Telegram</span>
+                <input value={form.metaEvents} onChange={(event) => setForm((current) => ({ ...current, metaEvents: event.target.value }))} placeholder="CompleteRegistration, QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                <span className="mt-1 block text-xs text-zinc-500">Через запятую. Lead и TelegramOpen добавляются автоматически.</span>
+              </label>
+              <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2.5 text-sm text-zinc-200">
+                <span>
+                  <span className="block font-medium text-zinc-100">Автопереход в Telegram</span>
+                  <span className="mt-0.5 block text-xs text-zinc-500">Работает у дефолтного лендинга после короткой паузы.</span>
+                </span>
+                <input type="checkbox" checked={form.autoRedirectEnabled} disabled={form.type === 'custom_upload'} onChange={(event) => setForm((current) => ({ ...current, autoRedirectEnabled: event.target.checked }))} className="h-5 w-5 shrink-0 accent-emerald-400 disabled:opacity-40" />
+              </label>
               <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_source</span><input value={form.utmSource} onChange={(event) => setForm((current) => ({ ...current, utmSource: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
                 <label className="block"><span className="mb-1 block text-xs text-zinc-500">utm_medium</span><input value={form.utmMedium} onChange={(event) => setForm((current) => ({ ...current, utmMedium: event.target.value }))} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 md:text-sm" /></label>
@@ -1019,6 +1108,45 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSavingLander ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
+                Сохранить
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {editingLander ? (
+        <Modal
+          title="Meta и переход"
+          description={`Настройки кампании для лендинга «${editingLander.name}».`}
+          maxWidthClassName="max-w-lg"
+          onClose={() => {
+            if (!isUpdatingLander) {
+              setEditingLander(null)
+            }
+          }}
+        >
+          <form className="space-y-4" onSubmit={(event) => void handleUpdateLander(event)}>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-zinc-200">Meta Pixel ID</span>
+              <input value={editingMetaPixelId} onChange={(event) => setEditingMetaPixelId(event.target.value)} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-zinc-200">События на переходе в Telegram</span>
+              <input value={editingMetaEvents} onChange={(event) => setEditingMetaEvents(event.target.value)} placeholder="CompleteRegistration, QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+              <span className="mt-1.5 block text-xs leading-5 text-zinc-500">События разделяются запятыми. Lead и TelegramOpen CRM отправляет всегда.</span>
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2.5 text-sm text-zinc-200">
+              <span>
+                <span className="block font-medium text-zinc-100">Автопереход в Telegram</span>
+                <span className="mt-0.5 block text-xs text-zinc-500">Для custom ZIP настройте переход в коде лендинга.</span>
+              </span>
+              <input type="checkbox" checked={editingAutoRedirectEnabled} disabled={editingLander.type === 'custom_upload'} onChange={(event) => setEditingAutoRedirectEnabled(event.target.checked)} className="h-5 w-5 shrink-0 accent-emerald-400 disabled:opacity-40" />
+            </label>
+            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setEditingLander(null)} disabled={isUpdatingLander} className="inline-flex h-10 items-center justify-center rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50">Отмена</button>
+              <button type="submit" disabled={isUpdatingLander} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50">
+                {isUpdatingLander ? <LoaderCircle size={16} className="animate-spin" /> : <Pencil size={16} />}
                 Сохранить
               </button>
             </div>

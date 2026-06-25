@@ -836,12 +836,23 @@ class FunnelService:
                 self._issue("missing_trigger", "В воронке нужен стартовый триггер.", "error")
             )
 
+        seen_keys: set[str] = set()
         for step in graph.steps:
             if step.id is None:
                 errors.append(
                     self._issue("missing_step_id", "У каждого блока должен быть UUID.", "error")
                 )
                 continue
+            if step.key in seen_keys:
+                errors.append(
+                    self._issue(
+                        "duplicate_step_key",
+                        f"Технический ключ блока «{step.title}» дублируется. Пересохраните блок или создайте его заново.",
+                        "error",
+                        step_id=step.id,
+                    )
+                )
+            seen_keys.add(step.key)
             if not self.registry.is_known(step.step_type, step.block_type):
                 errors.append(
                     self._issue(
@@ -977,12 +988,22 @@ class FunnelService:
                         "error",
                     )
                 )
-            if rule.action_after_send == "move_to_step" and rule.target_step_id not in step_ids:
+            if rule.target_step_id is not None and rule.target_step_id not in step_ids:
+                errors.append(
+                    self._issue(
+                        "push_rule_missing_target",
+                        "Push rule ведёт в несуществующий блок.",
+                        "error",
+                        step_id=rule.step_id,
+                    )
+                )
+            if rule.action_after_send == "move_to_step" and rule.target_step_id is None:
                 errors.append(
                     self._issue(
                         "push_rule_missing_target",
                         "Для push rule с переходом нужен существующий целевой блок.",
                         "error",
+                        step_id=rule.step_id,
                     )
                 )
 

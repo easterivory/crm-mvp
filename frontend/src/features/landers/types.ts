@@ -20,6 +20,10 @@ export type LanderPixel = {
   pixel_id: string
 }
 
+export type LanderMetaEvent = {
+  name: string
+}
+
 export type LanderTrackingCampaign = {
   bot_id: string
   title: string
@@ -48,8 +52,10 @@ export type ProjectLander = {
   slug: string
   tracking_link_id: string | null
   pixels_json: LanderPixel[]
+  meta_events_json: LanderMetaEvent[]
   utm_defaults_json: Record<string, string>
   custom_html_path: string | null
+  auto_redirect_enabled: boolean
   is_active: boolean
   created_at: string
   updated_at: string
@@ -63,7 +69,15 @@ export type ProjectLanderCreatePayload = {
   tracking_link_id: string | null
   campaign?: LanderTrackingCampaign | null
   pixels?: LanderPixel[]
+  meta_events?: LanderMetaEvent[]
   utm_defaults?: Record<string, string>
+  auto_redirect_enabled?: boolean
+}
+
+export type ProjectLanderUpdatePayload = {
+  pixels?: LanderPixel[]
+  meta_events?: LanderMetaEvent[]
+  auto_redirect_enabled?: boolean
 }
 
 export type ProjectLanderUploadResult = {

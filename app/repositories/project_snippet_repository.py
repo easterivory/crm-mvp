@@ -42,6 +42,10 @@ class ProjectSnippetRepository(BaseRepository[ProjectSnippet]):
         snippet_type: str,
         content: str | None,
         file_id: str | None,
+        storage_path: str | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        file_size: int | None = None,
     ) -> ProjectSnippet:
         return await self.create(
             project_id=project_id,
@@ -50,6 +54,10 @@ class ProjectSnippetRepository(BaseRepository[ProjectSnippet]):
             type=snippet_type,
             content=content,
             file_id=file_id,
+            storage_path=storage_path,
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size=file_size,
         )
 
     async def delete_in_project(self, snippet_id: UUID, project_id: UUID) -> bool:

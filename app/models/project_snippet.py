@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,7 +26,7 @@ class ProjectSnippet(Base, UUIDPrimaryKey, TimestampMixin):
             name="ck_project_snippets_text_content_required",
         ),
         CheckConstraint(
-            "(type = 'text') OR (file_id IS NOT NULL AND length(btrim(file_id)) > 0)",
+            "(type = 'text') OR ((file_id IS NOT NULL AND length(btrim(file_id)) > 0) OR storage_path IS NOT NULL)",
             name="ck_project_snippets_media_file_required",
         ),
         Index("ix_project_snippets_project_id", "project_id"),
@@ -45,5 +45,9 @@ class ProjectSnippet(Base, UUIDPrimaryKey, TimestampMixin):
     type: Mapped[str] = mapped_column(String(30), nullable=False)
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     file_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    storage_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     project: Mapped[Project] = relationship("Project", back_populates="snippets")

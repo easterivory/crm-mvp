@@ -87,6 +87,18 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         default=dict,
         server_default="'{}'::jsonb",
     )
+    meta_events_json: Mapped[list[dict]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="'[]'::jsonb",
+    )
+    auto_redirect_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
     custom_html_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,

@@ -141,6 +141,7 @@ export type TrackingProjectMetricsResponse = {
   bot_id: string | null
   date_from: string
   date_to: string
+  tracking_lead_status_codes: string[]
   summary: TrackingMetricSummary
   links: TrackingLinkMetric[]
   daily: TrackingDailyMetric[]
@@ -157,6 +158,7 @@ export type TrackingLinkMetricsResponse = {
   conversion_status: TrackingConversionStatus
   date_from: string
   date_to: string
+  tracking_lead_status_codes: string[]
   summary: TrackingMetricSummary
   daily: TrackingDailyMetric[]
   funnel_steps: FunnelStepMetric[]

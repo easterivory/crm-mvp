@@ -1,4 +1,5 @@
 """Message creation, listing, upload staging, and Telegram media proxying."""
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
@@ -17,12 +18,15 @@ from app.schemas.message import (
     MessageTranslationPreviewRequest,
     MessageUploadOut,
 )
+from app.schemas.scheduled_message import ScheduledMessageOut
 from app.services.message_service import MessageService
 from app.services.project_snippet_service import ProjectSnippetService
+from app.services.scheduled_message_service import ScheduledMessageService
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 media_router = APIRouter(prefix="/messages", tags=["messages"])
 attachments_router = APIRouter(prefix="/chats/{chat_id}/attachments", tags=["messages"])
+scheduled_router = APIRouter(prefix="/chats/{chat_id}/scheduled-messages", tags=["messages"])
 
 
 @router.post("", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
@@ -62,7 +66,8 @@ async def create_message(
     if snippet_id is not None:
         if upload is not None:
             raise HTTPException(status_code=422, detail="snippet_id cannot be combined with file upload")
-        snippet = await ProjectSnippetService(db).get_snippet_for_send(
+        snippet_service = ProjectSnippetService(db)
+        snippet = await snippet_service.get_snippet_for_send(
             project_id=project_id,
             snippet_id=snippet_id,
             actor=current_user,
@@ -77,6 +82,10 @@ async def create_message(
             text=text,
             media_type=snippet.type,
             file_id=snippet.file_id,
+            file_bytes=await snippet_service.snippet_file_bytes(snippet),
+            file_name=snippet.file_name,
+            mime_type=snippet.mime_type,
+            original_text=_optional_text(payload.get("original_text")),
             auto_translate=auto_translate,
         )
 
@@ -185,6 +194,95 @@ async def upload_chat_attachment(
         project_id=project_id,
         actor=current_user,
         file=file,
+    )
+
+
+@scheduled_router.post("", response_model=ScheduledMessageOut, status_code=status.HTTP_201_CREATED)
+async def schedule_chat_message(
+    chat_id: UUID,
+    request: Request,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ScheduledMessageOut:
+    payload, upload = await _read_message_request(request)
+    raw_scheduled_at = str(payload.get("scheduled_at") or "").strip()
+    try:
+        scheduled_at = datetime.fromisoformat(raw_scheduled_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="scheduled_at must be an ISO datetime") from exc
+
+    media_type = str(payload.get("media_type") or MessageType.TEXT)
+    file_id = None
+    file_bytes = await _read_upload_bytes(upload, media_type) if upload is not None else None
+    file_name = upload.filename if upload is not None else None
+    mime_type = upload.content_type if upload is not None else None
+    snippet_id = _optional_uuid(payload.get("snippet_id"), "snippet_id")
+    if snippet_id is not None:
+        if upload is not None:
+            raise HTTPException(status_code=422, detail="snippet_id cannot be combined with file upload")
+        snippet = await ProjectSnippetService(db).get_snippet_for_send(
+            project_id=project_id,
+            snippet_id=snippet_id,
+            actor=current_user,
+        )
+        if snippet.type == MessageType.TEXT:
+            raise HTTPException(status_code=422, detail="Text snippets should be scheduled as text")
+        has_text_override = any(key in payload for key in ("text", "caption", "body"))
+        text_override = _optional_text(payload.get("text") or payload.get("caption") or payload.get("body"))
+        media_type = snippet.type
+        file_id = snippet.file_id
+        file_bytes = await ProjectSnippetService(db).snippet_file_bytes(snippet)
+        file_name = snippet.file_name
+        mime_type = snippet.mime_type
+        if not has_text_override:
+            payload["text"] = snippet.content
+        else:
+            payload["text"] = text_override
+
+    return await ScheduledMessageService(db).schedule_message(
+        project_id=project_id,
+        chat_id=chat_id,
+        actor=current_user,
+        scheduled_at=scheduled_at,
+        text=_optional_text(payload.get("text") or payload.get("caption") or payload.get("body")),
+        original_text=_optional_text(payload.get("original_text")),
+        media_type=media_type,
+        auto_translate=_optional_bool(payload.get("auto_translate"), default=True),
+        file_id=file_id,
+        file_bytes=file_bytes,
+        file_name=file_name,
+        mime_type=mime_type,
+    )
+
+
+@scheduled_router.get("", response_model=list[ScheduledMessageOut])
+async def list_scheduled_chat_messages(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ScheduledMessageOut]:
+    return await ScheduledMessageService(db).list_messages(
+        project_id=project_id,
+        chat_id=chat_id,
+        actor=current_user,
+    )
+
+
+@scheduled_router.delete("/{scheduled_message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_scheduled_chat_message(
+    chat_id: UUID,
+    scheduled_message_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await ScheduledMessageService(db).cancel_message(
+        project_id=project_id,
+        chat_id=chat_id,
+        scheduled_message_id=scheduled_message_id,
+        actor=current_user,
     )
 
 

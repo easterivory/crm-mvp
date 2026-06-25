@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.constants import TrackingConversionStatus
 
@@ -67,6 +67,7 @@ class TrackingProjectMetricsResponse(BaseModel):
     bot_id: Optional[uuid.UUID] = None
     date_from: date
     date_to: date
+    tracking_lead_status_codes: list[str] = Field(default_factory=list)
     summary: TrackingMetricSummary
     links: list[TrackingLinkMetric]
     daily: list[TrackingDailyMetric]
@@ -83,6 +84,7 @@ class TrackingLinkMetricsResponse(BaseModel):
     conversion_status: TrackingConversionStatus
     date_from: date
     date_to: date
+    tracking_lead_status_codes: list[str] = Field(default_factory=list)
     summary: TrackingMetricSummary
     daily: list[TrackingDailyMetric]
     funnel_steps: list[TrackingFunnelStepItem] = []

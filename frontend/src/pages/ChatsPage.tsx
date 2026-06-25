@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Bot,
   CheckCheck,
+  Clock3,
   Download,
   FileText,
   Film,
@@ -103,12 +104,10 @@ type ProjectSnippet = {
   type: 'text' | OutgoingMediaType
   content: string | null
   file_id: string | null
+  file_name: string | null
+  mime_type: string | null
+  file_size: number | null
   created_at: string
-}
-
-type SnippetEditorDraft = {
-  snippet: ProjectSnippet
-  text: string
 }
 
 type ProjectTranslationConfig = {
@@ -130,6 +129,17 @@ type PendingTranslationApproval = {
   approvedText: string
   sourceLang: string
   targetLang: string
+}
+
+type ScheduledMessage = {
+  id: string
+  scheduled_at: string
+  text: string | null
+  media_type: 'text' | OutgoingMediaType
+  file_name: string | null
+  status: 'pending' | 'running' | 'sent' | 'failed' | 'cancelled'
+  last_error: string | null
+  created_by_user_id: string
 }
 
 type ChatAuditLog = {
@@ -610,11 +620,18 @@ export default function ChatsPage() {
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
   const [isSnippetsOpen, setIsSnippetsOpen] = useState(false)
   const [snippetSearch, setSnippetSearch] = useState('')
-  const [snippetEditor, setSnippetEditor] = useState<SnippetEditorDraft | null>(null)
+  const [snippetMedia, setSnippetMedia] = useState<ProjectSnippet | null>(null)
   const [isSnippetCreateOpen, setIsSnippetCreateOpen] = useState(false)
   const [newSnippetName, setNewSnippetName] = useState('')
   const [newSnippetContent, setNewSnippetContent] = useState('')
+  const [newSnippetType, setNewSnippetType] = useState<ProjectSnippet['type']>('text')
+  const [newSnippetFile, setNewSnippetFile] = useState<File | null>(null)
   const [isCreatingSnippet, setIsCreatingSnippet] = useState(false)
+  const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([])
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false)
+  const [scheduledAtLocal, setScheduledAtLocal] = useState('')
+  const [isScheduling, setIsScheduling] = useState(false)
+  const [cancellingScheduledMessageId, setCancellingScheduledMessageId] = useState<string | null>(null)
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
@@ -674,7 +691,7 @@ export default function ChatsPage() {
     return JSON.stringify(normalizeChatFilters(selectedPreset.filters_json)) !== JSON.stringify(chatFilters)
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
-  const canManageSnippets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
+  const canCreateSnippets = user?.role_name === 'manager' || user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
   const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users])
   const timelineItems = useMemo<TimelineItem[]>(
@@ -1084,6 +1101,24 @@ export default function ChatsPage() {
     }
   }, [notify, selectedProjectId])
 
+  const loadScheduledMessages = useCallback(async (chatId: string) => {
+    if (!selectedProjectId) {
+      setScheduledMessages([])
+      return
+    }
+    try {
+      const { data } = await api.get<ScheduledMessage[]>(
+        `/chats/${chatId}/scheduled-messages`,
+        { params: { project_id: selectedProjectId } },
+      )
+      setScheduledMessages(data)
+    } catch (err) {
+      if (!axios.isAxiosError(err) || err.response?.status !== 403) {
+        notify({ tone: 'error', message: getErrorMessage(err) })
+      }
+    }
+  }, [notify, selectedProjectId])
+
   const loadSelectedChat = useCallback(async (chatId: string) => {
     if (!selectedProjectId) {
       return
@@ -1237,6 +1272,7 @@ export default function ChatsPage() {
       messagesAbortRef.current?.abort()
       setMessages([])
       setAuditLogs([])
+      setScheduledMessages([])
       setIsMessagesLoading(false)
       return undefined
     }
@@ -1246,7 +1282,9 @@ export default function ChatsPage() {
 
     setMessages([])
     setAuditLogs([])
+    setScheduledMessages([])
     void loadMessages(selectedChatId, true)
+    void loadScheduledMessages(selectedChatId)
     const timer = window.setInterval(() => {
       void loadMessages(selectedChatId)
     }, 7000)
@@ -1255,7 +1293,7 @@ export default function ChatsPage() {
       window.clearInterval(timer)
       messagesAbortRef.current?.abort()
     }
-  }, [loadMessages, selectedChat?.project_id, selectedChatId, selectedProjectId])
+  }, [loadMessages, loadScheduledMessages, selectedChat?.project_id, selectedChatId, selectedProjectId])
 
   useEffect(() => {
     if (selectedChatId && !selectedChat && selectedProjectId) {
@@ -1269,7 +1307,7 @@ export default function ChatsPage() {
     setIsAttachmentMenuOpen(false)
     setIsSnippetsOpen(false)
     setSnippetSearch('')
-    setSnippetEditor(null)
+    setSnippetMedia(null)
     setPendingTranslation(null)
     setAlternateMessageTextIds(new Set<string>())
     if (attachmentPreviewUrl) {
@@ -1372,7 +1410,7 @@ export default function ChatsPage() {
     textOverride?: string
   } = {}) => {
     const text = (options.textOverride ?? draft).trim()
-    if (!selectedChatId || (!text && !attachment) || isSending || isPreparingTranslation) {
+    if (!selectedChatId || (!text && !attachment && !snippetMedia) || isSending || isPreparingTranslation) {
       return false
     }
 
@@ -1411,6 +1449,16 @@ export default function ChatsPage() {
             })(),
             { params },
           )
+        : snippetMedia
+          ? await api.post<Message>(
+              `/chats/${selectedChatId}/messages`,
+              {
+                snippet_id: snippetMedia.id,
+                text,
+                ...(originalText ? { original_text: originalText } : {}),
+              },
+              { params },
+            )
         : await api.post<Message>(
             `/chats/${selectedChatId}/messages`,
             {
@@ -1423,6 +1471,7 @@ export default function ChatsPage() {
       setMessages((current) => sortMessagesByDate([...current, data]))
       setDraft('')
       clearAttachment()
+      setSnippetMedia(null)
       setPendingTranslation(null)
       await loadChats()
       return true
@@ -1434,91 +1483,21 @@ export default function ChatsPage() {
     }
   }
 
-  const openSnippetEditor = (snippet: ProjectSnippet) => {
+  const insertSnippetIntoComposer = (snippet: ProjectSnippet) => {
     if (!selectedChatId || isSending || isPreparingTranslation) {
       return
     }
-    if (attachment) {
-      notify({
-        tone: 'error',
-        message: 'Сначала отправьте или уберите вложение, затем выберите заготовку.',
-      })
-      return
-    }
-
-    setSnippetEditor({
-      snippet,
-      text: snippet.content ?? '',
-    })
+    clearAttachment()
+    setSnippetMedia(snippet.type === 'text' ? null : snippet)
+    setDraft(snippet.content ?? '')
     setIsSnippetsOpen(false)
-  }
-
-  const sendSnippet = async (snippet: ProjectSnippet, text: string | null) => {
-    if (!selectedChatId || isSending) {
-      return false
-    }
-
-    setIsSending(true)
-    try {
-      const params = {
-        ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
-        auto_translate: isAutoTranslateEnabled,
-      }
-      const payload: { snippet_id: string; text?: string } = { snippet_id: snippet.id }
-      if (text !== null) {
-        payload.text = text
-      }
-      const { data } = await api.post<Message>(
-        `/chats/${selectedChatId}/messages`,
-        payload,
-        { params },
-      )
-      setMessages((current) => sortMessagesByDate([...current, data]))
-      setSnippetEditor(null)
-      await loadChats()
-      return true
-    } catch (err) {
-      notify({ tone: 'error', message: getErrorMessage(err) })
-      return false
-    } finally {
-      setIsSending(false)
-    }
-  }
-
-  const handleSendSnippet = async () => {
-    if (!snippetEditor) {
-      return
-    }
-
-    const { snippet } = snippetEditor
-    const text = snippetEditor.text.trim()
-    if (snippet.type === 'text' && !text) {
-      notify({ tone: 'error', message: 'Текст заготовки не может быть пустым.' })
-      return
-    }
-
-    if (
-      snippet.type === 'text'
-      && isAutoTranslateEnabled
-      && projectTranslation?.is_translation_enabled !== false
-    ) {
-      const translationPrepared = await prepareTranslationApproval(text)
-      if (translationPrepared) {
-        setDraft(text)
-        setSnippetEditor(null)
-      }
-      return
-    }
-
-    await sendSnippet(
-      snippet,
-      snippet.type === 'video_note' ? null : text,
-    )
   }
 
   const openSnippetCreate = () => {
     setNewSnippetName('')
     setNewSnippetContent(draft)
+    setNewSnippetType('text')
+    setNewSnippetFile(null)
     setIsSnippetCreateOpen(true)
   }
 
@@ -1530,22 +1509,31 @@ export default function ChatsPage() {
 
     const name = newSnippetName.trim()
     const content = newSnippetContent.trim()
-    if (!name || !content) {
-      notify({ tone: 'error', message: 'Укажите название и текст заготовки.' })
+    if (!name || (newSnippetType === 'text' && !content) || (newSnippetType !== 'text' && !newSnippetFile)) {
+      notify({ tone: 'error', message: newSnippetType === 'text' ? 'Укажите название и текст заготовки.' : 'Укажите название и файл заготовки.' })
       return
     }
 
     setIsCreatingSnippet(true)
     try {
-      const { data } = await api.post<ProjectSnippet>(
-        `/projects/${selectedProjectId}/snippets`,
-        {
-          name,
-          type: 'text',
-          content,
-          channel: 'telegram',
-        },
-      )
+      const { data } = newSnippetType === 'text'
+        ? await api.post<ProjectSnippet>(
+            `/projects/${selectedProjectId}/snippets`,
+            { name, type: 'text', content, channel: 'telegram' },
+          )
+        : await api.post<ProjectSnippet>(
+            `/projects/${selectedProjectId}/snippets/media`,
+            (() => {
+              const formData = new FormData()
+              formData.append('name', name)
+              formData.append('type', newSnippetType)
+              if (content) {
+                formData.append('content', content)
+              }
+              formData.append('file', newSnippetFile as File, (newSnippetFile as File).name)
+              return formData
+            })(),
+          )
       setSnippets((current) => [data, ...current.filter((snippet) => snippet.id !== data.id)])
       setIsSnippetCreateOpen(false)
       setIsSnippetsOpen(true)
@@ -1645,6 +1633,7 @@ export default function ChatsPage() {
 
   const setAttachmentFromFile = (file: File, mediaType: OutgoingMediaType) => {
     clearAttachment()
+    setSnippetMedia(null)
     setAttachment({
       file,
       file_name: file.name || mediaLabels[mediaType] || 'attachment',
@@ -1809,6 +1798,99 @@ export default function ChatsPage() {
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     await sendMessage()
+  }
+
+  const openScheduleMessage = () => {
+    if (!selectedChatId || (!draft.trim() && !attachment && !snippetMedia)) {
+      return
+    }
+    const date = new Date(Date.now() + 5 * 60 * 1000)
+    const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000)
+    setScheduledAtLocal(localDate.toISOString().slice(0, 16))
+    setIsScheduleOpen(true)
+  }
+
+  const handleScheduleMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selectedChatId || !scheduledAtLocal || isScheduling) {
+      return
+    }
+    const scheduledAt = new Date(scheduledAtLocal)
+    if (Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+      notify({ tone: 'error', message: 'Укажите время в будущем.' })
+      return
+    }
+    const text = draft.trim()
+    if (!text && !attachment && !snippetMedia) {
+      return
+    }
+
+    setIsScheduling(true)
+    try {
+      const params = selectedProjectId ? { project_id: selectedProjectId } : undefined
+      if (attachment) {
+        const formData = new FormData()
+        formData.append('scheduled_at', scheduledAt.toISOString())
+        formData.append('media_type', attachment.media_type)
+        formData.append('auto_translate', String(isAutoTranslateEnabled))
+        formData.append('file', attachment.file, attachment.file.name)
+        if (text) {
+          formData.append('text', text)
+        }
+        await api.post(`/chats/${selectedChatId}/scheduled-messages`, formData, { params })
+      } else if (snippetMedia) {
+        await api.post(
+          `/chats/${selectedChatId}/scheduled-messages`,
+          {
+            scheduled_at: scheduledAt.toISOString(),
+            media_type: snippetMedia.type,
+            snippet_id: snippetMedia.id,
+            text,
+            auto_translate: isAutoTranslateEnabled,
+          },
+          { params },
+        )
+      } else {
+        await api.post(
+          `/chats/${selectedChatId}/scheduled-messages`,
+          {
+            scheduled_at: scheduledAt.toISOString(),
+            media_type: 'text',
+            text,
+            auto_translate: isAutoTranslateEnabled,
+          },
+          { params },
+        )
+      }
+      setDraft('')
+      clearAttachment()
+      setSnippetMedia(null)
+      setIsScheduleOpen(false)
+      await loadScheduledMessages(selectedChatId)
+      notify({ tone: 'success', message: 'Сообщение запланировано.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      setIsScheduling(false)
+    }
+  }
+
+  const handleCancelScheduledMessage = async (scheduledMessageId: string) => {
+    if (!selectedChatId || !selectedProjectId || cancellingScheduledMessageId) {
+      return
+    }
+    setCancellingScheduledMessageId(scheduledMessageId)
+    try {
+      await api.delete(`/chats/${selectedChatId}/scheduled-messages/${scheduledMessageId}`, {
+        params: { project_id: selectedProjectId },
+      })
+      await loadScheduledMessages(selectedChatId)
+      notify({ tone: 'success', message: 'Отложенное сообщение отменено.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    } finally {
+      setCancellingScheduledMessageId(null)
+    }
   }
 
   const handleApproveTranslation = async () => {
@@ -2244,6 +2326,28 @@ export default function ChatsPage() {
               </button>
             </div>
           ) : null}
+          {snippetMedia ? (
+            <div className="mb-3 flex items-center gap-3 rounded-xl border border-accent-300/25 bg-accent-300/[0.06] p-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-accent-300/20 bg-accent-300/10 text-accent-100">
+                {(() => {
+                  const Icon = getMediaIcon(snippetMedia.type)
+                  return <Icon size={18} />
+                })()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-white">{snippetMedia.name}</p>
+                <p className="text-xs text-gray-500">Заготовка · {mediaLabels[snippetMedia.type]}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSnippetMedia(null)}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 transition hover:border-red-300/40 hover:text-red-100"
+                title="Убрать заготовку"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ) : null}
           <div className="mb-2 flex justify-end">
             <label
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 text-xs font-medium text-sky-50 transition hover:border-sky-300/40"
@@ -2322,7 +2426,7 @@ export default function ChatsPage() {
                 <div className="absolute bottom-full left-0 z-30 mb-2 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#0B0F19]/98 p-3 shadow-card backdrop-blur-xl">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-white">Заготовки</p>
-                    {canManageSnippets ? (
+                    {canCreateSnippets ? (
                       <button
                         type="button"
                         onClick={openSnippetCreate}
@@ -2355,7 +2459,7 @@ export default function ChatsPage() {
                             <button
                               key={snippet.id}
                               type="button"
-                              onClick={() => openSnippetEditor(snippet)}
+                              onClick={() => insertSnippetIntoComposer(snippet)}
                               disabled={isSending}
                               className="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -2399,14 +2503,23 @@ export default function ChatsPage() {
               data-chat-composer="true"
               enterKeyHint="send"
               className="touch-scroll max-h-32 min-h-10 flex-1 resize-none overflow-y-auto rounded-lg border-0 bg-transparent px-2 py-2 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 disabled:text-gray-500"
-              placeholder={attachment ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
+              placeholder={attachment || snippetMedia ? 'Добавить подпись к вложению' : 'Ответить в Telegram'}
               disabled={!selectedChat || isSending || isPreparingTranslation}
               rows={1}
             />
             <button
+              type="button"
+              title="Отложить отправку"
+              onClick={openScheduleMessage}
+              disabled={!selectedChat || (!draft.trim() && !attachment && !snippetMedia) || isSending || isPreparingTranslation}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Clock3 size={17} />
+            </button>
+            <button
               type="submit"
               title="Отправить сообщение"
-              disabled={!selectedChat || (!draft.trim() && !attachment) || isSending || isPreparingTranslation}
+              disabled={!selectedChat || (!draft.trim() && !attachment && !snippetMedia) || isSending || isPreparingTranslation}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSending || isPreparingTranslation ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
@@ -2448,75 +2561,10 @@ export default function ChatsPage() {
         />
       </div>
 
-      {snippetEditor ? (
-        <Modal
-          title="Перед отправкой"
-          description={`Заготовка «${snippetEditor.snippet.name}» будет изменена только для этого диалога.`}
-          maxWidthClassName="max-w-lg"
-          onClose={() => {
-            if (!isSending && !isPreparingTranslation) {
-              setSnippetEditor(null)
-            }
-          }}
-        >
-          <form className="space-y-4" onSubmit={(event) => {
-            event.preventDefault()
-            void handleSendSnippet()
-          }}>
-            {snippetEditor.snippet.type === 'video_note' ? (
-              <div className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm leading-6 text-gray-400">
-                Кружок отправится без подписи. Если исходный ролик не квадратный, сервер приведёт его к формату Telegram video note.
-              </div>
-            ) : (
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-medium text-gray-200">
-                  {snippetEditor.snippet.type === 'text' ? 'Текст сообщения' : 'Подпись к вложению'}
-                </span>
-                <textarea
-                  value={snippetEditor.text}
-                  onChange={(event) => setSnippetEditor((current) => (
-                    current ? { ...current, text: event.target.value } : current
-                  ))}
-                  rows={7}
-                  autoFocus
-                  className="touch-scroll w-full resize-y rounded-xl border border-accent-300/25 bg-background/80 px-3 py-2.5 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
-                  placeholder="Текст к отправке"
-                  disabled={isSending || isPreparingTranslation}
-                />
-              </label>
-            )}
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setSnippetEditor(null)}
-                disabled={isSending || isPreparingTranslation}
-                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Отмена
-              </button>
-              <button
-                type="submit"
-                disabled={
-                  isSending
-                  || isPreparingTranslation
-                  || (snippetEditor.snippet.type === 'text' && !snippetEditor.text.trim())
-                }
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSending || isPreparingTranslation ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
-                {snippetEditor.snippet.type === 'text' && isAutoTranslateEnabled && projectTranslation?.is_translation_enabled !== false
-                  ? 'Проверить перевод'
-                  : 'Отправить'}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      ) : null}
-
       {isSnippetCreateOpen ? (
         <Modal
           title="Новая заготовка"
-          description="Её смогут использовать операторы этого проекта. Редактировать и добавлять заготовки могут только администраторы."
+          description="Её смогут использовать операторы этого проекта. Менеджеры могут добавлять заготовки, а удаление остаётся у администраторов."
           maxWidthClassName="max-w-lg"
           onClose={() => {
             if (!isCreatingSnippet) {
@@ -2538,16 +2586,48 @@ export default function ChatsPage() {
               />
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-gray-200">Текст</span>
+              <span className="mb-1.5 block text-sm font-medium text-gray-200">Тип</span>
+              <select
+                value={newSnippetType}
+                onChange={(event) => setNewSnippetType(event.target.value as ProjectSnippet['type'])}
+                className="h-11 w-full rounded-xl border border-white/10 bg-background/80 px-3 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                disabled={isCreatingSnippet}
+              >
+                <option value="text">Текст</option>
+                {attachmentModes.map((mode) => (
+                  <option key={mode.type} value={mode.type}>{mode.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-gray-200">
+                {newSnippetType === 'text' ? 'Текст' : 'Подпись к вложению'}
+              </span>
               <textarea
                 value={newSnippetContent}
                 onChange={(event) => setNewSnippetContent(event.target.value)}
                 rows={8}
-                placeholder="Текст быстрого ответа"
+                placeholder={newSnippetType === 'text' ? 'Текст быстрого ответа' : 'Необязательная подпись'}
                 className="touch-scroll w-full resize-y rounded-xl border border-white/10 bg-background/80 px-3 py-2.5 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
                 disabled={isCreatingSnippet}
               />
             </label>
+            {newSnippetType !== 'text' ? (
+              <label className="block rounded-xl border border-dashed border-white/15 bg-white/[0.025] p-3">
+                <span className="flex items-center gap-2 text-sm font-medium text-gray-200">
+                  <Paperclip size={16} />
+                  Файл заготовки
+                </span>
+                <input
+                  type="file"
+                  accept={attachmentModes.find((mode) => mode.type === newSnippetType)?.accept ?? '*/*'}
+                  onChange={(event) => setNewSnippetFile(event.target.files?.[0] ?? null)}
+                  className="mt-2 block w-full text-sm text-gray-400 file:mr-3 file:rounded-lg file:border-0 file:bg-accent-300/15 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-accent-100 hover:file:bg-accent-300/25"
+                  disabled={isCreatingSnippet}
+                />
+                {newSnippetFile ? <span className="mt-2 block truncate text-xs text-emerald-200">{newSnippetFile.name}</span> : null}
+              </label>
+            ) : null}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
@@ -2559,7 +2639,7 @@ export default function ChatsPage() {
               </button>
               <button
                 type="submit"
-                disabled={isCreatingSnippet || !newSnippetName.trim() || !newSnippetContent.trim()}
+                disabled={isCreatingSnippet || !newSnippetName.trim() || (newSnippetType === 'text' ? !newSnippetContent.trim() : !newSnippetFile)}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isCreatingSnippet ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -2567,6 +2647,66 @@ export default function ChatsPage() {
               </button>
             </div>
           </form>
+        </Modal>
+      ) : null}
+
+      {isScheduleOpen ? (
+        <Modal
+          title="Отложить сообщение"
+          description="Сообщение хранится на сервере и будет отправлено worker’ом, даже если браузер закрыт."
+          maxWidthClassName="max-w-lg"
+          onClose={() => {
+            if (!isScheduling) {
+              setIsScheduleOpen(false)
+            }
+          }}
+        >
+          <form className="space-y-4" onSubmit={(event) => void handleScheduleMessage(event)}>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-gray-200">Дата и время</span>
+              <input
+                type="datetime-local"
+                value={scheduledAtLocal}
+                onChange={(event) => setScheduledAtLocal(event.target.value)}
+                min={new Date().toISOString().slice(0, 16)}
+                className="h-11 w-full rounded-xl border border-white/10 bg-background/80 px-3 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                required
+                disabled={isScheduling}
+              />
+            </label>
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-gray-300">
+              {attachment
+                ? `${mediaLabels[attachment.media_type]}: ${attachment.file_name}`
+                : snippetMedia
+                  ? `${mediaLabels[snippetMedia.type]}: ${snippetMedia.name}`
+                  : draft.trim()}
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setIsScheduleOpen(false)} disabled={isScheduling} className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:opacity-60">Отмена</button>
+              <button type="submit" disabled={isScheduling || !scheduledAtLocal} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition disabled:opacity-60">
+                {isScheduling ? <LoaderCircle size={16} className="animate-spin" /> : <Clock3 size={16} />}
+                Запланировать
+              </button>
+            </div>
+          </form>
+          {scheduledMessages.filter((item) => item.status === 'pending').length > 0 ? (
+            <div className="mt-5 border-t border-white/10 pt-4">
+              <p className="text-sm font-semibold text-white">В очереди</p>
+              <div className="mt-2 max-h-44 space-y-2 overflow-y-auto pr-1">
+                {scheduledMessages.filter((item) => item.status === 'pending').map((item) => (
+                  <div key={item.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-gray-200">{item.file_name ?? item.text ?? 'Сообщение'}</p>
+                      <p className="text-xs text-gray-500">{new Date(item.scheduled_at).toLocaleString()}</p>
+                    </div>
+                    <button type="button" onClick={() => void handleCancelScheduledMessage(item.id)} disabled={cancellingScheduledMessageId === item.id} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-gray-400 transition hover:border-red-300/40 hover:text-red-100 disabled:opacity-50" title="Отменить">
+                      {cancellingScheduledMessageId === item.id ? <LoaderCircle size={14} className="animate-spin" /> : <X size={15} />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </Modal>
       ) : null}
 

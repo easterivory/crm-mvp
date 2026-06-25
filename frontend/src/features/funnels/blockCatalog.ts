@@ -62,6 +62,7 @@ export const universalBlocks: UniversalBlock[] = [
       answer_type: 'text',
       save_to: '',
       wait_for_answer: true,
+      delay_before_seconds: 0,
       timeout_seconds: 0,
       max_retries: 2,
       validation: { type: 'text' },
@@ -127,6 +128,14 @@ export const universalBlocks: UniversalBlock[] = [
     defaultConfig: { actions: [{ id: 'action_1', type: 'set_lead_status', status: 'in_progress' }] },
   },
   {
+    stepType: 'action',
+    blockType: 'set_lead_status',
+    label: 'Статус лида',
+    defaultTitle: 'Статус лида',
+    description: 'Меняет статус лида в понятной точке сценария.',
+    defaultConfig: { status: 'in_progress' },
+  },
+  {
     stepType: 'delay',
     blockType: 'generic_delay',
     label: 'Таймер / ожидание',
@@ -181,7 +190,9 @@ export const blockGroups: BlockMenuGroup[] = [
     title: 'CRM',
     accent: 'emerald',
     items: universalBlocks.filter((item) =>
-      ['generic_crm_action', 'generic_operator', 'generic_finish'].includes(item.blockType),
+      ['generic_crm_action', 'set_lead_status', 'generic_operator', 'generic_finish'].includes(
+        item.blockType,
+      ),
     ),
   },
 ]

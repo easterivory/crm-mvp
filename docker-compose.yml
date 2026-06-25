@@ -36,9 +36,11 @@ services:
       - .env
     environment:
       BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
+      CHAT_ATTACHMENT_STORAGE_PATH: /app/storage/chat_attachments
     volumes:
       - landers_data:/app/storage/landers
       - broadcast_uploads_data:/app/storage/broadcast_uploads
+      - chat_attachments_data:/app/storage/chat_attachments
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,8 +55,10 @@ services:
       - .env
     environment:
       BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
+      CHAT_ATTACHMENT_STORAGE_PATH: /app/storage/chat_attachments
     volumes:
       - broadcast_uploads_data:/app/storage/broadcast_uploads
+      - chat_attachments_data:/app/storage/chat_attachments
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,3 +83,4 @@ volumes:
   backups_data:
   landers_data:
   broadcast_uploads_data:
+  chat_attachments_data:

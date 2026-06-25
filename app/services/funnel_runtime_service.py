@@ -401,6 +401,13 @@ class FunnelRuntimeService:
             return True
 
         if state.waiting_for_answer or self._is_input_step(step):
+            if self._is_input_prompt_pending(state.runtime_json, step):
+                logger.info(
+                    "Ignoring incoming text while input prompt is delayed chat_id=%s step_id=%s",
+                    chat_id,
+                    step.id,
+                )
+                return True
             if await self._should_override_call_time_for_hold(chat_id=chat_id, step=step):
                 next_step = await self._apply_hold_call_time_override(
                     chat_id=chat_id,
@@ -592,6 +599,13 @@ class FunnelRuntimeService:
         answer = answer or fallback_text
 
         if self._is_input_step(step):
+            if self._is_input_prompt_pending(state.runtime_json, step):
+                logger.info(
+                    "Ignoring callback while input prompt is delayed chat_id=%s step_id=%s",
+                    chat_id,
+                    step.id,
+                )
+                return True
             validation = self._validate_input_answer(step, answer)
             if not validation["valid"]:
                 await self._create_outgoing_message(
@@ -802,6 +816,25 @@ class FunnelRuntimeService:
                 await self._execute_from_step(chat_id=job.chat_id, step=next_step, answer="timeout")
             return
 
+        if job.job_type == "input_prompt":
+            if not self._is_input_step(step):
+                logger.info("Ignoring input prompt job for non-input step job_id=%s", job.id)
+                return
+            runtime_json = dict(state.runtime_json or {})
+            runtime_json.pop("input_prompt_pending_step_id", None)
+            await self.repo.upsert_chat_funnel_state(
+                chat_id=job.chat_id,
+                funnel_id=state.funnel_id,
+                funnel_version_id=state.funnel_version_id,
+                current_step_id=step.id,
+                entered_step_at=state.entered_step_at,
+                waiting_for_answer=True,
+                runtime_json=runtime_json,
+            )
+            await self._send_input_prompt(chat_id=job.chat_id, step=step)
+            await self._schedule_input_timeout(chat_id=job.chat_id, step=step)
+            return
+
         if job.job_type == "delay_step":
             next_step = await self._move_to_config_target_or_next(
                 chat_id=job.chat_id,
@@ -903,6 +936,35 @@ class FunnelRuntimeService:
                     continue
 
                 state = await self.repo.get_chat_funnel_state(chat_id)
+                prompt_delay_seconds = self._input_prompt_delay_seconds(current)
+                if prompt_delay_seconds > 0:
+                    if state is not None:
+                        runtime_json = dict(state.runtime_json or {})
+                        runtime_json["input_prompt_pending_step_id"] = str(current.id)
+                        await self.repo.upsert_chat_funnel_state(
+                            chat_id=chat_id,
+                            funnel_id=state.funnel_id,
+                            funnel_version_id=state.funnel_version_id,
+                            current_step_id=current.id,
+                            entered_step_at=datetime.now(timezone.utc),
+                            waiting_for_answer=False,
+                            runtime_json=runtime_json,
+                        )
+                    await self._schedule_job(
+                        chat_id=chat_id,
+                        step=current,
+                        job_type="input_prompt",
+                        delay_seconds=prompt_delay_seconds,
+                        payload_json={},
+                    )
+                    logger.info(
+                        "Scheduled delayed input prompt chat_id=%s step_id=%s delay_seconds=%s",
+                        chat_id,
+                        current.id,
+                        prompt_delay_seconds,
+                    )
+                    return current
+
                 if state is not None:
                     await self.repo.upsert_chat_funnel_state(
                         chat_id=chat_id,
@@ -2790,6 +2852,25 @@ class FunnelRuntimeService:
             except (TypeError, ValueError):
                 return 0
         return 0
+
+    @staticmethod
+    def _input_prompt_delay_seconds(step: FunnelStep) -> int:
+        config = step.config_json or {}
+        for key in ("delay_before_seconds", "prompt_delay_seconds"):
+            if config.get(key) is not None:
+                try:
+                    return max(int(config.get(key) or 0), 0)
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+
+    @staticmethod
+    def _is_input_prompt_pending(
+        runtime_json: dict[str, Any] | None,
+        step: FunnelStep,
+    ) -> bool:
+        marker = (runtime_json or {}).get("input_prompt_pending_step_id")
+        return str(marker or "") == str(step.id)
 
     @staticmethod
     def _is_no_reply_delay_step(step: FunnelStep) -> bool:

@@ -5,6 +5,7 @@ import type {
   ProjectDomainCreatePayload,
   ProjectLander,
   ProjectLanderCreatePayload,
+  ProjectLanderUpdatePayload,
   ProjectLanderUploadResult,
   LanderTargetStep,
   TrackingLinkOption,
@@ -44,6 +45,18 @@ export async function createProjectLander(
 ): Promise<ProjectLander> {
   const { data } = await api.post<ProjectLander>(
     `/projects/${projectId}/landers`,
+    payload,
+  )
+  return data
+}
+
+export async function updateProjectLander(
+  projectId: string,
+  landerId: string,
+  payload: ProjectLanderUpdatePayload,
+): Promise<ProjectLander> {
+  const { data } = await api.patch<ProjectLander>(
+    `/projects/${projectId}/landers/${landerId}`,
     payload,
   )
   return data

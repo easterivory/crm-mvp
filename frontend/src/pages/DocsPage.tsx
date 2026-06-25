@@ -304,7 +304,7 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
       {
         label: 'CR в лид',
         value: 'leads / starts * 100',
-        note: 'В сводке трекинга denominator = starts. В оценке качества ссылки sample = clicks, а если кликов нет, то starts.',
+        note: 'starts - это Telegram /start. leads считаются только по статусам, выбранным в Настройки -> Проект -> Лид в трекинге. В оценке качества ссылки sample = clicks, а если кликов нет, то starts.',
       },
       {
         label: 'CR в подачу',
@@ -319,7 +319,7 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
       {
         label: 'CPL',
         value: 'spend / leads',
-        note: 'Стоимость лида по выбранной ссылке, баеру, проекту или периоду.',
+        note: 'Стоимость лида по выбранной ссылке, баеру, проекту или периоду. Лид берется из проектного набора tracking-статусов, а не из факта старта.',
       },
       {
         label: 'CPSL',
@@ -349,7 +349,7 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
       {
         label: 'Лиды баера',
         value: 'count(distinct Lead.id)',
-        note: 'Лиды считаются через чат и tracking-link баера, удаленные/reset чаты исключаются.',
+        note: 'Лиды считаются через чат и tracking-link баера только по статусам проекта из настройки “Лид в трекинге”; удаленные/reset чаты исключаются.',
       },
       {
         label: 'Конверсия в лид',

@@ -116,6 +116,9 @@ function previewLines(step: FunnelStep) {
   }
 
   if (step.step_type === 'action') {
+    if (step.block_type === 'set_lead_status') {
+      return [`Статус: ${textValue(step.config_json, 'status') || '...'}`]
+    }
     const actions = normalizeActions(step.config_json.actions)
     return actions.slice(0, 2).map((action) => {
       if (action.type === 'set_lead_status') return `Статус: ${action.status || '...'}` 

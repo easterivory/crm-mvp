@@ -464,14 +464,39 @@ class FunnelRepository(BaseRepository[Funnel]):
         await self.db.execute(
             delete(FunnelEdge).where(FunnelEdge.funnel_version_id == version_id)
         )
-        await self.db.execute(
-            delete(FunnelStep).where(FunnelStep.funnel_version_id == version_id)
-        )
         await self.db.flush()
 
+        existing_result = await self.db.execute(
+            select(FunnelStep.id).where(FunnelStep.funnel_version_id == version_id)
+        )
+        existing_step_ids = set(existing_result.scalars().all())
+        incoming_step_ids = {step.id for step in graph.steps if step.id is not None}
+
         for step_in in graph.steps:
-            self.db.add(self._step_from_in(version_id, step_in))
+            values = step_in.model_dump()
+            step_id = values.pop("id", None)
+            if step_id is not None and step_id in existing_step_ids:
+                await self.db.execute(
+                    update(FunnelStep)
+                    .where(
+                        FunnelStep.id == step_id,
+                        FunnelStep.funnel_version_id == version_id,
+                    )
+                    .values(**values, updated_at=func.now())
+                )
+                continue
+            self.db.add(self._step_from_values(version_id, step_id, values))
         await self.db.flush()
+
+        removed_step_ids = existing_step_ids - incoming_step_ids
+        if removed_step_ids:
+            await self.db.execute(
+                delete(FunnelStep).where(
+                    FunnelStep.funnel_version_id == version_id,
+                    FunnelStep.id.in_(removed_step_ids),
+                )
+            )
+            await self.db.flush()
 
         for edge_in in graph.edges:
             self.db.add(self._edge_from_in(version_id, edge_in))
@@ -1006,6 +1031,14 @@ class FunnelRepository(BaseRepository[Funnel]):
     def _step_from_in(version_id: UUID, step_in: FunnelStepIn) -> FunnelStep:
         values = step_in.model_dump()
         step_id = values.pop("id", None)
+        return FunnelRepository._step_from_values(version_id, step_id, values)
+
+    @staticmethod
+    def _step_from_values(
+        version_id: UUID,
+        step_id: Optional[UUID],
+        values: dict,
+    ) -> FunnelStep:
         if step_id is not None:
             values["id"] = step_id
         return FunnelStep(funnel_version_id=version_id, **values)

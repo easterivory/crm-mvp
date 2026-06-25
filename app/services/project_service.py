@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, RoleName
 from app.models.user import User
+from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_metrics_repository import ProjectMetricsRepository
 from app.schemas.project import (
@@ -32,6 +33,7 @@ PROJECT_STATUSES: set[str] = {"active", "archived"}
 class ProjectService:
     def __init__(self, db: AsyncSession) -> None:
         self.project_repo = ProjectRepository(db)
+        self.lead_repo = LeadRepository(db)
         self.metrics_repo = ProjectMetricsRepository(db)
         self.audit = AuditService(db)
 
@@ -59,6 +61,9 @@ class ProjectService:
         name = self._validate_name(data.name)
         status_value = self._validate_status(data.status)
         sla_threshold_minutes = self._validate_sla(data.sla_threshold_minutes)
+        tracking_lead_status_codes = await self._validate_tracking_lead_status_codes(
+            data.tracking_lead_status_codes
+        )
         slug = (
             await self._generate_unique_slug(name)
             if data.slug is None
@@ -73,6 +78,7 @@ class ProjectService:
                 status=status_value,
                 is_deleted=status_value == "archived",
                 sla_threshold_minutes=sla_threshold_minutes,
+                tracking_lead_status_codes=tracking_lead_status_codes,
             )
         except IntegrityError as exc:
             raise HTTPException(
@@ -127,6 +133,12 @@ class ProjectService:
         ):
             values["sla_threshold_minutes"] = self._validate_sla(
                 values["sla_threshold_minutes"]
+            )
+        if "tracking_lead_status_codes" in values:
+            values["tracking_lead_status_codes"] = (
+                await self._validate_tracking_lead_status_codes(
+                    values["tracking_lead_status_codes"]
+                )
             )
 
         if not values:
@@ -342,6 +354,25 @@ class ProjectService:
                 detail=f"{field_name} must be a valid language code",
             )
         return normalized
+
+    async def _validate_tracking_lead_status_codes(
+        self,
+        status_codes: list[str],
+    ) -> list[str]:
+        statuses = await self.lead_repo.list_statuses()
+        existing_codes = {status_item.code for status_item in statuses}
+        unknown_codes = [
+            status_code for status_code in status_codes if status_code not in existing_codes
+        ]
+        if unknown_codes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Tracking lead statuses are unknown: "
+                    + ", ".join(sorted(unknown_codes))
+                ),
+            )
+        return status_codes
 
     @classmethod
     def _normalize_slug(cls, value: str) -> str:

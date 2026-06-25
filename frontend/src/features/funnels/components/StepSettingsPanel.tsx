@@ -433,6 +433,26 @@ export default function StepSettingsPanel({
             </div>
           ) : null}
 
+          {step.block_type === 'set_lead_status' ? (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Новый статус лида
+              </span>
+              <select
+                value={textValue(step.config_json, 'status') || 'in_progress'}
+                onChange={(event) => patchConfig({ status: event.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+              >
+                <option value="">Выберите статус</option>
+                {statuses.map((status) => (
+                  <option key={status.id} value={status.code ?? ''}>
+                    {status.name ?? status.code}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           {step.block_type === 'generic_delay' ? (
             <div className="space-y-3">
               <label className="block">

@@ -79,6 +79,7 @@ class LeadStatusCode:
     # Statuses from which further transitions are not allowed
     TERMINAL: frozenset[str] = frozenset({QUALIFIED, LOST})
     SUBMITTED_SET: frozenset[str] = frozenset({SUBMITTED, APPLIED, QUALIFIED})
+    TRACKING_LEAD_DEFAULT: tuple[str, ...] = (SUBMITTED, QUALIFIED)
 
 
 class RoleName:

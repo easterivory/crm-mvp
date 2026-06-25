@@ -1,5 +1,5 @@
 """
-Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|postback|buyer|backup|all]
+Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|scheduled|postback|buyer|backup|all]
 
 Each worker is an independent asyncio loop.
 Running 'all' starts both workers concurrently in the same process.
@@ -45,6 +45,10 @@ def main() -> None:
         from app.workers.broadcast_worker import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "scheduled":
+        from app.workers.scheduled_message_worker import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "postback":
         from app.workers.postback_worker import run_loop
         asyncio.run(run_loop())
@@ -63,6 +67,7 @@ def main() -> None:
         from app.workers.buyer_bot import run_loop as buyer_loop
         from app.workers.funnel_scheduled_worker import run_loop as funnel_loop
         from app.workers.postback_worker import run_loop as postback_loop
+        from app.workers.scheduled_message_worker import run_loop as scheduled_loop
         from app.workers.stats_worker import run_loop as stats_loop
 
         async def run_all() -> None:
@@ -72,6 +77,7 @@ def main() -> None:
                 stats_loop(),
                 funnel_loop(),
                 broadcast_loop(),
+                scheduled_loop(),
                 postback_loop(),
                 buyer_loop(),
             )
@@ -80,7 +86,7 @@ def main() -> None:
 
     else:
         logger.error(
-            "Unknown worker mode: %r. Use: alert | stats | funnel | broadcast | postback | buyer | backup | all",
+            "Unknown worker mode: %r. Use: alert | stats | funnel | broadcast | scheduled | postback | buyer | backup | all",
             mode,
         )
         sys.exit(1)

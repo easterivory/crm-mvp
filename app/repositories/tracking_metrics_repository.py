@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode
@@ -18,6 +18,7 @@ from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 
 
 SUBMITTED_STATUS_CODES = LeadStatusCode.SUBMITTED_SET
+DEFAULT_TRACKING_LEAD_STATUS_CODES = LeadStatusCode.TRACKING_LEAD_DEFAULT
 
 
 class TrackingMetricsRepository:
@@ -120,6 +121,7 @@ class TrackingMetricsRepository:
         bot_id: UUID | None,
         date_from: date,
         date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> int:
         return await self._aggregate_leads_by_project(
             project_id=project_id,
@@ -127,6 +129,7 @@ class TrackingMetricsRepository:
             date_from=date_from,
             date_to=date_to,
             submitted_only=False,
+            lead_status_codes=lead_status_codes,
         )
 
     async def aggregate_leads_by_link(
@@ -134,12 +137,14 @@ class TrackingMetricsRepository:
         link_id: UUID,
         date_from: date,
         date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> int:
         return await self._aggregate_leads_by_link(
             link_id=link_id,
             date_from=date_from,
             date_to=date_to,
             submitted_only=False,
+            lead_status_codes=lead_status_codes,
         )
 
     async def aggregate_submitted_by_project(
@@ -176,12 +181,20 @@ class TrackingMetricsRepository:
         bot_id: UUID | None,
         date_from: date,
         date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         daily = self._empty_daily_map()
         await self._merge_daily_clicks(daily, project_id, bot_id, None, date_from, date_to)
         await self._merge_daily_starts(daily, project_id, bot_id, None, date_from, date_to)
         await self._merge_daily_leads(
-            daily, project_id, bot_id, None, date_from, date_to, submitted_only=False
+            daily,
+            project_id,
+            bot_id,
+            None,
+            date_from,
+            date_to,
+            submitted_only=False,
+            lead_status_codes=lead_status_codes,
         )
         await self._merge_daily_leads(
             daily, project_id, bot_id, None, date_from, date_to, submitted_only=True
@@ -194,12 +207,20 @@ class TrackingMetricsRepository:
         link_id: UUID,
         date_from: date,
         date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         daily = self._empty_daily_map()
         await self._merge_daily_clicks(daily, None, None, link_id, date_from, date_to)
         await self._merge_daily_starts(daily, None, None, link_id, date_from, date_to)
         await self._merge_daily_leads(
-            daily, None, None, link_id, date_from, date_to, submitted_only=False
+            daily,
+            None,
+            None,
+            link_id,
+            date_from,
+            date_to,
+            submitted_only=False,
+            lead_status_codes=lead_status_codes,
         )
         await self._merge_daily_leads(
             daily, None, None, link_id, date_from, date_to, submitted_only=True
@@ -213,6 +234,7 @@ class TrackingMetricsRepository:
         bot_id: UUID | None,
         date_from: date,
         date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         link_rows = await self._get_base_link_rows(project_id, bot_id)
         if not link_rows:
@@ -234,7 +256,13 @@ class TrackingMetricsRepository:
         await self._merge_link_clicks(rows_by_id, project_id, bot_id, date_from, date_to)
         await self._merge_link_starts(rows_by_id, project_id, bot_id, date_from, date_to)
         await self._merge_link_leads(
-            rows_by_id, project_id, bot_id, date_from, date_to, submitted_only=False
+            rows_by_id,
+            project_id,
+            bot_id,
+            date_from,
+            date_to,
+            submitted_only=False,
+            lead_status_codes=lead_status_codes,
         )
         await self._merge_link_leads(
             rows_by_id, project_id, bot_id, date_from, date_to, submitted_only=True
@@ -304,6 +332,7 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
         submitted_only: bool,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
@@ -322,10 +351,11 @@ class TrackingMetricsRepository:
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
-        if submitted_only:
-            stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id).where(
-                LeadStatus.code.in_(SUBMITTED_STATUS_CODES)
-            )
+        stmt = self._apply_lead_status_filter(
+            stmt,
+            submitted_only=submitted_only,
+            lead_status_codes=lead_status_codes,
+        )
 
         result = await self.db.execute(stmt)
         return result.scalar_one()
@@ -337,6 +367,7 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
         submitted_only: bool,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
@@ -352,10 +383,11 @@ class TrackingMetricsRepository:
                 lifecycle_at < end_at,
             )
         )
-        if submitted_only:
-            stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id).where(
-                LeadStatus.code.in_(SUBMITTED_STATUS_CODES)
-            )
+        stmt = self._apply_lead_status_filter(
+            stmt,
+            submitted_only=submitted_only,
+            lead_status_codes=lead_status_codes,
+        )
 
         result = await self.db.execute(stmt)
         return result.scalar_one()
@@ -454,6 +486,7 @@ class TrackingMetricsRepository:
         date_to: date,
         *,
         submitted_only: bool,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
@@ -476,10 +509,11 @@ class TrackingMetricsRepository:
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
-        if submitted_only:
-            stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id).where(
-                LeadStatus.code.in_(SUBMITTED_STATUS_CODES)
-            )
+        stmt = self._apply_lead_status_filter(
+            stmt,
+            submitted_only=submitted_only,
+            lead_status_codes=lead_status_codes,
+        )
 
         result = await self.db.execute(stmt)
         target_field = "submitted_leads" if submitted_only else "leads"
@@ -589,6 +623,7 @@ class TrackingMetricsRepository:
         date_to: date,
         *,
         submitted_only: bool,
+        lead_status_codes: Sequence[str] | None = None,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
@@ -615,10 +650,11 @@ class TrackingMetricsRepository:
             stmt = stmt.where(Chat.bot_id == bot_id)
         if link_id is not None:
             stmt = stmt.where(Chat.tracking_link_id == link_id)
-        if submitted_only:
-            stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id).where(
-                LeadStatus.code.in_(SUBMITTED_STATUS_CODES)
-            )
+        stmt = self._apply_lead_status_filter(
+            stmt,
+            submitted_only=submitted_only,
+            lead_status_codes=lead_status_codes,
+        )
 
         result = await self.db.execute(stmt)
         target_field = "submitted_leads" if submitted_only else "leads"
@@ -670,6 +706,40 @@ class TrackingMetricsRepository:
         if link_id is not None:
             stmt = stmt.where(TrackingLink.id == link_id)
         return stmt
+
+    @classmethod
+    def _apply_lead_status_filter(
+        cls,
+        stmt,
+        *,
+        submitted_only: bool,
+        lead_status_codes: Sequence[str] | None,
+    ):
+        status_codes = (
+            tuple(SUBMITTED_STATUS_CODES)
+            if submitted_only
+            else cls._normalize_lead_status_codes(lead_status_codes)
+        )
+        stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id)
+        if not status_codes:
+            return stmt.where(false())
+        return stmt.where(LeadStatus.code.in_(status_codes))
+
+    @staticmethod
+    def _normalize_lead_status_codes(
+        lead_status_codes: Sequence[str] | None,
+    ) -> tuple[str, ...]:
+        source = (
+            DEFAULT_TRACKING_LEAD_STATUS_CODES
+            if lead_status_codes is None
+            else lead_status_codes
+        )
+        normalized: list[str] = []
+        for raw_code in source:
+            code = raw_code.strip().lower()
+            if code and code not in normalized:
+                normalized.append(code)
+        return tuple(normalized)
 
     @staticmethod
     def _empty_daily_map() -> dict[date, dict[str, Any]]:

@@ -50,6 +50,7 @@ type Project = {
   operator_lang: string
   default_client_lang: string
   is_translation_enabled: boolean
+  tracking_lead_status_codes: string[]
   created_at: string
   is_deleted: boolean
 }
@@ -125,6 +126,8 @@ const translationProviderOptions: Array<{ value: TranslationProvider; label: str
   { value: 'google', label: 'Google Translate' },
   { value: 'libretranslate', label: 'LibreTranslate' },
 ]
+
+const defaultTrackingLeadStatusCodes = ['submitted', 'qualified']
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
   if (axios.isAxiosError(err)) {
@@ -286,6 +289,9 @@ export default function SettingsPage() {
 
   const [projectName, setProjectName] = useState('')
   const [slaMinutes, setSlaMinutes] = useState('30')
+  const [trackingLeadStatusCodes, setTrackingLeadStatusCodes] = useState<string[]>(
+    defaultTrackingLeadStatusCodes,
+  )
   const [translationEnabled, setTranslationEnabled] = useState(false)
   const [operatorLang, setOperatorLang] = useState('ru')
   const [defaultClientLang, setDefaultClientLang] = useState('en')
@@ -421,6 +427,18 @@ export default function SettingsPage() {
     [canDeleteUser, currentRoleName, roles],
   )
 
+  const toggleTrackingLeadStatus = useCallback((statusCode: string) => {
+    setTrackingLeadStatusCodes((currentCodes) => {
+      if (currentCodes.includes(statusCode)) {
+        if (currentCodes.length <= 1) {
+          return currentCodes
+        }
+        return currentCodes.filter((code) => code !== statusCode)
+      }
+      return [...currentCodes, statusCode]
+    })
+  }, [])
+
   useEffect(() => {
     if (!visibleTabs.some((tab) => tab.key === activeTab)) {
       setActiveTab(visibleTabs[0]?.key ?? 'tags')
@@ -470,6 +488,11 @@ export default function SettingsPage() {
     setProject(data)
     setProjectName(data.name)
     setSlaMinutes(String(data.sla_threshold_minutes))
+    setTrackingLeadStatusCodes(
+      data.tracking_lead_status_codes?.length
+        ? data.tracking_lead_status_codes
+        : defaultTrackingLeadStatusCodes,
+    )
     setTranslationEnabled(data.is_translation_enabled)
     setOperatorLang(data.operator_lang || 'ru')
     setDefaultClientLang(data.default_client_lang || 'en')
@@ -576,10 +599,16 @@ export default function SettingsPage() {
       const { data } = await api.patch<Project>(`/projects/${project.id}`, {
         name: projectName.trim(),
         sla_threshold_minutes: Number(slaMinutes),
+        tracking_lead_status_codes: trackingLeadStatusCodes,
       })
       setProject(data)
       setProjectName(data.name)
       setSlaMinutes(String(data.sla_threshold_minutes))
+      setTrackingLeadStatusCodes(
+        data.tracking_lead_status_codes?.length
+          ? data.tracking_lead_status_codes
+          : defaultTrackingLeadStatusCodes,
+      )
       setNotice('Настройки проекта сохранены.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось сохранить проект.'))
@@ -1135,6 +1164,53 @@ export default function SettingsPage() {
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
               />
             </label>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-100">
+                    Лид в трекинге
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-zinc-500">
+                    Старты считаются отдельно. Метрика “Лиды”, CPL и CR до лида
+                    считаются только по выбранным статусам.
+                  </p>
+                </div>
+                <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-100">
+                  {trackingLeadStatusCodes.length}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {statuses.map((statusItem) => {
+                  const isSelected = trackingLeadStatusCodes.includes(statusItem.code)
+                  const isLastSelected = isSelected && trackingLeadStatusCodes.length <= 1
+                  return (
+                    <label
+                      key={statusItem.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-200 transition hover:border-emerald-500/40"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={isLastSelected}
+                        onChange={() => toggleTrackingLeadStatus(statusItem.code)}
+                        className="h-5 w-5 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 disabled:cursor-not-allowed"
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{statusItem.name}</span>
+                        <span className="block truncate text-xs text-zinc-500">
+                          {statusItem.code}
+                        </span>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+              {statuses.length === 0 ? (
+                <p className="mt-3 text-sm text-zinc-500">
+                  Статусы пока не загружены. Повторите после обновления страницы.
+                </p>
+              ) : null}
+            </div>
             <button
               type="submit"
               disabled={!project || isSavingProject}

@@ -50,6 +50,20 @@ class LanderPixel(BaseModel):
         return normalized
 
 
+class LanderMetaEvent(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not normalized[0].isalpha() or not all(
+            char.isascii() and (char.isalnum() or char == "_") for char in normalized
+        ):
+            raise ValueError("Meta event name must use Latin letters, numbers, or underscores")
+        return normalized
+
+
 class LanderTrackingCampaignCreate(BaseModel):
     bot_id: UUID
     title: str = Field(..., min_length=1, max_length=255)
@@ -70,6 +84,8 @@ class ProjectLanderBase(BaseModel):
     tracking_link_id: Optional[UUID] = None
     campaign: Optional[LanderTrackingCampaignCreate] = None
     pixels: list[LanderPixel] = Field(default_factory=list, max_length=1)
+    meta_events: list[LanderMetaEvent] = Field(default_factory=list, max_length=10)
+    auto_redirect_enabled: bool = True
     utm_defaults: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("name", "type", "slug")
@@ -110,6 +126,12 @@ class ProjectLanderCreate(ProjectLanderBase):
     pass
 
 
+class ProjectLanderUpdate(BaseModel):
+    pixels: Optional[list[LanderPixel]] = Field(default=None, max_length=1)
+    meta_events: Optional[list[LanderMetaEvent]] = Field(default=None, max_length=10)
+    auto_redirect_enabled: Optional[bool] = None
+
+
 class ProjectLanderOut(OrmBase):
     id: UUID
     project_id: UUID
@@ -119,8 +141,10 @@ class ProjectLanderOut(OrmBase):
     slug: str
     tracking_link_id: Optional[UUID] = None
     pixels_json: list[dict] = Field(default_factory=list)
+    meta_events_json: list[dict] = Field(default_factory=list)
     utm_defaults_json: dict[str, str] = Field(default_factory=dict)
     custom_html_path: Optional[str] = None
+    auto_redirect_enabled: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime

@@ -68,4 +68,7 @@ class SnippetOut(OrmBase):
     type: str
     content: Optional[str]
     file_id: Optional[str]
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_size: Optional[int] = None
     created_at: datetime
