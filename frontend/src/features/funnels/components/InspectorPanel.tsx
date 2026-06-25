@@ -17,6 +17,7 @@ type InspectorPanelProps = {
   hasPublishedVersion: boolean
   readOnly?: boolean
   onUpdateStep: (stepId: string, patch: Partial<FunnelStep>) => void
+  onDuplicateStep: (stepId: string) => void
   onDeleteStep: (stepId: string) => void
   onUpdateEdge: (edgeId: string, patch: Partial<FunnelEdge>) => void
   onRemoveEdge: (edgeId: string) => void
@@ -36,6 +37,7 @@ export default function InspectorPanel({
   hasPublishedVersion,
   readOnly = false,
   onUpdateStep,
+  onDuplicateStep,
   onDeleteStep,
   onUpdateEdge,
   onRemoveEdge,
@@ -75,6 +77,7 @@ export default function InspectorPanel({
               projectId={projectId}
               steps={steps}
               onUpdate={onUpdateStep}
+              onDuplicate={onDuplicateStep}
               onDelete={onDeleteStep}
             />
             {selectedStep ? (

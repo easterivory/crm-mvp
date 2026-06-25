@@ -42,7 +42,9 @@ import type {
   Funnel,
   FunnelDropOffStep,
   FunnelEdge,
+  FunnelFieldMapping,
   FunnelGraph,
+  FunnelPushRule,
   FunnelStep,
   FunnelVersion,
 } from '../types'
@@ -112,6 +114,29 @@ function uniqueStepKey(baseKey: string, usedKeys: Set<string>) {
     suffix += 1
   }
   usedKeys.add(candidate)
+  return candidate
+}
+
+function cloneGraphValue<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value
+  }
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value)
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function duplicateStepTitle(title: string, existingTitles: Set<string>) {
+  const baseTitle = title.trim() || 'Блок'
+  const base = `${baseTitle} копия`
+  let candidate = base
+  let suffix = 2
+  while (existingTitles.has(candidate)) {
+    candidate = `${base} ${suffix}`
+    suffix += 1
+  }
+  existingTitles.add(candidate)
   return candidate
 }
 
@@ -435,6 +460,78 @@ export default function FunnelBuilder({
     setSelectedStepId((current) => (current === stepId ? null : current))
     setSelectedEdgeId(null)
   }
+
+  const duplicateStep = useCallback((stepId: string) => {
+    if (!isEditableDraft) {
+      return
+    }
+    setGraph((current) => {
+      if (!current) {
+        return current
+      }
+      const sourceStep = current.steps.find((step) => step.id === stepId)
+      if (!sourceStep) {
+        return current
+      }
+
+      const duplicateId = crypto.randomUUID()
+      const usedKeys = new Set(current.steps.map((step) => step.key))
+      const existingTitles = new Set(current.steps.map((step) => step.title))
+      const duplicate: FunnelStep = {
+        id: duplicateId,
+        key: uniqueStepKey(`${sourceStep.key}_copy`, usedKeys),
+        title: duplicateStepTitle(sourceStep.title, existingTitles),
+        step_type: sourceStep.step_type,
+        block_type: sourceStep.block_type,
+        position_x: sourceStep.position_x + 56,
+        position_y: sourceStep.position_y + 56,
+        config_json: cloneGraphValue(sourceStep.config_json ?? {}),
+        validation_json: cloneGraphValue(sourceStep.validation_json),
+        ui_schema_json: cloneGraphValue(sourceStep.ui_schema_json),
+      }
+      const duplicatedEdges: FunnelEdge[] = current.edges
+        .filter((edge) => edge.from_step_id === sourceStep.id)
+        .map((edge) => ({
+          id: crypto.randomUUID(),
+          from_step_id: duplicateId,
+          to_step_id: edge.to_step_id,
+          condition_json: cloneGraphValue(edge.condition_json),
+          priority: edge.priority,
+        }))
+      const duplicatedPushRules: FunnelPushRule[] = current.push_rules
+        .filter((rule) => rule.step_id === sourceStep.id)
+        .map((rule) => ({
+          id: crypto.randomUUID(),
+          step_id: duplicateId,
+          delay_minutes: rule.delay_minutes,
+          message_text: rule.message_text,
+          action_after_send: rule.action_after_send,
+          target_step_id: rule.target_step_id,
+          is_active: rule.is_active,
+        }))
+      const duplicatedMappings: FunnelFieldMapping[] = current.field_mappings
+        .filter((mapping) => mapping.step_id === sourceStep.id)
+        .map((mapping) => ({
+          id: crypto.randomUUID(),
+          step_id: duplicateId,
+          source: mapping.source,
+          lead_field_key: mapping.lead_field_key,
+          transform_rule_json: cloneGraphValue(mapping.transform_rule_json),
+          is_required: mapping.is_required,
+        }))
+
+      setSelectedStepId(duplicateId)
+      setSelectedEdgeId(null)
+      return {
+        ...current,
+        steps: [...current.steps, duplicate],
+        edges: [...current.edges, ...duplicatedEdges],
+        push_rules: [...current.push_rules, ...duplicatedPushRules],
+        field_mappings: [...current.field_mappings, ...duplicatedMappings],
+      }
+    })
+    revealCompactPanel('canvas')
+  }, [isEditableDraft, revealCompactPanel])
 
   const addBlock = (item: BlockMenuItem) => {
     if (!isEditableDraft) {
@@ -999,6 +1096,7 @@ export default function FunnelBuilder({
                 hasPublishedVersion={Boolean(funnel.published_version_id)}
                 readOnly={!isEditableDraft}
                 onUpdateStep={updateStep}
+                onDuplicateStep={duplicateStep}
                 onDeleteStep={deleteStep}
                 onUpdateEdge={updateEdge}
                 onRemoveEdge={removeEdge}

@@ -1,4 +1,4 @@
-import { ChevronDown, Trash2 } from 'lucide-react'
+import { ChevronDown, CopyPlus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import api from '../../../api/client'
@@ -26,6 +26,7 @@ type StepSettingsPanelProps = {
   projectId: string
   steps: FunnelStep[]
   onUpdate: (stepId: string, patch: Partial<FunnelStep>) => void
+  onDuplicate: (stepId: string) => void
   onDelete: (stepId: string) => void
 }
 
@@ -42,6 +43,7 @@ export default function StepSettingsPanel({
   projectId,
   steps,
   onUpdate,
+  onDuplicate,
   onDelete,
 }: StepSettingsPanelProps) {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
@@ -120,14 +122,24 @@ export default function StepSettingsPanel({
             <h3 className="truncate text-sm font-semibold text-white">{step.title}</h3>
             <p className="truncate text-xs text-gray-500">{getBlockLabel(step.block_type)}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => onDelete(step.id)}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-red-300/15 text-red-200 transition hover:border-red-300/35"
-            title="Удалить блок"
-          >
-            <Trash2 size={14} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onDuplicate(step.id)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-300/20 text-cyan-100 transition hover:border-cyan-300/45 hover:bg-cyan-300/10"
+              title="Дублировать блок"
+            >
+              <CopyPlus size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onDelete(step.id)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-300/15 text-red-200 transition hover:border-red-300/35"
+              title="Удалить блок"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 space-y-3">
