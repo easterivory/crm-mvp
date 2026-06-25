@@ -143,6 +143,7 @@ export type TrackingProjectMetricsResponse = {
   date_to: string
   tracking_lead_status_codes: string[]
   summary: TrackingMetricSummary
+  unattributed_summary: TrackingMetricSummary
   links: TrackingLinkMetric[]
   daily: TrackingDailyMetric[]
 }

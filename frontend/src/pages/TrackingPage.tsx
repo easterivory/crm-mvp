@@ -818,6 +818,11 @@ export default function TrackingPage() {
   }
 
   const summary = metrics?.summary ?? zeroSummary
+  const unattributedSummary = metrics?.unattributed_summary ?? zeroSummary
+  const hasUnattributedTraffic =
+    Number(unattributedSummary.starts || 0) > 0 ||
+    Number(unattributedSummary.leads || 0) > 0 ||
+    Number(unattributedSummary.submitted_leads || 0) > 0
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-[#0B0F19]/80 text-gray-200 shadow-card">
@@ -1193,6 +1198,31 @@ export default function TrackingPage() {
         ) : null}
 
         <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {hasUnattributedTraffic ? (
+            <article className="rounded-xl border border-amber-300/20 bg-amber-500/10 p-4 transition">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <span className="rounded-full border border-amber-300/25 bg-amber-400/10 px-2 py-1 font-mono text-xs text-amber-100">
+                    direct
+                  </span>
+                  <h3 className="mt-3 truncate text-lg font-semibold text-white">
+                    Без трекинга
+                  </h3>
+                  <p className="mt-1 text-sm text-amber-100/70">
+                    Прямые Telegram /start без tracking link. Они входят в totals, но не привязаны к баеру или ссылке.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-amber-300/10 bg-black/10 p-4 md:grid-cols-4">
+                {miniMetric('Старты', formatNumber(unattributedSummary.starts))}
+                {miniMetric('Лиды', formatNumber(unattributedSummary.leads))}
+                {miniMetric('Отправлены', formatNumber(unattributedSummary.submitted_leads))}
+                {miniMetric('CR', formatPercent(unattributedSummary.cr_to_lead))}
+              </div>
+            </article>
+          ) : null}
+
           {filteredLinks.map((link) => {
             const linkMetric = linkMetricsById.get(link.id)
             const linkSummary = linkMetric?.summary ?? zeroSummary

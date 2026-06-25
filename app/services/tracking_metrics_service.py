@@ -87,16 +87,6 @@ class TrackingMetricsService:
                     summary=summary,
                 )
             )
-        summary = self._summary_from_values(
-            {
-                "clicks": sum(link.summary.clicks for link in links),
-                "starts": sum(link.summary.starts for link in links),
-                "leads": sum(link.summary.leads for link in links),
-                "submitted_leads": sum(link.summary.submitted_leads for link in links),
-                "deposits": sum(link.summary.deposits for link in links),
-                "spend": sum((link.summary.spend for link in links), Decimal("0")),
-            }
-        )
         daily = self._fill_daily_range(
             await self.metrics_repo.aggregate_daily_by_project(
                 project_id=project_id,
@@ -108,6 +98,17 @@ class TrackingMetricsService:
             date_from,
             date_to,
         )
+        summary = self._summary_from_values(
+            {
+                "clicks": sum(item.clicks for item in daily),
+                "starts": sum(item.starts for item in daily),
+                "leads": sum(item.leads for item in daily),
+                "submitted_leads": sum(item.submitted_leads for item in daily),
+                "deposits": sum(item.deposits for item in daily),
+                "spend": sum((item.spend for item in daily), Decimal("0")),
+            }
+        )
+        unattributed_summary = self._unattributed_summary(summary, links)
 
         return TrackingProjectMetricsResponse(
             project_id=project_id,
@@ -116,6 +117,7 @@ class TrackingMetricsService:
             date_to=date_to,
             tracking_lead_status_codes=lead_status_codes,
             summary=summary,
+            unattributed_summary=unattributed_summary,
             links=links,
             daily=daily,
         )
@@ -296,6 +298,28 @@ class TrackingMetricsService:
             cpl=cls._cost(spend, leads),
             cpsl=cls._cost(spend, submitted),
             cpd=cls._cost(spend, deposits),
+        )
+
+    @classmethod
+    def _unattributed_summary(
+        cls,
+        total: TrackingMetricSummary,
+        links: list[TrackingLinkMetric],
+    ) -> TrackingMetricSummary:
+        tracked_clicks = sum(link.summary.clicks for link in links)
+        tracked_starts = sum(link.summary.starts for link in links)
+        tracked_leads = sum(link.summary.leads for link in links)
+        tracked_submitted = sum(link.summary.submitted_leads for link in links)
+        tracked_deposits = sum(link.summary.deposits for link in links)
+        return cls._summary_from_values(
+            {
+                "clicks": max(total.clicks - tracked_clicks, 0),
+                "starts": max(total.starts - tracked_starts, 0),
+                "leads": max(total.leads - tracked_leads, 0),
+                "submitted_leads": max(total.submitted_leads - tracked_submitted, 0),
+                "deposits": max(total.deposits - tracked_deposits, 0),
+                "spend": Decimal("0"),
+            }
         )
 
     @staticmethod

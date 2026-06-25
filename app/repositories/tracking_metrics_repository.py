@@ -6,14 +6,15 @@ from decimal import Decimal
 from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import distinct, false, func, select
+from sqlalchemy import distinct, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import LeadStatusCode
+from app.core.constants import LeadStatusCode, MessageType, SenderType
 from app.models.bot import BotStep, ChatBotState
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
+from app.models.message import Message
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 
 
@@ -27,8 +28,8 @@ class TrackingMetricsRepository:
 
     Current source of truth:
     - clicks: TrackingEvent.clicks grouped by TrackingEvent.created_at.
-    - starts: unique Chat rows with tracking_link_id.
-    - leads/submitted: Lead rows joined through Chat.tracking_link_id.
+    - starts: unique Chat rows with an incoming Telegram /start message.
+    - leads/submitted: Lead rows filtered by configured project lead statuses.
     - deposits/age/country: absent in current schema, returned as zero/empty.
     - funnel: current ChatBotState.current_step_id snapshot, not step history.
     """
@@ -81,14 +82,19 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
-        lifecycle_at = self._chat_lifecycle_at()
-        stmt = select(func.count(distinct(Chat.id))).where(
-            Chat.project_id == project_id,
-            Chat.tracking_link_id.is_not(None),
-            Chat.is_deleted.is_(False),
-            Chat.reset_at.is_(None),
-            lifecycle_at >= start_at,
-            lifecycle_at < end_at,
+        stmt = (
+            select(func.count(distinct(Chat.id)))
+            .join(Message, Message.chat_id == Chat.id)
+            .where(
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
+            )
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
@@ -103,14 +109,18 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> int:
         start_at, end_at = self._date_bounds(date_from, date_to)
-        lifecycle_at = self._chat_lifecycle_at()
         result = await self.db.execute(
-            select(func.count(distinct(Chat.id))).where(
+            select(func.count(distinct(Chat.id)))
+            .join(Message, Message.chat_id == Chat.id)
+            .where(
                 Chat.tracking_link_id == link_id,
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                lifecycle_at >= start_at,
-                lifecycle_at < end_at,
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
             )
         )
         return result.scalar_one()
@@ -342,7 +352,6 @@ class TrackingMetricsRepository:
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
-                Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 lifecycle_at >= start_at,
@@ -453,19 +462,22 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
-        lifecycle_at = self._chat_lifecycle_at()
         stmt = (
             select(
                 Chat.tracking_link_id.label("link_id"),
                 func.count(distinct(Chat.id)).label("starts"),
             )
+            .join(Message, Message.chat_id == Chat.id)
             .where(
                 Chat.project_id == project_id,
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                lifecycle_at >= start_at,
-                lifecycle_at < end_at,
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
             )
             .group_by(Chat.tracking_link_id)
         )
@@ -586,19 +598,21 @@ class TrackingMetricsRepository:
         date_to: date,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
-        lifecycle_at = self._chat_lifecycle_at()
-        metric_date = func.date(lifecycle_at)
+        metric_date = func.date(Message.created_at)
         stmt = (
             select(
                 metric_date.label("metric_date"),
                 func.count(distinct(Chat.id)).label("starts"),
             )
+            .join(Message, Message.chat_id == Chat.id)
             .where(
-                Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                lifecycle_at >= start_at,
-                lifecycle_at < end_at,
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
             )
             .group_by(metric_date)
         )
@@ -636,7 +650,6 @@ class TrackingMetricsRepository:
             .join(Chat, Chat.id == Lead.chat_id)
             .where(
                 Lead.is_deleted.is_(False),
-                Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 lifecycle_at >= start_at,
@@ -778,6 +791,11 @@ class TrackingMetricsRepository:
     @staticmethod
     def _lead_lifecycle_at():
         return func.coalesce(Chat.current_cycle_started_at, Lead.created_at)
+
+    @staticmethod
+    def _is_start_message():
+        command = func.split_part(func.lower(func.trim(Message.body)), " ", 1)
+        return or_(command == "/start", command.like("/start@%"))
 
     @staticmethod
     def _step_label(step_type: str, config: dict[str, Any] | None) -> str:

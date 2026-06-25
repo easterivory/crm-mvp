@@ -345,6 +345,14 @@ export default function SettingsPage() {
       }),
     [canManageProject, canManageStaff],
   )
+  const knownStatusCodes = useMemo(
+    () => new Set(statuses.map((statusItem) => statusItem.code)),
+    [statuses],
+  )
+  const unknownTrackingLeadStatusCodes = useMemo(
+    () => trackingLeadStatusCodes.filter((code) => !knownStatusCodes.has(code)),
+    [knownStatusCodes, trackingLeadStatusCodes],
+  )
 
   const selectedRole = useMemo(
     () => roles.find((role) => role.id === newUserRoleId) ?? null,
@@ -1204,7 +1212,35 @@ export default function SettingsPage() {
                     </label>
                   )
                 })}
+                {unknownTrackingLeadStatusCodes.map((statusCode) => {
+                  const isLastSelected = trackingLeadStatusCodes.length <= 1
+                  return (
+                    <label
+                      key={`unknown-${statusCode}`}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100 transition hover:border-amber-400/60"
+                    >
+                      <input
+                        type="checkbox"
+                        checked
+                        disabled={isLastSelected}
+                        onChange={() => toggleTrackingLeadStatus(statusCode)}
+                        className="h-5 w-5 rounded border-amber-500/60 bg-zinc-950 text-amber-400 focus:ring-amber-400 disabled:cursor-not-allowed"
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">Статус не найден</span>
+                        <span className="block truncate text-xs text-amber-100/65">
+                          {statusCode}
+                        </span>
+                      </span>
+                    </label>
+                  )
+                })}
               </div>
+              {unknownTrackingLeadStatusCodes.length > 0 ? (
+                <p className="mt-3 text-sm leading-5 text-amber-100/80">
+                  В проекте сохранены коды статусов, которых нет в справочнике. Снимите их или создайте соответствующие статусы.
+                </p>
+              ) : null}
               {statuses.length === 0 ? (
                 <p className="mt-3 text-sm text-zinc-500">
                   Статусы пока не загружены. Повторите после обновления страницы.

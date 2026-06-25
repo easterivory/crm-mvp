@@ -69,6 +69,7 @@ class TrackingProjectMetricsResponse(BaseModel):
     date_to: date
     tracking_lead_status_codes: list[str] = Field(default_factory=list)
     summary: TrackingMetricSummary
+    unattributed_summary: TrackingMetricSummary = Field(default_factory=TrackingMetricSummary)
     links: list[TrackingLinkMetric]
     daily: list[TrackingDailyMetric]
 

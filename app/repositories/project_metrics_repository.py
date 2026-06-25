@@ -4,12 +4,16 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import LeadStatusCode, MessageType, SenderType
 from app.models.chat import Chat
 from app.models.lead import Lead
+from app.models.lead_status import LeadStatus
+from app.models.message import Message
 from app.models.partner import LeadSubmission
+from app.models.project import Project
 from app.models.tracking import TrackingLink, TrackingSpend
 
 
@@ -23,20 +27,37 @@ class ProjectMetricsRepository:
         start_at = datetime.combine(day, time.min, tzinfo=timezone.utc)
         end_at = start_at + timedelta(days=1)
 
+        project_result = await self.db.execute(
+            select(Project.tracking_lead_status_codes).where(Project.id == project_id)
+        )
+        tracking_status_codes = self._normalize_status_codes(project_result.scalar_one_or_none())
+
         leads_result = await self.db.execute(
-            select(func.count(distinct(Lead.id))).where(
+            select(func.count(distinct(Lead.id)))
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
-                Lead.created_at >= start_at,
-                Lead.created_at < end_at,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                LeadStatus.code.in_(tracking_status_codes),
+                self._lead_lifecycle_at() >= start_at,
+                self._lead_lifecycle_at() < end_at,
             )
         )
-        chats_result = await self.db.execute(
-            select(func.count(distinct(Chat.id))).where(
+        starts_result = await self.db.execute(
+            select(func.count(distinct(Chat.id)))
+            .join(Message, Message.chat_id == Chat.id)
+            .where(
                 Chat.project_id == project_id,
                 Chat.is_deleted.is_(False),
-                Chat.created_at >= start_at,
-                Chat.created_at < end_at,
+                Chat.reset_at.is_(None),
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
             )
         )
         submitted_result = await self.db.execute(
@@ -59,13 +80,13 @@ class ProjectMetricsRepository:
             )
         )
         leads = int(leads_result.scalar_one() or 0)
-        chats = int(chats_result.scalar_one() or 0)
+        starts = int(starts_result.scalar_one() or 0)
         submitted = int(submitted_result.scalar_one() or 0)
         spend = Decimal(spend_result.scalar_one() or 0)
         cpl = spend / Decimal(leads) if leads > 0 else Decimal("0")
         conversion = (
-            Decimal(leads) / Decimal(chats) * Decimal("100")
-            if chats > 0
+            Decimal(leads) / Decimal(starts) * Decimal("100")
+            if starts > 0
             else Decimal("0")
         )
         submitted_percent = (
@@ -76,13 +97,32 @@ class ProjectMetricsRepository:
         cost_per_submitted = spend / Decimal(submitted) if submitted > 0 else Decimal("0")
         return {
             "date": day,
-            "subscribers_today": chats,
+            "subscribers_today": starts,
             "conversion_today": conversion,
             "leads_today": leads,
-            "chats_today": chats,
+            "chats_today": starts,
             "submitted_today": submitted,
             "submitted_percent_today": submitted_percent,
             "spend_today": spend,
             "cpl_today": cpl,
             "cost_per_submitted_today": cost_per_submitted,
         }
+
+    @staticmethod
+    def _normalize_status_codes(raw_codes: list[str] | None) -> tuple[str, ...]:
+        source = raw_codes or list(LeadStatusCode.TRACKING_LEAD_DEFAULT)
+        normalized: list[str] = []
+        for raw_code in source:
+            code = str(raw_code).strip().lower()
+            if code and code not in normalized:
+                normalized.append(code)
+        return tuple(normalized or LeadStatusCode.TRACKING_LEAD_DEFAULT)
+
+    @staticmethod
+    def _is_start_message():
+        command = func.split_part(func.lower(func.trim(Message.body)), " ", 1)
+        return or_(command == "/start", command.like("/start@%"))
+
+    @staticmethod
+    def _lead_lifecycle_at():
+        return func.coalesce(Chat.current_cycle_started_at, Lead.created_at)
