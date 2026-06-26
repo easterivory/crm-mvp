@@ -5,8 +5,14 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 from app.core.config import settings
 from app.core.database import get_db_session
+from app.models.lead import Lead
+from app.models.tracking import TrackingLink
+from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.google_sheets_service import GoogleSheetsService
 from app.services.postback_service import PostbackService
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
@@ -94,6 +100,78 @@ async def export_lead_to_sheets_task(
         return {"status": "failed", "error": str(exc)[:1000]}
 
 
+async def send_fb_capi_event_task(
+    ctx: dict,
+    lead_id: str,
+    tracking_link_id: str,
+    event_name: str,
+    custom_data: dict | None = None,
+    event_time: int | None = None,
+) -> dict:
+    try:
+        lead_uuid = UUID(lead_id)
+        tracking_link_uuid = UUID(tracking_link_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    try:
+        async with get_db_session() as db:
+            lead_result = await db.execute(
+                select(Lead)
+                .options(selectinload(Lead.chat))
+                .where(Lead.id == lead_uuid, Lead.is_deleted.is_(False))
+            )
+            lead = lead_result.scalar_one_or_none()
+            if lead is None:
+                return {"status": "failed", "error": "Lead not found"}
+            if lead.chat is None or lead.chat.tracking_link_id != tracking_link_uuid:
+                return {
+                    "status": "failed",
+                    "error": "Lead is not attached to the requested tracking link",
+                }
+
+            link_result = await db.execute(
+                select(TrackingLink).where(TrackingLink.id == tracking_link_uuid)
+            )
+            link = link_result.scalar_one_or_none()
+            if link is None:
+                return {"status": "failed", "error": "Tracking link not found"}
+            if not link.fb_pixel_id or not link.fb_capi_token:
+                return {"status": "skipped", "error": "Facebook CAPI is not configured"}
+
+            response = await FacebookCAPIService.send_event(
+                pixel_id=link.fb_pixel_id,
+                token=link.fb_capi_token,
+                event_name=event_name,
+                lead=lead,
+                event_time=event_time,
+                custom_data=custom_data or {},
+            )
+            return {
+                "status": "completed",
+                "lead_id": str(lead_uuid),
+                "tracking_link_id": str(tracking_link_uuid),
+                "response": response,
+            }
+    except FacebookCAPIError as exc:
+        logger.warning(
+            "Facebook CAPI task failed lead_id=%s tracking_link_id=%s event_name=%s error=%s",
+            lead_id,
+            tracking_link_id,
+            event_name,
+            exc,
+        )
+        return {"status": "failed", "error": str(exc)[:1000]}
+    except Exception as exc:
+        logger.exception(
+            "Facebook CAPI task crashed lead_id=%s tracking_link_id=%s event_name=%s",
+            lead_id,
+            tracking_link_id,
+            event_name,
+        )
+        return {"status": "failed", "error": str(exc)[:1000]}
+
+
 def _redis_settings_from_url() -> Any:
     if RedisSettings is None:
         return None
@@ -112,6 +190,7 @@ class WorkerSettings:
     functions = [
         send_lead_postback,
         export_lead_to_sheets_task,
+        send_fb_capi_event_task,
         process_broadcast,
         process_due_broadcasts,
         process_funnel_scheduled_job_task,

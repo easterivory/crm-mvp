@@ -59,6 +59,8 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     ad_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     payment_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     invite_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fb_pixel_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    fb_capi_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

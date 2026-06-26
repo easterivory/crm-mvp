@@ -433,6 +433,38 @@ export default function StepSettingsPanel({
                       ))}
                     </select>
                   ) : null}
+                  {action.type === 'send_fb_event' ? (
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                        Facebook event
+                      </span>
+                      <input
+                        list="facebook-capi-event-names"
+                        value={action.event_name || 'Lead'}
+                        onChange={(event) =>
+                          patchConfig({
+                            actions: actions.map((item, idx) =>
+                              idx === index ? { ...item, event_name: event.target.value } : item,
+                            ),
+                          })
+                        }
+                        maxLength={40}
+                        pattern="[A-Za-z][A-Za-z0-9_]*"
+                        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                        placeholder="Lead"
+                      />
+                      <datalist id="facebook-capi-event-names">
+                        <option value="Lead" />
+                        <option value="CompleteRegistration" />
+                        <option value="InitiateCheckout" />
+                        <option value="Purchase" />
+                        <option value="SubmitApplication" />
+                      </datalist>
+                      <span className="mt-1 block text-xs leading-5 text-gray-500">
+                        Событие уйдет через CAPI, если у tracking link чата заполнены Pixel ID и token.
+                      </span>
+                    </label>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => patchConfig({ actions: actions.filter((_, idx) => idx !== index) })}

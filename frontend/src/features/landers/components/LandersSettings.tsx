@@ -60,6 +60,8 @@ type LanderForm = {
   campaignBuyerName: string
   campaignAdType: string
   campaignPaymentType: string
+  campaignFbPixelId: string
+  campaignFbCapiToken: string
   campaignTargetStepKey: string
   metaPixelId: string
   metaEvents: string
@@ -85,6 +87,8 @@ const emptyLanderForm: LanderForm = {
   campaignBuyerName: '',
   campaignAdType: '',
   campaignPaymentType: '',
+  campaignFbPixelId: '',
+  campaignFbCapiToken: '',
   campaignTargetStepKey: '',
   metaPixelId: '',
   metaEvents: '',
@@ -459,6 +463,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               buyer_name: form.campaignBuyerName.trim() || null,
               ad_type: form.campaignAdType.trim() || null,
               payment_type: form.campaignPaymentType.trim() || null,
+              fb_pixel_id: form.campaignFbPixelId.trim() || form.metaPixelId.trim() || null,
+              fb_capi_token: form.campaignFbCapiToken.trim() || null,
               target_funnel_step_key: form.campaignTargetStepKey || null,
             }
           : null,
@@ -991,6 +997,37 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                       />
                     </label>
+                  </div>
+                  <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/5 p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                      Facebook Conversion API
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Pixel ID</span>
+                        <input
+                          value={form.campaignFbPixelId}
+                          onChange={(event) => setForm((current) => ({ ...current, campaignFbPixelId: event.target.value }))}
+                          inputMode="numeric"
+                          maxLength={50}
+                          placeholder={form.metaPixelId.trim() || '123456789012345'}
+                          className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">CAPI token</span>
+                        <input
+                          value={form.campaignFbCapiToken}
+                          onChange={(event) => setForm((current) => ({ ...current, campaignFbCapiToken: event.target.value }))}
+                          placeholder="Access token"
+                          autoComplete="off"
+                          className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                        />
+                      </label>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-zinc-500">
+                      Эти поля сохраняются в созданной tracking-ссылке и используются server-side CRM-действием.
+                    </p>
                   </div>
                   <label className="block">
                     <span className="mb-1 block text-sm font-medium text-zinc-300">Точка входа в активную воронку</span>

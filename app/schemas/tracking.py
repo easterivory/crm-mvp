@@ -1,9 +1,10 @@
+import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.constants import TrackingConversionStatus
 from app.core.constants import TrackingCostModel
@@ -22,6 +23,8 @@ class TrackingLinkCreate(BaseModel):
     ad_type: Optional[str] = Field(None, max_length=100)
     payment_type: Optional[str] = Field(None, max_length=100)
     invite_link: Optional[str] = None
+    fb_pixel_id: Optional[str] = Field(None, max_length=50)
+    fb_capi_token: Optional[str] = Field(None, max_length=4096)
     cost_model: TrackingCostModel = TrackingCostModel.FIX_PDP
     price_per_unit: Decimal = Field(default=Decimal("0"), ge=0)
     spend: Decimal = Field(default=Decimal("0"), ge=0)
@@ -35,6 +38,16 @@ class TrackingLinkCreate(BaseModel):
         if not (self.title or self.name):
             raise ValueError("title is required")
         return self
+
+    @field_validator("fb_pixel_id")
+    @classmethod
+    def normalize_fb_pixel_id(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_pixel_id(value)
+
+    @field_validator("fb_capi_token")
+    @classmethod
+    def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_capi_token(value)
 
 
 class TrackingLinkCostUpdate(BaseModel):
@@ -52,11 +65,23 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     ad_type: Optional[str] = Field(None, max_length=100)
     payment_type: Optional[str] = Field(None, max_length=100)
     invite_link: Optional[str] = None
+    fb_pixel_id: Optional[str] = Field(None, max_length=50)
+    fb_capi_token: Optional[str] = Field(None, max_length=4096)
     is_active: Optional[bool] = None
     base_conversion_rate: Optional[float] = Field(None, ge=0, le=100)
     min_sample_size: Optional[int] = Field(None, ge=1)
     target_step_id: Optional[uuid.UUID] = None
     target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("fb_pixel_id")
+    @classmethod
+    def normalize_fb_pixel_id(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_pixel_id(value)
+
+    @field_validator("fb_capi_token")
+    @classmethod
+    def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_capi_token(value)
 
 
 class TrackingLinkOut(OrmBase):
@@ -71,6 +96,8 @@ class TrackingLinkOut(OrmBase):
     base_conversion_rate: float
     min_sample_size: int
     target_step_id: Optional[uuid.UUID]
+    fb_pixel_id: Optional[str] = None
+    has_fb_capi_token: bool = False
     tracking_url: str = ""
     created_at: datetime
 
@@ -94,7 +121,23 @@ class TrackingLinkRead(OrmBase):
     target_funnel_id: Optional[uuid.UUID] = None
     target_funnel_step_key: Optional[str] = None
     target_funnel_step_title: Optional[str] = None
+    fb_pixel_id: Optional[str] = None
+    has_fb_capi_token: bool = False
     total_spend: Optional[Decimal] = None
+
+
+def normalize_fb_pixel_id(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"\d{5,50}", normalized):
+        raise ValueError("fb_pixel_id must contain 5-50 digits")
+    return normalized
+
+
+def normalize_fb_capi_token(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip()
+    return normalized or None
 
 
 class TrackingFunnelStepOption(BaseModel):

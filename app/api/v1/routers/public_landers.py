@@ -82,6 +82,7 @@ async def _render_lander(
             host=host,
             slug=slug,
             query_params=request.query_params,
+            browser_context=_browser_context_from_request(request),
         )
     except LanderNotFoundError as exc:
         raise HTTPException(
@@ -95,3 +96,24 @@ async def _render_lander(
         ) from exc
 
     return HTMLResponse(content=html_content)
+
+
+def _browser_context_from_request(request: Request) -> dict[str, str]:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded_for.split(",", maxsplit=1)[0].strip()
+    if not client_ip and request.client is not None:
+        client_ip = request.client.host
+
+    context: dict[str, str] = {}
+    fbp = request.cookies.get("_fbp")
+    if fbp:
+        context["fbp"] = fbp
+    fbc = request.cookies.get("_fbc")
+    if fbc:
+        context["fbc"] = fbc
+    user_agent = request.headers.get("user-agent")
+    if user_agent:
+        context["client_user_agent"] = user_agent
+    if client_ip:
+        context["client_ip_address"] = client_ip
+    return context

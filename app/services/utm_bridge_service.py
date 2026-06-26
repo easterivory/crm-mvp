@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -23,8 +24,13 @@ class UtmBridgeService:
     START_KEY_PREFIX = "start_"
     LANDER_START_PREFIX = "ls_"
 
-    async def store_query_params(self, query_params: QueryParamInput | None) -> str:
-        payload = self.normalize_query_params(query_params)
+    async def store_query_params(
+        self,
+        query_params: QueryParamInput | None,
+        *,
+        browser_context: Mapping[str, Any] | None = None,
+    ) -> str:
+        payload = self.build_bridge_payload(query_params, browser_context=browser_context)
         utm_key = f"utm_{uuid.uuid4().hex[:8]}"
         redis = await get_redis()
         await redis.setex(
@@ -60,11 +66,15 @@ class UtmBridgeService:
         *,
         ref_code: str,
         query_params: QueryParamInput | None,
+        browser_context: Mapping[str, Any] | None = None,
     ) -> str:
         key = f"{self.START_KEY_PREFIX}{uuid.uuid4().hex[:10]}"
         payload = {
             "ref_code": ref_code,
-            "params": self.normalize_query_params(query_params),
+            "params": self.build_bridge_payload(
+                query_params,
+                browser_context=browser_context,
+            ),
         }
         redis = await get_redis()
         await redis.setex(
@@ -183,6 +193,64 @@ class UtmBridgeService:
             else:
                 normalized[key] = [existing, value]
         return normalized
+
+    @classmethod
+    def build_bridge_payload(
+        cls,
+        query_params: QueryParamInput | None,
+        *,
+        browser_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = cls.normalize_query_params(query_params)
+        payload.update(cls.normalize_facebook_context(browser_context, payload))
+        return payload
+
+    @classmethod
+    def normalize_facebook_context(
+        cls,
+        browser_context: Mapping[str, Any] | None,
+        query_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, str]:
+        if browser_context is None:
+            browser_context = {}
+        query_payload = query_payload or {}
+
+        fbp = cls._clean_context_value(browser_context.get("fbp") or browser_context.get("_fbp"), 500)
+        fbc = cls._clean_context_value(browser_context.get("fbc") or browser_context.get("_fbc"), 500)
+        fbclid = cls._clean_context_value(query_payload.get("fbclid"), 500)
+        if fbc is None and fbclid is not None:
+            fbc = f"fb.1.{int(time.time() * 1000)}.{fbclid}"
+
+        context: dict[str, str] = {}
+        if fbp is not None:
+            context["fbp"] = fbp
+        if fbc is not None:
+            context["fbc"] = fbc
+
+        user_agent = cls._clean_context_value(
+            browser_context.get("client_user_agent") or browser_context.get("user_agent"),
+            1000,
+        )
+        if user_agent is not None:
+            context["client_user_agent"] = user_agent
+
+        client_ip = cls._clean_context_value(
+            browser_context.get("client_ip_address") or browser_context.get("client_ip"),
+            100,
+        )
+        if client_ip is not None:
+            context["client_ip_address"] = client_ip
+
+        return context
+
+    @staticmethod
+    def _clean_context_value(value: Any, max_length: int) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+        return normalized[:max_length]
 
     @classmethod
     def _redis_key(cls, utm_key: str) -> str:

@@ -21,9 +21,12 @@ from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.repositories.tag_repository import TagRepository
+from app.repositories.tracking_repository import TrackingLinkRepository
 from app.schemas.message import MessageCreate
 from app.services.chat_audit_service import ChatAuditService
 from app.services.audit_service import AuditService
+from app.services.facebook_capi_queue import enqueue_facebook_capi_event
+from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.funnel_block_registry import LEAD_FIELD_KEYS
 from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
@@ -71,6 +74,7 @@ class FunnelRuntimeService:
         self.lead_repo = LeadRepository(db)
         self.partner_repo = PartnerIntegrationRepository(db)
         self.tag_repo = TagRepository(db)
+        self.tracking_link_repo = TrackingLinkRepository(db)
         from app.services.message_service import MessageService
 
         self.message_service = MessageService(db)
@@ -1700,6 +1704,71 @@ class FunnelRuntimeService:
                         partner_integration_id=integration.id,
                         status="pending",
                     )
+                elif action_type in {"send_fb_event", "send_facebook_capi_event"}:
+                    event_name = str(
+                        raw.get("event_name")
+                        or raw.get("fb_event_name")
+                        or "Lead"
+                    ).strip()
+                    try:
+                        event_name = FacebookCAPIService.validate_event_name(event_name)
+                    except FacebookCAPIError as exc:
+                        await self._log_runtime_step(
+                            chat_id=chat_id,
+                            step=step,
+                            status="failed",
+                            error_message=f"Ошибка Facebook CAPI: {exc}",
+                        )
+                        return False
+
+                    chat = await self.chat_repo.get_by_id(chat_id)
+                    if chat is None or chat.tracking_link_id is None:
+                        logger.warning(
+                            "Facebook CAPI action skipped without tracking link chat_id=%s lead_id=%s step_id=%s",
+                            chat_id,
+                            lead.id,
+                            step.id,
+                        )
+                        continue
+
+                    tracking_link = await self.tracking_link_repo.get_link_by_id(chat.tracking_link_id)
+                    if (
+                        tracking_link is None
+                        or not tracking_link.fb_pixel_id
+                        or not tracking_link.fb_capi_token
+                    ):
+                        logger.warning(
+                            "Facebook CAPI action skipped without configured link chat_id=%s lead_id=%s "
+                            "tracking_link_id=%s step_id=%s",
+                            chat_id,
+                            lead.id,
+                            chat.tracking_link_id,
+                            step.id,
+                        )
+                        continue
+
+                    custom_data = {
+                        "source": "funnel_runtime",
+                        "project_id": str(lead.project_id),
+                        "tracking_code": tracking_link.code,
+                        "funnel_step_id": str(step.id),
+                        "funnel_step_key": step.key,
+                        "funnel_step_title": step.title,
+                    }
+                    queued_job_id = await enqueue_facebook_capi_event(
+                        lead_id=lead.id,
+                        tracking_link_id=tracking_link.id,
+                        event_name=event_name,
+                        custom_data=custom_data,
+                    )
+                    if queued_job_id is None:
+                        logger.warning(
+                            "Facebook CAPI event was not queued chat_id=%s lead_id=%s step_id=%s event_name=%s",
+                            chat_id,
+                            lead.id,
+                            step.id,
+                            event_name,
+                        )
                 elif action_type == "add_note":
                     logger.info("CRM note action recorded chat_id=%s lead_id=%s step_id=%s", chat_id, lead.id, step.id)
                 else:

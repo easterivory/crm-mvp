@@ -333,6 +333,8 @@ export default function TrackingPage() {
   const [createAdType, setCreateAdType] = useState('')
   const [createPaymentType, setCreatePaymentType] = useState('')
   const [createInviteLink, setCreateInviteLink] = useState('')
+  const [createFbPixelId, setCreateFbPixelId] = useState('')
+  const [createFbCapiToken, setCreateFbCapiToken] = useState('')
   const [createBaseConversionRate, setCreateBaseConversionRate] = useState(
     DEFAULT_BASE_CONVERSION_RATE,
   )
@@ -349,6 +351,8 @@ export default function TrackingPage() {
   const [editAdType, setEditAdType] = useState('')
   const [editPaymentType, setEditPaymentType] = useState('')
   const [editInviteLink, setEditInviteLink] = useState('')
+  const [editFbPixelId, setEditFbPixelId] = useState('')
+  const [editFbCapiToken, setEditFbCapiToken] = useState('')
   const [editBaseConversionRate, setEditBaseConversionRate] = useState(
     DEFAULT_BASE_CONVERSION_RATE,
   )
@@ -551,6 +555,8 @@ export default function TrackingPage() {
     setCreateAdType('')
     setCreatePaymentType('')
     setCreateInviteLink('')
+    setCreateFbPixelId('')
+    setCreateFbCapiToken('')
     setCreateBaseConversionRate(DEFAULT_BASE_CONVERSION_RATE)
     setCreateMinSampleSize(DEFAULT_MIN_SAMPLE_SIZE)
     setCreateTargetStepKey('')
@@ -598,6 +604,8 @@ export default function TrackingPage() {
         ad_type: createAdType.trim() || null,
         payment_type: createPaymentType.trim() || null,
         invite_link: createInviteLink.trim() || null,
+        fb_pixel_id: createFbPixelId.trim() || null,
+        fb_capi_token: createFbCapiToken.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
         target_funnel_step_key: createTargetStepKey || null,
@@ -619,6 +627,8 @@ export default function TrackingPage() {
     setEditAdType(link.ad_type ?? '')
     setEditPaymentType(link.payment_type ?? '')
     setEditInviteLink(link.invite_link ?? '')
+    setEditFbPixelId(link.fb_pixel_id ?? '')
+    setEditFbCapiToken('')
     setEditBaseConversionRate(String(link.base_conversion_rate ?? 10))
     setEditMinSampleSize(String(link.min_sample_size ?? 500))
     setEditTargetStepKey(link.target_funnel_step_key ?? '')
@@ -655,15 +665,21 @@ export default function TrackingPage() {
     setNotice('')
 
     try {
-      const updatedLink = await updateTrackingLink(editingLink.id, {
+      const payload = {
         title: editTitle.trim(),
         buyer_name: editBuyerName.trim() || null,
         ad_type: editAdType.trim() || null,
         payment_type: editPaymentType.trim() || null,
         invite_link: editInviteLink.trim() || null,
+        fb_pixel_id: editFbPixelId.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
         target_funnel_step_key: editTargetStepKey || null,
+      }
+      const token = editFbCapiToken.trim()
+      const updatedLink = await updateTrackingLink(editingLink.id, {
+        ...payload,
+        ...(token ? { fb_capi_token: token } : {}),
       })
       setNotice('Tracking link обновлён.')
       setEditingLink(null)
@@ -1256,6 +1272,15 @@ export default function TrackingPage() {
                       }`}>
                         {link.is_active ? 'Активна' : 'Архив'}
                       </span>
+                      {link.fb_pixel_id ? (
+                        <span className={`rounded-full border px-2 py-1 text-xs ${
+                          link.has_fb_capi_token
+                            ? 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100'
+                            : 'border-amber-300/20 bg-amber-400/10 text-amber-100'
+                        }`}>
+                          Meta CAPI {link.has_fb_capi_token ? 'готов' : 'без token'}
+                        </span>
+                      ) : null}
                     </div>
                     <h3 className="mt-3 truncate text-lg font-semibold text-white">
                       {link.title}
@@ -1532,6 +1557,41 @@ export default function TrackingPage() {
                 placeholder="Готовый URL, необязательно"
               />
             </label>
+            <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/5 p-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                Facebook Conversion API
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Pixel ID
+                  </span>
+                  <input
+                    value={createFbPixelId}
+                    onChange={(event) => setCreateFbPixelId(event.target.value)}
+                    inputMode="numeric"
+                    maxLength={50}
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                    placeholder="123456789012345"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    CAPI token
+                  </span>
+                  <input
+                    value={createFbCapiToken}
+                    onChange={(event) => setCreateFbCapiToken(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                    placeholder="Access token"
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-gray-500">
+                Эти данные используются только для server-side событий из CRM-действий воронки.
+              </p>
+            </div>
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1653,6 +1713,41 @@ export default function TrackingPage() {
                   : 'Ссылка зайдет прямо на выбранный шаг, если активная воронка этого бота не изменилась.'}
               </span>
             </label>
+            <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/5 p-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                Facebook Conversion API
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Pixel ID
+                  </span>
+                  <input
+                    value={editFbPixelId}
+                    onChange={(event) => setEditFbPixelId(event.target.value)}
+                    inputMode="numeric"
+                    maxLength={50}
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                    placeholder="123456789012345"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Новый CAPI token
+                  </span>
+                  <input
+                    value={editFbCapiToken}
+                    onChange={(event) => setEditFbCapiToken(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                    placeholder={editingLink.has_fb_capi_token ? 'Уже задан, оставить пустым' : 'Access token'}
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-gray-500">
+                Текущий token не показывается. Введите новый, только если его нужно заменить.
+              </p>
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">

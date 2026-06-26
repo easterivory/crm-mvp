@@ -133,6 +133,8 @@ class LanderAdminService:
                     buyer_name=campaign.buyer_name,
                     ad_type=campaign.ad_type,
                     payment_type=campaign.payment_type,
+                    fb_pixel_id=campaign.fb_pixel_id,
+                    fb_capi_token=campaign.fb_capi_token,
                     base_conversion_rate=campaign.base_conversion_rate,
                     min_sample_size=campaign.min_sample_size,
                     target_funnel_step_key=campaign.target_funnel_step_key,

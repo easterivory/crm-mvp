@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import MainLayout from './components/MainLayout'
 import ManagerRestrictedRoute from './components/ManagerRestrictedRoute'
 import ProtectedRoute from './components/ProtectedRoute'
+import SuperAdminRoute from './components/SuperAdminRoute'
 import BotsPage from './pages/BotsPage'
 import BroadcastsPage from './pages/BroadcastsPage'
 import DashboardPage from './pages/DashboardPage'
@@ -53,7 +54,7 @@ export default function App() {
           <Route path="/bots" element={<ManagerRestrictedRoute><BotsPage /></ManagerRestrictedRoute>} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/tracking" element={<ManagerRestrictedRoute><TrackingPage /></ManagerRestrictedRoute>} />
-          <Route path="/docs" element={<DocsPage />} />
+          <Route path="/docs" element={<SuperAdminRoute><DocsPage /></SuperAdminRoute>} />
           <Route path="/settings" element={<ManagerRestrictedRoute><SettingsPage /></ManagerRestrictedRoute>} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />

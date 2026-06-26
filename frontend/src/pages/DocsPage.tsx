@@ -53,6 +53,13 @@ type Formula = {
   note: string
 }
 
+type LogicFlow = {
+  title: string
+  icon: LucideIcon
+  tone: Tone
+  steps: string[]
+}
+
 const toneStyles: Record<Tone, { border: string; bg: string; icon: string; text: string }> = {
   cyan: {
     border: 'border-cyan-300/25',
@@ -94,6 +101,7 @@ const toneStyles: Record<Tone, { border: string; bg: string; icon: string; text:
 
 const navItems: NavItem[] = [
   { id: 'start', label: 'Быстрый старт', icon: CheckCircle2 },
+  { id: 'logic', label: 'Логика CRM', icon: ClipboardList },
   { id: 'roles', label: 'Роли и доступы', icon: ShieldCheck },
   { id: 'workspace', label: 'Рабочее место', icon: MessageSquareText },
   { id: 'bots-leads', label: 'Боты и лиды', icon: Bot },
@@ -115,6 +123,64 @@ const quickStartSteps = [
   'Создайте tracking-ссылки и, если нужен трафик через ленды, припаркуйте домен.',
   'Соберите воронку: триггер, сообщения, ожидание ответа, условия, CRM-действия.',
   'Опубликуйте воронку, протестируйте путь лида и только потом включайте трафик.',
+]
+
+const logicFlows: LogicFlow[] = [
+  {
+    title: 'Старт бота и подписчик',
+    icon: Bot,
+    tone: 'cyan',
+    steps: [
+      'Пользователь открывает deep-link Telegram или пишет /start напрямую.',
+      'CRM создает или находит чат и сохраняет входящее сообщение пользователя.',
+      'Подписчик/старт в метриках считается только по входящему тексту /start или /start@bot, а не по факту создания чата.',
+      'Если у /start есть tracking code, чат связывается с tracking-ссылкой; без кода он попадает в “Без трекинга”.',
+    ],
+  },
+  {
+    title: 'Лид и статус лида',
+    icon: UsersRound,
+    tone: 'emerald',
+    steps: [
+      'Лид привязан к чату, проекту и текущему статусу из проектного справочника статусов.',
+      'Старт бота не равен лиду в трекинге. Лидом для CPL и CR считается только статус, выбранный в Настройки -> Проект -> “Лид в трекинге”.',
+      'По умолчанию в tracking-набор входят submitted и qualified; проект может выбрать другой набор статусов.',
+      'Дата лида для аналитики берется из текущего цикла чата, а если цикла нет - из даты создания лида.',
+    ],
+  },
+  {
+    title: 'Воронка и ручная обработка',
+    icon: Workflow,
+    tone: 'violet',
+    steps: [
+      'Активная опубликованная версия воронки обслуживает новых лидов; черновик нужен для безопасной подготовки изменений.',
+      'Когда менеджер забирает диалог, сценарий можно поставить на паузу, чтобы бот не продолжал писать поверх ручной обработки.',
+      'Менеджер может вернуть человека в воронку на нужный шаг, если сценарий должен продолжиться после ручного контакта.',
+      'Блок вопроса или сообщения должен явно ждать ответ, иначе сценарий пойдет дальше сразу после отправки.',
+    ],
+  },
+  {
+    title: 'Трекинг, ленды и баеры',
+    icon: MousePointerClick,
+    tone: 'amber',
+    steps: [
+      'Tracking-ссылка хранит код, бота, баера, расходную модель, базовый CR и точку входа в воронку.',
+      'Ленд подставляет Telegram-ссылку CRM на сервере, чтобы не терять tracking code, UTM и выбранный шаг воронки.',
+      'Клики считаются по открытию tracking/ленд-ссылки, старты - по фактическому /start в Telegram, лиды - по выбранным статусам проекта.',
+      'Баерская статистика агрегируется по tracking-ссылкам баера: расход, клики, старты, лиды, поданные, CPL и конверсии.',
+    ],
+  },
+  {
+    title: 'Партнеры, Google Sheets и бэкапы',
+    icon: Plug,
+    tone: 'slate',
+    steps: [
+      'Подача партнеру идет через mapping полей, проверку обязательных данных, postback URL и распознавание ответа партнера.',
+      'Google Sheets выгружает лидов при переходе в выбранные trigger statuses проекта.',
+      'Валидность лида для качества менеджера появляется только из обратной информации партнера или финального qualified-статуса.',
+      'Бэкап базы создается отдельным процессом через pg_dump, проверяется через pg_restore --list и может отправляться в закрытый Telegram-чат.',
+    ],
+  },
 ]
 
 const featureCards: FeatureCard[] = [
@@ -220,9 +286,9 @@ const featureCards: FeatureCard[] = [
 ]
 
 const roleRows: Array<[string, string]> = [
-  ['Super Admin', 'Все проекты, архивирование проектов, команда, интеграции, баеры, настройки и аналитика.'],
+  ['Super Admin', 'Все проекты, архивирование проектов, команда, интеграции, баеры, настройки, аналитика и эта документация.'],
   ['Admin', 'Управление доступными проектами, командой проекта, интеграциями, баерами и настройками.'],
-  ['Manager', 'Операционная работа с чатами и лидами, подача лидов партнеру, просмотр доступных данных.'],
+  ['Manager', 'Операционная работа с чатами и лидами, подача лидов партнеру, шаблоны сообщений и выбор активной воронки без доступа к редактированию конструктора.'],
   ['Operator', 'Работа с диалогами, ответ клиентам, базовые действия с лидом в пределах доступа.'],
 ]
 
@@ -269,12 +335,12 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
       {
         label: 'Лиды сегодня',
         value: 'count(distinct Lead.id)',
-        note: 'Считаются лиды активного проекта, не удаленные, созданные в текущий UTC-день.',
+        note: 'Считаются только неудаленные лиды проекта, чей текущий статус входит в Настройки -> Проект -> “Лид в трекинге”. Дата берется из текущего цикла чата или даты создания лида.',
       },
       {
-        label: 'Чаты / подписчики сегодня',
-        value: 'count(distinct Chat.id)',
-        note: 'Новые чаты проекта за текущий UTC-день, без удаленных записей.',
+        label: 'Подписчики / старты сегодня',
+        value: 'count(distinct Chat.id with /start)',
+        note: 'Уникальные неудаленные чаты проекта, где за день было входящее текстовое сообщение /start или /start@bot. Создание чата без /start не увеличивает показатель.',
       },
       {
         label: 'Подано сегодня',
@@ -283,8 +349,8 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
       },
       {
         label: 'CR в лид',
-        value: 'leads_today / chats_today * 100',
-        note: 'Если чатов нет, значение равно 0.',
+        value: 'leads_today / subscribers_today * 100',
+        note: 'Конверсия из фактических Telegram-стартов в лиды по выбранным tracking-статусам. Если стартов нет, значение равно 0.',
       },
       {
         label: 'Стоимость лида',
@@ -304,7 +370,7 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
       {
         label: 'CR в лид',
         value: 'leads / starts * 100',
-        note: 'starts - это Telegram /start. leads считаются только по статусам, выбранным в Настройки -> Проект -> Лид в трекинге. В оценке качества ссылки sample = clicks, а если кликов нет, то starts.',
+        note: 'starts - это уникальные Telegram /start за период. leads считаются только по статусам, выбранным в Настройки -> Проект -> Лид в трекинге. В оценке качества ссылки sample = clicks, а если кликов нет, то starts.',
       },
       {
         label: 'CR в подачу',
@@ -335,6 +401,11 @@ const formulaGroups: Array<{ title: string; formulas: Formula[] }> = [
         label: 'Статус CR',
         value: 'fact_cr vs base_conversion_rate',
         note: 'high_cr >= 120% от базы, low_cr <= 70% от базы, normal_cr между ними, insufficient_data если sample меньше min_sample_size.',
+      },
+      {
+        label: 'Без трекинга',
+        value: 'project_total - sum(tracking_links)',
+        note: 'Отдельная карточка показывает прямые старты и лиды без tracking_link_id. Это помогает увидеть трафик, пришедший без рекламной ссылки или без кода.',
       },
     ],
   },
@@ -430,6 +501,34 @@ function FeatureCardView({ card }: { card: FeatureCard }) {
           </li>
         ))}
       </ul>
+    </article>
+  )
+}
+
+function LogicFlowCard({ flow }: { flow: LogicFlow }) {
+  const Icon = flow.icon
+  const tone = toneStyles[flow.tone]
+
+  return (
+    <article className={cn('rounded-xl border p-4', tone.border, tone.bg)}>
+      <div className="flex items-start gap-3">
+        <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border', tone.border, tone.bg, tone.icon)}>
+          <Icon size={20} />
+        </div>
+        <div className="min-w-0">
+          <h3 className={cn('text-base font-semibold', tone.text)}>{flow.title}</h3>
+          <ol className="mt-3 space-y-2 text-sm leading-6 text-gray-300">
+            {flow.steps.map((step, index) => (
+              <li key={step} className="flex gap-2">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/20 text-[11px] font-semibold text-gray-200">
+                  {index + 1}
+                </span>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </div>
     </article>
   )
 }
@@ -577,7 +676,7 @@ export default function DocsPage() {
             </div>
             <div className="grid gap-2 text-sm text-gray-400 sm:grid-cols-3 lg:w-[420px]">
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                <div className="text-lg font-semibold text-white">12</div>
+                <div className="text-lg font-semibold text-white">13</div>
                 <div>разделов</div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
@@ -652,6 +751,25 @@ export default function DocsPage() {
           </InfoCallout>
         </Section>
 
+        <Section id="logic" title="Как работает CRM" kicker="Системная логика" icon={ClipboardList}>
+          <p className="text-sm leading-6 text-gray-400">
+            Этот раздел описывает цепочку событий без маркетинговых упрощений: что считается стартом,
+            когда появляется лид, какие статусы попадают в трекинг, как воронка уступает управление
+            менеджеру и откуда берутся цифры в верхней панели, аналитике и tracking-экране.
+          </p>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {logicFlows.map((flow) => (
+              <LogicFlowCard key={flow.title} flow={flow} />
+            ))}
+          </div>
+          <InfoCallout title="Самое важное про старты и лиды" tone="amber">
+            Старт бота и лид в трекинге специально считаются разными событиями. Старт фиксирует факт
+            входа пользователя в Telegram-бота, а лид для CPL/CR появляется только после перехода в
+            один из статусов, выбранных в настройке проекта “Лид в трекинге”. Поэтому рекламный клик,
+            Telegram /start и квалифицированный лид могут иметь разные значения в одной и той же дате.
+          </InfoCallout>
+        </Section>
+
         <Section id="roles" title="Роли и доступы" kicker="Команда" icon={ShieldCheck}>
           <p className="text-sm leading-6 text-gray-400">
             Доступы управляются в настройках команды. У пользователя есть роль и список проектов,
@@ -684,6 +802,12 @@ export default function DocsPage() {
               </p>
             </div>
           </div>
+          <InfoCallout title="Ограничения менеджера" tone="amber">
+            Менеджер может вести переписку, забрать чат себе, отправить лида в корзину, подать лида
+            партнеру, пользоваться шаблонами и выбрать активную воронку. Блокировка пользователя,
+            полный сброс диалога, редактирование конструктора, удаление рассылок из базы, боты,
+            трекинг и настройки должны оставаться выше менеджерского уровня.
+          </InfoCallout>
         </Section>
 
         <Section id="workspace" title="Рабочее место оператора" kicker="Чаты, лиды, перевод" icon={MessageSquareText}>

@@ -118,6 +118,8 @@ class TrackingService:
                     ad_type=self._normalize_optional(data.ad_type),
                     payment_type=self._normalize_optional(data.payment_type),
                     invite_link=invite_link,
+                    fb_pixel_id=data.fb_pixel_id,
+                    fb_capi_token=data.fb_capi_token,
                     cost_model=data.cost_model,
                     price_per_unit=data.price_per_unit,
                     spend=data.spend,
@@ -146,6 +148,8 @@ class TrackingService:
                     ad_type=self._normalize_optional(data.ad_type),
                     payment_type=self._normalize_optional(data.payment_type),
                     invite_link=self._build_invite_link(bot.bot_username, code),
+                    fb_pixel_id=data.fb_pixel_id,
+                    fb_capi_token=data.fb_capi_token,
                     cost_model=data.cost_model,
                     price_per_unit=data.price_per_unit,
                     spend=data.spend,
@@ -333,6 +337,8 @@ class TrackingService:
                 ad_type=self._normalize_optional(data.ad_type),
                 payment_type=self._normalize_optional(data.payment_type),
                 invite_link=invite_link,
+                fb_pixel_id=data.fb_pixel_id,
+                fb_capi_token=data.fb_capi_token,
                 cost_model=data.cost_model,
                 price_per_unit=data.price_per_unit,
                 spend=data.spend,
@@ -656,7 +662,7 @@ class TrackingService:
                 values["code"] = code
                 values["ref_code"] = code
 
-        for field in ("buyer_name", "ad_type", "payment_type", "invite_link"):
+        for field in ("buyer_name", "ad_type", "payment_type", "invite_link", "fb_pixel_id", "fb_capi_token"):
             if field in values:
                 values[field] = self._normalize_optional(values[field])
 
@@ -749,7 +755,10 @@ class TrackingService:
         username = (link.bot.bot_username or "").removeprefix("@")
         ref_code = link.ref_code or link.code
         return TrackingLinkOut.model_validate(link).model_copy(
-            update={"tracking_url": f"https://t.me/{username}?start={ref_code}"}
+            update={
+                "tracking_url": f"https://t.me/{username}?start={ref_code}",
+                "has_fb_capi_token": bool((link.fb_capi_token or "").strip()),
+            }
         )
 
     async def _to_read(
@@ -787,5 +796,7 @@ class TrackingService:
             target_funnel_id=link.target_funnel_id,
             target_funnel_step_key=link.target_funnel_step_key,
             target_funnel_step_title=await self._target_funnel_step_title(link),
+            fb_pixel_id=link.fb_pixel_id,
+            has_fb_capi_token=bool((link.fb_capi_token or "").strip()),
             total_spend=total_spend,
         )

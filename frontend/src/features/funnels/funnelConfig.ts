@@ -62,6 +62,7 @@ export type ActionConfig = {
   value?: string
   operator_id?: string
   partner_integration_id?: string
+  event_name?: string
   note?: string
 }
 
@@ -121,6 +122,7 @@ export const actionTypes = [
   ['assign_operator', 'Назначить оператора'],
   ['add_note', 'Добавить заметку'],
   ['submit_to_partner', 'Отправить в partner CRM'],
+  ['send_fb_event', 'Facebook CAPI event'],
 ] as const
 
 export function textValue(config: Record<string, unknown>, key: string) {
@@ -355,6 +357,11 @@ export function normalizeActions(raw: unknown): ActionConfig[] {
       operator_id: typeof action.operator_id === 'string' ? action.operator_id : '',
       partner_integration_id:
         typeof action.partner_integration_id === 'string' ? action.partner_integration_id : '',
+      event_name: typeof action.event_name === 'string'
+        ? action.event_name
+        : typeof action.fb_event_name === 'string'
+          ? action.fb_event_name
+          : 'Lead',
       note: typeof action.note === 'string' ? action.note : '',
     }
   })

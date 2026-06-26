@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     # Landings/domains
     LANDER_STORAGE_PATH: str = "storage/landers"
 
+    # Facebook Conversion API
+    FACEBOOK_CAPI_TIMEOUT_SECONDS: float = 10.0
+
     # Database backups
     BACKUP_ENABLED: bool = False
     BACKUP_STORAGE_PATH: str = "/backups"

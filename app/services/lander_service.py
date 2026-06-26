@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from collections.abc import Mapping
 from uuid import UUID
 from urllib.parse import quote
 
@@ -114,9 +115,14 @@ class LanderService:
         host: str,
         slug: str,
         query_params: QueryParamInput | None = None,
+        browser_context: Mapping[str, object] | None = None,
     ) -> str:
         lander = await self.resolve_lander_request(host=host, slug=slug)
-        telegram_url = await self.build_telegram_url(lander, query_params)
+        telegram_url = await self.build_telegram_url(
+            lander,
+            query_params,
+            browser_context=browser_context,
+        )
         pixel_markup = self._render_pixel_markup(
             lander.pixels_json,
             lander.meta_events_json,
@@ -159,6 +165,8 @@ class LanderService:
         self,
         lander: ProjectLander,
         query_params: QueryParamInput | None = None,
+        *,
+        browser_context: Mapping[str, object] | None = None,
     ) -> str:
         tracking_link = lander.tracking_link
         if tracking_link is None:
@@ -177,6 +185,7 @@ class LanderService:
         start_key = await self.utm_bridge.store_lander_start(
             ref_code=code,
             query_params=utm_params,
+            browser_context=browser_context,
         )
         start_payload = quote(
             self.utm_bridge.build_lander_start_payload(tracking_link.id, start_key),

@@ -124,6 +124,7 @@ function previewLines(step: FunnelStep) {
       if (action.type === 'set_lead_status') return `Статус: ${action.status || '...'}` 
       if (action.type === 'add_tag') return 'Добавить тег'
       if (action.type === 'write_field') return `Поле: ${action.field || '...'}`
+      if (action.type === 'send_fb_event') return `FB: ${action.event_name || 'Lead'}`
       return action.type
     })
   }

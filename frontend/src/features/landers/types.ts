@@ -31,6 +31,8 @@ export type LanderTrackingCampaign = {
   buyer_name?: string | null
   ad_type?: string | null
   payment_type?: string | null
+  fb_pixel_id?: string | null
+  fb_capi_token?: string | null
   base_conversion_rate?: number
   min_sample_size?: number
   target_funnel_step_key?: string | null

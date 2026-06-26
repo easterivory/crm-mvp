@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { BotSelector } from '../features/bots'
 import { ProjectSelector } from '../features/projects'
-import { isManagerRole, t } from '../shared/lib'
+import { isManagerRole, isSuperAdminRole, t } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 import DashboardHeaderMetrics from './DashboardHeaderMetrics'
 
@@ -102,7 +102,14 @@ export default function MainLayout() {
   const displayName = user?.name ?? user?.email ?? 'Пользователь'
   const isChatPage = location.pathname.startsWith('/chats')
   const visibleNavItems = useMemo(
-    () => navItems.filter((item) => !isManagerRole(user?.role_name) || !['/bots', '/tracking', '/settings'].includes(item.path)),
+    () =>
+      navItems.filter((item) => {
+        if (item.path === '/docs') {
+          return isSuperAdminRole(user?.role_name)
+        }
+
+        return !isManagerRole(user?.role_name) || !['/bots', '/tracking', '/settings'].includes(item.path)
+      }),
     [user?.role_name],
   )
   const roleLabel = useMemo(() => {

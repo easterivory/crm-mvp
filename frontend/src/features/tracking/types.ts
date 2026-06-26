@@ -17,6 +17,8 @@ export type TrackingLink = {
   target_funnel_id: string | null
   target_funnel_step_key: string | null
   target_funnel_step_title: string | null
+  fb_pixel_id: string | null
+  has_fb_capi_token: boolean
   total_spend?: string | number | null
 }
 
@@ -32,6 +34,8 @@ export type TrackingLinkCreatePayload = {
   base_conversion_rate?: number
   min_sample_size?: number
   target_funnel_step_key?: string | null
+  fb_pixel_id?: string | null
+  fb_capi_token?: string | null
 }
 
 export type TrackingLinkUpdatePayload = Partial<{
@@ -45,6 +49,8 @@ export type TrackingLinkUpdatePayload = Partial<{
   base_conversion_rate: number
   min_sample_size: number
   target_funnel_step_key: string | null
+  fb_pixel_id: string | null
+  fb_capi_token: string | null
 }>
 
 export type TrackingFunnelStepOption = {

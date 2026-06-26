@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import OrmBase
+from app.schemas.tracking import normalize_fb_capi_token, normalize_fb_pixel_id
 
 
 class ProjectDomainBase(BaseModel):
@@ -71,9 +72,21 @@ class LanderTrackingCampaignCreate(BaseModel):
     buyer_name: Optional[str] = Field(default=None, max_length=255)
     ad_type: Optional[str] = Field(default=None, max_length=100)
     payment_type: Optional[str] = Field(default=None, max_length=100)
+    fb_pixel_id: Optional[str] = Field(default=None, max_length=50)
+    fb_capi_token: Optional[str] = Field(default=None, max_length=4096)
     base_conversion_rate: float = Field(default=10.0, ge=0, le=100)
     min_sample_size: int = Field(default=500, ge=1)
     target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("fb_pixel_id")
+    @classmethod
+    def normalize_fb_pixel_id(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_pixel_id(value)
+
+    @field_validator("fb_capi_token")
+    @classmethod
+    def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_capi_token(value)
 
 
 class ProjectLanderBase(BaseModel):
