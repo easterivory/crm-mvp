@@ -21,6 +21,7 @@ export type ChatFiltersState = {
   funnelState: ChatFunnelStateFilter
   hasUnansweredIncoming: boolean
   isRed: boolean
+  isHotLead: boolean
   assignedUserId: string
   unassigned: boolean
   quickFilter: ChatQuickFilter
@@ -63,6 +64,7 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   funnelState: '',
   hasUnansweredIncoming: false,
   isRed: false,
+  isHotLead: false,
   assignedUserId: '',
   unassigned: false,
   quickFilter: '',
@@ -78,6 +80,7 @@ export function countActiveChatFilters(filters: ChatFiltersState) {
     filters.funnelState,
     filters.hasUnansweredIncoming ? 'has_unanswered' : '',
     filters.isRed ? 'is_red' : '',
+    filters.isHotLead ? 'is_hot_lead' : '',
     filters.assignedUserId,
     filters.unassigned ? 'unassigned' : '',
   ].filter(Boolean).length

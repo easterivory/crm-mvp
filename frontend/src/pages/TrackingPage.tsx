@@ -68,6 +68,8 @@ type SpendMode = 'create' | 'edit'
 
 const DEFAULT_BASE_CONVERSION_RATE = '10.0'
 const DEFAULT_MIN_SAMPLE_SIZE = '500'
+const dateInputClassName = 'crm-date-input h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60'
+const modalDateInputClassName = 'crm-date-input h-10 w-full rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2'
 
 const zeroSummary: TrackingMetricSummary = {
   clicks: 0,
@@ -835,6 +837,12 @@ export default function TrackingPage() {
 
   const summary = metrics?.summary ?? zeroSummary
   const unattributedSummary = metrics?.unattributed_summary ?? zeroSummary
+  const unattributedDaily = metrics?.unattributed_daily ?? []
+  const activeUnattributedDays = unattributedDaily.filter((item) =>
+    Number(item.starts || 0) > 0
+    || Number(item.leads || 0) > 0
+    || Number(item.submitted_leads || 0) > 0,
+  )
   const hasUnattributedTraffic =
     Number(unattributedSummary.starts || 0) > 0 ||
     Number(unattributedSummary.leads || 0) > 0 ||
@@ -865,7 +873,7 @@ export default function TrackingPage() {
                 type="date"
                 value={dateFrom}
                 onChange={(event) => setDateFrom(event.target.value)}
-                className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
+                className={dateInputClassName}
               />
             </label>
             <label className="block">
@@ -876,7 +884,7 @@ export default function TrackingPage() {
                 type="date"
                 value={dateTo}
                 onChange={(event) => setDateTo(event.target.value)}
-                className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
+                className={dateInputClassName}
               />
             </label>
             <button
@@ -1235,6 +1243,32 @@ export default function TrackingPage() {
                 {miniMetric('Лиды', formatNumber(unattributedSummary.leads))}
                 {miniMetric('Отправлены', formatNumber(unattributedSummary.submitted_leads))}
                 {miniMetric('CR', formatPercent(unattributedSummary.cr_to_lead))}
+              </div>
+
+              <div className="mt-4 rounded-xl border border-amber-300/10 bg-black/10 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-100/70">
+                    По дням
+                  </p>
+                  <CalendarDays size={15} className="text-amber-100/70" />
+                </div>
+                {activeUnattributedDays.length === 0 ? (
+                  <p className="text-sm text-amber-100/60">Нет прямых стартов в выбранном периоде.</p>
+                ) : (
+                  <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
+                    {activeUnattributedDays.map((item) => (
+                      <div
+                        key={item.date}
+                        className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs"
+                      >
+                        <span className="truncate font-medium text-white">{item.date}</span>
+                        <span className="text-cyan-100">S {formatNumber(item.starts)}</span>
+                        <span className="text-violet-100">L {formatNumber(item.leads)}</span>
+                        <span className="text-emerald-100">P {formatNumber(item.submitted_leads)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </article>
           ) : null}
@@ -1838,9 +1872,35 @@ export default function TrackingPage() {
               </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="font-semibold text-white">Детализация по дням</h3>
-                  <CalendarDays size={18} className="text-accent-300" />
+                <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-white">Детализация по дням</h3>
+                    <CalendarDays size={18} className="text-accent-300" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:w-auto">
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                        С
+                      </span>
+                      <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(event) => setDateFrom(event.target.value)}
+                        className={modalDateInputClassName}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                        По
+                      </span>
+                      <input
+                        type="date"
+                        value={dateTo}
+                        onChange={(event) => setDateTo(event.target.value)}
+                        className={modalDateInputClassName}
+                      />
+                    </label>
+                  </div>
                 </div>
                 <div className="h-64">
                   {detailChartData.length === 0 ? (
@@ -2033,7 +2093,7 @@ export default function TrackingPage() {
                 value={spendDate}
                 onChange={(event) => setSpendDate(event.target.value)}
                 required
-                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                className={modalDateInputClassName}
               />
             </label>
             <label className="block">

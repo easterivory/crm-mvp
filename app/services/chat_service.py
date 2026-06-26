@@ -76,6 +76,8 @@ class ChatService:
         Filter semantics:
           - filters.unread / unanswered / is_red — if True, keep only matching
             chats; if None or False, no restriction on that dimension.
+          - filters.is_hot_lead — if True, keep only sales-hot leads. This is
+            intentionally separate from SLA-red unanswered chats.
           - filters.manager_id — if set, restrict to chats whose lead is
             assigned to that manager (JOIN with leads table).
         """
@@ -99,6 +101,7 @@ class ChatService:
             only_unanswered=filters.unanswered is True
             or filters.has_unanswered_incoming is True,
             only_red=filters.is_red is True,
+            only_hot_lead=filters.is_hot_lead is True,
             sla_threshold_minutes=sla,
             manager_id=filters.manager_id,
             assigned_user_id=filters.assigned_user_id,
@@ -130,6 +133,7 @@ class ChatService:
         )
         tags_by_chat = await self.chat_repo.lead_tags_for_chats(chat_ids)
         statuses_by_chat = await self.chat_repo.lead_statuses_for_chats(chat_ids)
+        hot_leads_by_chat = await self.chat_repo.hot_lead_flags_for_chats(chat_ids)
         items = [
             self._chat_out(
                 chat,
@@ -140,6 +144,7 @@ class ChatService:
                 search_query=filters.q,
                 tags=tags_by_chat.get(chat.id, []),
                 lead_status=statuses_by_chat.get(chat.id),
+                is_hot_lead=hot_leads_by_chat.get(chat.id, False),
             )
             for chat in chats
         ]
@@ -168,6 +173,7 @@ class ChatService:
         latest_messages = await self.chat_repo.latest_messages_for_chats([chat.id])
         tags_by_chat = await self.chat_repo.lead_tags_for_chats([chat.id])
         statuses_by_chat = await self.chat_repo.lead_statuses_for_chats([chat.id])
+        hot_leads_by_chat = await self.chat_repo.hot_lead_flags_for_chats([chat.id])
         return self._chat_out(
             chat,
             project.sla_threshold_minutes,
@@ -175,6 +181,7 @@ class ChatService:
             latest_message=latest_messages.get(chat.id),
             tags=tags_by_chat.get(chat.id, []),
             lead_status=statuses_by_chat.get(chat.id),
+            is_hot_lead=hot_leads_by_chat.get(chat.id, False),
         )
 
     async def update_language(
@@ -451,6 +458,7 @@ class ChatService:
         search_query: str | None = None,
         tags: list[dict] | None = None,
         lead_status: dict | None = None,
+        is_hot_lead: bool = False,
     ) -> ChatOut:
         flags = self._compute_flags(chat, sla_threshold_minutes)
         context = dict(funnel_context or {})
@@ -469,6 +477,7 @@ class ChatService:
                 **context,
                 **preview_context,
                 **search_context,
+                "is_hot_lead": is_hot_lead,
                 "tags": [ChatTagOut.model_validate(tag) for tag in tags or []],
                 "lead_status": (
                     ChatLeadStatusOut.model_validate(lead_status)

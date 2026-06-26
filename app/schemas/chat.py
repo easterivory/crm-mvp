@@ -61,6 +61,7 @@ class ChatOut(OrmBase):
     unread: bool = False
     unanswered: bool = False
     is_red: bool = False
+    is_hot_lead: bool = False
     last_incoming_at: Optional[datetime] = None
     last_outgoing_at: Optional[datetime] = None
     has_unanswered_incoming: bool = False
@@ -105,6 +106,7 @@ class ChatFilters(BaseModel):
     unanswered: Optional[bool] = None
     has_unanswered_incoming: Optional[bool] = None
     is_red: Optional[bool] = None
+    is_hot_lead: Optional[bool] = None
     manager_id: Optional[uuid.UUID] = None
     assigned_user_id: Optional[uuid.UUID] = None
     unassigned: Optional[bool] = None

@@ -350,13 +350,13 @@ export default function LeadsPage() {
             type="date"
             value={dateFrom}
             onChange={(event) => setDateFrom(event.target.value)}
-            className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
+            className="crm-date-input h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
           />
           <input
             type="date"
             value={dateTo}
             onChange={(event) => setDateTo(event.target.value)}
-            className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
+            className="crm-date-input h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
           />
         </div>
 

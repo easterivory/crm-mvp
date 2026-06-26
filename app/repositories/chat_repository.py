@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, String, case, func, or_, select, update
+from sqlalchemy import ColumnElement, String, and_, case, func, or_, select, update
 
 from app.core.constants import SenderType
 from app.models.chat import Chat
@@ -83,6 +83,50 @@ class ChatRepository(BaseRepository[Chat]):
         """
         return Chat.is_read.is_(False)
 
+    @staticmethod
+    def _has_text_expr(column) -> ColumnElement:
+        return func.nullif(func.trim(func.coalesce(column, "")), "").isnot(None)
+
+    @classmethod
+    def _hot_lead_condition(cls) -> ColumnElement:
+        """
+        Sales-hot lead signal.
+
+        This is intentionally separate from SLA/red chats: a hot lead is one
+        that looks close to sale by score or strong buying intent, not merely a
+        chat waiting for an operator reply.
+        """
+        return or_(
+            func.coalesce(Lead.score_percent, 0) >= 70,
+            and_(
+                cls._has_text_expr(Lead.phone),
+                or_(
+                    Lead.has_card.is_(True),
+                    cls._has_text_expr(Lead.preferred_call_time),
+                    cls._has_text_expr(Lead.call_time_text),
+                ),
+            ),
+            and_(
+                Lead.has_card.is_(True),
+                or_(
+                    cls._has_text_expr(Lead.country),
+                    cls._has_text_expr(Lead.username),
+                ),
+            ),
+        )
+
+    @classmethod
+    def _is_hot_lead_expr(cls) -> ColumnElement:
+        return (
+            select(Lead.id)
+            .where(
+                Lead.chat_id == Chat.id,
+                Lead.is_deleted.is_(False),
+                cls._hot_lead_condition(),
+            )
+            .exists()
+        )
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _base_select(
@@ -109,6 +153,7 @@ class ChatRepository(BaseRepository[Chat]):
         only_unread: bool,
         only_unanswered: bool,
         only_red: bool,
+        only_hot_lead: bool,
         sla_threshold_minutes: int,
         manager_id: Optional[UUID],
         assigned_user_id: Optional[UUID],
@@ -145,6 +190,8 @@ class ChatRepository(BaseRepository[Chat]):
             )
         if only_red:
             stmt = stmt.where(self._is_red_expr(sla_threshold_minutes))
+        if only_hot_lead:
+            stmt = stmt.where(self._is_hot_lead_expr())
         if only_unanswered:
             stmt = stmt.where(self._unanswered_expr())
         if only_unread:
@@ -445,6 +492,7 @@ class ChatRepository(BaseRepository[Chat]):
         only_unread: bool = False,
         only_unanswered: bool = False,
         only_red: bool = False,
+        only_hot_lead: bool = False,
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
         assigned_user_id: Optional[UUID] = None,
@@ -471,6 +519,7 @@ class ChatRepository(BaseRepository[Chat]):
             only_unread=only_unread,
             only_unanswered=only_unanswered,
             only_red=only_red,
+            only_hot_lead=only_hot_lead,
             sla_threshold_minutes=sla_threshold_minutes,
             manager_id=manager_id,
             assigned_user_id=assigned_user_id,
@@ -502,6 +551,7 @@ class ChatRepository(BaseRepository[Chat]):
         only_unread: bool = False,
         only_unanswered: bool = False,
         only_red: bool = False,
+        only_hot_lead: bool = False,
         sla_threshold_minutes: int = 30,
         manager_id: Optional[UUID] = None,
         assigned_user_id: Optional[UUID] = None,
@@ -539,6 +589,7 @@ class ChatRepository(BaseRepository[Chat]):
             only_unread=only_unread,
             only_unanswered=only_unanswered,
             only_red=only_red,
+            only_hot_lead=only_hot_lead,
             sla_threshold_minutes=sla_threshold_minutes,
             manager_id=manager_id,
             assigned_user_id=assigned_user_id,
@@ -554,6 +605,20 @@ class ChatRepository(BaseRepository[Chat]):
         )
         result = await self.db.execute(stmt)
         return result.scalar_one()
+
+    async def hot_lead_flags_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, bool]:
+        if not chat_ids:
+            return {}
+        result = await self.db.execute(
+            select(Lead.chat_id)
+            .where(
+                Lead.chat_id.in_(chat_ids),
+                Lead.is_deleted.is_(False),
+                self._hot_lead_condition(),
+            )
+            .distinct()
+        )
+        return {chat_id: True for chat_id in result.scalars().all()}
 
     async def latest_messages_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, Message]:
         if not chat_ids:

@@ -96,6 +96,14 @@ class AssignmentService:
         if manager_id is not None:
             manager = await self.user_repo.get_active_in_project(manager_id, project_id)
             if manager is None:
+                candidate = await self.user_repo.get_by_id(manager_id)
+                if (
+                    candidate is not None
+                    and not candidate.is_deleted
+                    and candidate.role_name == RoleName.SUPER_ADMIN
+                ):
+                    manager = candidate
+            if manager is None:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=(

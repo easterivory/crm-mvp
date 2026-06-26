@@ -9,6 +9,7 @@ type ChatQuickFiltersProps = {
 const quickFilterBase = {
   assignedUserId: '',
   hasUnansweredIncoming: false,
+  isHotLead: false,
   isRed: false,
   unassigned: false,
 }
@@ -19,7 +20,7 @@ export default function ChatQuickFilters({
   onChange,
 }: ChatQuickFiltersProps) {
   const activeQuick =
-    filters.isRed
+    filters.isHotLead
       ? 'hot'
       : filters.hasUnansweredIncoming
         ? 'unanswered'
@@ -56,7 +57,7 @@ export default function ChatQuickFilters({
     onChange({
       ...filters,
       ...quickFilterBase,
-      isRed: true,
+      isHotLead: true,
       quickFilter: 'hot',
     })
   }

@@ -212,6 +212,53 @@ class TrackingMetricsRepository:
         await self._merge_daily_spend(daily, project_id, bot_id, None, date_from, date_to)
         return self._daily_rows(daily)
 
+    async def aggregate_daily_unattributed_by_project(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Daily metrics for Telegram starts/leads that have no tracking_link_id.
+
+        Clicks and spend belong to tracking links, so direct traffic returns
+        zero for those fields while preserving starts/leads/submitted by day.
+        """
+        daily = self._empty_daily_map()
+        await self._merge_daily_starts(
+            daily,
+            project_id,
+            bot_id,
+            None,
+            date_from,
+            date_to,
+            unattributed_only=True,
+        )
+        await self._merge_daily_leads(
+            daily,
+            project_id,
+            bot_id,
+            None,
+            date_from,
+            date_to,
+            submitted_only=False,
+            lead_status_codes=lead_status_codes,
+            unattributed_only=True,
+        )
+        await self._merge_daily_leads(
+            daily,
+            project_id,
+            bot_id,
+            None,
+            date_from,
+            date_to,
+            submitted_only=True,
+            unattributed_only=True,
+        )
+        return self._daily_rows(daily)
+
     async def aggregate_daily_by_link(
         self,
         link_id: UUID,
@@ -596,6 +643,8 @@ class TrackingMetricsRepository:
         link_id: UUID | None,
         date_from: date,
         date_to: date,
+        *,
+        unattributed_only: bool = False,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         metric_date = func.date(Message.created_at)
@@ -622,6 +671,8 @@ class TrackingMetricsRepository:
             stmt = stmt.where(Chat.bot_id == bot_id)
         if link_id is not None:
             stmt = stmt.where(Chat.tracking_link_id == link_id)
+        if unattributed_only:
+            stmt = stmt.where(Chat.tracking_link_id.is_(None))
 
         result = await self.db.execute(stmt)
         for row in result.all():
@@ -638,6 +689,7 @@ class TrackingMetricsRepository:
         *,
         submitted_only: bool,
         lead_status_codes: Sequence[str] | None = None,
+        unattributed_only: bool = False,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
@@ -663,6 +715,8 @@ class TrackingMetricsRepository:
             stmt = stmt.where(Chat.bot_id == bot_id)
         if link_id is not None:
             stmt = stmt.where(Chat.tracking_link_id == link_id)
+        if unattributed_only:
+            stmt = stmt.where(Chat.tracking_link_id.is_(None))
         stmt = self._apply_lead_status_filter(
             stmt,
             submitted_only=submitted_only,

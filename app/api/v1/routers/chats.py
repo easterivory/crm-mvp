@@ -79,6 +79,7 @@ async def list_chats(
     unanswered: Optional[bool] = Query(default=None),
     has_unanswered_incoming: Optional[bool] = Query(default=None),
     is_red: Optional[bool] = Query(default=None),
+    is_hot_lead: Optional[bool] = Query(default=None),
     manager_id: Optional[UUID] = Query(default=None),
     assigned_user_id: Optional[UUID] = Query(default=None),
     unassigned: Optional[bool] = Query(default=None),
@@ -111,6 +112,7 @@ async def list_chats(
       - unread=true      — only chats with unread messages
       - unanswered=true  — only chats waiting for a manager reply
       - is_red=true      — only chats that breached the SLA threshold
+      - is_hot_lead=true — only sales-hot chats with high lead quality
       - manager_id=<uuid> — only chats whose lead is assigned to this manager
       - assigned_user_id=<uuid> — same as manager_id, preferred frontend name
       - unassigned=true — only chats without manager
@@ -133,6 +135,7 @@ async def list_chats(
         unanswered=unanswered,
         has_unanswered_incoming=has_unanswered_incoming,
         is_red=is_red,
+        is_hot_lead=is_hot_lead,
         manager_id=manager_id,
         assigned_user_id=assigned_user_id,
         unassigned=unassigned,

@@ -481,6 +481,7 @@ function isQuickFilter(value: string | null): value is ChatFiltersState['quickFi
 }
 
 function normalizeChatFilters(value: Partial<ChatFiltersState> | null | undefined) {
+  const quickFilter = isQuickFilter(value?.quickFilter ?? null) ? value?.quickFilter ?? '' : ''
   return {
     ...EMPTY_CHAT_FILTERS,
     ...(value ?? {}),
@@ -491,7 +492,9 @@ function normalizeChatFilters(value: Partial<ChatFiltersState> | null | undefine
     leadStatuses: Array.isArray(value?.leadStatuses)
       ? value.leadStatuses.filter(Boolean)
       : [],
-    quickFilter: isQuickFilter(value?.quickFilter ?? null) ? value?.quickFilter ?? '' : '',
+    isRed: value?.isRed === true && quickFilter !== 'hot',
+    isHotLead: value?.isHotLead === true || (quickFilter === 'hot' && value?.isRed === true),
+    quickFilter,
   }
 }
 
@@ -512,7 +515,9 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     trackingLinkId: params.get('tracking_link_id') ?? '',
     funnelState: isFunnelState(funnelState) ? funnelState : '',
     hasUnansweredIncoming: params.get('has_unanswered_incoming') === 'true',
-    isRed: params.get('is_red') === 'true',
+    isRed: params.get('is_red') === 'true' && quickFilter !== 'hot',
+    isHotLead: params.get('is_hot_lead') === 'true'
+      || (quickFilter === 'hot' && params.get('is_red') === 'true'),
     assignedUserId: params.get('assigned_user_id') ?? '',
     unassigned: params.get('unassigned') === 'true',
     quickFilter: isQuickFilter(quickFilter) ? quickFilter : '',
@@ -535,6 +540,7 @@ function writeChatFilters(filters: ChatFiltersState) {
   if (filters.funnelState) params.set('funnel_state', filters.funnelState)
   if (filters.hasUnansweredIncoming) params.set('has_unanswered_incoming', 'true')
   if (filters.isRed) params.set('is_red', 'true')
+  if (filters.isHotLead) params.set('is_hot_lead', 'true')
   if (filters.assignedUserId) params.set('assigned_user_id', filters.assignedUserId)
   if (filters.unassigned) params.set('unassigned', 'true')
   if (filters.quickFilter) params.set('quick_filter', filters.quickFilter)
@@ -863,6 +869,9 @@ export default function ChatsPage() {
       }
       if (debouncedChatFilters.isRed) {
         params.is_red = true
+      }
+      if (debouncedChatFilters.isHotLead) {
+        params.is_hot_lead = true
       }
       if (debouncedChatFilters.assignedUserId) {
         params.assigned_user_id = debouncedChatFilters.assignedUserId
@@ -2035,6 +2044,11 @@ export default function ChatsPage() {
                     <h2 className="truncate text-base font-semibold text-white">
                       {getChatTitle(selectedChat)}
                     </h2>
+                    {selectedChat.is_hot_lead ? (
+                      <span className="hidden rounded-full border border-amber-300/25 bg-amber-400/10 px-2 py-0.5 text-[11px] font-medium text-amber-100 sm:inline-flex">
+                        Горячий
+                      </span>
+                    ) : null}
                     {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
                     {selectedChat.is_blocked ? (
                       <span className="rounded-full border border-red-300/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-100">

@@ -78,6 +78,7 @@ function withoutSearch(filters: ChatFiltersState) {
     dateTo: '',
     funnelState: '' as ChatFiltersState['funnelState'],
     hasUnansweredIncoming: false,
+    isHotLead: false,
     isRed: false,
     leadStatuses: [] as string[],
     quickFilter: '' as const,
@@ -379,7 +380,7 @@ export default function ChatFiltersPopover({
                     type="date"
                     value={draft.dateFrom}
                     onChange={(event) => setDraft({ ...draft, dateFrom: event.target.value })}
-                    className="h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none"
+                    className="crm-date-input h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
                   />
                 </label>
                 <label className="block">
@@ -388,7 +389,7 @@ export default function ChatFiltersPopover({
                     type="date"
                     value={draft.dateTo}
                     onChange={(event) => setDraft({ ...draft, dateTo: event.target.value })}
-                    className="h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none"
+                    className="crm-date-input h-9 w-full rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200 outline-none transition focus:border-accent-300/50"
                   />
                 </label>
               </div>
@@ -490,6 +491,21 @@ export default function ChatFiltersPopover({
                 setDraft({
                   ...draft,
                   hasUnansweredIncoming: event.target.checked,
+                  quickFilter: '',
+                })
+              }
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-200">
+            <span>Горячие к продаже</span>
+            <input
+              type="checkbox"
+              checked={draft.isHotLead}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  isHotLead: event.target.checked,
                   quickFilter: '',
                 })
               }

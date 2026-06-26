@@ -70,6 +70,7 @@ class TrackingProjectMetricsResponse(BaseModel):
     tracking_lead_status_codes: list[str] = Field(default_factory=list)
     summary: TrackingMetricSummary
     unattributed_summary: TrackingMetricSummary = Field(default_factory=TrackingMetricSummary)
+    unattributed_daily: list[TrackingDailyMetric] = Field(default_factory=list)
     links: list[TrackingLinkMetric]
     daily: list[TrackingDailyMetric]
 

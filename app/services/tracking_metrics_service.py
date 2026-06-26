@@ -108,7 +108,27 @@ class TrackingMetricsService:
                 "spend": sum((item.spend for item in daily), Decimal("0")),
             }
         )
-        unattributed_summary = self._unattributed_summary(summary, links)
+        unattributed_daily = self._fill_daily_range(
+            await self.metrics_repo.aggregate_daily_unattributed_by_project(
+                project_id=project_id,
+                bot_id=bot_id,
+                date_from=date_from,
+                date_to=date_to,
+                lead_status_codes=lead_status_codes,
+            ),
+            date_from,
+            date_to,
+        )
+        unattributed_summary = self._summary_from_values(
+            {
+                "clicks": 0,
+                "starts": sum(item.starts for item in unattributed_daily),
+                "leads": sum(item.leads for item in unattributed_daily),
+                "submitted_leads": sum(item.submitted_leads for item in unattributed_daily),
+                "deposits": sum(item.deposits for item in unattributed_daily),
+                "spend": Decimal("0"),
+            }
+        )
 
         return TrackingProjectMetricsResponse(
             project_id=project_id,
@@ -118,6 +138,7 @@ class TrackingMetricsService:
             tracking_lead_status_codes=lead_status_codes,
             summary=summary,
             unattributed_summary=unattributed_summary,
+            unattributed_daily=unattributed_daily,
             links=links,
             daily=daily,
         )

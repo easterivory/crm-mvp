@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,14 +14,33 @@ router = APIRouter(tags=["public-landers"])
 SYSTEM_ROOT_PATHS = frozenset(
     {
         "api",
+        "analytics",
+        "bots",
+        "broadcasts",
+        "buyers",
+        "chats",
+        "dashboard",
         "docs",
-        "redoc",
-        "openapi.json",
-        "health",
-        "static",
         "favicon.ico",
+        "funnels",
+        "google-sheets",
+        "health",
+        "landers",
+        "leads",
+        "login",
+        "openapi.json",
+        "partners",
+        "profile",
+        "projects",
+        "redoc",
+        "settings",
+        "static",
+        "team",
+        "tracking",
+        "users",
     }
 )
+LANDER_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @router.get("/l/{slug}/{asset_path:path}", response_class=FileResponse, include_in_schema=False)
@@ -65,7 +86,7 @@ async def render_short_lander(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
-    if slug.lower() in SYSTEM_ROOT_PATHS:
+    if slug.lower() in SYSTEM_ROOT_PATHS or not LANDER_SLUG_RE.fullmatch(slug):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return await _render_lander(slug=slug, request=request, db=db)
 

@@ -55,9 +55,13 @@ class FunnelGraphValidator:
         reachable = self._reachable(start_ids, adjacency)
         for node_id, node in parsed_nodes.items():
             if start_ids and node_id not in reachable:
-                errors.append(f"Блок '{node.title}' недостижим из стартовой точки")
+                warnings.append(
+                    f"Блок '{node.title}' недостижим из стартовой точки и будет храниться как черновой/неиспользуемый"
+                )
 
         for node_id, node in parsed_nodes.items():
+            if start_ids and node_id not in reachable:
+                continue
             if self._is_finish(node):
                 continue
             if not adjacency.get(node_id):

@@ -1060,11 +1060,11 @@ class FunnelService:
         reachable = self._reachable(trigger_ids, adjacency)
         for step in graph.steps:
             if step.id is not None and step.step_type != "trigger" and step.id not in reachable:
-                errors.append(
+                warnings.append(
                     self._issue(
                         "orphan_step",
-                        f"Блок «{step.title}» недостижим от триггера.",
-                        "error",
+                        f"Блок «{step.title}» недостижим от триггера и не будет исполняться.",
+                        "warning",
                         step_id=step.id,
                     )
                 )
@@ -1134,6 +1134,15 @@ class FunnelService:
         )
         for message in algorithmic_validation["errors"]:
             if self._duplicates_existing_graph_issue(message, errors):
+                continue
+            if "недостижим" in message.lower():
+                warnings.append(
+                    self._issue(
+                        self._algorithmic_issue_code(message),
+                        message,
+                        "warning",
+                    )
+                )
                 continue
             errors.append(
                 self._issue(

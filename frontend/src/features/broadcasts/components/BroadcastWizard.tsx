@@ -180,6 +180,7 @@ function unsupportedPresetHints(filters: ChatFiltersState) {
   return [
     filters.q ? 'текстовый поиск' : '',
     filters.isRed ? 'красный SLA-флаг' : '',
+    filters.isHotLead ? 'фильтр горячих лидов' : '',
     filters.quickFilter ? 'быстрый фильтр' : '',
   ].filter(Boolean)
 }

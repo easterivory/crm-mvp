@@ -62,12 +62,23 @@ export default function ChatFilterChips({
   }
   if (filters.isRed) {
     chips.push({
-      key: 'hot',
-      label: 'Горячие',
+      key: 'sla',
+      label: 'SLA просрочен',
       remove: () =>
         onChange({
           ...filters,
           isRed: false,
+        }),
+    })
+  }
+  if (filters.isHotLead) {
+    chips.push({
+      key: 'hot',
+      label: 'Горячие к продаже',
+      remove: () =>
+        onChange({
+          ...filters,
+          isHotLead: false,
           quickFilter: filters.quickFilter === 'hot' ? '' : filters.quickFilter,
         }),
     })

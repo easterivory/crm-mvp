@@ -32,6 +32,7 @@ export type Chat = {
   unanswered: boolean
   has_unanswered_incoming: boolean
   is_red: boolean
+  is_hot_lead: boolean
   last_message_text: string | null
   last_message_type: string | null
   last_message_caption: string | null
@@ -441,9 +442,14 @@ export default function ChatList({
                       Ждет ответа {formatWaitingMinutes(waitingForReplyMinutes)}
                     </span>
                   ) : null}
+                  {chat.is_hot_lead ? (
+                    <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs font-semibold text-amber-200">
+                      Горячий
+                    </span>
+                  ) : null}
                   {chat.is_red ? (
                     <span className="rounded-full bg-red-400/10 px-2 py-0.5 text-xs font-medium text-red-300">
-                      Горячий
+                      SLA
                     </span>
                   ) : null}
                   <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">

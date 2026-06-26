@@ -72,6 +72,24 @@ textarea {
   color-scheme: dark;
 }
 
+.crm-date-input {
+  color-scheme: dark;
+}
+
+.crm-date-input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 4px;
+  background-color: rgba(255, 255, 255, 0.08);
+  filter: invert(1) opacity(0.72);
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+
+.crm-date-input::-webkit-calendar-picker-indicator:hover {
+  background-color: rgba(34, 211, 238, 0.2);
+  opacity: 1;
+}
+
 @media (min-width: 768px) {
   body {
     overflow: hidden;
