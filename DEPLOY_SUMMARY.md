@@ -92,7 +92,7 @@ curl http://sfera.cyou/health
 Ожидается: `{"status":"ok","components":{"api":"ok","database":"ok","redis":"ok"}}`
 
 ### API Docs
-http://sfera.cyou/docs
+http://sfera.cyou/api/docs
 
 ### Контейнеры на сервере
 ```bash

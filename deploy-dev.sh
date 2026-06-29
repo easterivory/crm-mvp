@@ -122,5 +122,13 @@ for attempt in $(seq 1 30); do
 done
 
 echo ""
+echo "=== SPA route check ==="
+if ! curl -fsS http://localhost:8001/chats | grep -Fq '<div id="root"></div>'; then
+  echo "Frontend SPA fallback check failed for /chats" >&2
+  exit 1
+fi
+echo "Direct /chats request serves the frontend index"
+
+echo ""
 echo "=== DEV status ==="
 docker compose ps

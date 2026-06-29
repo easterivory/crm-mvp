@@ -184,6 +184,7 @@ Fresh frontend verification:
 
 ```bash
 curl -fsS http://<dev-host>/ | rg 'assets/index-.*\\.(js|css)'
+curl -fsS http://<dev-host>/chats | rg '<div id="root"></div>'
 curl -fsS http://<dev-host>/api/v1/health
 ```
 

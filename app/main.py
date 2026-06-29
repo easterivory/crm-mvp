@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import spa
 from app.api.v1.routers import (
     analytics,
     assignments,
@@ -43,8 +44,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version="0.1.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
     lifespan=lifespan,
 )
 
@@ -87,6 +88,10 @@ app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)
+
+# BrowserRouter pages need an explicit index.html fallback on direct requests.
+# Keep these routes before the broad public /{slug} lander route.
+app.include_router(spa.router)
 
 # Public lander routes must stay last because /{slug} is intentionally broad.
 app.include_router(public_landers.router)
