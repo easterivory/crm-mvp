@@ -10,18 +10,19 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import TrackingSpendSource
+from app.core.constants import TrackingCostModel, TrackingSpendSource
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
 from app.models.funnel import FunnelStep, FunnelVersion
-from app.models.user import User
+from app.models.user import User, UserProjectAccess
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.tracking_repository import TrackingLinkRepository
+from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.repositories.tracking_repository import TrackingRepository
 from app.repositories.tracking_repository import TrackingSpendRepository
 from app.schemas.tracking import (
@@ -84,6 +85,7 @@ class TrackingService:
         project_id: UUID,
         data: TrackingLinkCreate,
     ) -> TrackingLinkOut:
+        self._validate_cost_configuration(data.cost_model, data.price_per_unit)
         bot = await self.bot_service.ensure_bot_username(
             bot_id=data.bot_id,
             project_id=project_id,
@@ -104,6 +106,11 @@ class TrackingService:
             bot.bot_username,
             code,
         )
+        buyer_id, buyer_name = await self._resolve_buyer(
+            project_id=project_id,
+            buyer_id=data.buyer_id,
+            buyer_name=data.buyer_name,
+        )
 
         try:
             async with self.db.begin_nested():
@@ -114,7 +121,8 @@ class TrackingService:
                     title=title,
                     ref_code=code,
                     code=code,
-                    buyer_name=self._normalize_optional(data.buyer_name),
+                    buyer_id=buyer_id,
+                    buyer_name=buyer_name,
                     ad_type=self._normalize_optional(data.ad_type),
                     payment_type=self._normalize_optional(data.payment_type),
                     invite_link=invite_link,
@@ -144,7 +152,8 @@ class TrackingService:
                     title=title,
                     ref_code=code,
                     code=code,
-                    buyer_name=self._normalize_optional(data.buyer_name),
+                    buyer_id=buyer_id,
+                    buyer_name=buyer_name,
                     ad_type=self._normalize_optional(data.ad_type),
                     payment_type=self._normalize_optional(data.payment_type),
                     invite_link=self._build_invite_link(bot.bot_username, code),
@@ -161,6 +170,7 @@ class TrackingService:
                 )
 
         link.bot = bot
+        await self._create_initial_manual_spend(link, data, actor_id=None)
         return self._to_out(link)
 
     async def update_link(
@@ -177,6 +187,19 @@ class TrackingService:
             )
 
         values = self._build_link_update_values(data, link=link, allow_code_update=True)
+        if {"cost_model", "price_per_unit"} & values.keys():
+            self._validate_cost_configuration(
+                values.get("cost_model", link.cost_model),
+                values.get("price_per_unit", link.price_per_unit),
+            )
+        if "buyer_id" in data.model_fields_set:
+            buyer_id, buyer_name = await self._resolve_buyer(
+                project_id=link.project_id,
+                buyer_id=data.buyer_id,
+                buyer_name=data.buyer_name,
+            )
+            values["buyer_id"] = buyer_id
+            values["buyer_name"] = buyer_name
         if values.get("target_step_id") is not None:
             await self._ensure_step_belongs_to_bot(
                 values["target_step_id"],
@@ -270,18 +293,20 @@ class TrackingService:
             .where(
                 FunnelVersion.id == bot.active_funnel_version_id,
                 FunnelVersion.funnel_id == bot.active_funnel_id,
-                FunnelStep.step_type.notin_(("trigger", "finish")),
             )
             .order_by(FunnelStep.position_y, FunnelStep.position_x, FunnelStep.created_at)
         )
+        ordered_steps = list(result.scalars().all())
         return [
             TrackingFunnelStepOption(
                 key=step.key,
                 title=step.title,
                 step_type=step.step_type,
                 block_type=step.block_type,
+                number=number,
             )
-            for step in result.scalars().all()
+            for number, step in enumerate(ordered_steps, start=1)
+            if step.step_type not in {"trigger", "finish"}
         ]
 
     async def get_tracking_link(self, link_id: UUID, actor: User) -> TrackingLinkRead:
@@ -299,6 +324,7 @@ class TrackingService:
                 detail="project_id is required",
             )
 
+        self._validate_cost_configuration(data.cost_model, data.price_per_unit)
         await self._ensure_project_access(actor, data.project_id)
         project = await self._get_active_project_or_404(data.project_id)
         bot = await self.bot_service.ensure_bot_username(
@@ -324,6 +350,11 @@ class TrackingService:
             bot.bot_username,
             code,
         )
+        buyer_id, buyer_name = await self._resolve_buyer(
+            project_id=project.id,
+            buyer_id=data.buyer_id,
+            buyer_name=data.buyer_name,
+        )
 
         try:
             link = await self.link_repo.create_link(
@@ -333,7 +364,8 @@ class TrackingService:
                 title=title,
                 ref_code=code,
                 code=code,
-                buyer_name=self._normalize_optional(data.buyer_name),
+                buyer_id=buyer_id,
+                buyer_name=buyer_name,
                 ad_type=self._normalize_optional(data.ad_type),
                 payment_type=self._normalize_optional(data.payment_type),
                 invite_link=invite_link,
@@ -356,6 +388,7 @@ class TrackingService:
             ) from exc
 
         link.bot = bot
+        await self._create_initial_manual_spend(link, data, actor_id=actor.id)
         return await self._to_read(link, include_total_spend=True)
 
     async def update_tracking_link(
@@ -366,6 +399,19 @@ class TrackingService:
     ) -> TrackingLinkRead:
         link = await self._get_link_for_actor(link_id, actor)
         values = self._build_link_update_values(data, link=link, allow_code_update=False)
+        if {"cost_model", "price_per_unit"} & values.keys():
+            self._validate_cost_configuration(
+                values.get("cost_model", link.cost_model),
+                values.get("price_per_unit", link.price_per_unit),
+            )
+        if "buyer_id" in data.model_fields_set:
+            buyer_id, buyer_name = await self._resolve_buyer(
+                project_id=link.project_id,
+                buyer_id=data.buyer_id,
+                buyer_name=data.buyer_name,
+            )
+            values["buyer_id"] = buyer_id
+            values["buyer_name"] = buyer_name
         if "target_step_id" in values and values["target_step_id"] is not None:
             await self._ensure_step_belongs_to_bot(
                 values["target_step_id"],
@@ -429,6 +475,11 @@ class TrackingService:
         actor: User,
     ) -> TrackingSpendRead:
         link = await self._get_link_for_actor(link_id, actor)
+        if link.cost_model != TrackingCostModel.CPM:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Manual spend is available only for the manual budget cost model",
+            )
         spend = await self.spend_repo.create_spend(
             tracking_link_id=link.id,
             spend_date=data.spend_date,
@@ -668,6 +719,62 @@ class TrackingService:
 
         return values
 
+    async def _resolve_buyer(
+        self,
+        *,
+        project_id: UUID,
+        buyer_id: UUID | None,
+        buyer_name: str | None,
+    ) -> tuple[UUID | None, str | None]:
+        if buyer_id is None:
+            return None, self._normalize_optional(buyer_name)
+
+        project_user_ids = select(UserProjectAccess.user_id).where(
+            UserProjectAccess.project_id == project_id
+        )
+        linked_buyer_ids = select(TrackingLink.buyer_id).where(
+            TrackingLink.project_id == project_id,
+            TrackingLink.buyer_id.is_not(None),
+        )
+        result = await self.db.execute(
+            select(User).where(
+                User.id == buyer_id,
+                User.is_deleted.is_(False),
+                or_(User.project_id == project_id, User.id.in_(project_user_ids)),
+                or_(
+                    User.buyer_telegram_id.is_not(None),
+                    User.buyer_invite_token.is_not(None),
+                    User.id.in_(linked_buyer_ids),
+                ),
+            )
+        )
+        buyer = result.scalar_one_or_none()
+        if buyer is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Buyer is not available in this project",
+            )
+        return buyer.id, buyer.name
+
+    async def _create_initial_manual_spend(
+        self,
+        link: TrackingLink,
+        data: TrackingLinkCreate,
+        *,
+        actor_id: UUID | None,
+    ) -> None:
+        if data.cost_model != TrackingCostModel.CPM or Decimal(data.spend or 0) <= 0:
+            return
+        await self.spend_repo.create_spend(
+            tracking_link_id=link.id,
+            spend_date=date.today(),
+            amount=data.spend,
+            currency="USD",
+            comment="Начальный рекламный бюджет из настроек tracking link",
+            source=TrackingSpendSource.CRM_MANUAL,
+            created_by_user_id=actor_id,
+        )
+
     @staticmethod
     def _random_ref_code() -> str:
         alphabet = string.ascii_letters + string.digits + "_-"
@@ -694,6 +801,19 @@ class TrackingService:
             return None
         normalized = str(value).strip()
         return normalized or None
+
+    @staticmethod
+    def _validate_cost_configuration(
+        cost_model: TrackingCostModel | str,
+        price_per_unit: Decimal,
+    ) -> None:
+        model = TrackingCostModel(cost_model)
+        if model in {TrackingCostModel.FIX_PDP, TrackingCostModel.CPA}:
+            if Decimal(price_per_unit or 0) <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="price_per_unit must be greater than zero for unit cost models",
+                )
 
     @classmethod
     def _normalize_code(
@@ -775,7 +895,13 @@ class TrackingService:
         )
         total_spend: Decimal | None = None
         if include_total_spend:
-            total_spend = await self.spend_repo.sum_spend_by_link(link.id)
+            total_spend = await TrackingMetricsRepository(
+                self.db
+            ).aggregate_spend_by_link(
+                link_id=link.id,
+                date_from=link.created_at.date(),
+                date_to=date.today(),
+            )
 
         return TrackingLinkRead(
             id=link.id,
@@ -783,6 +909,7 @@ class TrackingService:
             bot_id=link.bot_id,
             code=code,
             title=title,
+            buyer_id=link.buyer_id,
             buyer_name=link.buyer_name,
             ad_type=link.ad_type,
             payment_type=link.payment_type,
@@ -791,6 +918,9 @@ class TrackingService:
             created_by_user_id=link.created_by_user_id,
             created_at=link.created_at,
             updated_at=link.updated_at,
+            cost_model=link.cost_model,
+            price_per_unit=link.price_per_unit,
+            spend=link.spend,
             base_conversion_rate=link.base_conversion_rate,
             min_sample_size=link.min_sample_size,
             target_funnel_id=link.target_funnel_id,

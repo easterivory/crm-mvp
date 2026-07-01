@@ -18,7 +18,10 @@ type VisualRuleBuilderProps = {
 
 function fieldOptionsForSource(source: string) {
   if (source === 'lead_field') {
-    return leadFields.filter(([value]) => value)
+    return [
+      ...leadFields.filter(([value]) => value),
+      ['__custom__', 'Произвольное поле'],
+    ] as const
   }
   if (source === 'last_answer') {
     return [['', 'Последний ответ']] as const
@@ -66,6 +69,13 @@ export default function VisualRuleBuilder({
 
       {rules.map((rule, index) => {
         const sourceLabel = conditionSources.find(([value]) => value === rule.source)?.[1]
+        const standardLeadFieldKeys = new Set<string>(
+          leadFields.map(([value]) => value).filter(Boolean),
+        )
+        const isCustomLeadField =
+          rule.source === 'lead_field'
+          && Boolean(rule.field)
+          && !standardLeadFieldKeys.has(rule.field)
         return (
           <div key={rule.id} className="rounded-xl border border-white/8 bg-white/[0.03] p-2">
             <div className="grid gap-2">
@@ -85,8 +95,15 @@ export default function VisualRuleBuilder({
 
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                 <select
-                  value={rule.field}
-                  onChange={(event) => update(index, { field: event.target.value })}
+                  value={isCustomLeadField ? '__custom__' : rule.field}
+                  onChange={(event) =>
+                    update(index, {
+                      field:
+                        event.target.value === '__custom__'
+                          ? 'custom_field'
+                          : event.target.value,
+                    })
+                  }
                   className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
                 >
                   {fieldOptionsForSource(rule.source).map(([value, label]) => (
@@ -107,6 +124,23 @@ export default function VisualRuleBuilder({
                   ))}
                 </select>
               </div>
+              {isCustomLeadField ? (
+                <input
+                  value={rule.field}
+                  onChange={(event) =>
+                    update(index, {
+                      field: event.target.value
+                        .toLowerCase()
+                        .replace(/[^a-z0-9_]/g, '_')
+                        .replace(/^[^a-z]+/, '')
+                        .slice(0, 100),
+                    })
+                  }
+                  maxLength={100}
+                  placeholder="Ключ произвольного поля"
+                  className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                />
+              ) : null}
 
               {rule.operator !== 'exists' && rule.operator !== 'empty' ? (
                 <RuleValueInput

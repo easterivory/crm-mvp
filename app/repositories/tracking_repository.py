@@ -10,11 +10,14 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, distinct, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import LeadStatusCode, MessageType, SenderType
 from app.models.chat import Chat
 from app.models.lead import Lead
+from app.models.lead_status import LeadStatus
+from app.models.message import Message
 from app.models.tracking import TrackingEvent
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
@@ -167,13 +170,23 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
         chat_counts = (
             select(
                 Chat.tracking_link_id.label("tracking_link_id"),
-                func.count(Chat.id).label("chat_clicks"),
+                func.count(distinct(Chat.id)).label("chat_clicks"),
             )
+            .join(Message, Message.chat_id == Chat.id)
             .where(
                 Chat.project_id == project_id,
                 Chat.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                or_(
+                    func.split_part(func.lower(func.trim(Message.body)), " ", 1)
+                    == "/start",
+                    func.split_part(func.lower(func.trim(Message.body)), " ", 1).like(
+                        "/start@%"
+                    ),
+                ),
             )
             .group_by(Chat.tracking_link_id)
             .subquery()
@@ -194,6 +207,24 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
             .group_by(Chat.tracking_link_id)
             .subquery()
         )
+        submitted_counts = (
+            select(
+                Chat.tracking_link_id.label("tracking_link_id"),
+                func.count(distinct(Lead.id)).label("submitted_leads"),
+            )
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                Chat.tracking_link_id.is_not(None),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                LeadStatus.code.in_(LeadStatusCode.SUBMITTED_SET),
+            )
+            .group_by(Chat.tracking_link_id)
+            .subquery()
+        )
         event_counts = (
             select(
                 TrackingEvent.tracking_link_id.label("tracking_link_id"),
@@ -204,6 +235,14 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
             .group_by(TrackingEvent.tracking_link_id)
             .subquery()
         )
+        spend_totals = (
+            select(
+                TrackingSpend.tracking_link_id.label("tracking_link_id"),
+                func.coalesce(func.sum(TrackingSpend.amount), 0).label("manual_spend"),
+            )
+            .group_by(TrackingSpend.tracking_link_id)
+            .subquery()
+        )
 
         result = await self.db.execute(
             select(
@@ -212,6 +251,10 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
                 func.coalesce(event_counts.c.event_clicks, 0).label("event_clicks"),
                 func.coalesce(event_counts.c.impressions, 0).label("impressions"),
                 func.coalesce(lead_counts.c.leads, 0).label("leads"),
+                func.coalesce(
+                    submitted_counts.c.submitted_leads, 0
+                ).label("submitted_leads"),
+                func.coalesce(spend_totals.c.manual_spend, 0).label("manual_spend"),
             )
             .outerjoin(
                 chat_counts,
@@ -224,6 +267,14 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
             .outerjoin(
                 lead_counts,
                 lead_counts.c.tracking_link_id == TrackingLink.id,
+            )
+            .outerjoin(
+                submitted_counts,
+                submitted_counts.c.tracking_link_id == TrackingLink.id,
+            )
+            .outerjoin(
+                spend_totals,
+                spend_totals.c.tracking_link_id == TrackingLink.id,
             )
             .where(TrackingLink.project_id == project_id)
             .order_by(TrackingLink.created_at.desc())

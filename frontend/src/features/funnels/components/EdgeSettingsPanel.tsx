@@ -2,6 +2,7 @@ import { ChevronDown, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import type { FunnelEdge, FunnelStep } from '../types'
+import { funnelStepLabel, funnelStepNumberMap } from '../funnelConfig'
 
 type EdgeSettingsPanelProps = {
   selectedEdge: FunnelEdge | null
@@ -25,7 +26,10 @@ export default function EdgeSettingsPanel({
   onSelect,
 }: EdgeSettingsPanelProps) {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
-  const titleById = new Map(steps.map((step) => [step.id, step.title]))
+  const numberById = funnelStepNumberMap(steps)
+  const titleById = new Map(
+    steps.map((step) => [step.id, funnelStepLabel(step, numberById)]),
+  )
 
   const updateCondition = (patch: Record<string, unknown>) => {
     if (!selectedEdge) {

@@ -1,7 +1,13 @@
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 
 import type { FunnelStep } from '../types'
-import { configId, type ButtonConfig } from '../funnelConfig'
+import {
+  configId,
+  funnelStepLabel,
+  funnelStepNumberMap,
+  orderedFunnelSteps,
+  type ButtonConfig,
+} from '../funnelConfig'
 
 type TargetSelectProps = {
   value?: string
@@ -11,6 +17,7 @@ type TargetSelectProps = {
 }
 
 export function TargetSelect({ value, currentStepId, steps, onChange }: TargetSelectProps) {
+  const numberById = funnelStepNumberMap(steps)
   return (
     <select
       value={value ?? ''}
@@ -18,11 +25,11 @@ export function TargetSelect({ value, currentStepId, steps, onChange }: TargetSe
       className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
     >
       <option value="">По обычной связи</option>
-      {steps
+      {orderedFunnelSteps(steps)
         .filter((item) => item.id !== currentStepId)
         .map((item) => (
           <option key={item.id} value={item.id}>
-            {item.title}
+            {funnelStepLabel(item, numberById)}
           </option>
         ))}
     </select>

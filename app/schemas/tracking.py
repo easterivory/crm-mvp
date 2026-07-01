@@ -19,13 +19,14 @@ class TrackingLinkCreate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     code: Optional[str] = Field(None, max_length=100)
     ref_code: Optional[str] = Field(None, max_length=100)
+    buyer_id: Optional[uuid.UUID] = None
     buyer_name: Optional[str] = Field(None, max_length=255)
     ad_type: Optional[str] = Field(None, max_length=100)
     payment_type: Optional[str] = Field(None, max_length=100)
     invite_link: Optional[str] = None
     fb_pixel_id: Optional[str] = Field(None, max_length=50)
     fb_capi_token: Optional[str] = Field(None, max_length=4096)
-    cost_model: TrackingCostModel = TrackingCostModel.FIX_PDP
+    cost_model: TrackingCostModel = TrackingCostModel.CPM
     price_per_unit: Decimal = Field(default=Decimal("0"), ge=0)
     spend: Decimal = Field(default=Decimal("0"), ge=0)
     base_conversion_rate: float = Field(default=10.0, ge=0, le=100)
@@ -61,6 +62,7 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     title: Optional[str] = Field(None, max_length=255)
     code: Optional[str] = Field(None, max_length=100)
     ref_code: Optional[str] = Field(None, max_length=100)
+    buyer_id: Optional[uuid.UUID] = None
     buyer_name: Optional[str] = Field(None, max_length=255)
     ad_type: Optional[str] = Field(None, max_length=100)
     payment_type: Optional[str] = Field(None, max_length=100)
@@ -108,6 +110,7 @@ class TrackingLinkRead(OrmBase):
     bot_id: uuid.UUID
     code: str
     title: str
+    buyer_id: Optional[uuid.UUID] = None
     buyer_name: Optional[str] = None
     ad_type: Optional[str] = None
     payment_type: Optional[str] = None
@@ -116,6 +119,9 @@ class TrackingLinkRead(OrmBase):
     created_by_user_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
+    cost_model: TrackingCostModel
+    price_per_unit: Decimal
+    spend: Decimal
     base_conversion_rate: float
     min_sample_size: int
     target_funnel_id: Optional[uuid.UUID] = None
@@ -145,6 +151,7 @@ class TrackingFunnelStepOption(BaseModel):
     title: str
     step_type: str
     block_type: str
+    number: int = Field(..., ge=1)
 
 
 class TrackingSpendCreate(BaseModel):

@@ -29,6 +29,7 @@ import UnsupportedBlockCard from './UnsupportedBlockCard'
 
 export type FunnelNodeData = {
   step: FunnelStep
+  stepNumber?: number
   onDelete?: (stepId: string) => void
 } & Record<string, unknown>
 
@@ -92,7 +93,9 @@ function previewLines(step: FunnelStep) {
       textValue(step.config_json, 'question_text') ||
       textValue(step.config_json, 'text') ||
       'Вопрос без текста'
-    const saveTo = textValue(step.config_json, 'save_to')
+    const saveTo =
+      textValue(step.config_json, 'custom_field_key') ||
+      textValue(step.config_json, 'save_to')
     return saveTo ? [prompt, `Сохранить: ${saveTo}`] : [prompt]
   }
 
@@ -137,7 +140,7 @@ function previewLines(step: FunnelStep) {
 }
 
 export default function FunnelNode({ data, selected, isConnectable }: NodeProps<FunnelFlowNode>) {
-  const { step, onDelete } = data
+  const { step, stepNumber, onDelete } = data
   const Icon = iconByType[step.step_type] ?? Bell
   const isSupported = mvpBlockTypes.has(step.block_type)
   const outputs = collectConfiguredOutputs(step)
@@ -173,7 +176,10 @@ export default function FunnelNode({ data, selected, isConnectable }: NodeProps<
           <Icon size={17} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-white">{step.title}</p>
+          <p className="truncate text-sm font-semibold text-white">
+            {stepNumber ? `#${stepNumber} · ` : ''}
+            {step.title}
+          </p>
           <p className="truncate text-xs text-gray-400">{getBlockLabel(step.block_type)}</p>
         </div>
         {onDelete ? (

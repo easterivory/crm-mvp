@@ -1,4 +1,4 @@
-import { LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
+import { ArrowDownWideNarrow, LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
 import { useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
@@ -317,6 +317,24 @@ export default function ChatList({
             onChange={onFiltersChange}
           />
         </div>
+
+        <label className={`${isMobileControlsOpen ? 'mt-2 flex' : 'hidden'} items-center gap-2 md:mt-2 md:flex`}>
+          <ArrowDownWideNarrow size={14} className="shrink-0 text-gray-500" />
+          <span className="sr-only">Сортировка чатов</span>
+          <select
+            value={filters.sortBy}
+            onChange={(event) =>
+              onFiltersChange({
+                ...filters,
+                sortBy: event.target.value as ChatFiltersState['sortBy'],
+              })
+            }
+            className="h-8 min-w-0 flex-1 rounded-lg border border-white/8 bg-background/45 px-2 text-xs text-gray-300 outline-none transition focus:border-accent-300/45"
+          >
+            <option value="latest">Сначала свежие</option>
+            <option value="priority">Сначала срочные</option>
+          </select>
+        </label>
 
         {activeFilterCount > 0 ? (
           <div className={`${isMobileControlsOpen ? 'mt-2 block' : 'hidden'} md:mt-2 md:block`}>

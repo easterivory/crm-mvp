@@ -6,10 +6,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import TrackingCostModel
 from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.tracking import TrafficStatsOut
 from app.services.tracking_conversion import calculate_conversion_status
+from app.services.tracking_cost_service import calculate_tracking_spend
 
 
 class AnalyticsService:
@@ -21,17 +21,26 @@ class AnalyticsService:
         rows = await self.tracking_repo.get_traffic_stats(project_id)
 
         stats: list[TrafficStatsOut] = []
-        for link, chat_clicks, event_clicks, impressions, leads in rows:
-            clicks = max(int(chat_clicks or 0), int(event_clicks or 0))
+        for (
+            link,
+            chat_starts,
+            event_clicks,
+            impressions,
+            leads,
+            submitted_leads,
+            stored_manual_spend,
+        ) in rows:
+            starts = int(chat_starts or 0)
+            clicks = max(starts, int(event_clicks or 0))
             impressions_count = int(impressions or 0)
             leads_count = int(leads or 0)
-            spend = self._calculate_spend(
+            manual_spend = Decimal(stored_manual_spend or link.spend or 0)
+            spend = calculate_tracking_spend(
                 cost_model=link.cost_model,
                 price_per_unit=Decimal(link.price_per_unit or 0),
-                manual_spend=Decimal(link.spend or 0),
-                clicks=clicks,
-                impressions=impressions_count,
-                leads=leads_count,
+                manual_spend=manual_spend,
+                starts=starts,
+                submitted_leads=int(submitted_leads or 0),
             )
             cpl = self._calculate_cpl(spend=spend, leads=leads_count)
 
@@ -50,7 +59,7 @@ class AnalyticsService:
                     min_sample_size=link.min_sample_size,
                     conversion_status=calculate_conversion_status(
                         clicks=clicks,
-                        starts=clicks,
+                        starts=starts,
                         leads=leads_count,
                         base_conversion_rate=link.base_conversion_rate,
                         min_sample_size=link.min_sample_size,
@@ -59,27 +68,6 @@ class AnalyticsService:
             )
 
         return stats
-
-    @staticmethod
-    def _calculate_spend(
-        *,
-        cost_model: TrackingCostModel,
-        price_per_unit: Decimal,
-        manual_spend: Decimal,
-        clicks: int,
-        impressions: int,
-        leads: int,
-    ) -> Decimal:
-        if cost_model == TrackingCostModel.FIX_PDP:
-            spend = Decimal(clicks) * price_per_unit
-        elif cost_model == TrackingCostModel.CPM:
-            spend = (Decimal(impressions) / Decimal("1000")) * price_per_unit
-        elif cost_model == TrackingCostModel.CPA:
-            spend = Decimal(leads) * price_per_unit if price_per_unit > 0 else manual_spend
-        else:
-            spend = manual_spend
-
-        return AnalyticsService._money(spend)
 
     @staticmethod
     def _calculate_cpl(*, spend: Decimal, leads: int) -> Decimal:

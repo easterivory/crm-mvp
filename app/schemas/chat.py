@@ -117,3 +117,4 @@ class ChatFilters(BaseModel):
     tag_mode: str = "any"
     lead_statuses: list[str] = Field(default_factory=list)
     funnel_state: Optional[str] = None
+    sort_by: str = Field(default="latest", pattern="^(latest|priority)$")

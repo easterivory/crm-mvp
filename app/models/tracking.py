@@ -81,8 +81,8 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
             length=20,
         ),
         nullable=False,
-        default=TrackingCostModel.FIX_PDP,
-        server_default=TrackingCostModel.FIX_PDP.value,
+        default=TrackingCostModel.CPM,
+        server_default=TrackingCostModel.CPM.value,
     )
     price_per_unit: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),

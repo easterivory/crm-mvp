@@ -1,9 +1,12 @@
+export type TrackingCostModel = 'fix_pdp' | 'cpa' | 'cpm'
+
 export type TrackingLink = {
   id: string
   project_id: string
   bot_id: string
   code: string
   title: string
+  buyer_id: string | null
   buyer_name: string | null
   ad_type: string | null
   payment_type: string | null
@@ -12,6 +15,9 @@ export type TrackingLink = {
   created_by_user_id: string | null
   created_at: string
   updated_at: string
+  cost_model: TrackingCostModel
+  price_per_unit: string | number
+  spend: string | number
   base_conversion_rate: number
   min_sample_size: number
   target_funnel_id: string | null
@@ -27,6 +33,7 @@ export type TrackingLinkCreatePayload = {
   bot_id: string
   title: string
   code?: string
+  buyer_id?: string | null
   buyer_name?: string | null
   ad_type?: string | null
   payment_type?: string | null
@@ -36,11 +43,15 @@ export type TrackingLinkCreatePayload = {
   target_funnel_step_key?: string | null
   fb_pixel_id?: string | null
   fb_capi_token?: string | null
+  cost_model?: TrackingCostModel
+  price_per_unit?: number
+  spend?: number
 }
 
 export type TrackingLinkUpdatePayload = Partial<{
   title: string
   code: string
+  buyer_id: string | null
   buyer_name: string | null
   ad_type: string | null
   payment_type: string | null
@@ -51,6 +62,9 @@ export type TrackingLinkUpdatePayload = Partial<{
   target_funnel_step_key: string | null
   fb_pixel_id: string | null
   fb_capi_token: string | null
+  cost_model: TrackingCostModel
+  price_per_unit: number
+  spend: number
 }>
 
 export type TrackingFunnelStepOption = {
@@ -58,6 +72,7 @@ export type TrackingFunnelStepOption = {
   title: string
   step_type: string
   block_type: string
+  number: number
 }
 
 export type TrackingSpend = {

@@ -31,8 +31,8 @@ import {
 
 import { fetchBots } from '../features/bots/api'
 import type { Bot } from '../features/bots/types'
-import { fetchBuyerPerformance } from '../features/buyers'
-import type { BuyerPerformance } from '../features/buyers'
+import { fetchBuyerPerformance, fetchBuyers } from '../features/buyers'
+import type { BuyerPerformance, BuyerUser } from '../features/buyers'
 import {
   archiveTrackingLink,
   createTrackingLink,
@@ -53,6 +53,7 @@ import type {
   FunnelStepMetric,
   ManagerPerformance,
   TrackingConversionStatus,
+  TrackingCostModel,
   TrackingLink,
   TrackingLinkMetricsResponse,
   TrackingMetricSummary,
@@ -65,9 +66,11 @@ import { Modal } from '../shared/ui'
 
 type ActiveFilter = 'active' | 'inactive' | 'all'
 type SpendMode = 'create' | 'edit'
+type BuyerSelection = '' | 'custom' | string
 
 const DEFAULT_BASE_CONVERSION_RATE = '10.0'
 const DEFAULT_MIN_SAMPLE_SIZE = '500'
+const DEFAULT_COST_MODEL: TrackingCostModel = 'cpm'
 const dateInputClassName = 'crm-date-input h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60'
 const modalDateInputClassName = 'crm-date-input h-10 w-full rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2'
 
@@ -171,6 +174,24 @@ function parseMinSampleSize(value: string) {
     return null
   }
   return parsed
+}
+
+function parseNonNegativeMoney(value: string) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null
+  }
+  return parsed
+}
+
+function costModelLabel(model: TrackingCostModel) {
+  if (model === 'fix_pdp') {
+    return 'Фикс за подписчика'
+  }
+  if (model === 'cpa') {
+    return 'CPL за поданного лида'
+  }
+  return 'Ручной рекламный бюджет'
 }
 
 function conversionSampleSize(summary: TrackingMetricSummary) {
@@ -320,6 +341,7 @@ export default function TrackingPage() {
   const [metrics, setMetrics] = useState<TrackingProjectMetricsResponse | null>(null)
   const [managerPerformance, setManagerPerformance] = useState<ManagerPerformance[]>([])
   const [buyerPerformance, setBuyerPerformance] = useState<BuyerPerformance[]>([])
+  const [buyers, setBuyers] = useState<BuyerUser[]>([])
   const [dateFrom, setDateFrom] = useState(daysAgoIso(6))
   const [dateTo, setDateTo] = useState(todayIso())
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('active')
@@ -331,9 +353,14 @@ export default function TrackingPage() {
   const [createTitle, setCreateTitle] = useState('')
   const [createBotId, setCreateBotId] = useState('')
   const [createCode, setCreateCode] = useState('')
+  const [createBuyerSelection, setCreateBuyerSelection] = useState<BuyerSelection>('')
   const [createBuyerName, setCreateBuyerName] = useState('')
   const [createAdType, setCreateAdType] = useState('')
-  const [createPaymentType, setCreatePaymentType] = useState('')
+  const [createCostModel, setCreateCostModel] = useState<TrackingCostModel>(
+    DEFAULT_COST_MODEL,
+  )
+  const [createPricePerUnit, setCreatePricePerUnit] = useState('')
+  const [createManualSpend, setCreateManualSpend] = useState('')
   const [createInviteLink, setCreateInviteLink] = useState('')
   const [createFbPixelId, setCreateFbPixelId] = useState('')
   const [createFbCapiToken, setCreateFbCapiToken] = useState('')
@@ -349,9 +376,13 @@ export default function TrackingPage() {
   const [mutatingLinkId, setMutatingLinkId] = useState<string | null>(null)
   const [editingLink, setEditingLink] = useState<TrackingLink | null>(null)
   const [editTitle, setEditTitle] = useState('')
+  const [editBuyerSelection, setEditBuyerSelection] = useState<BuyerSelection>('')
   const [editBuyerName, setEditBuyerName] = useState('')
   const [editAdType, setEditAdType] = useState('')
-  const [editPaymentType, setEditPaymentType] = useState('')
+  const [editCostModel, setEditCostModel] = useState<TrackingCostModel>(
+    DEFAULT_COST_MODEL,
+  )
+  const [editPricePerUnit, setEditPricePerUnit] = useState('')
   const [editInviteLink, setEditInviteLink] = useState('')
   const [editFbPixelId, setEditFbPixelId] = useState('')
   const [editFbCapiToken, setEditFbCapiToken] = useState('')
@@ -434,6 +465,7 @@ export default function TrackingPage() {
       setMetrics(null)
       setManagerPerformance([])
       setBuyerPerformance([])
+      setBuyers([])
       return
     }
 
@@ -449,7 +481,14 @@ export default function TrackingPage() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       }
-      const [botItems, linkResponse, projectMetrics, managerItems, buyerItems] = await Promise.all([
+      const [
+        botItems,
+        linkResponse,
+        projectMetrics,
+        managerItems,
+        buyerItems,
+        buyerUsers,
+      ] = await Promise.all([
         fetchBots(selectedProjectId),
         fetchTrackingLinks({
           project_id: selectedProjectId,
@@ -469,6 +508,7 @@ export default function TrackingPage() {
           date_to: dateTo || undefined,
           bot_id: selectedBotIdForQuery,
         }),
+        fetchBuyers(selectedProjectId),
       ])
 
       setBots(botItems)
@@ -476,6 +516,7 @@ export default function TrackingPage() {
       setMetrics(projectMetrics)
       setManagerPerformance(managerItems)
       setBuyerPerformance(buyerItems)
+      setBuyers(buyerUsers)
     } catch (err) {
       setError(getErrorMessage(err, 'Could not load tracking data.'))
     } finally {
@@ -553,9 +594,12 @@ export default function TrackingPage() {
     setCreateTitle('')
     setCreateBotId(defaultBotId)
     setCreateCode('')
+    setCreateBuyerSelection('')
     setCreateBuyerName('')
     setCreateAdType('')
-    setCreatePaymentType('')
+    setCreateCostModel(DEFAULT_COST_MODEL)
+    setCreatePricePerUnit('')
+    setCreateManualSpend('')
     setCreateInviteLink('')
     setCreateFbPixelId('')
     setCreateFbCapiToken('')
@@ -583,12 +627,22 @@ export default function TrackingPage() {
     }
     const baseConversionRate = parseBaseConversionRate(createBaseConversionRate)
     const minSampleSize = parseMinSampleSize(createMinSampleSize)
+    const pricePerUnit = parseNonNegativeMoney(createPricePerUnit || '0')
+    const manualSpend = parseNonNegativeMoney(createManualSpend || '0')
     if (baseConversionRate === null) {
       setCreateError('Целевая конверсия должна быть числом от 0 до 100.')
       return
     }
     if (minSampleSize === null) {
       setCreateError('Минимальная выборка должна быть целым числом от 1.')
+      return
+    }
+    if (pricePerUnit === null || manualSpend === null) {
+      setCreateError('Стоимость должна быть неотрицательным числом.')
+      return
+    }
+    if (createCostModel !== 'cpm' && pricePerUnit <= 0) {
+      setCreateError('Укажите стоимость единицы для выбранной модели.')
       return
     }
 
@@ -602,9 +656,17 @@ export default function TrackingPage() {
         bot_id: createBotId,
         title: createTitle.trim(),
         code: createCode.trim() || undefined,
-        buyer_name: createBuyerName.trim() || null,
+        buyer_id:
+          createBuyerSelection && createBuyerSelection !== 'custom'
+            ? createBuyerSelection
+            : null,
+        buyer_name:
+          createBuyerSelection === 'custom' ? createBuyerName.trim() || null : null,
         ad_type: createAdType.trim() || null,
-        payment_type: createPaymentType.trim() || null,
+        payment_type: createCostModel,
+        cost_model: createCostModel,
+        price_per_unit: createCostModel === 'cpm' ? 0 : pricePerUnit,
+        spend: createCostModel === 'cpm' ? manualSpend : 0,
         invite_link: createInviteLink.trim() || null,
         fb_pixel_id: createFbPixelId.trim() || null,
         fb_capi_token: createFbCapiToken.trim() || null,
@@ -625,9 +687,11 @@ export default function TrackingPage() {
   const openEditLink = (link: TrackingLink) => {
     setEditingLink(link)
     setEditTitle(link.title)
+    setEditBuyerSelection(link.buyer_id ?? (link.buyer_name ? 'custom' : ''))
     setEditBuyerName(link.buyer_name ?? '')
     setEditAdType(link.ad_type ?? '')
-    setEditPaymentType(link.payment_type ?? '')
+    setEditCostModel(link.cost_model ?? DEFAULT_COST_MODEL)
+    setEditPricePerUnit(String(link.price_per_unit ?? ''))
     setEditInviteLink(link.invite_link ?? '')
     setEditFbPixelId(link.fb_pixel_id ?? '')
     setEditFbCapiToken('')
@@ -653,12 +717,21 @@ export default function TrackingPage() {
 
     const baseConversionRate = parseBaseConversionRate(editBaseConversionRate)
     const minSampleSize = parseMinSampleSize(editMinSampleSize)
+    const pricePerUnit = parseNonNegativeMoney(editPricePerUnit || '0')
     if (baseConversionRate === null) {
       setEditError('Целевая конверсия должна быть числом от 0 до 100.')
       return
     }
     if (minSampleSize === null) {
       setEditError('Минимальная выборка должна быть целым числом от 1.')
+      return
+    }
+    if (pricePerUnit === null) {
+      setEditError('Стоимость должна быть неотрицательным числом.')
+      return
+    }
+    if (editCostModel !== 'cpm' && pricePerUnit <= 0) {
+      setEditError('Укажите стоимость единицы для выбранной модели.')
       return
     }
 
@@ -669,9 +742,16 @@ export default function TrackingPage() {
     try {
       const payload = {
         title: editTitle.trim(),
-        buyer_name: editBuyerName.trim() || null,
+        buyer_id:
+          editBuyerSelection && editBuyerSelection !== 'custom'
+            ? editBuyerSelection
+            : null,
+        buyer_name:
+          editBuyerSelection === 'custom' ? editBuyerName.trim() || null : null,
         ad_type: editAdType.trim() || null,
-        payment_type: editPaymentType.trim() || null,
+        payment_type: editCostModel,
+        cost_model: editCostModel,
+        price_per_unit: editCostModel === 'cpm' ? 0 : pricePerUnit,
         invite_link: editInviteLink.trim() || null,
         fb_pixel_id: editFbPixelId.trim() || null,
         base_conversion_rate: baseConversionRate,
@@ -1320,7 +1400,7 @@ export default function TrackingPage() {
                       {link.title}
                     </h3>
                     <p className="mt-1 truncate text-sm text-gray-500">
-                      {botLabel} · {link.buyer_name || 'buyer не указан'} · {link.ad_type || 'тип рекламы не указан'} · {link.payment_type || 'оплата не указана'}
+                      {botLabel} · {link.buyer_name || 'баер не указан'} · {link.ad_type || 'тип рекламы не указан'} · {costModelLabel(link.cost_model)}
                     </p>
                     {link.target_funnel_step_key ? (
                       <p className="mt-2 inline-flex max-w-full items-center rounded-lg border border-violet-300/20 bg-violet-400/10 px-2 py-1 text-xs text-violet-100">
@@ -1382,14 +1462,16 @@ export default function TrackingPage() {
                     ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openSpendModal(link)}
-                      className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 hover:text-white"
-                    >
-                      <DollarSign size={15} />
-                      Добавить расход
-                    </button>
+                    {link.cost_model === 'cpm' ? (
+                      <button
+                        type="button"
+                        onClick={() => openSpendModal(link)}
+                        className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 hover:text-white"
+                      >
+                        <DollarSign size={15} />
+                        Добавить расход
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => openDetail(link)}
@@ -1426,7 +1508,7 @@ export default function TrackingPage() {
           title="Создать tracking link"
           description="Сгенерируйте source-ссылку для выбранного проекта."
           onClose={closeCreateLink}
-          maxWidthClassName="max-w-lg"
+          maxWidthClassName="max-w-2xl"
         >
           <form className="space-y-3" onSubmit={handleCreateLink}>
             {createError ? (
@@ -1485,7 +1567,7 @@ export default function TrackingPage() {
                 <option value="">Обычный старт воронки</option>
                 {(targetStepsByBot[createBotId] ?? []).map((step) => (
                   <option key={step.key} value={step.key}>
-                    {step.title} · {step.block_type}
+                    #{step.number} · {step.title} · {step.block_type}
                   </option>
                 ))}
               </select>
@@ -1510,40 +1592,105 @@ export default function TrackingPage() {
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Buyer
+                  Баер
+                </span>
+                <select
+                  value={createBuyerSelection}
+                  onChange={(event) => {
+                    setCreateBuyerSelection(event.target.value)
+                    if (event.target.value !== 'custom') {
+                      setCreateBuyerName('')
+                    }
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                >
+                  <option value="">Не указывать</option>
+                  {buyers.map((buyer) => (
+                    <option key={buyer.id} value={buyer.id}>
+                      {buyer.name} · {buyer.email}
+                    </option>
+                  ))}
+                  <option value="custom">Тестовый баер / свободный ввод</option>
+                </select>
+              </label>
+            </div>
+            {createBuyerSelection === 'custom' ? (
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Имя тестового баера
                 </span>
                 <input
                   value={createBuyerName}
                   onChange={(event) => setCreateBuyerName(event.target.value)}
                   maxLength={255}
-                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                  placeholder="Имя buyer"
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                  placeholder="Например, Test buyer 01"
                 />
               </label>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Тип рекламы
+            ) : null}
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Тип рекламы
+              </span>
+              <input
+                value={createAdType}
+                onChange={(event) => setCreateAdType(event.target.value)}
+                maxLength={100}
+                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                placeholder="Facebook, Instagram, Telegram Ads"
+              />
+            </label>
+            <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
+              <span className="mb-2 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Модель расходов
+              </span>
+              <div className="grid gap-2 md:grid-cols-3">
+                {(
+                  [
+                    ['fix_pdp', 'Фикс', 'Цена за уникальный старт бота'],
+                    ['cpa', 'CPL', 'Цена за поданного лида'],
+                    ['cpm', 'Бюджет', 'Ручная сумма расходов'],
+                  ] as const
+                ).map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setCreateCostModel(value)}
+                    className={`min-h-20 rounded-lg border px-3 py-2 text-left transition ${
+                      createCostModel === value
+                        ? 'border-cyan-300/50 bg-cyan-400/10 text-white'
+                        : 'border-white/10 bg-background/50 text-gray-300 hover:border-white/20'
+                    }`}
+                  >
+                    <span className="block text-sm font-semibold">{label}</span>
+                    <span className="mt-1 block text-xs leading-4 text-gray-500">{hint}</span>
+                  </button>
+                ))}
+              </div>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-xs text-gray-400">
+                  {createCostModel === 'cpm'
+                    ? 'Начальный рекламный бюджет'
+                    : createCostModel === 'fix_pdp'
+                      ? 'Стоимость одного подписчика'
+                      : 'Стоимость одного поданного лида'}
                 </span>
                 <input
-                  value={createAdType}
-                  onChange={(event) => setCreateAdType(event.target.value)}
-                  maxLength={100}
-                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                  placeholder="instagram"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Тип оплаты
-                </span>
-                <input
-                  value={createPaymentType}
-                  onChange={(event) => setCreatePaymentType(event.target.value)}
-                  maxLength={100}
-                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                  placeholder="cpa"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={
+                    createCostModel === 'cpm' ? createManualSpend : createPricePerUnit
+                  }
+                  onChange={(event) => {
+                    if (createCostModel === 'cpm') {
+                      setCreateManualSpend(event.target.value)
+                    } else {
+                      setCreatePricePerUnit(event.target.value)
+                    }
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                  placeholder="0.00"
                 />
               </label>
             </div>
@@ -1652,7 +1799,7 @@ export default function TrackingPage() {
           title="Редактировать tracking link"
           description={`Code ${editingLink.code}`}
           onClose={closeEditLink}
-          maxWidthClassName="max-w-lg"
+          maxWidthClassName="max-w-2xl"
         >
           <form className="space-y-3" onSubmit={handleUpdateLink}>
             {editError ? (
@@ -1676,15 +1823,26 @@ export default function TrackingPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Buyer
+                  Баер
                 </span>
-                <input
-                  value={editBuyerName}
-                  onChange={(event) => setEditBuyerName(event.target.value)}
-                  maxLength={255}
-                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                  placeholder="Имя buyer"
-                />
+                <select
+                  value={editBuyerSelection}
+                  onChange={(event) => {
+                    setEditBuyerSelection(event.target.value)
+                    if (event.target.value !== 'custom') {
+                      setEditBuyerName('')
+                    }
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                >
+                  <option value="">Не указывать</option>
+                  {buyers.map((buyer) => (
+                    <option key={buyer.id} value={buyer.id}>
+                      {buyer.name} · {buyer.email}
+                    </option>
+                  ))}
+                  <option value="custom">Тестовый баер / свободный ввод</option>
+                </select>
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -1699,19 +1857,21 @@ export default function TrackingPage() {
                 />
               </label>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            {editBuyerSelection === 'custom' ? (
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Тип оплаты
+                  Имя тестового баера
                 </span>
                 <input
-                  value={editPaymentType}
-                  onChange={(event) => setEditPaymentType(event.target.value)}
-                  maxLength={100}
-                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                  placeholder="cpa"
+                  value={editBuyerName}
+                  onChange={(event) => setEditBuyerName(event.target.value)}
+                  maxLength={255}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                  placeholder="Например, Test buyer 01"
                 />
               </label>
+            ) : null}
+            <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Invite link
@@ -1723,6 +1883,44 @@ export default function TrackingPage() {
                   placeholder="Готовый URL, необязательно"
                 />
               </label>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
+              <span className="mb-2 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Модель расходов
+              </span>
+              <select
+                value={editCostModel}
+                onChange={(event) =>
+                  setEditCostModel(event.target.value as TrackingCostModel)
+                }
+                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+              >
+                <option value="fix_pdp">Фикс за подписчика</option>
+                <option value="cpa">CPL за поданного лида</option>
+                <option value="cpm">Ручной рекламный бюджет</option>
+              </select>
+              {editCostModel === 'cpm' ? (
+                <p className="mt-2 text-xs leading-5 text-gray-500">
+                  Суммы бюджета добавляются по датам через кнопку «Добавить расход».
+                </p>
+              ) : (
+                <label className="mt-3 block">
+                  <span className="mb-1 block text-xs text-gray-400">
+                    {editCostModel === 'fix_pdp'
+                      ? 'Стоимость одного подписчика'
+                      : 'Стоимость одного поданного лида'}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editPricePerUnit}
+                    onChange={(event) => setEditPricePerUnit(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                    placeholder="0.00"
+                  />
+                </label>
+              )}
             </div>
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -1737,7 +1935,7 @@ export default function TrackingPage() {
                 <option value="">Обычный старт воронки</option>
                 {(targetStepsByBot[editingLink.bot_id] ?? []).map((step) => (
                   <option key={step.key} value={step.key}>
-                    {step.title} · {step.block_type}
+                    #{step.number} · {step.title} · {step.block_type}
                   </option>
                 ))}
               </select>

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.core.constants import RoleName
@@ -18,6 +19,38 @@ from app.schemas.buyer import BuyerCreate, BuyerInviteOut, BuyerUserOut
 from app.services.system_setting_service import SystemSettingService
 
 router = APIRouter(prefix="/buyers", tags=["buyers"])
+
+
+@router.get("", response_model=list[BuyerUserOut])
+async def list_buyers(
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[BuyerUserOut]:
+    _ensure_admin(current_user)
+    await _ensure_project_active(db, project_id)
+    project_user_ids = select(UserProjectAccess.user_id).where(
+        UserProjectAccess.project_id == project_id
+    )
+    linked_buyer_ids = select(TrackingLink.buyer_id).where(
+        TrackingLink.project_id == project_id,
+        TrackingLink.buyer_id.is_not(None),
+    )
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.role))
+        .where(
+            User.is_deleted.is_(False),
+            or_(User.project_id == project_id, User.id.in_(project_user_ids)),
+            or_(
+                User.buyer_telegram_id.is_not(None),
+                User.buyer_invite_token.is_not(None),
+                User.id.in_(linked_buyer_ids),
+            ),
+        )
+        .order_by(User.name.asc(), User.email.asc())
+    )
+    return [BuyerUserOut.model_validate(user) for user in result.scalars().all()]
 
 
 @router.post("", response_model=BuyerInviteOut, status_code=status.HTTP_201_CREATED)

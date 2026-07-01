@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
+import api from '../api/client'
 import { useAuthStore, type TelegramAuthPayload } from '../store/authStore'
 
 type TelegramLoginUser = TelegramAuthPayload & {
@@ -21,7 +22,7 @@ declare global {
   }
 }
 
-const telegramBotUsername = (
+const fallbackTelegramBotUsername = (
   import.meta.env.VITE_TELEGRAM_LOGIN_BOT_USERNAME ||
   import.meta.env.VITE_BUYER_BOT_USERNAME ||
   ''
@@ -39,12 +40,47 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isTelegramLoading, setIsTelegramLoading] = useState(false)
+  const [telegramBotUsername, setTelegramBotUsername] = useState(
+    fallbackTelegramBotUsername,
+  )
+  const [isTelegramConfigured, setIsTelegramConfigured] = useState(
+    Boolean(fallbackTelegramBotUsername),
+  )
+  const [isTelegramConfigLoading, setIsTelegramConfigLoading] = useState(true)
 
   useEffect(() => {
     if (isAuthenticated) {
       navigate('/chats', { replace: true })
     }
   }, [isAuthenticated, navigate])
+
+  useEffect(() => {
+    let cancelled = false
+    void api
+      .get<{ username: string | null; is_configured: boolean }>(
+        '/auth/telegram-config',
+      )
+      .then(({ data }) => {
+        if (cancelled) {
+          return
+        }
+        setTelegramBotUsername((data.username ?? '').replace(/^@/, ''))
+        setIsTelegramConfigured(data.is_configured)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsTelegramConfigured(Boolean(fallbackTelegramBotUsername))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsTelegramConfigLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     window.onTelegramAuth = (user: TelegramLoginUser) => {
@@ -64,7 +100,12 @@ export default function LoginPage() {
   }, [loginWithTelegram, navigate])
 
   useEffect(() => {
-    if (!telegramBotUsername || !telegramWidgetRef.current) {
+    if (
+      isTelegramConfigLoading ||
+      !isTelegramConfigured ||
+      !telegramBotUsername ||
+      !telegramWidgetRef.current
+    ) {
       return
     }
 
@@ -84,7 +125,7 @@ export default function LoginPage() {
     return () => {
       widgetContainer.innerHTML = ''
     }
-  }, [])
+  }, [isTelegramConfigLoading, isTelegramConfigured, telegramBotUsername])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -159,7 +200,9 @@ export default function LoginPage() {
         </div>
 
         <div className="flex min-h-12 items-center justify-center">
-          {telegramBotUsername ? (
+          {isTelegramConfigLoading ? (
+            <LoaderCircle size={18} className="animate-spin text-zinc-500" />
+          ) : isTelegramConfigured && telegramBotUsername ? (
             <div className={isTelegramLoading ? 'pointer-events-none opacity-60' : ''} ref={telegramWidgetRef} />
           ) : (
             <button

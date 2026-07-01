@@ -102,6 +102,7 @@ async def list_chats(
         default=None,
         pattern="^(in_funnel|waiting_for_answer|paused|completed|manual)$",
     ),
+    sort_by: str = Query(default="latest", pattern="^(latest|priority)$"),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[ChatOut]:
@@ -126,7 +127,9 @@ async def list_chats(
       - lead_statuses=<csv> — only chats whose lead status code matches
       - funnel_state=in_funnel|waiting_for_answer|paused|completed|manual
 
-    Sort order (fixed): is_red DESC → unanswered DESC → last_message_at DESC
+    Sort order:
+      - latest: latest dialog activity first
+      - priority: SLA-red, unanswered, then latest activity
     """
     date_from_dt, date_to_dt = ChatService.date_range_to_datetimes(date_from, date_to)
     filters = ChatFilters(
@@ -154,6 +157,7 @@ async def list_chats(
             lead_statuses_array,
         ),
         funnel_state=funnel_state,
+        sort_by=sort_by,
     )
     items, total = await ChatService(db).get_chat_list(
         project_id=project_id,

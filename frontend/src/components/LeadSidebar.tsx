@@ -173,6 +173,25 @@ function attributionEntries(customFields: Record<string, unknown> | undefined) {
     .map(([key, value]) => [key, String(value)] as const)
 }
 
+function customFieldEntries(customFields: Record<string, unknown> | undefined) {
+  if (!customFields) {
+    return []
+  }
+  return Object.entries(customFields)
+    .filter(([key, value]) => (
+      key !== 'fb_data'
+      && !key.startsWith('__')
+      && value !== null
+      && value !== undefined
+      && ['string', 'number', 'boolean'].includes(typeof value)
+      && String(value).trim() !== ''
+    ))
+    .map(([key, value]) => [
+      key.replace(/_/g, ' ').replace(/^\p{L}/u, (letter) => letter.toUpperCase()),
+      typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value),
+    ] as const)
+}
+
 function getErrorMessage(err: unknown) {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
@@ -267,6 +286,7 @@ export default function LeadSidebar({
       ['Возраст', lead.age ? String(lead.age) : null],
       ['Страна', lead.country],
       ['Карта', lead.has_card === null ? null : lead.has_card ? 'Есть' : 'Нет'],
+      ...customFieldEntries(lead.custom_fields),
     ].filter(([, value]) => Boolean(value))
   }, [lead])
 

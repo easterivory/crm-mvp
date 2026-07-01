@@ -8,6 +8,7 @@ export type ChatFunnelStateFilter =
 export type ChatDatePreset = '' | 'today' | 'yesterday' | '7d' | '30d' | 'custom'
 export type ChatTagMode = 'any' | 'all'
 export type ChatQuickFilter = '' | 'all' | 'mine' | 'unanswered' | 'hot'
+export type ChatSort = 'latest' | 'priority'
 
 export type ChatFiltersState = {
   q: string
@@ -25,6 +26,7 @@ export type ChatFiltersState = {
   assignedUserId: string
   unassigned: boolean
   quickFilter: ChatQuickFilter
+  sortBy: ChatSort
 }
 
 export type FilterOption = {
@@ -68,6 +70,7 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   assignedUserId: '',
   unassigned: false,
   quickFilter: '',
+  sortBy: 'latest',
 }
 
 export function countActiveChatFilters(filters: ChatFiltersState) {

@@ -27,7 +27,7 @@ from app.services.chat_audit_service import ChatAuditService
 from app.services.audit_service import AuditService
 from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
-from app.services.funnel_block_registry import LEAD_FIELD_KEYS
+from app.services.funnel_block_registry import is_supported_lead_field_key
 from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
 from app.services.telegram_sender import TelegramSenderService
@@ -701,7 +701,7 @@ class FunnelRuntimeService:
         custom_values: dict[str, Any] = {}
         if step is not None:
             save_to = self._normalize_field_key(step.config_json.get("save_to"))
-            if save_to in LEAD_FIELD_KEYS:
+            if save_to and is_supported_lead_field_key(save_to):
                 value = self._transform_value(save_to, answer)
                 if save_to in DIRECT_LEAD_FIELDS:
                     direct_values[save_to] = value
@@ -709,7 +709,7 @@ class FunnelRuntimeService:
                     custom_values[save_to] = value
 
         for mapping in relevant:
-            if mapping.lead_field_key not in LEAD_FIELD_KEYS:
+            if not is_supported_lead_field_key(mapping.lead_field_key):
                 continue
             value = self._transform_value(mapping.lead_field_key, answer)
             if value is None and mapping.is_required:
@@ -1940,8 +1940,20 @@ class FunnelRuntimeService:
         direct_values: dict[str, Any] = {}
         custom_values: dict[str, Any] = {}
         normalized_answer = str(answer or "").strip()
+        configured_field = self._normalize_field_key(
+            (step.config_json or {}).get("custom_field_key")
+            or (step.config_json or {}).get("save_to")
+            or (step.config_json or {}).get("field_key")
+            or (step.config_json or {}).get("lead_field_key")
+        )
 
-        if answer_type == "phone":
+        if configured_field:
+            value = self._transform_value(configured_field, normalized_answer)
+            if configured_field in DIRECT_LEAD_FIELDS:
+                direct_values[configured_field] = value
+            else:
+                custom_values[configured_field] = value
+        elif answer_type == "phone":
             direct_values["phone"] = self._normalize_phone(normalized_answer)
         elif answer_type == "email":
             custom_values["email"] = normalized_answer

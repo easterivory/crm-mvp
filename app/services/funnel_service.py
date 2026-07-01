@@ -40,8 +40,8 @@ from app.schemas.funnel import (
     FunnelVersionUpdate,
 )
 from app.services.funnel_block_registry import (
-    LEAD_FIELD_KEYS,
     FunnelBlockRegistry,
+    is_supported_lead_field_key,
 )
 from app.services.access_control import require_project_access
 from app.services.chat_audit_service import ChatAuditService
@@ -1118,7 +1118,7 @@ class FunnelService:
                         "error",
                     )
                 )
-            if mapping.lead_field_key not in LEAD_FIELD_KEYS:
+            if not is_supported_lead_field_key(mapping.lead_field_key):
                 errors.append(
                     self._issue(
                         "field_mapping_invalid_key",

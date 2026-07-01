@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -9,9 +10,26 @@ from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import TokenOut
 from app.services.auth_service import AuthService
+from app.services.system_setting_service import SystemSettingService
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class TelegramLoginConfigOut(BaseModel):
+    username: str | None
+    is_configured: bool
+
+
+@router.get("/telegram-config", response_model=TelegramLoginConfigOut)
+async def telegram_login_config(
+    db: AsyncSession = Depends(get_db),
+) -> TelegramLoginConfigOut:
+    config = await SystemSettingService(db).get_effective_buyer_bot_config()
+    return TelegramLoginConfigOut(
+        username=config.username,
+        is_configured=bool(config.username and config.token),
+    )
 
 
 @router.post("/telegram-login", response_model=TokenOut)
@@ -19,7 +37,11 @@ async def telegram_login(
     auth_data: dict[str, Any],
     db: AsyncSession = Depends(get_db),
 ) -> TokenOut:
-    if not AuthService.verify_telegram_auth(auth_data):
+    config = await SystemSettingService(db).get_effective_buyer_bot_config()
+    if not config.token or not AuthService.verify_telegram_auth(
+        auth_data,
+        bot_token=config.token,
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Telegram signature",

@@ -9,7 +9,9 @@ built from timestamp columns and evaluated inside the DB engine.
 All expressions are defined as @staticmethod so they can be reused in WHERE,
 ORDER BY, and count queries without repeating literal SQL.
 
-Sorting contract: is_red DESC → unanswered DESC → last_message_at DESC NULLS LAST
+Sorting contract:
+  - latest: last_message_at DESC NULLS LAST
+  - priority: is_red DESC → unanswered DESC → last_message_at DESC NULLS LAST
 """
 from datetime import datetime, timezone
 from typing import Optional, Sequence
@@ -507,12 +509,12 @@ class ChatRepository(BaseRepository[Chat]):
         tag_mode: str = "any",
         lead_statuses: Sequence[str] | None = None,
         funnel_state: Optional[str] = None,
+        sort_by: str = "latest",
     ) -> list[Chat]:
         """
-        Returns chats matching the given filters, ordered by priority:
-          1. is_red DESC  (SLA breached)
-          2. unanswered DESC
-          3. last_message_at DESC NULLS LAST
+        Returns chats matching the given filters. The default order is the
+        latest dialog activity; the operator can explicitly switch to SLA
+        priority order.
         """
         stmt = self._apply_filters(
             self._base_select(project_id, bot_id=bot_id, bot_ids=bot_ids),
@@ -533,15 +535,19 @@ class ChatRepository(BaseRepository[Chat]):
             lead_statuses=lead_statuses or (),
             funnel_state=funnel_state,
         )
-        stmt = (
-            stmt.order_by(
+        if sort_by == "priority":
+            stmt = stmt.order_by(
                 self._is_red_expr(sla_threshold_minutes).desc(),
                 self._unanswered_expr().desc(),
                 Chat.last_message_at.desc().nullslast(),
+                Chat.id.desc(),
             )
-            .limit(limit)
-            .offset(offset)
-        )
+        else:
+            stmt = stmt.order_by(
+                Chat.last_message_at.desc().nullslast(),
+                Chat.id.desc(),
+            )
+        stmt = stmt.limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
@@ -566,6 +572,7 @@ class ChatRepository(BaseRepository[Chat]):
         tag_mode: str = "any",
         lead_statuses: Sequence[str] | None = None,
         funnel_state: Optional[str] = None,
+        sort_by: str = "latest",
     ) -> int:
         """
         Mirror of list() without LIMIT/OFFSET — used for pagination totals.
@@ -573,6 +580,7 @@ class ChatRepository(BaseRepository[Chat]):
         COUNT(DISTINCT Chat.id) is used only when a JOIN is present — adding
         DISTINCT unconditionally hurts performance on the common no-join path.
         """
+        del sort_by
         count_col = func.count(Chat.id)
         stmt = select(count_col).where(
             Chat.project_id == project_id,
@@ -635,6 +643,7 @@ class ChatRepository(BaseRepository[Chat]):
         cycle_lower_bound = func.coalesce(cycle_started_at, Chat.created_at)
         result = await self.db.execute(
             select(Message)
+            .distinct(Message.chat_id)
             .join(Chat, Chat.id == Message.chat_id)
             .where(
                 Message.chat_id.in_(chat_ids),
@@ -642,12 +651,9 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.reset_at.is_(None),
                 Message.created_at >= cycle_lower_bound,
             )
-            .order_by(Message.chat_id.asc(), Message.created_at.desc(), Message.id.desc())
+            .order_by(Message.chat_id, Message.created_at.desc(), Message.id.desc())
         )
-        latest: dict[UUID, Message] = {}
-        for message in result.scalars().all():
-            latest.setdefault(message.chat_id, message)
-        return latest
+        return {message.chat_id: message for message in result.scalars().all()}
 
     async def search_hit_messages_for_chats(
         self,
@@ -670,6 +676,7 @@ class ChatRepository(BaseRepository[Chat]):
         cycle_lower_bound = func.coalesce(cycle_started_at, Chat.created_at)
         result = await self.db.execute(
             select(Message)
+            .distinct(Message.chat_id)
             .join(Chat, Chat.id == Message.chat_id)
             .where(
                 Message.chat_id.in_(chat_ids),
@@ -681,12 +688,9 @@ class ChatRepository(BaseRepository[Chat]):
                     func.lower(func.coalesce(Message.caption, "")).like(needle, escape="\\"),
                 ),
             )
-            .order_by(Message.chat_id.asc(), Message.created_at.desc(), Message.id.desc())
+            .order_by(Message.chat_id, Message.created_at.desc(), Message.id.desc())
         )
-        hits: dict[UUID, Message] = {}
-        for message in result.scalars().all():
-            hits.setdefault(message.chat_id, message)
-        return hits
+        return {message.chat_id: message for message in result.scalars().all()}
 
     async def lead_tags_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, list[dict]]:
         if not chat_ids:

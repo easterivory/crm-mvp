@@ -125,6 +125,29 @@ export const actionTypes = [
   ['send_fb_event', 'Facebook CAPI event'],
 ] as const
 
+export function orderedFunnelSteps(steps: FunnelStep[]) {
+  return [...steps].sort(
+    (left, right) =>
+      left.position_y - right.position_y ||
+      left.position_x - right.position_x ||
+      left.id.localeCompare(right.id),
+  )
+}
+
+export function funnelStepNumberMap(steps: FunnelStep[]) {
+  return new Map(
+    orderedFunnelSteps(steps).map((step, index) => [step.id, index + 1]),
+  )
+}
+
+export function funnelStepLabel(
+  step: FunnelStep,
+  numberById: Map<string, number>,
+) {
+  const number = numberById.get(step.id)
+  return number ? `#${number} · ${step.title}` : step.title
+}
+
 export function textValue(config: Record<string, unknown>, key: string) {
   const value = config[key]
   return typeof value === 'string' ? value : ''

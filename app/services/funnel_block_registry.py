@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Literal
 
 from app.schemas.funnel import FunnelBlockDefinitionOut, FunnelBlockRegistryOut
@@ -35,6 +36,13 @@ LEAD_FIELD_KEYS = [
     "source",
     "comment",
 ]
+
+CUSTOM_FIELD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
+
+
+def is_supported_lead_field_key(value: str) -> bool:
+    key = value.strip()
+    return key in LEAD_FIELD_KEYS or bool(CUSTOM_FIELD_KEY_RE.fullmatch(key))
 
 
 MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
@@ -414,8 +422,16 @@ class FunnelBlockRegistry:
             if answer_type not in {"text", "phone", "email", "name", "number", "choice", "date", "time"}:
                 errors.append("Для вопроса выберите тип ответа.")
             save_to = str(config.get("save_to") or "").strip()
-            if save_to and save_to not in LEAD_FIELD_KEYS:
+            custom_field_key = str(config.get("custom_field_key") or "").strip()
+            if str(config.get("field_mode") or "").strip() == "custom" and not custom_field_key:
+                errors.append("Укажите ключ произвольного поля.")
+            if save_to and not is_supported_lead_field_key(save_to):
                 errors.append("Поле для сохранения ответа не поддерживается.")
+            if custom_field_key and not is_supported_lead_field_key(custom_field_key):
+                errors.append(
+                    "Ключ произвольного поля должен начинаться с латинской буквы "
+                    "и содержать только a-z, 0-9 и подчёркивание."
+                )
             if answer_type == "choice" and not self._list(config, "choices", "options", "buttons"):
                 errors.append("Для выбора нужен хотя бы один вариант.")
         if block_type in {"generic_condition", "generic_hold_router"}:
@@ -492,7 +508,7 @@ class FunnelBlockRegistry:
                 errors.append("Укажите задержку в часах больше 0.")
         if block_type == "write_field":
             field_key = str(config.get("lead_field_key") or "").strip()
-            if field_key not in LEAD_FIELD_KEYS:
+            if not is_supported_lead_field_key(field_key):
                 errors.append("Для записи поля выберите допустимое поле лида.")
         if block_type in {"http_request", "outgoing_webhook"}:
             if not self._text(config, "url"):

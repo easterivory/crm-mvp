@@ -108,9 +108,18 @@ export default function FieldMappingsPanel({
                 <label className="block">
                   <span className="mb-1 block text-xs text-gray-500">Поле лида</span>
                   <select
-                    value={mapping.lead_field_key}
+                    value={
+                      leadFields.some(([value]) => value === mapping.lead_field_key)
+                        ? mapping.lead_field_key
+                        : '__custom__'
+                    }
                     onChange={(event) =>
-                      patchMapping(mapping.id, { lead_field_key: event.target.value })
+                      patchMapping(mapping.id, {
+                        lead_field_key:
+                          event.target.value === '__custom__'
+                            ? 'custom_field'
+                            : event.target.value,
+                      })
                     }
                     className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
                   >
@@ -119,8 +128,33 @@ export default function FieldMappingsPanel({
                         {label}
                       </option>
                     ))}
+                    <option value="__custom__">Произвольное поле</option>
                   </select>
                 </label>
+                {!leadFields.some(
+                  ([value]) => value === mapping.lead_field_key,
+                ) ? (
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-gray-500">
+                      Ключ произвольного поля
+                    </span>
+                    <input
+                      value={mapping.lead_field_key}
+                      onChange={(event) =>
+                        patchMapping(mapping.id, {
+                          lead_field_key: event.target.value
+                            .toLowerCase()
+                            .replace(/[^a-z0-9_]/g, '_')
+                            .replace(/^[^a-z]+/, '')
+                            .slice(0, 100),
+                        })
+                      }
+                      maxLength={100}
+                      className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                      placeholder="например: monthly_income"
+                    />
+                  </label>
+                ) : null}
                 <label className="flex items-center gap-2 text-sm text-gray-300">
                   <input
                     type="checkbox"

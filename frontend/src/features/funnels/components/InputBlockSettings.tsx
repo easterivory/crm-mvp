@@ -23,6 +23,11 @@ export default function InputBlockSettings({
   const patchConfig = (patch: Record<string, unknown>) => {
     onConfigChange({ ...step.config_json, ...patch })
   }
+  const customFieldKey = textValue(step.config_json, 'custom_field_key')
+  const selectedField =
+    textValue(step.config_json, 'field_mode') === 'custom' || customFieldKey
+      ? '__custom__'
+      : textValue(step.config_json, 'save_to')
 
   return (
     <div className="space-y-3">
@@ -75,8 +80,15 @@ export default function InputBlockSettings({
         <label className="block">
           <span className="mb-1 block text-xs text-gray-500">Сохранить в поле</span>
           <select
-            value={textValue(step.config_json, 'save_to')}
-            onChange={(event) => patchConfig({ save_to: event.target.value })}
+            value={selectedField}
+            onChange={(event) => {
+              const value = event.target.value
+              patchConfig(
+                value === '__custom__'
+                  ? { save_to: '', custom_field_key: customFieldKey, field_mode: 'custom' }
+                  : { save_to: value, custom_field_key: '', field_mode: 'standard' },
+              )
+            }}
             className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
           >
             {leadFields.map(([value, label]) => (
@@ -84,9 +96,38 @@ export default function InputBlockSettings({
                 {label}
               </option>
             ))}
+            <option value="__custom__">Произвольное поле</option>
           </select>
         </label>
       </div>
+
+      {selectedField === '__custom__' ? (
+        <label className="block">
+          <span className="mb-1 block text-xs text-gray-500">
+            Ключ произвольного поля
+          </span>
+          <input
+            value={customFieldKey}
+            onChange={(event) =>
+              patchConfig({
+                save_to: '',
+                custom_field_key: event.target.value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9_]/g, '_')
+                  .replace(/^[^a-z]+/, '')
+                  .slice(0, 100),
+              })
+            }
+            maxLength={100}
+            required
+            placeholder="например: city или monthly_income"
+            className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+          />
+          <span className="mt-1 block text-xs leading-5 text-gray-500">
+            Значение появится в карточке лида и будет доступно в условиях и интеграциях.
+          </span>
+        </label>
+      ) : null}
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         <label className="block">

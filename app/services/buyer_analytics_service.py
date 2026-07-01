@@ -14,8 +14,9 @@ from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.project import Project
-from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
+from app.models.tracking import TrackingEvent, TrackingLink
 from app.models.user import User, UserProjectAccess
+from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
 
 
@@ -46,6 +47,26 @@ class BuyerAnalyticsService:
             )
         tracking_lead_status_codes = await self._get_tracking_lead_status_codes(project_id)
         start_at, end_at = self._date_bounds(date_from=date_from, date_to=date_to)
+        metrics_date_from = date_from or date.min
+        metrics_date_to = date_to or date.today()
+        modeled_link_rows = await TrackingMetricsRepository(
+            self.db
+        ).get_link_metrics_rows(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=metrics_date_from,
+            date_to=metrics_date_to,
+            lead_status_codes=tracking_lead_status_codes,
+        )
+        modeled_spend_by_buyer: dict[UUID, Decimal] = {}
+        for link_row in modeled_link_rows:
+            buyer_id = link_row.get("buyer_id")
+            if buyer_id is None:
+                continue
+            modeled_spend_by_buyer[buyer_id] = (
+                modeled_spend_by_buyer.get(buyer_id, Decimal("0"))
+                + Decimal(link_row.get("spend") or 0)
+            )
         link_counts_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
@@ -59,25 +80,6 @@ class BuyerAnalyticsService:
         if bot_id is not None:
             link_counts_stmt = link_counts_stmt.where(TrackingLink.bot_id == bot_id)
         link_counts = link_counts_stmt.group_by(TrackingLink.buyer_id).subquery()
-        spend_stmt = (
-            select(
-                TrackingLink.buyer_id.label("buyer_id"),
-                func.coalesce(func.sum(TrackingSpend.amount), 0).label("total_spend"),
-            )
-            .join(TrackingLink, TrackingLink.id == TrackingSpend.tracking_link_id)
-            .where(
-                TrackingLink.project_id == project_id,
-                TrackingLink.buyer_id.is_not(None),
-            )
-        )
-        if date_from is not None:
-            spend_stmt = spend_stmt.where(TrackingSpend.spend_date >= date_from)
-        if date_to is not None:
-            spend_stmt = spend_stmt.where(TrackingSpend.spend_date <= date_to)
-        if bot_id is not None:
-            spend_stmt = spend_stmt.where(TrackingLink.bot_id == bot_id)
-        spend_totals = spend_stmt.group_by(TrackingLink.buyer_id).subquery()
-
         click_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
@@ -155,13 +157,11 @@ class BuyerAnalyticsService:
                 User.email,
                 User.buyer_telegram_id,
                 func.coalesce(link_counts.c.links_count, 0).label("links_count"),
-                func.coalesce(spend_totals.c.total_spend, 0).label("total_spend"),
                 func.coalesce(click_totals.c.clicks, 0).label("clicks"),
                 func.coalesce(lead_totals.c.leads, 0).label("leads"),
                 func.coalesce(submitted_totals.c.submitted_leads, 0).label("submitted_leads"),
             )
             .outerjoin(link_counts, link_counts.c.buyer_id == User.id)
-            .outerjoin(spend_totals, spend_totals.c.buyer_id == User.id)
             .outerjoin(click_totals, click_totals.c.buyer_id == User.id)
             .outerjoin(lead_totals, lead_totals.c.buyer_id == User.id)
             .outerjoin(submitted_totals, submitted_totals.c.buyer_id == User.id)
@@ -187,7 +187,7 @@ class BuyerAnalyticsService:
 
         items: list[BuyerPerformanceOut] = []
         for row in result.mappings().all():
-            spend = money(Decimal(row["total_spend"] or 0))
+            spend = money(modeled_spend_by_buyer.get(row["buyer_id"], Decimal("0")))
             clicks = int(row["clicks"] or 0)
             leads = int(row["leads"] or 0)
             submitted = int(row["submitted_leads"] or 0)

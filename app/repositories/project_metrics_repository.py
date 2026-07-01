@@ -14,7 +14,7 @@ from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.partner import LeadSubmission
 from app.models.project import Project
-from app.models.tracking import TrackingLink, TrackingSpend
+from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 
 
 class ProjectMetricsRepository:
@@ -71,18 +71,16 @@ class ProjectMetricsRepository:
                 LeadSubmission.completed_at < end_at,
             )
         )
-        spend_result = await self.db.execute(
-            select(func.coalesce(func.sum(TrackingSpend.amount), 0))
-            .join(TrackingLink, TrackingLink.id == TrackingSpend.tracking_link_id)
-            .where(
-                TrackingLink.project_id == project_id,
-                TrackingSpend.spend_date == day,
-            )
+        spend = await TrackingMetricsRepository(self.db).aggregate_spend_by_project(
+            project_id=project_id,
+            bot_id=None,
+            date_from=day,
+            date_to=day,
         )
         leads = int(leads_result.scalar_one() or 0)
         starts = int(starts_result.scalar_one() or 0)
         submitted = int(submitted_result.scalar_one() or 0)
-        spend = Decimal(spend_result.scalar_one() or 0)
+        spend = Decimal(spend or 0)
         cpl = spend / Decimal(leads) if leads > 0 else Decimal("0")
         conversion = (
             Decimal(leads) / Decimal(starts) * Decimal("100")

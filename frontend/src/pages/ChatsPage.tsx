@@ -51,6 +51,7 @@ import {
   EMPTY_CHAT_FILTERS,
   type ChatDatePreset,
   type ChatFiltersState,
+  type ChatSort,
   type ChatTagMode,
   type FilterOption,
 } from '../features/chats/types'
@@ -480,6 +481,10 @@ function isQuickFilter(value: string | null): value is ChatFiltersState['quickFi
     || value === 'unanswered' || value === 'hot'
 }
 
+function isChatSort(value: string | null): value is ChatSort {
+  return value === 'latest' || value === 'priority'
+}
+
 function normalizeChatFilters(value: Partial<ChatFiltersState> | null | undefined) {
   const quickFilter = isQuickFilter(value?.quickFilter ?? null) ? value?.quickFilter ?? '' : ''
   return {
@@ -495,6 +500,7 @@ function normalizeChatFilters(value: Partial<ChatFiltersState> | null | undefine
     isRed: value?.isRed === true && quickFilter !== 'hot',
     isHotLead: value?.isHotLead === true || (quickFilter === 'hot' && value?.isRed === true),
     quickFilter,
+    sortBy: isChatSort(value?.sortBy ?? null) ? value?.sortBy ?? 'latest' : 'latest',
   }
 }
 
@@ -521,6 +527,9 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     assignedUserId: params.get('assigned_user_id') ?? '',
     unassigned: params.get('unassigned') === 'true',
     quickFilter: isQuickFilter(quickFilter) ? quickFilter : '',
+    sortBy: isChatSort(params.get('sort_by'))
+      ? params.get('sort_by') as ChatSort
+      : 'latest',
   }
 }
 
@@ -544,6 +553,7 @@ function writeChatFilters(filters: ChatFiltersState) {
   if (filters.assignedUserId) params.set('assigned_user_id', filters.assignedUserId)
   if (filters.unassigned) params.set('unassigned', 'true')
   if (filters.quickFilter) params.set('quick_filter', filters.quickFilter)
+  if (filters.sortBy !== 'latest') params.set('sort_by', filters.sortBy)
   return params
 }
 
@@ -853,6 +863,7 @@ export default function ChatsPage() {
         limit: CHAT_LIMIT,
         offset: 0,
         project_id: selectedProjectId,
+        sort_by: debouncedChatFilters.sortBy,
       }
 
       if (selectedBotIds.length === 1) {

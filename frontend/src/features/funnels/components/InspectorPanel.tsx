@@ -1,6 +1,7 @@
 import { CheckCircle2 } from 'lucide-react'
 
 import type { FunnelEdge, FunnelFieldMapping, FunnelPushRule, FunnelStep } from '../types'
+import { funnelStepNumberMap } from '../funnelConfig'
 import EdgeSettingsPanel from './EdgeSettingsPanel'
 import FieldMappingsPanel from './FieldMappingsPanel'
 import PushRulesPanel from './PushRulesPanel'
@@ -45,6 +46,7 @@ export default function InspectorPanel({
   onFieldMappingsChange,
   onPushRulesChange,
 }: InspectorPanelProps) {
+  const stepNumberById = funnelStepNumberMap(steps)
   return (
     <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-white/8 bg-[#0d1324]/92 lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l">
       <div className="border-b border-white/8 px-4 py-3">
@@ -74,6 +76,9 @@ export default function InspectorPanel({
           <>
             <StepSettingsPanel
               step={selectedStep}
+              stepNumber={
+                selectedStep ? stepNumberById.get(selectedStep.id) : undefined
+              }
               projectId={projectId}
               steps={steps}
               onUpdate={onUpdateStep}

@@ -9,13 +9,14 @@ from uuid import UUID
 from sqlalchemy import distinct, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import LeadStatusCode, MessageType, SenderType
+from app.core.constants import LeadStatusCode, MessageType, SenderType, TrackingCostModel
 from app.models.bot import BotStep, ChatBotState
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
+from app.services.tracking_cost_service import calculate_tracking_spend
 
 
 SUBMITTED_STATUS_CODES = LeadStatusCode.SUBMITTED_SET
@@ -44,20 +45,18 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
     ) -> Decimal:
-        stmt = (
-            select(func.coalesce(func.sum(TrackingSpend.amount), 0))
-            .join(TrackingLink, TrackingLink.id == TrackingSpend.tracking_link_id)
-            .where(
-                TrackingLink.project_id == project_id,
-                TrackingSpend.spend_date >= date_from,
-                TrackingSpend.spend_date <= date_to,
-            )
+        daily: dict[date, dict[str, Any]] = {}
+        await self._merge_daily_modeled_spend(
+            daily,
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
         )
-        if bot_id is not None:
-            stmt = stmt.where(TrackingLink.bot_id == bot_id)
-
-        result = await self.db.execute(stmt)
-        return result.scalar_one()
+        return sum(
+            (Decimal(item["spend"] or 0) for item in daily.values()),
+            Decimal("0"),
+        )
 
     async def aggregate_spend_by_link(
         self,
@@ -65,6 +64,16 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
     ) -> Decimal:
+        link_result = await self.db.execute(
+            select(
+                TrackingLink.cost_model,
+                TrackingLink.price_per_unit,
+            ).where(TrackingLink.id == link_id)
+        )
+        link_row = link_result.one_or_none()
+        if link_row is None:
+            return Decimal("0")
+
         result = await self.db.execute(
             select(func.coalesce(func.sum(TrackingSpend.amount), 0)).where(
                 TrackingSpend.tracking_link_id == link_id,
@@ -72,7 +81,16 @@ class TrackingMetricsRepository:
                 TrackingSpend.spend_date <= date_to,
             )
         )
-        return result.scalar_one()
+        manual_spend = Decimal(result.scalar_one() or 0)
+        starts = await self.aggregate_starts_by_link(link_id, date_from, date_to)
+        submitted = await self.aggregate_submitted_by_link(link_id, date_from, date_to)
+        return calculate_tracking_spend(
+            cost_model=link_row.cost_model,
+            price_per_unit=Decimal(link_row.price_per_unit or 0),
+            manual_spend=manual_spend,
+            starts=int(starts or 0),
+            submitted_leads=int(submitted or 0),
+        )
 
     async def aggregate_starts_by_project(
         self,
@@ -209,7 +227,13 @@ class TrackingMetricsRepository:
         await self._merge_daily_leads(
             daily, project_id, bot_id, None, date_from, date_to, submitted_only=True
         )
-        await self._merge_daily_spend(daily, project_id, bot_id, None, date_from, date_to)
+        await self._merge_daily_modeled_spend(
+            daily,
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
         return self._daily_rows(daily)
 
     async def aggregate_daily_unattributed_by_project(
@@ -283,6 +307,7 @@ class TrackingMetricsRepository:
             daily, None, None, link_id, date_from, date_to, submitted_only=True
         )
         await self._merge_daily_spend(daily, None, None, link_id, date_from, date_to)
+        await self._apply_link_daily_cost_model(daily, link_id)
         return self._daily_rows(daily)
 
     async def get_link_metrics_rows(
@@ -325,6 +350,14 @@ class TrackingMetricsRepository:
             rows_by_id, project_id, bot_id, date_from, date_to, submitted_only=True
         )
         await self._merge_link_spend(rows_by_id, project_id, bot_id, date_from, date_to)
+        for row in rows_by_id.values():
+            row["spend"] = calculate_tracking_spend(
+                cost_model=row["cost_model"],
+                price_per_unit=Decimal(row["price_per_unit"] or 0),
+                manual_spend=Decimal(row["spend"] or 0),
+                starts=int(row["starts"] or 0),
+                submitted_leads=int(row["submitted_leads"] or 0),
+            )
 
         return list(rows_by_id.values())
 
@@ -457,10 +490,13 @@ class TrackingMetricsRepository:
             TrackingLink.id.label("link_id"),
             TrackingLink.code,
             TrackingLink.title,
+            TrackingLink.buyer_id,
             TrackingLink.buyer_name,
             TrackingLink.ad_type,
             TrackingLink.payment_type,
             TrackingLink.is_active,
+            TrackingLink.cost_model,
+            TrackingLink.price_per_unit,
             TrackingLink.base_conversion_rate,
             TrackingLink.min_sample_size,
         ).where(TrackingLink.project_id == project_id)
@@ -758,6 +794,121 @@ class TrackingMetricsRepository:
             self._ensure_daily(daily, row.metric_date)["spend"] = (
                 row.spend or Decimal("0")
             )
+
+    async def _apply_link_daily_cost_model(
+        self,
+        daily: dict[date, dict[str, Any]],
+        link_id: UUID,
+    ) -> None:
+        result = await self.db.execute(
+            select(TrackingLink.cost_model, TrackingLink.price_per_unit).where(
+                TrackingLink.id == link_id
+            )
+        )
+        row = result.one_or_none()
+        if row is None:
+            return
+        for item in daily.values():
+            item["spend"] = calculate_tracking_spend(
+                cost_model=row.cost_model,
+                price_per_unit=Decimal(row.price_per_unit or 0),
+                manual_spend=Decimal(item["spend"] or 0),
+                starts=int(item["starts"] or 0),
+                submitted_leads=int(item["submitted_leads"] or 0),
+            )
+
+    async def _merge_daily_modeled_spend(
+        self,
+        daily: dict[date, dict[str, Any]],
+        *,
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+    ) -> None:
+        manual_stmt = (
+            select(
+                TrackingSpend.spend_date.label("metric_date"),
+                func.coalesce(func.sum(TrackingSpend.amount), 0).label("spend"),
+            )
+            .join(TrackingLink, TrackingLink.id == TrackingSpend.tracking_link_id)
+            .where(
+                TrackingLink.project_id == project_id,
+                TrackingLink.cost_model == TrackingCostModel.CPM,
+                TrackingSpend.spend_date >= date_from,
+                TrackingSpend.spend_date <= date_to,
+            )
+            .group_by(TrackingSpend.spend_date)
+        )
+        if bot_id is not None:
+            manual_stmt = manual_stmt.where(TrackingLink.bot_id == bot_id)
+        manual_result = await self.db.execute(manual_stmt)
+        for row in manual_result.all():
+            self._ensure_daily(daily, row.metric_date)["spend"] += Decimal(row.spend or 0)
+
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        start_date = func.date(Message.created_at)
+        fixed_stmt = (
+            select(
+                start_date.label("metric_date"),
+                TrackingLink.id.label("link_id"),
+                TrackingLink.price_per_unit,
+                func.count(distinct(Chat.id)).label("units"),
+            )
+            .select_from(Chat)
+            .join(Message, Message.chat_id == Chat.id)
+            .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+            .where(
+                TrackingLink.project_id == project_id,
+                TrackingLink.cost_model == TrackingCostModel.FIX_PDP,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
+            )
+            .group_by(start_date, TrackingLink.id, TrackingLink.price_per_unit)
+        )
+        if bot_id is not None:
+            fixed_stmt = fixed_stmt.where(TrackingLink.bot_id == bot_id)
+        fixed_result = await self.db.execute(fixed_stmt)
+        for row in fixed_result.all():
+            amount = Decimal(row.units or 0) * Decimal(row.price_per_unit or 0)
+            self._ensure_daily(daily, row.metric_date)["spend"] += amount
+
+        lifecycle_at = self._lead_lifecycle_at()
+        submitted_date = func.date(lifecycle_at)
+        submitted_stmt = (
+            select(
+                submitted_date.label("metric_date"),
+                TrackingLink.id.label("link_id"),
+                TrackingLink.price_per_unit,
+                func.count(distinct(Lead.id)).label("units"),
+            )
+            .select_from(Lead)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .where(
+                TrackingLink.project_id == project_id,
+                TrackingLink.cost_model == TrackingCostModel.CPA,
+                Lead.is_deleted.is_(False),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                LeadStatus.code.in_(tuple(SUBMITTED_STATUS_CODES)),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
+            )
+            .group_by(submitted_date, TrackingLink.id, TrackingLink.price_per_unit)
+        )
+        if bot_id is not None:
+            submitted_stmt = submitted_stmt.where(TrackingLink.bot_id == bot_id)
+        submitted_result = await self.db.execute(submitted_stmt)
+        for row in submitted_result.all():
+            amount = Decimal(row.units or 0) * Decimal(row.price_per_unit or 0)
+            self._ensure_daily(daily, row.metric_date)["spend"] += amount
 
     @staticmethod
     def _apply_link_scope(

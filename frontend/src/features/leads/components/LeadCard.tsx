@@ -80,6 +80,25 @@ function attributionEntries(customFields: Record<string, unknown> | null | undef
     .map(([key, value]) => [key, String(value)] as const)
 }
 
+function customFieldEntries(customFields: Record<string, unknown> | null | undefined) {
+  if (!customFields) {
+    return []
+  }
+  return Object.entries(customFields)
+    .filter(([key, value]) => (
+      key !== 'fb_data'
+      && !key.startsWith('__')
+      && value !== null
+      && value !== undefined
+      && ['string', 'number', 'boolean'].includes(typeof value)
+      && String(value).trim() !== ''
+    ))
+    .map(([key, value]) => [
+      key.replace(/_/g, ' ').replace(/^\p{L}/u, (letter) => letter.toUpperCase()),
+      typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value),
+    ] as const)
+}
+
 export default function LeadCard({
   lead,
   projectId,
@@ -97,6 +116,7 @@ export default function LeadCard({
     (lead.username ? `@${lead.username}` : null) ||
     `Telegram ${lead.external_chat_id ?? lead.id.slice(0, 8)}`
   const attribution = attributionEntries(lead.custom_fields)
+  const customFields = customFieldEntries(lead.custom_fields)
 
   const handleCopy = async (key: string, value: string | null | undefined) => {
     if (!value) {
@@ -194,6 +214,24 @@ export default function LeadCard({
               <span key={key} className="rounded-md border border-cyan-300/15 bg-background/40 px-2 py-1 text-xs text-gray-200">
                 <span className="text-cyan-100">{key}</span>={value}
               </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {customFields.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-white/8 bg-white/[0.025] p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+            Данные из воронки
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {customFields.map(([key, value]) => (
+              <div key={key} className="flex items-start justify-between gap-3 text-sm">
+                <span className="text-gray-500">{key}</span>
+                <span className="max-w-[60%] break-words text-right text-gray-100">
+                  {value}
+                </span>
+              </div>
             ))}
           </div>
         </div>

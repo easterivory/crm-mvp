@@ -1,6 +1,19 @@
 import api from '../../api/client'
 
-import type { BuyerBotConfig, BuyerCreatePayload, BuyerInvite, BuyerPerformance } from './types'
+import type {
+  BuyerBotConfig,
+  BuyerCreatePayload,
+  BuyerInvite,
+  BuyerPerformance,
+  BuyerUser,
+} from './types'
+
+export async function fetchBuyers(projectId: string): Promise<BuyerUser[]> {
+  const { data } = await api.get<BuyerUser[]>('/buyers', {
+    params: { project_id: projectId },
+  })
+  return data
+}
 
 export async function createBuyer(
   payload: BuyerCreatePayload,

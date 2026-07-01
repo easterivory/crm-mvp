@@ -15,7 +15,7 @@ import {
 import { Maximize2, Minus, Plus } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { edgeLabel, edgeSourceKey } from '../funnelConfig'
+import { edgeLabel, edgeSourceKey, funnelStepNumberMap } from '../funnelConfig'
 import type { FunnelEdge, FunnelStep } from '../types'
 import FunnelNode, {
   TARGET_HANDLE_ID,
@@ -57,6 +57,7 @@ function FunnelCanvasInner({
 }: FunnelCanvasProps) {
   const { fitView, zoomIn, zoomOut } = useReactFlow()
   const [zoom, setZoom] = useState(1)
+  const stepNumberById = useMemo(() => funnelStepNumberMap(steps), [steps])
 
   const flowNodes = useMemo<FunnelFlowNode[]>(
     () =>
@@ -64,11 +65,15 @@ function FunnelCanvasInner({
         id: step.id,
         type: 'funnelStep',
         position: { x: step.position_x, y: step.position_y },
-        data: { step, onDelete: readOnly ? undefined : onDeleteStep },
+        data: {
+          step,
+          stepNumber: stepNumberById.get(step.id),
+          onDelete: readOnly ? undefined : onDeleteStep,
+        },
         selected: selectedStepId === step.id,
         draggable: !readOnly,
       })),
-    [onDeleteStep, readOnly, selectedStepId, steps],
+    [onDeleteStep, readOnly, selectedStepId, stepNumberById, steps],
   )
 
   const flowEdges = useMemo<FlowEdge[]>(

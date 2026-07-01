@@ -1,6 +1,11 @@
 import { Plus, Trash2 } from 'lucide-react'
 
 import type { FunnelPushRule, FunnelStep } from '../types'
+import {
+  funnelStepLabel,
+  funnelStepNumberMap,
+  orderedFunnelSteps,
+} from '../funnelConfig'
 
 type PushRulesPanelProps = {
   selectedStep: FunnelStep | null
@@ -23,6 +28,7 @@ export default function PushRulesPanel({
   onChange,
 }: PushRulesPanelProps) {
   const stepRules = selectedStep ? rules.filter((rule) => rule.step_id === selectedStep.id) : []
+  const numberById = funnelStepNumberMap(steps)
 
   const addRule = () => {
     if (!selectedStep) {
@@ -124,9 +130,9 @@ export default function PushRulesPanel({
                       className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
                     >
                       <option value="">Выберите блок</option>
-                      {steps.map((step) => (
+                      {orderedFunnelSteps(steps).map((step) => (
                         <option key={step.id} value={step.id}>
-                          {step.title}
+                          {funnelStepLabel(step, numberById)}
                         </option>
                       ))}
                     </select>

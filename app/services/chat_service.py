@@ -17,10 +17,9 @@ Computed flags contract:
   If SLA logic changes, update both _is_red_expr() in ChatRepository and
   _compute_flags() here.
 
-Sorting order (enforced by repository):
-  1. is_red DESC   — SLA breached chats always on top
-  2. unanswered DESC
-  3. last_message_at DESC NULLS LAST
+Sorting order is selected by the caller:
+  - latest: last_message_at DESC NULLS LAST
+  - priority: is_red DESC, unanswered DESC, last_message_at DESC NULLS LAST
 """
 import re
 from datetime import date, datetime, time, timedelta, timezone
@@ -115,6 +114,7 @@ class ChatService:
             tag_mode=filters.tag_mode,
             lead_statuses=filters.lead_statuses,
             funnel_state=filters.funnel_state,
+            sort_by=filters.sort_by,
         )
 
         # Sequential — AsyncSession does not support concurrent operations.
