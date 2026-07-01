@@ -1,4 +1,4 @@
-import type { FunnelEdge, FunnelStep } from './types'
+import type { FunnelEdge, FunnelGraph, FunnelStep } from './types'
 
 export type ButtonConfig = {
   id: string
@@ -447,6 +447,75 @@ export function collectManagedEdges(step: FunnelStep): Array<{
       label: output.label,
       targetStepId: output.targetStepId as string,
     }))
+}
+
+function sanitizeTarget(value: unknown, stepIds: Set<string>): unknown {
+  return typeof value === 'string' && value && !stepIds.has(value) ? '' : value
+}
+
+function sanitizeTargetList(value: unknown, stepIds: Set<string>): unknown {
+  if (!Array.isArray(value)) {
+    return value
+  }
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') {
+      return item
+    }
+    const record = item as Record<string, unknown>
+    return {
+      ...record,
+      target_step_id: sanitizeTarget(record.target_step_id, stepIds),
+    }
+  })
+}
+
+function sanitizeStepTargets(step: FunnelStep, stepIds: Set<string>): FunnelStep {
+  const config = { ...step.config_json }
+  for (const key of ['target_step_id', 'timeout_target_step_id', 'fallback_target_step_id']) {
+    config[key] = sanitizeTarget(config[key], stepIds)
+  }
+  for (const key of ['buttons', 'choices', 'outcomes', 'variants']) {
+    config[key] = sanitizeTargetList(config[key], stepIds)
+  }
+  if (Array.isArray(config.messages)) {
+    config.messages = config.messages.map((message) => {
+      if (!message || typeof message !== 'object') {
+        return message
+      }
+      const record = message as Record<string, unknown>
+      return {
+        ...record,
+        buttons: sanitizeTargetList(record.buttons, stepIds),
+      }
+    })
+  }
+  return { ...step, config_json: config }
+}
+
+export function sanitizeGraphReferences(graph: FunnelGraph): FunnelGraph {
+  const stepIds = new Set(graph.steps.map((step) => step.id))
+  return {
+    steps: graph.steps.map((step) => sanitizeStepTargets(step, stepIds)),
+    edges: graph.edges.filter(
+      (edge) => stepIds.has(edge.from_step_id) && stepIds.has(edge.to_step_id),
+    ),
+    push_rules: graph.push_rules
+      .filter((rule) => stepIds.has(rule.step_id))
+      .map((rule) => {
+        if (!rule.target_step_id || stepIds.has(rule.target_step_id)) {
+          return rule
+        }
+        const actionAfterSend = rule.action_after_send === 'move_to_step'
+          ? 'stay'
+          : rule.action_after_send
+        return {
+          ...rule,
+          target_step_id: null,
+          action_after_send: actionAfterSend,
+        }
+      }),
+    field_mappings: graph.field_mappings.filter((mapping) => stepIds.has(mapping.step_id)),
+  }
 }
 
 export function syncManagedEdgesForStep(edges: FunnelEdge[], step: FunnelStep): FunnelEdge[] {

@@ -1305,13 +1305,8 @@ class FunnelService:
 
     @staticmethod
     def _validation_detail(prefix: str, issues: list[FunnelValidationIssue]) -> dict:
-        messages = [issue.message for issue in issues if issue.message]
-        if not messages:
-            message = f"{prefix}: граф не прошёл валидацию."
-        else:
-            message = f"{prefix}: " + "; ".join(messages)
         return {
-            "message": message,
+            "message": f"{prefix}: обнаружены ошибки ({len(issues)}).",
             "errors": [issue.model_dump(mode="json") for issue in issues],
         }
 

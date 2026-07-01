@@ -36,6 +36,7 @@ import {
   normalizeButtons,
   normalizeMessages,
   normalizeOutcomes,
+  sanitizeGraphReferences,
   syncManagedEdgesForStep,
 } from '../funnelConfig'
 import type {
@@ -71,7 +72,8 @@ function isCompactBuilderViewport() {
 }
 
 function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
-  const steps = graph.steps.map((step) => ({
+  const sanitizedGraph = sanitizeGraphReferences(graph)
+  const steps = sanitizedGraph.steps.map((step) => ({
     ...step,
     config_json: step.config_json ?? {},
     validation_json: step.validation_json ?? null,
@@ -81,7 +83,7 @@ function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
 
   return {
     steps,
-    edges: graph.edges.map((edge) => {
+    edges: sanitizedGraph.edges.map((edge) => {
       const sourceStep = stepById.get(edge.from_step_id)
       const sourceKey = edgeSourceKey(edge, sourceStep)
       if (!sourceKey) {
@@ -100,8 +102,8 @@ function graphWithDefaults(graph: FunnelGraph): FunnelGraph {
         },
       }
     }),
-    push_rules: graph.push_rules,
-    field_mappings: graph.field_mappings,
+    push_rules: sanitizedGraph.push_rules,
+    field_mappings: sanitizedGraph.field_mappings,
   }
 }
 
@@ -141,10 +143,11 @@ function duplicateStepTitle(title: string, existingTitles: Set<string>) {
 }
 
 function graphForSave(graph: FunnelGraph): FunnelGraph {
+  const sanitizedGraph = sanitizeGraphReferences(graph)
   const usedKeys = new Set<string>()
   return {
-    ...graph,
-    steps: graph.steps.map((step, index) => {
+    ...sanitizedGraph,
+    steps: sanitizedGraph.steps.map((step, index) => {
       const key = uniqueStepKey(step.key || `${step.block_type}_${index + 1}`, usedKeys)
       return key === step.key ? step : { ...step, key }
     }),
@@ -442,21 +445,22 @@ export default function FunnelBuilder({
     if (!isEditableDraft) {
       return
     }
-    setGraph((current) =>
-      current
-        ? {
-            ...current,
-            steps: current.steps.filter((step) => step.id !== stepId),
-            edges: current.edges.filter(
-              (edge) => edge.from_step_id !== stepId && edge.to_step_id !== stepId,
-            ),
-            push_rules: current.push_rules.filter((rule) => rule.step_id !== stepId),
-            field_mappings: current.field_mappings.filter(
-              (mapping) => mapping.step_id !== stepId,
-            ),
-          }
-        : current,
-    )
+    setGraph((current) => {
+      if (!current) {
+        return current
+      }
+      return sanitizeGraphReferences({
+        ...current,
+        steps: current.steps.filter((step) => step.id !== stepId),
+        edges: current.edges.filter(
+          (edge) => edge.from_step_id !== stepId && edge.to_step_id !== stepId,
+        ),
+        push_rules: current.push_rules.filter((rule) => rule.step_id !== stepId),
+        field_mappings: current.field_mappings.filter(
+          (mapping) => mapping.step_id !== stepId,
+        ),
+      })
+    })
     setSelectedStepId((current) => (current === stepId ? null : current))
     setSelectedEdgeId(null)
   }
