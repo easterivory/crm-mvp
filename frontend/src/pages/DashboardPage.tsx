@@ -5,7 +5,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Legend,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -89,6 +89,7 @@ export default function DashboardPage() {
       })),
     [sortedItems],
   )
+  const buyerChartHeight = Math.min(520, Math.max(220, chartData.length * 52 + 48))
 
   const totals = useMemo(
     () =>
@@ -226,63 +227,138 @@ export default function DashboardPage() {
         <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.02] p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-white">Spend / Leads</h2>
+              <h2 className="text-sm font-semibold text-white">Показатели по баерам</h2>
               <p className="mt-1 text-xs text-gray-500">
-                Сравнение расходов и количества лидов по каждому баеру.
+                Результат и затраты за выбранный период.
               </p>
             </div>
           </div>
-          <div className="h-[360px] min-w-0">
-            {chartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-gray-500">
-                Нет данных для графика.
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 10, right: 24, bottom: 30, left: 0 }}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                  <XAxis
-                    dataKey="name"
-                    stroke="#6B7280"
-                    tick={{ fill: '#9CA3AF', fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
-                  />
-                  <YAxis
-                    yAxisId="spend"
-                    stroke="#22D3EE"
-                    tick={{ fill: '#9CA3AF', fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    yAxisId="leads"
-                    orientation="right"
-                    stroke="#34D399"
-                    tick={{ fill: '#9CA3AF', fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-                    contentStyle={{
-                      background: '#0B0F19',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: 12,
-                      color: '#E5E7EB',
-                    }}
-                    formatter={(value, name) => [
-                      name === 'spend' ? money(String(value)) : String(value),
-                      name === 'spend' ? 'Расход' : 'Лиды',
-                    ]}
-                  />
-                  <Legend wrapperStyle={{ color: '#9CA3AF', fontSize: 12 }} />
-                  <Bar yAxisId="spend" dataKey="spend" name="Расход" fill="#22D3EE" radius={[6, 6, 0, 0]} />
-                  <Bar yAxisId="leads" dataKey="leads" name="Лиды" fill="#34D399" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+          {chartData.length === 0 ? (
+            <div className="flex h-56 items-center justify-center text-sm text-gray-500">
+              Нет данных для графиков.
+            </div>
+          ) : (
+            <div className="grid divide-y divide-white/10 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+              <section className="min-w-0 pb-4 lg:pb-0 lg:pr-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium text-gray-100">Лиды</h3>
+                  <span className="text-xs text-gray-500">Количество</span>
+                </div>
+                <div style={{ height: buyerChartHeight }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={chartData}
+                      layout="vertical"
+                      margin={{ top: 4, right: 64, bottom: 8, left: 4 }}
+                    >
+                      <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
+                      <XAxis
+                        type="number"
+                        allowDecimals={false}
+                        stroke="#6B7280"
+                        tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                        tickLine={false}
+                        axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={104}
+                        stroke="#6B7280"
+                        tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                        contentStyle={{
+                          background: '#0B0F19',
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: 8,
+                          color: '#E5E7EB',
+                        }}
+                        formatter={(value) => [String(value), 'Лиды']}
+                      />
+                      <Bar
+                        dataKey="leads"
+                        name="Лиды"
+                        fill="#34D399"
+                        maxBarSize={28}
+                        radius={[0, 6, 6, 0]}
+                      >
+                        <LabelList
+                          dataKey="leads"
+                          position="right"
+                          fill="#A7F3D0"
+                          fontSize={12}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+
+              <section className="min-w-0 pt-4 lg:pl-5 lg:pt-0">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium text-gray-100">Расход</h3>
+                  <span className="text-xs text-gray-500">USD</span>
+                </div>
+                <div style={{ height: buyerChartHeight }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={chartData}
+                      layout="vertical"
+                      margin={{ top: 4, right: 76, bottom: 8, left: 4 }}
+                    >
+                      <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
+                      <XAxis
+                        type="number"
+                        stroke="#6B7280"
+                        tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                        tickFormatter={(value) => `$${toNumber(value).toFixed(0)}`}
+                        tickLine={false}
+                        axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={104}
+                        stroke="#6B7280"
+                        tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                        contentStyle={{
+                          background: '#0B0F19',
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: 8,
+                          color: '#E5E7EB',
+                        }}
+                        formatter={(value) => [money(String(value)), 'Расход']}
+                      />
+                      <Bar
+                        dataKey="spend"
+                        name="Расход"
+                        fill="#22D3EE"
+                        maxBarSize={28}
+                        radius={[0, 6, 6, 0]}
+                      >
+                        <LabelList
+                          dataKey="spend"
+                          position="right"
+                          fill="#A5F3FC"
+                          fontSize={12}
+                          formatter={(value) => money(String(value))}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+            </div>
+          )}
         </div>
       </div>
     </section>
