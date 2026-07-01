@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKey
+from app.core.constants import ROOT_ADMIN_EMAIL
 
 
 class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
@@ -93,6 +94,10 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     @property
     def role_name(self) -> str | None:
         return self.role.name if self.role is not None else None
+
+    @property
+    def is_root(self) -> bool:
+        return self.email.strip().lower() == ROOT_ADMIN_EMAIL
 
     @property
     def project_ids(self) -> list[uuid.UUID]:

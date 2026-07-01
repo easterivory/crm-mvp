@@ -3,16 +3,20 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_user, get_db
+from app.api.v1.dependencies import get_current_root_user, get_current_user, get_db
 from app.core.constants import RoleName
 from app.models.user import User
 from app.schemas.system_setting import (
     BuyerBotConfigOut,
     BuyerBotConfigUpdate,
+    BackupJobOut,
+    SystemGlobalConfigOut,
+    SystemGlobalConfigUpdate,
     TranslationProviderConfigOut,
     TranslationProviderConfigUpdate,
 )
 from app.services.system_setting_service import SystemSettingService
+from app.services.backup_queue import enqueue_manual_backup
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -82,9 +86,78 @@ async def update_translation_settings(
     )
 
 
+@router.get("/global", response_model=SystemGlobalConfigOut)
+async def get_global_settings(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SystemGlobalConfigOut:
+    _ensure_super_admin(current_user)
+    config = await SystemSettingService(db).get_global_config()
+    return SystemGlobalConfigOut(
+        tg_backup_bot_token=config.tg_backup_bot_token,
+        tg_backup_channel_id=config.tg_backup_channel_id,
+        is_tg_backup_enabled=config.is_tg_backup_enabled,
+        admin_bot_token=config.admin_bot_token,
+    )
+
+
+@router.patch("/global", response_model=SystemGlobalConfigOut)
+async def update_global_settings(
+    data: SystemGlobalConfigUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SystemGlobalConfigOut:
+    _ensure_super_admin(current_user)
+    service = SystemSettingService(db)
+    current = await service.get_global_config()
+    values = data.model_dump(exclude_unset=True)
+    backup_token = values.get("tg_backup_bot_token", current.tg_backup_bot_token)
+    backup_channel_id = values.get("tg_backup_channel_id", current.tg_backup_channel_id)
+    backup_enabled = values.get("is_tg_backup_enabled", current.is_tg_backup_enabled)
+    if backup_enabled and (not backup_token or not backup_channel_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Backup bot token and channel ID are required when Telegram backup is enabled",
+        )
+    config = await service.set_global_config(
+        tg_backup_bot_token=backup_token,
+        tg_backup_channel_id=backup_channel_id,
+        is_tg_backup_enabled=backup_enabled,
+        admin_bot_token=values.get("admin_bot_token", current.admin_bot_token),
+    )
+    await db.commit()
+    return SystemGlobalConfigOut(
+        tg_backup_bot_token=config.tg_backup_bot_token,
+        tg_backup_channel_id=config.tg_backup_channel_id,
+        is_tg_backup_enabled=config.is_tg_backup_enabled,
+        admin_bot_token=config.admin_bot_token,
+    )
+
+
+@router.post("/global/backup/run", response_model=BackupJobOut, status_code=status.HTTP_202_ACCEPTED)
+async def run_manual_backup(
+    _root_user: User = Depends(get_current_root_user),
+) -> BackupJobOut:
+    try:
+        return BackupJobOut(job_id=await enqueue_manual_backup())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Backup queue is unavailable",
+        ) from exc
+
+
 def _ensure_settings_admin(current_user: User) -> None:
     if current_user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin/super_admin can manage system settings",
+        )
+
+
+def _ensure_super_admin(current_user: User) -> None:
+    if current_user.role_name != RoleName.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super_admin can manage global settings",
         )

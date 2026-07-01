@@ -26,12 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.constants import LeadStatusCode, TrackingSpendSource
+from app.core.constants import LeadStatusCode, RoleName, TrackingSpendSource
 from app.models.bot import Bot
 from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
+from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
@@ -49,6 +50,7 @@ MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
             {"text": "Статистика", "callback_data": "menu:stats"},
         ],
         [{"text": "Воронка отвалов", "callback_data": "menu:funnel"}],
+        [{"text": "Сменить проект", "callback_data": "menu:project"}],
     ]
 }
 
@@ -71,6 +73,7 @@ STATS_ACTION_MARKUP: dict[str, Any] = {
 STATE_CREATE_LINK_NAME = "create_link_name"
 STATE_SPEND_DATE = "spend_date"
 STATE_SPEND_AMOUNT = "spend_amount"
+STATE_SELECT_PROJECT = "select_project"
 MAX_LINKS_IN_KEYBOARD = 30
 REF_CODE_LENGTH = 6
 
@@ -223,6 +226,7 @@ class BuyerTelegramClient:
                     {"command": "create_link", "description": "Создать ссылку"},
                     {"command": "spend", "description": "Ввести расход"},
                     {"command": "stats", "description": "Статистика"},
+                    {"command": "project", "description": "Сменить активный проект"},
                     {"command": "funnel", "description": "Воронка отвалов"},
                     {"command": "cancel", "description": "Отменить текущее действие"},
                 ]
@@ -299,7 +303,7 @@ class BuyerBotService:
             return
 
         if command in {"/cancel", "Отмена"}:
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             await self.telegram.send_message(
                 chat_id,
                 "Действие отменено.",
@@ -308,19 +312,22 @@ class BuyerBotService:
             return
 
         if command in {"/create_link", "/new_link", "Создать ссылку"}:
-            await self._start_create_link(chat_id)
+            await self._run_project_action(chat_id, buyer, "create_link")
             return
         if command in {"/links", "Мои ссылки"}:
             await self._send_links(chat_id, buyer)
             return
         if command in {"/spend", "Ввести расход"}:
-            await self._start_spend(chat_id, buyer)
+            await self._run_project_action(chat_id, buyer, "spend")
             return
         if command in {"/stats", "Статистика"}:
-            await self._send_stats(chat_id, buyer)
+            await self._run_project_action(chat_id, buyer, "stats")
             return
         if command in {"/funnel", "Воронка отвалов"}:
-            await self._send_funnel(chat_id, buyer)
+            await self._run_project_action(chat_id, buyer, "funnel")
+            return
+        if command in {"/project", "Сменить проект"}:
+            await self._prompt_project_selection(chat_id, buyer, "menu")
             return
 
         state = await self.state_store.get(chat_id)
@@ -355,6 +362,10 @@ class BuyerBotService:
             await self._handle_menu_callback(chat_id, buyer, data.removeprefix("menu:"))
             return
 
+        if data.startswith("project:"):
+            await self._select_project(chat_id, buyer, data.removeprefix("project:"))
+            return
+
         if data.startswith("spend_link:"):
             await self._select_spend_link(chat_id, buyer, data.removeprefix("spend_link:"))
             return
@@ -365,22 +376,25 @@ class BuyerBotService:
 
     async def _handle_menu_callback(self, chat_id: int, buyer: User, action: str) -> None:
         if action == "create_link":
-            await self._start_create_link(chat_id)
+            await self._run_project_action(chat_id, buyer, "create_link")
             return
         if action == "links":
             await self._send_links(chat_id, buyer)
             return
         if action == "spend":
-            await self._start_spend(chat_id, buyer)
+            await self._run_project_action(chat_id, buyer, "spend")
             return
         if action == "stats":
-            await self._send_stats(chat_id, buyer)
+            await self._run_project_action(chat_id, buyer, "stats")
             return
         if action == "funnel":
-            await self._send_funnel(chat_id, buyer)
+            await self._run_project_action(chat_id, buyer, "funnel")
+            return
+        if action == "project":
+            await self._prompt_project_selection(chat_id, buyer, "menu")
             return
         if action == "cancel":
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             await self.telegram.send_message(
                 chat_id,
                 "Действие отменено.",
@@ -398,8 +412,9 @@ class BuyerBotService:
             return
 
         user_result = await self.db.execute(
-            select(User).where(
+            select(User).options(selectinload(User.role), selectinload(User.project_accesses)).where(
                 User.buyer_invite_token == token,
+                User.role.has(name=RoleName.MANAGER),
                 User.is_deleted.is_(False),
             )
         )
@@ -429,7 +444,7 @@ class BuyerBotService:
         user.buyer_telegram_id = chat_id
         user.buyer_invite_token = None
         await self.db.commit()
-        await self.state_store.clear(chat_id)
+        await self._clear_flow_state(chat_id)
 
         await self.telegram.send_message(
             chat_id,
@@ -450,8 +465,11 @@ class BuyerBotService:
             reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
-    async def _start_create_link(self, chat_id: int) -> None:
-        await self.state_store.set(chat_id, {"state": STATE_CREATE_LINK_NAME})
+    async def _start_create_link(self, chat_id: int, project_id: UUID) -> None:
+        await self._set_flow_state(
+            chat_id,
+            {"state": STATE_CREATE_LINK_NAME, "project_id": str(project_id)},
+        )
         await self.telegram.send_message(
             chat_id,
             "Пришли название ссылки, например: tiktok_camp_3.\n\n"
@@ -467,21 +485,23 @@ class BuyerBotService:
                 "Название должно содержать хотя бы 2 символа. Попробуй еще раз или отправь /cancel.",
             )
             return
-        if buyer.project_id is None:
+        state = await self.state_store.get(chat_id)
+        project_id = self._parse_uuid((state or {}).get("project_id"))
+        if project_id is None or not await self._buyer_has_project(buyer, project_id):
             await self.telegram.send_message(
                 chat_id,
                 "У твоего пользователя не указан проект. Администратор должен привязать баера к проекту.",
             )
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             return
 
-        bot = await self._resolve_client_bot(buyer.project_id)
+        bot = await self._resolve_client_bot(project_id)
         if bot is None or not bot.bot_username:
             await self.telegram.send_message(
                 chat_id,
                 "В проекте не найден клиентский Telegram-бот с username. Проверь настройки бота в CRM.",
             )
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             return
 
         invite_link: str | None = None
@@ -490,7 +510,7 @@ class BuyerBotService:
             invite_link = self._build_client_start_link(bot.bot_username, code)
             self.db.add(
                 TrackingLink(
-                    project_id=buyer.project_id,
+                    project_id=project_id,
                     bot_id=bot.id,
                     name=title,
                     title=title,
@@ -513,10 +533,10 @@ class BuyerBotService:
                 "Не удалось сгенерировать уникальный код ссылки. Попробуй еще раз.",
                 reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             return
 
-        await self.state_store.clear(chat_id)
+        await self._clear_flow_state(chat_id)
         await self.telegram.send_message(
             chat_id,
             f"Ссылка создана:\n{title}\n\n{invite_link}",
@@ -524,7 +544,8 @@ class BuyerBotService:
         )
 
     async def _send_links(self, chat_id: int, buyer: User) -> None:
-        links = await self._list_buyer_links(buyer.id, limit=20)
+        project_id = await self._active_project_id(chat_id, buyer)
+        links = await self._list_buyer_links(buyer.id, limit=20, project_id=project_id)
         if not links:
             await self.telegram.send_message(
                 chat_id,
@@ -543,8 +564,12 @@ class BuyerBotService:
 
         await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=MAIN_MENU_INLINE_MARKUP)
 
-    async def _start_spend(self, chat_id: int, buyer: User) -> None:
-        links = await self._list_buyer_links(buyer.id, limit=MAX_LINKS_IN_KEYBOARD)
+    async def _start_spend(self, chat_id: int, buyer: User, project_id: UUID) -> None:
+        links = await self._list_buyer_links(
+            buyer.id,
+            limit=MAX_LINKS_IN_KEYBOARD,
+            project_id=project_id,
+        )
         if not links:
             await self.telegram.send_message(
                 chat_id,
@@ -565,7 +590,10 @@ class BuyerBotService:
             ]
             + [[{"text": "Отмена", "callback_data": "menu:cancel"}]]
         }
-        await self.state_store.set(chat_id, {"state": STATE_SPEND_DATE})
+        await self._set_flow_state(
+            chat_id,
+            {"state": STATE_SPEND_DATE, "project_id": str(project_id)},
+        )
         await self.telegram.send_message(chat_id, "Выбери ссылку для внесения расхода:", reply_markup=keyboard)
 
     async def _select_spend_link(self, chat_id: int, buyer: User, raw_link_id: str) -> None:
@@ -574,14 +602,20 @@ class BuyerBotService:
             await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
-        link = await self._get_buyer_link(link_id, buyer.id)
+        state = await self.state_store.get(chat_id)
+        project_id = self._parse_uuid((state or {}).get("project_id"))
+        link = await self._get_buyer_link(link_id, buyer.id, project_id=project_id)
         if link is None:
             await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
-        await self.state_store.set(
+        await self._set_flow_state(
             chat_id,
-            {"state": STATE_SPEND_DATE, "link_id": str(link.id)},
+            {
+                "state": STATE_SPEND_DATE,
+                "link_id": str(link.id),
+                "project_id": str(link.project_id),
+            },
         )
         keyboard = {
             "inline_keyboard": [
@@ -609,7 +643,8 @@ class BuyerBotService:
             )
             return
 
-        link = await self._get_buyer_link(link_id, buyer.id)
+        project_id = self._parse_uuid((state or {}).get("project_id"))
+        link = await self._get_buyer_link(link_id, buyer.id, project_id=project_id)
         if link is None:
             await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
@@ -622,12 +657,13 @@ class BuyerBotService:
             await self.telegram.send_message(chat_id, "Дата не распознана.", reply_markup=MAIN_MENU_INLINE_MARKUP)
             return
 
-        await self.state_store.set(
+        await self._set_flow_state(
             chat_id,
             {
                 "state": STATE_SPEND_AMOUNT,
                 "link_id": str(link.id),
                 "spend_date": spend_date.isoformat(),
+                "project_id": str(link.project_id),
             },
         )
         await self.telegram.send_message(
@@ -652,7 +688,7 @@ class BuyerBotService:
                 "Контекст расхода устарел. Начни заново через «Ввести расход».",
                 reply_markup=MAIN_MENU_INLINE_MARKUP,
             )
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             return
         if amount is None:
             await self.telegram.send_message(
@@ -662,10 +698,11 @@ class BuyerBotService:
             )
             return
 
-        link = await self._get_buyer_link(link_id, buyer.id)
+        project_id = self._parse_uuid(state.get("project_id"))
+        link = await self._get_buyer_link(link_id, buyer.id, project_id=project_id)
         if link is None:
             await self.telegram.send_message(chat_id, "Ссылка не найдена.", reply_markup=MAIN_MENU_INLINE_MARKUP)
-            await self.state_store.clear(chat_id)
+            await self._clear_flow_state(chat_id)
             return
 
         existing_result = await self.db.execute(
@@ -704,7 +741,7 @@ class BuyerBotService:
             )
 
         await self.db.commit()
-        await self.state_store.clear(chat_id)
+        await self._clear_flow_state(chat_id)
         await self.telegram.send_message(
             chat_id,
             f"Расход сохранен: {money(amount)} USD за {spend_date.isoformat()}.\n"
@@ -712,7 +749,7 @@ class BuyerBotService:
             reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
-    async def _send_stats(self, chat_id: int, buyer: User) -> None:
+    async def _send_stats(self, chat_id: int, buyer: User, project_id: UUID) -> None:
         today = date.today()
         periods = [
             ("Сегодня", today, today),
@@ -721,11 +758,18 @@ class BuyerBotService:
             ("30 дней", today - timedelta(days=29), today),
         ]
         stats = [
-            await self._get_buyer_period_stats(buyer.id, label, date_from, date_to)
+            await self._get_buyer_period_stats(
+                buyer.id,
+                label,
+                date_from,
+                date_to,
+                project_id=project_id,
+            )
             for label, date_from, date_to in periods
         ]
         top_links = await self._get_buyer_link_stats(
             buyer.id,
+            project_id=project_id,
             date_from=today - timedelta(days=6),
             date_to=today,
             limit=5,
@@ -749,8 +793,8 @@ class BuyerBotService:
                 )
         await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=STATS_ACTION_MARKUP)
 
-    async def _send_funnel(self, chat_id: int, buyer: User) -> None:
-        steps = await self._get_buyer_funnel_dropoff(buyer.id)
+    async def _send_funnel(self, chat_id: int, buyer: User, project_id: UUID) -> None:
+        steps = await self._get_buyer_funnel_dropoff(buyer.id, project_id=project_id)
         if not steps:
             await self.telegram.send_message(
                 chat_id,
@@ -767,6 +811,139 @@ class BuyerBotService:
             )
         await self.telegram.send_message(chat_id, "\n".join(lines), reply_markup=MAIN_MENU_INLINE_MARKUP)
 
+    async def _run_project_action(self, chat_id: int, buyer: User, action: str) -> None:
+        projects = await self._list_buyer_projects(buyer)
+        if not projects:
+            await self.telegram.send_message(
+                chat_id,
+                "Нет доступных активных проектов. Обратись к администратору.",
+            )
+            return
+
+        active_project_id = await self._active_project_id(chat_id, buyer, projects=projects)
+        if active_project_id is None:
+            await self._prompt_project_selection(chat_id, buyer, action, projects=projects)
+            return
+        await self._dispatch_project_action(chat_id, buyer, action, active_project_id)
+
+    async def _dispatch_project_action(
+        self,
+        chat_id: int,
+        buyer: User,
+        action: str,
+        project_id: UUID,
+    ) -> None:
+        if action == "create_link":
+            await self._start_create_link(chat_id, project_id)
+        elif action == "spend":
+            await self._start_spend(chat_id, buyer, project_id)
+        elif action == "stats":
+            await self._send_stats(chat_id, buyer, project_id)
+        elif action == "funnel":
+            await self._send_funnel(chat_id, buyer, project_id)
+        else:
+            await self._send_menu(chat_id, buyer)
+
+    async def _prompt_project_selection(
+        self,
+        chat_id: int,
+        buyer: User,
+        action: str,
+        *,
+        projects: list[Project] | None = None,
+    ) -> None:
+        project_items = projects or await self._list_buyer_projects(buyer)
+        if not project_items:
+            await self.telegram.send_message(chat_id, "Нет доступных активных проектов.")
+            return
+        await self._set_flow_state(
+            chat_id,
+            {"state": STATE_SELECT_PROJECT, "pending_action": action},
+            preserve_active=False,
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": project.name, "callback_data": f"project:{project.id}"}]
+                for project in project_items
+            ]
+            + [[{"text": "Отмена", "callback_data": "menu:cancel"}]]
+        }
+        await self.telegram.send_message(chat_id, "Выбери активный проект:", reply_markup=keyboard)
+
+    async def _select_project(self, chat_id: int, buyer: User, raw_project_id: str) -> None:
+        project_id = self._parse_uuid(raw_project_id)
+        if project_id is None or not await self._buyer_has_project(buyer, project_id):
+            await self.telegram.send_message(
+                chat_id,
+                "Проект недоступен. Обнови меню и попробуй снова.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
+            return
+        state = await self.state_store.get(chat_id) or {}
+        action = str(state.get("pending_action") or "menu")
+        await self.state_store.set(chat_id, {"active_project_id": str(project_id)})
+        await self._dispatch_project_action(chat_id, buyer, action, project_id)
+
+    async def _active_project_id(
+        self,
+        chat_id: int,
+        buyer: User,
+        *,
+        projects: list[Project] | None = None,
+    ) -> UUID | None:
+        project_items = projects or await self._list_buyer_projects(buyer)
+        allowed_ids = {project.id for project in project_items}
+        state = await self.state_store.get(chat_id) or {}
+        active_project_id = self._parse_uuid(state.get("active_project_id"))
+        if active_project_id in allowed_ids:
+            return active_project_id
+        if len(project_items) == 1:
+            active_project_id = project_items[0].id
+            state["active_project_id"] = str(active_project_id)
+            await self.state_store.set(chat_id, state)
+            return active_project_id
+        return None
+
+    async def _set_flow_state(
+        self,
+        chat_id: int,
+        payload: dict[str, Any],
+        *,
+        preserve_active: bool = True,
+    ) -> None:
+        if preserve_active:
+            current = await self.state_store.get(chat_id) or {}
+            active_project_id = current.get("active_project_id")
+            if active_project_id is not None:
+                payload = {"active_project_id": active_project_id, **payload}
+        await self.state_store.set(chat_id, payload)
+
+    async def _clear_flow_state(self, chat_id: int) -> None:
+        current = await self.state_store.get(chat_id) or {}
+        active_project_id = current.get("active_project_id")
+        if active_project_id is None:
+            await self.state_store.clear(chat_id)
+        else:
+            await self.state_store.set(chat_id, {"active_project_id": active_project_id})
+
+    async def _list_buyer_projects(self, buyer: User) -> list[Project]:
+        project_ids = buyer.project_ids
+        if not project_ids:
+            return []
+        result = await self.db.execute(
+            select(Project)
+            .where(
+                Project.id.in_(project_ids),
+                Project.is_deleted.is_(False),
+                Project.status == "active",
+            )
+            .order_by(Project.name.asc())
+        )
+        return list(result.scalars().all())
+
+    async def _buyer_has_project(self, buyer: User, project_id: UUID) -> bool:
+        return any(project.id == project_id for project in await self._list_buyer_projects(buyer))
+
     async def _require_buyer(self, chat_id: int) -> User | None:
         buyer = await self._get_buyer_by_telegram_id(chat_id)
         if buyer is None:
@@ -779,9 +956,12 @@ class BuyerBotService:
 
     async def _get_buyer_by_telegram_id(self, chat_id: int) -> User | None:
         result = await self.db.execute(
-            select(User).where(
+            select(User)
+            .options(selectinload(User.role), selectinload(User.project_accesses))
+            .where(
                 User.buyer_telegram_id == chat_id,
                 User.is_deleted.is_(False),
+                User.role.has(name=RoleName.MANAGER),
             )
         )
         return result.scalar_one_or_none()
@@ -802,24 +982,41 @@ class BuyerBotService:
         result = await self.db.execute(stmt.limit(1))
         return result.scalar_one_or_none()
 
-    async def _list_buyer_links(self, buyer_id: UUID, limit: int) -> list[TrackingLink]:
+    async def _list_buyer_links(
+        self,
+        buyer_id: UUID,
+        limit: int,
+        project_id: UUID | None = None,
+    ) -> list[TrackingLink]:
+        filters = [
+            TrackingLink.buyer_id == buyer_id,
+            TrackingLink.is_active.is_(True),
+        ]
+        if project_id is not None:
+            filters.append(TrackingLink.project_id == project_id)
         result = await self.db.execute(
             select(TrackingLink)
             .options(selectinload(TrackingLink.bot))
-            .where(
-                TrackingLink.buyer_id == buyer_id,
-                TrackingLink.is_active.is_(True),
-            )
+            .where(*filters)
             .order_by(TrackingLink.created_at.desc())
             .limit(limit)
         )
         return list(result.scalars().all())
 
-    async def _get_buyer_link(self, link_id: UUID, buyer_id: UUID) -> TrackingLink | None:
+    async def _get_buyer_link(
+        self,
+        link_id: UUID,
+        buyer_id: UUID,
+        *,
+        project_id: UUID | None,
+    ) -> TrackingLink | None:
+        if project_id is None:
+            return None
         result = await self.db.execute(
             select(TrackingLink).where(
                 TrackingLink.id == link_id,
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 TrackingLink.is_active.is_(True),
             )
         )
@@ -844,6 +1041,8 @@ class BuyerBotService:
         label: str,
         date_from: date,
         date_to: date,
+        *,
+        project_id: UUID,
     ) -> BuyerPeriodStats:
         start_at, end_at = date_bounds(date_from, date_to)
 
@@ -852,6 +1051,7 @@ class BuyerBotService:
             .join(TrackingLink, TrackingLink.id == TrackingSpend.tracking_link_id)
             .where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 TrackingSpend.spend_date >= date_from,
                 TrackingSpend.spend_date <= date_to,
             )
@@ -864,6 +1064,7 @@ class BuyerBotService:
             .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
             .where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
@@ -878,6 +1079,7 @@ class BuyerBotService:
             .join(TrackingLink, TrackingLink.id == TrackingEvent.tracking_link_id)
             .where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 TrackingEvent.created_at >= start_at,
                 TrackingEvent.created_at < end_at,
             )
@@ -891,6 +1093,7 @@ class BuyerBotService:
             .join(LeadStatus, LeadStatus.id == Lead.status_id)
             .where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
@@ -904,6 +1107,7 @@ class BuyerBotService:
         links_result = await self.db.execute(
             select(func.count(distinct(TrackingLink.id))).where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 TrackingLink.is_active.is_(True),
             )
         )
@@ -922,6 +1126,7 @@ class BuyerBotService:
         self,
         buyer_id: UUID,
         *,
+        project_id: UUID,
         date_from: date,
         date_to: date,
         limit: int,
@@ -1004,6 +1209,7 @@ class BuyerBotService:
             .outerjoin(submitted_totals, submitted_totals.c.link_id == TrackingLink.id)
             .where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 TrackingLink.is_active.is_(True),
             )
             .order_by(
@@ -1032,7 +1238,12 @@ class BuyerBotService:
             )
         return items
 
-    async def _get_buyer_funnel_dropoff(self, buyer_id: UUID) -> list[BuyerFunnelStepStats]:
+    async def _get_buyer_funnel_dropoff(
+        self,
+        buyer_id: UUID,
+        *,
+        project_id: UUID,
+    ) -> list[BuyerFunnelStepStats]:
         result = await self.db.execute(
             select(
                 FunnelStepLog.step_id.label("step_id"),
@@ -1048,6 +1259,7 @@ class BuyerBotService:
             .outerjoin(FunnelStep, FunnelStep.id == FunnelStepLog.step_id)
             .where(
                 TrackingLink.buyer_id == buyer_id,
+                TrackingLink.project_id == project_id,
                 FunnelStepLog.event_type == "entered",
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),

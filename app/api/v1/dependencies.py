@@ -28,7 +28,7 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.services.access_control import resolve_scoped_project_id
 
-__all__ = ["get_db", "get_current_user", "get_current_project_id"]
+__all__ = ["get_db", "get_current_user", "get_current_project_id", "get_current_root_user"]
 
 bearer_scheme = HTTPBearer()
 
@@ -73,3 +73,15 @@ async def get_current_project_id(
     explicit different project_id is rejected.
     """
     return resolve_scoped_project_id(current_user, project_id)
+
+
+async def get_current_root_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Allow system-destructive operations only for the immutable Root account."""
+    if not current_user.is_root:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Root access is required",
+        )
+    return current_user

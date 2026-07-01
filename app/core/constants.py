@@ -5,6 +5,9 @@ Avoids magic strings scattered across the codebase.
 from enum import StrEnum
 
 
+ROOT_ADMIN_EMAIL = "superadmin@testcrm.dev"
+
+
 class SenderType:
     USER = "user"
     MANAGER = "manager"

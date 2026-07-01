@@ -47,3 +47,33 @@ class TranslationProviderConfigUpdate(BaseModel):
         if isinstance(value, str):
             return value.strip() or None
         return value
+
+
+class SystemGlobalConfigOut(BaseModel):
+    tg_backup_bot_token: Optional[str] = None
+    tg_backup_channel_id: Optional[str] = None
+    is_tg_backup_enabled: bool = False
+    admin_bot_token: Optional[str] = None
+
+
+class SystemGlobalConfigUpdate(BaseModel):
+    tg_backup_bot_token: Optional[str] = Field(default=None, max_length=255)
+    tg_backup_channel_id: Optional[str] = Field(default=None, max_length=100)
+    is_tg_backup_enabled: bool = False
+    admin_bot_token: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator(
+        "tg_backup_bot_token",
+        "tg_backup_channel_id",
+        "admin_bot_token",
+        mode="before",
+    )
+    @classmethod
+    def trim_global_optional_string(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+
+class BackupJobOut(BaseModel):
+    job_id: str

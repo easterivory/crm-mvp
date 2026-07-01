@@ -1,7 +1,7 @@
 """
 AlertWorker — runs as an asyncio loop, independent of the FastAPI process.
 
-Checks alert conditions for every active project and writes to alerts table.
+Checks SLA conditions and low-conversion transitions for every active project.
 Runs every INTERVAL_SECONDS. Uses its own DB session per cycle.
 """
 import asyncio
@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.core.database import async_session_factory
 from app.models.project import Project
 from app.services.alert_service import AlertService
+from app.services.admin_bot_service import LowConversionAdminAlertService
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,11 @@ async def run_once() -> None:
             projects = list(result.scalars().all())
 
             alert_service = AlertService(db)
+            conversion_alert_service = LowConversionAdminAlertService(db)
             for project in projects:
                 try:
                     await alert_service.check_and_create(project.id)
+                    await conversion_alert_service.check_project(project)
                 except Exception:
                     logger.exception("alert_worker: error on project %s", project.id)
 

@@ -26,6 +26,7 @@ import { Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
 
 type TabKey =
+  | 'system'
   | 'project'
   | 'team'
   | 'buyers'
@@ -63,7 +64,9 @@ type User = {
   project_ids?: string[]
   role_id: string
   role_name?: string | null
+  is_root?: boolean
   handler_code?: string | null
+  telegram_id?: number | null
   created_at: string
   is_deleted: boolean
 }
@@ -97,7 +100,15 @@ type TranslationProviderSettings = {
   base_url: string | null
 }
 
+type SystemGlobalSettings = {
+  tg_backup_bot_token: string | null
+  tg_backup_channel_id: string | null
+  is_tg_backup_enabled: boolean
+  admin_bot_token: string | null
+}
+
 const tabs: Array<{ key: TabKey; label: string }> = [
+  { key: 'system', label: 'Система' },
   { key: 'project', label: 'Проект' },
   { key: 'team', label: 'Команда' },
   { key: 'buyers', label: 'Баеры' },
@@ -267,6 +278,8 @@ export default function SettingsPage() {
   const [isSavingProject, setIsSavingProject] = useState(false)
   const [isSavingTranslation, setIsSavingTranslation] = useState(false)
   const [isSavingTranslationProvider, setIsSavingTranslationProvider] = useState(false)
+  const [isSavingGlobalSettings, setIsSavingGlobalSettings] = useState(false)
+  const [isRunningBackup, setIsRunningBackup] = useState(false)
   const [isAddingUser, setIsAddingUser] = useState(false)
   const [isAddingStatus, setIsAddingStatus] = useState(false)
   const [isAddingTag, setIsAddingTag] = useState(false)
@@ -298,10 +311,15 @@ export default function SettingsPage() {
   const [translationProvider, setTranslationProvider] = useState<TranslationProvider>('libretranslate')
   const [translationApiKey, setTranslationApiKey] = useState('')
   const [translationBaseUrl, setTranslationBaseUrl] = useState('')
+  const [tgBackupBotToken, setTgBackupBotToken] = useState('')
+  const [tgBackupChannelId, setTgBackupChannelId] = useState('')
+  const [isTgBackupEnabled, setIsTgBackupEnabled] = useState(false)
+  const [adminBotToken, setAdminBotToken] = useState('')
   const [newUserEmail, setNewUserEmail] = useState('')
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
   const [newUserHandlerCode, setNewUserHandlerCode] = useState('')
+  const [newUserTelegramId, setNewUserTelegramId] = useState('')
   const [newUserRoleId, setNewUserRoleId] = useState('')
   const [newUserProjectIds, setNewUserProjectIds] = useState<string[]>([])
   const [newStatusCode, setNewStatusCode] = useState('')
@@ -323,6 +341,9 @@ export default function SettingsPage() {
   const visibleTabs = useMemo(
     () =>
       tabs.filter((tab) => {
+        if (tab.key === 'system') {
+          return currentRoleName === 'super_admin'
+        }
         if (tab.key === 'team') {
           return canManageStaff
         }
@@ -343,7 +364,7 @@ export default function SettingsPage() {
         }
         return true
       }),
-    [canManageProject, canManageStaff],
+    [canManageProject, canManageStaff, currentRoleName],
   )
   const knownStatusCodes = useMemo(
     () => new Set(statuses.map((statusItem) => statusItem.code)),
@@ -400,6 +421,9 @@ export default function SettingsPage() {
 
       const targetRoleName = getUserRoleName(user)
       if (currentRoleName === 'super_admin') {
+        if (user.is_root && !currentUser?.is_root) {
+          return false
+        }
         return true
       }
 
@@ -414,6 +438,7 @@ export default function SettingsPage() {
       canManageStaff,
       currentRoleName,
       currentUser?.id,
+      currentUser?.is_root,
       getUserRoleName,
       getUserProjectIds,
     ],
@@ -560,6 +585,17 @@ export default function SettingsPage() {
     setTranslationBaseUrl(data.base_url ?? '')
   }, [canManageProject])
 
+  const loadGlobalSettings = useCallback(async () => {
+    if (currentRoleName !== 'super_admin') {
+      return
+    }
+    const { data } = await api.get<SystemGlobalSettings>('/settings/global')
+    setTgBackupBotToken(data.tg_backup_bot_token ?? '')
+    setTgBackupChannelId(data.tg_backup_channel_id ?? '')
+    setIsTgBackupEnabled(data.is_tg_backup_enabled)
+    setAdminBotToken(data.admin_bot_token ?? '')
+  }, [currentRoleName])
+
   const loadAll = useCallback(async () => {
     setIsLoading(true)
     setError('')
@@ -573,6 +609,7 @@ export default function SettingsPage() {
         loadStatuses(),
         loadTags(),
         loadTranslationProviderSettings(),
+        loadGlobalSettings(),
       ])
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось загрузить настройки.'))
@@ -586,6 +623,7 @@ export default function SettingsPage() {
     loadStatuses,
     loadTags,
     loadTranslationProviderSettings,
+    loadGlobalSettings,
     loadUsers,
   ])
 
@@ -681,6 +719,50 @@ export default function SettingsPage() {
     }
   }
 
+  const handleGlobalSettingsSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (isSavingGlobalSettings) {
+      return
+    }
+    setIsSavingGlobalSettings(true)
+    setError('')
+    setNotice('')
+    try {
+      const { data } = await api.patch<SystemGlobalSettings>('/settings/global', {
+        tg_backup_bot_token: tgBackupBotToken.trim() || null,
+        tg_backup_channel_id: tgBackupChannelId.trim() || null,
+        is_tg_backup_enabled: isTgBackupEnabled,
+        admin_bot_token: adminBotToken.trim() || null,
+      })
+      setTgBackupBotToken(data.tg_backup_bot_token ?? '')
+      setTgBackupChannelId(data.tg_backup_channel_id ?? '')
+      setIsTgBackupEnabled(data.is_tg_backup_enabled)
+      setAdminBotToken(data.admin_bot_token ?? '')
+      setNotice('Глобальные настройки сохранены.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось сохранить глобальные настройки.'))
+    } finally {
+      setIsSavingGlobalSettings(false)
+    }
+  }
+
+  const handleRunBackup = async () => {
+    if (!currentUser?.is_root || isRunningBackup) {
+      return
+    }
+    setIsRunningBackup(true)
+    setError('')
+    setNotice('')
+    try {
+      const { data } = await api.post<{ job_id: string }>('/settings/global/backup/run')
+      setNotice(`Бэкап поставлен в очередь: ${data.job_id}`)
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось запустить резервное копирование.'))
+    } finally {
+      setIsRunningBackup(false)
+    }
+  }
+
   const handleArchiveProject = async () => {
     if (!project || archiveProjectName !== project.name || isArchivingProject) {
       return
@@ -736,11 +818,13 @@ export default function SettingsPage() {
         project_id: selectedRole?.name === 'super_admin' ? null : newUserProjectIds[0],
         project_ids: selectedRole?.name === 'super_admin' ? [] : newUserProjectIds,
         handler_code: handlerCode || null,
+        telegram_id: newUserTelegramId.trim() ? Number(newUserTelegramId) : null,
       })
       setNewUserEmail('')
       setNewUserName('')
       setNewUserPassword('')
       setNewUserHandlerCode('')
+      setNewUserTelegramId('')
       setNewUserProjectIds(activeProjectId ? [activeProjectId] : [])
       await loadUsers()
       setNotice('Пользователь добавлен.')
@@ -840,6 +924,30 @@ export default function SettingsPage() {
       setNotice('Код обработчика обновлён.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось обновить код обработчика.'))
+    } finally {
+      setUpdatingUserId(null)
+    }
+  }
+
+  const handleUserTelegramIdChange = async (user: User, rawValue: string) => {
+    if (!canDeleteUser(user)) {
+      setError('Недостаточно прав для изменения Telegram ID.')
+      return
+    }
+    const normalized = rawValue.replace(/\D/g, '')
+    const telegramId = normalized ? Number(normalized) : null
+    if (telegramId === (user.telegram_id ?? null)) {
+      return
+    }
+    setUpdatingUserId(user.id)
+    setError('')
+    setNotice('')
+    try {
+      await api.patch<User>(`/users/${user.id}`, { telegram_id: telegramId })
+      await loadUsers()
+      setNotice('Telegram ID обновлён.')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось обновить Telegram ID.'))
     } finally {
       setUpdatingUserId(null)
     }
@@ -1137,6 +1245,100 @@ export default function SettingsPage() {
             <LoaderCircle size={18} className="mr-2 animate-spin" />
             Загрузка настроек
           </div>
+        ) : null}
+
+        {!isLoading && activeTab === 'system' ? (
+          <form className="max-w-xl space-y-6" onSubmit={handleGlobalSettingsSave}>
+            <div>
+              <h2 className="text-xl font-semibold text-zinc-100">Глобальные настройки</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Системные Telegram-боты и ежедневные резервные копии.
+              </p>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-100">Резервные копии в Telegram</h3>
+                <p className="mt-1 text-sm leading-6 text-zinc-500">
+                  ARQ создаёт сжатый PostgreSQL dump ежедневно в 03:00 UTC и отправляет его в канал.
+                </p>
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-300">Токен backup-бота</span>
+                <input
+                  type="password"
+                  value={tgBackupBotToken}
+                  onChange={(event) => setTgBackupBotToken(event.target.value)}
+                  autoComplete="off"
+                  placeholder="1234567890:AA..."
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-300">ID канала</span>
+                <input
+                  value={tgBackupChannelId}
+                  onChange={(event) => setTgBackupChannelId(event.target.value)}
+                  placeholder="-1001234567890"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-3">
+                <span>
+                  <span className="block text-sm font-medium text-zinc-200">Ежедневный backup включён</span>
+                  <span className="mt-1 block text-xs text-zinc-500">Cron запускается в 03:00 UTC.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isTgBackupEnabled}
+                  onChange={(event) => setIsTgBackupEnabled(event.target.checked)}
+                  className="h-5 w-5 shrink-0 accent-emerald-500"
+                />
+              </label>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-100">Admin Telegram Bot</h3>
+                <p className="mt-1 text-sm leading-6 text-zinc-500">
+                  Команда /stats и автоматические алерты при переходе ссылки в low_cr.
+                </p>
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-300">Токен admin-бота</span>
+                <input
+                  type="password"
+                  value={adminBotToken}
+                  onChange={(event) => setAdminBotToken(event.target.value)}
+                  autoComplete="off"
+                  placeholder="1234567890:AA..."
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
+                />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="submit"
+                disabled={isSavingGlobalSettings}
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50"
+              >
+                {isSavingGlobalSettings ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
+                Сохранить
+              </button>
+              {currentUser?.is_root ? (
+                <button
+                  type="button"
+                  onClick={() => void handleRunBackup()}
+                  disabled={isRunningBackup}
+                  className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/35 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/10 disabled:opacity-50"
+                >
+                  {isRunningBackup ? <LoaderCircle size={16} className="animate-spin" /> : <Settings size={16} />}
+                  Запустить backup сейчас
+                </button>
+              ) : null}
+            </div>
+          </form>
         ) : null}
 
         {!isLoading && activeTab === 'project' ? (
@@ -1446,12 +1648,13 @@ export default function SettingsPage() {
               </div>
 
               <div className="overflow-x-auto rounded-lg border border-zinc-800">
-                <table className="min-w-[1160px] w-full text-left text-sm">
+                <table className="min-w-[1280px] w-full text-left text-sm">
                   <thead className="bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
                     <tr>
                       <th className="px-4 py-3">Имя</th>
                       <th className="px-4 py-3">Email</th>
                       <th className="px-4 py-3">Код</th>
+                      <th className="px-4 py-3">Telegram ID</th>
                       <th className="px-4 py-3">Роль</th>
                       <th className="px-4 py-3">Доступы</th>
                       <th className="w-[132px] px-4 py-3 text-right">Действия</th>
@@ -1483,6 +1686,20 @@ export default function SettingsPage() {
                               }}
                               onBlur={(event) => void handleUserHandlerCodeChange(user, event.currentTarget.value)}
                               className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-center font-mono text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              key={`${user.id}-${user.telegram_id ?? 'empty'}-telegram`}
+                              defaultValue={user.telegram_id ?? ''}
+                              inputMode="numeric"
+                              placeholder="123456789"
+                              disabled={!canRemove || updatingUserId === user.id}
+                              onChange={(event) => {
+                                event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '')
+                              }}
+                              onBlur={(event) => void handleUserTelegramIdChange(user, event.currentTarget.value)}
+                              className="w-32 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-50"
                             />
                           </td>
                           <td className="px-4 py-3 text-zinc-400">
@@ -1575,7 +1792,7 @@ export default function SettingsPage() {
 
             {canManageStaff ? (
               <form
-                className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_180px_110px_140px]"
+                className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-2 xl:grid-cols-4"
                 onSubmit={handleAddUser}
               >
                 <input
@@ -1593,6 +1810,13 @@ export default function SettingsPage() {
                   maxLength={4}
                   placeholder="Код 0001"
                   className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-base font-mono text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                />
+                <input
+                  value={newUserTelegramId}
+                  onChange={(event) => setNewUserTelegramId(event.target.value.replace(/\D/g, ''))}
+                  inputMode="numeric"
+                  placeholder="Telegram ID админа"
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
                 />
                 <input
                   value={newUserName}
@@ -1635,11 +1859,11 @@ export default function SettingsPage() {
                   Добавить
                 </button>
                 {selectedRole?.name === 'super_admin' ? (
-                  <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100 md:col-span-2 xl:col-span-5">
+                  <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100 md:col-span-2 xl:col-span-4">
                     Суперадмин получает доступ ко всем проектам автоматически.
                   </div>
                 ) : (
-                  <div className="md:col-span-2 xl:col-span-5">
+                  <div className="md:col-span-2 xl:col-span-4">
                     <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
                       Доступы к проектам
                     </span>

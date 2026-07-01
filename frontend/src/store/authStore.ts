@@ -10,6 +10,7 @@ type User = {
   project_ids?: string[]
   role_id: string
   role_name?: string | null
+  is_root?: boolean
   created_at: string
   is_deleted: boolean
 }

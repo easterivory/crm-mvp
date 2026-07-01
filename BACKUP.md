@@ -1,18 +1,18 @@
 # Database Backups
 
 CRM stores production data in PostgreSQL. The safe backup path is a verified
-`pg_dump` custom-format archive, not a raw copy of the Docker volume.
+compressed `pg_dump` SQL archive, not a raw copy of the Docker volume.
 
 ## What Is Included
 
-- Scheduled backup worker: `python -m app.workers backup`
+- Scheduled ARQ cron worker: `arq app.workers.backup_worker.WorkerSettings`
 - Manual backup command: `python scripts/db_backup.py`
 - Manual restore command: `python scripts/db_restore.py`
 - Docker volume for local archives: `backups_data` mounted at `/backups`
 - Optional Telegram delivery to a private chat/channel
 - Optional OpenSSL encryption before local storage and Telegram delivery
 - Retention by count and age
-- Verification with `pg_restore --list`
+- Full gzip-stream and PostgreSQL dump-header verification
 
 ## Telegram File Limit
 
@@ -35,12 +35,12 @@ BACKUP_TELEGRAM_MAX_UPLOAD_MB=2000
 
 ## Enable Scheduled Backups
 
-Set these values in the server `.env`:
+Configure the backup bot token, channel ID, and enabled toggle in
+**Settings → System**. The ARQ cron runs daily at 03:00 UTC; the Root account
+can enqueue a manual run from the same screen. Storage, retention, encryption,
+upload limits and optional delivery fallbacks remain deployment settings:
 
 ```env
-BACKUP_ENABLED=true
-BACKUP_INTERVAL_HOURS=24
-BACKUP_RUN_ON_STARTUP=true
 BACKUP_RETENTION_COUNT=14
 BACKUP_RETENTION_DAYS=30
 BACKUP_VERIFY=true
@@ -58,7 +58,7 @@ BACKUP_ENCRYPTION_KEY=replace_with_a_long_random_passphrase
 ```
 
 Keep the encryption key outside Git and outside Telegram. Without this key,
-`.dump.enc` files cannot be restored.
+`.sql.gz.enc` files cannot be restored.
 
 Apply changes:
 
@@ -68,7 +68,7 @@ docker compose logs -f backup
 ```
 
 The deploy script starts the `backup` container together with the main services.
-If `BACKUP_ENABLED=false`, the container stays idle.
+The backup container runs the ARQ worker and waits for cron/manual jobs.
 
 ## Manual Backup
 
@@ -99,7 +99,7 @@ docker compose exec -T backup ls -lh /backups
 ## Restore On A New Server
 
 1. Deploy the code and `.env` on the new server.
-2. Put the `.dump` or `.dump.enc` backup into `/backups`.
+2. Put the `.sql.gz` or `.sql.gz.enc` backup into `/backups`.
 3. Stop services that write to the database:
 
 ```bash
@@ -109,14 +109,14 @@ docker compose stop api worker backup
 4. Restore:
 
 ```bash
-docker compose run --rm backup python scripts/db_restore.py /backups/crm_mvp_YYYYMMDD_HHMMSS_UTC.dump --yes
+docker compose run --rm backup python scripts/db_restore.py /backups/crm_mvp_YYYYMMDD_HHMMSS_UTC.sql.gz --yes
 ```
 
 For encrypted backups:
 
 ```bash
 BACKUP_ENCRYPTION_KEY=replace_with_the_original_passphrase \
-docker compose run --rm backup python scripts/db_restore.py /backups/crm_mvp_YYYYMMDD_HHMMSS_UTC.dump.enc --yes
+docker compose run --rm backup python scripts/db_restore.py /backups/crm_mvp_YYYYMMDD_HHMMSS_UTC.sql.gz.enc --yes
 ```
 
 5. Apply migrations and start services:
@@ -128,14 +128,14 @@ docker compose up -d postgres redis api worker backup
 
 ## Restore Safety
 
-`db_restore.py` refuses to run without `--yes`. By default it passes
-`--clean --if-exists` to `pg_restore`, so the target database may be overwritten.
+`db_restore.py` refuses to run without `--yes`. By default it resets the public
+schema, then restores through `psql` with `ON_ERROR_STOP=on` so SQL errors abort.
 Always verify `DATABASE_URL` before running it.
 
 To restore into a different database:
 
 ```bash
-docker compose run --rm backup python scripts/db_restore.py /backups/file.dump \
+docker compose run --rm backup python scripts/db_restore.py /backups/file.sql.gz \
   --database-url postgresql+asyncpg://user:password@postgres:5432/other_db \
   --yes
 ```
@@ -143,7 +143,7 @@ docker compose run --rm backup python scripts/db_restore.py /backups/file.dump \
 ## Recommended Production Routine
 
 - Keep `BACKUP_RUN_ON_STARTUP=true` so every deploy creates a fresh safety point.
-- Use daily backups at minimum; use `BACKUP_INTERVAL_HOURS=6` during active launch.
+- Use the daily ARQ backup at minimum and monitor failed jobs.
 - Use `BACKUP_ENCRYPTION_KEY` before sending archives outside the server.
 - Periodically test restore into a temporary database. A backup that has never
   been restored is only a hope, not a recovery plan.

@@ -69,7 +69,7 @@ services:
   backup:
     build: .
     restart: unless-stopped
-    command: python -m app.workers backup
+    command: arq app.workers.backup_worker.WorkerSettings
     env_file:
       - .env
     volumes:

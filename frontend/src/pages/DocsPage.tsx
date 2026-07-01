@@ -178,7 +178,7 @@ const logicFlows: LogicFlow[] = [
       'Подача партнеру идет через mapping полей, проверку обязательных данных, postback URL и распознавание ответа партнера.',
       'Google Sheets выгружает лидов при переходе в выбранные trigger statuses проекта.',
       'Валидность лида для качества менеджера появляется только из обратной информации партнера или финального qualified-статуса.',
-      'Бэкап базы создается отдельным процессом через pg_dump, проверяется через pg_restore --list и может отправляться в закрытый Telegram-чат.',
+      'Бэкап базы создается ARQ-задачей через pg_dump в .sql.gz, проверяется полным чтением архива и отправляется в закрытый Telegram-канал.',
     ],
   },
 ]
@@ -274,7 +274,7 @@ const featureCards: FeatureCard[] = [
   },
   {
     title: 'Бэкапы',
-    description: 'Резервные копии PostgreSQL через pg_dump, проверка pg_restore и доставка в Telegram.',
+    description: 'Резервные копии PostgreSQL через pg_dump, проверка gzip/SQL и доставка в Telegram.',
     icon: Database,
     tone: 'rose',
     bullets: [
@@ -1138,12 +1138,12 @@ export default function DocsPage() {
               </h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
                 Бэкап PostgreSQL создается через pg_dump --format=custom --compress=9 --no-owner
-                --no-privileges. После создания CRM проверяет файл через pg_restore --list. При
+                --no-privileges. После создания CRM полностью читает gzip и проверяет SQL-заголовок. При
                 BACKUP_ENCRYPTION_KEY файл шифруется AES-256-CBC с PBKDF2.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Pill>BACKUP_ENABLED</Pill>
-                <Pill>BACKUP_INTERVAL_HOURS</Pill>
+                <Pill>is_tg_backup_enabled</Pill>
+                <Pill>ARQ 03:00 UTC</Pill>
                 <Pill>BACKUP_RETENTION_COUNT</Pill>
                 <Pill>BACKUP_RETENTION_DAYS</Pill>
                 <Pill>BACKUP_VERIFY</Pill>
@@ -1174,9 +1174,9 @@ export default function DocsPage() {
             </h3>
             <ol className="mt-3 grid gap-2 text-sm leading-6 text-gray-400 md:grid-cols-2">
               <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />Создать ручной бэкап и проверить sha256.</li>
-              <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />Проверить, что файл прошел pg_restore --list.</li>
+              <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />Проверить, что gzip-архив и SQL-заголовок валидны.</li>
               <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />Сохранить .env, GOOGLE_SERVICE_ACCOUNT_JSON, токены ботов и BACKUP_ENCRYPTION_KEY.</li>
-              <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />На новом сервере восстановить БД через pg_restore.</li>
+              <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />На новом сервере восстановить БД через psql.</li>
               <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />Перепроверить webhook Telegram-ботов и DNS доменов.</li>
               <li className="flex gap-2"><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-cyan-200" />Открыть CRM, проверить проекты, чаты, воронки, tracking и интеграции.</li>
             </ol>

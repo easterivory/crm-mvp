@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import case, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import LeadStatusCode
+from app.core.constants import LeadStatusCode, RoleName
 from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
@@ -175,6 +175,7 @@ class BuyerAnalyticsService:
                     ),
                 ),
                 User.is_deleted.is_(False),
+                User.role.has(name=RoleName.MANAGER),
                 or_(
                     User.buyer_telegram_id.is_not(None),
                     User.buyer_invite_token.is_not(None),
@@ -245,6 +246,7 @@ class BuyerAnalyticsService:
             select(User).where(
                 User.buyer_telegram_id == buyer_telegram_id,
                 User.is_deleted.is_(False),
+                User.role.has(name=RoleName.MANAGER),
             )
         )
         buyer = result.scalar_one_or_none()

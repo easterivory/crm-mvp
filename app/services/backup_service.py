@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
 import logging
 import os
 import shutil
@@ -147,11 +148,16 @@ def _decrypt_file(source: Path, destination: Path, config: Settings) -> None:
 
 
 def _verify_dump(path: Path, config: Settings) -> None:
-    _run_command(
-        ["pg_restore", "--list", str(path)],
-        env=os.environ.copy(),
-        timeout=config.BACKUP_COMMAND_TIMEOUT_SECONDS,
-    )
+    """Read the whole gzip stream and validate the pg_dump SQL header."""
+    try:
+        with gzip.open(path, "rb") as file:
+            header = file.read(4096)
+            while file.read(1024 * 1024):
+                pass
+    except (OSError, EOFError) as exc:
+        raise BackupError(f"Compressed SQL backup is invalid: {path.name}") from exc
+    if b"PostgreSQL database dump" not in header:
+        raise BackupError(f"Backup does not contain a PostgreSQL SQL dump header: {path.name}")
 
 
 def _verify_backup_artifact(path: Path, config: Settings) -> None:
@@ -167,11 +173,13 @@ def _verify_backup_artifact(path: Path, config: Settings) -> None:
 
 
 def _backup_files(output_dir: Path, prefix: str) -> list[Path]:
-    files = []
-    for path in output_dir.glob(f"{prefix}_*.dump*"):
+    files: list[Path] = []
+    candidates = list(output_dir.glob(f"{prefix}_*.sql.gz*"))
+    candidates.extend(output_dir.glob(f"{prefix}_*.dump*"))
+    for path in candidates:
         if path.name.startswith(".") or path.name.endswith(".partial"):
             continue
-        if path.suffix not in {".dump", ".enc"}:
+        if not path.name.endswith((".sql.gz", ".sql.gz.enc", ".dump", ".dump.enc")):
             continue
         files.append(path)
     return sorted(files, key=lambda item: item.stat().st_mtime, reverse=True)
@@ -205,12 +213,17 @@ def create_database_backup(
 
     created_at = datetime.now(UTC)
     stem = backup_name or f"{config.BACKUP_PREFIX}_{created_at.strftime('%Y%m%d_%H%M%S_UTC')}"
-    raw_path = target_dir / f"{stem}.dump"
-    final_path = target_dir / f"{stem}.dump.enc" if config.BACKUP_ENCRYPTION_KEY else raw_path
-    raw_partial = target_dir / f".{raw_path.name}.partial"
+    compressed_path = target_dir / f"{stem}.sql.gz"
+    final_path = (
+        target_dir / f"{stem}.sql.gz.enc"
+        if config.BACKUP_ENCRYPTION_KEY
+        else compressed_path
+    )
+    raw_partial = target_dir / f".{stem}.sql.partial"
+    compressed_partial = target_dir / f".{compressed_path.name}.partial"
     final_partial = target_dir / f".{final_path.name}.partial"
 
-    for stale_path in (raw_partial, final_partial):
+    for stale_path in (raw_partial, compressed_partial, final_partial):
         stale_path.unlink(missing_ok=True)
 
     pg_args, env = _postgres_cli_args(config.DATABASE_URL)
@@ -219,8 +232,7 @@ def create_database_backup(
         [
             "pg_dump",
             *pg_args,
-            "--format=custom",
-            "--compress=9",
+            "--format=plain",
             "--no-owner",
             "--no-privileges",
             "--file",
@@ -230,12 +242,16 @@ def create_database_backup(
         timeout=config.BACKUP_COMMAND_TIMEOUT_SECONDS,
     )
 
+    with raw_partial.open("rb") as source, gzip.open(compressed_partial, "wb", compresslevel=9) as target:
+        shutil.copyfileobj(source, target, length=1024 * 1024)
+    raw_partial.unlink(missing_ok=True)
+
     if config.BACKUP_ENCRYPTION_KEY:
-        _encrypt_file(raw_partial, final_partial, config)
-        raw_partial.unlink(missing_ok=True)
+        _encrypt_file(compressed_partial, final_partial, config)
+        compressed_partial.unlink(missing_ok=True)
         final_partial.replace(final_path)
     else:
-        raw_partial.replace(final_path)
+        compressed_partial.replace(final_path)
 
     _verify_backup_artifact(final_path, config)
     result = BackupResult(
@@ -279,36 +295,83 @@ def restore_database_backup(
             restore_source = Path(temp_dir) / source.name.removesuffix(".enc")
             _decrypt_file(source, restore_source, config)
 
+        is_legacy_dump = restore_source.name.endswith(".dump")
+        if is_legacy_dump:
+            _run_command(
+                ["pg_restore", "--list", str(restore_source)],
+                env=os.environ.copy(),
+                timeout=config.BACKUP_COMMAND_TIMEOUT_SECONDS,
+            )
+            command = ["pg_restore", *pg_args, "--no-owner", "--no-privileges"]
+            if clean:
+                command.extend(["--clean", "--if-exists"])
+            command.append(str(restore_source))
+            _run_command(command, env=env, timeout=config.BACKUP_COMMAND_TIMEOUT_SECONDS)
+            return
+
         _verify_dump(restore_source, config)
+        sql_source = Path(temp_dir) / "restore.sql"
+        try:
+            with gzip.open(restore_source, "rb") as source, sql_source.open("wb") as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+        except (OSError, EOFError) as exc:
+            raise BackupError(f"Could not decompress backup: {source.name}") from exc
         command = [
-            "pg_restore",
+            "psql",
             *pg_args,
-            "--no-owner",
-            "--no-privileges",
+            "--set",
+            "ON_ERROR_STOP=on",
         ]
         if clean:
-            command.extend(["--clean", "--if-exists"])
-        command.append(str(restore_source))
+            _run_command(
+                [
+                    "psql",
+                    *pg_args,
+                    "--set",
+                    "ON_ERROR_STOP=on",
+                    "--command",
+                    "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public",
+                ],
+                env=env,
+                timeout=config.BACKUP_COMMAND_TIMEOUT_SECONDS,
+            )
+        command.extend(["--file", str(sql_source)])
         _run_command(command, env=env, timeout=config.BACKUP_COMMAND_TIMEOUT_SECONDS)
 
 
-def telegram_delivery_configured(config: Settings = settings) -> bool:
-    return bool(config.BACKUP_TELEGRAM_BOT_TOKEN and config.BACKUP_TELEGRAM_CHAT_ID)
+def telegram_delivery_configured(
+    config: Settings = settings,
+    *,
+    bot_token: str | None = None,
+    chat_id: str | None = None,
+) -> bool:
+    return bool(
+        (bot_token or config.BACKUP_TELEGRAM_BOT_TOKEN)
+        and (chat_id or config.BACKUP_TELEGRAM_CHAT_ID)
+    )
 
 
-def _telegram_method_url(method: str, config: Settings) -> str:
+def _telegram_method_url(method: str, config: Settings, bot_token: str | None = None) -> str:
     base_url = config.BACKUP_TELEGRAM_API_BASE_URL.rstrip("/")
-    return f"{base_url}/bot{config.BACKUP_TELEGRAM_BOT_TOKEN}/{method}"
+    token = bot_token or config.BACKUP_TELEGRAM_BOT_TOKEN
+    return f"{base_url}/bot{token}/{method}"
 
 
-def send_telegram_message(text: str, *, config: Settings = settings) -> None:
-    if not telegram_delivery_configured(config):
+def send_telegram_message(
+    text: str,
+    *,
+    config: Settings = settings,
+    bot_token: str | None = None,
+    chat_id: str | None = None,
+) -> None:
+    if not telegram_delivery_configured(config, bot_token=bot_token, chat_id=chat_id):
         return
+    destination = chat_id or config.BACKUP_TELEGRAM_CHAT_ID
     with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
         response = client.post(
-            _telegram_method_url("sendMessage", config),
+            _telegram_method_url("sendMessage", config, bot_token),
             json={
-                "chat_id": config.BACKUP_TELEGRAM_CHAT_ID,
+                "chat_id": destination,
                 "text": text[:4096],
                 "disable_web_page_preview": True,
             },
@@ -320,9 +383,16 @@ def send_telegram_message(text: str, *, config: Settings = settings) -> None:
             raise BackupError(f"Telegram sendMessage failed: {payload}")
 
 
-def send_backup_to_telegram(result: BackupResult, *, config: Settings = settings) -> None:
-    if not telegram_delivery_configured(config):
+def send_backup_to_telegram(
+    result: BackupResult,
+    *,
+    config: Settings = settings,
+    bot_token: str | None = None,
+    chat_id: str | None = None,
+) -> None:
+    if not telegram_delivery_configured(config, bot_token=bot_token, chat_id=chat_id):
         return
+    destination = chat_id or config.BACKUP_TELEGRAM_CHAT_ID
 
     max_upload_bytes = config.BACKUP_TELEGRAM_MAX_UPLOAD_MB * 1024 * 1024
     if result.size_bytes > max_upload_bytes:
@@ -331,7 +401,12 @@ def send_backup_to_telegram(result: BackupResult, *, config: Settings = settings
             f"{result.path.name} is {result.size_bytes / 1024 / 1024:.1f} MB, "
             f"limit is {config.BACKUP_TELEGRAM_MAX_UPLOAD_MB} MB."
         )
-        send_telegram_message(message, config=config)
+        send_telegram_message(
+            message,
+            config=config,
+            bot_token=bot_token,
+            chat_id=destination,
+        )
         raise BackupError(message)
 
     caption = (
@@ -345,16 +420,16 @@ def send_backup_to_telegram(result: BackupResult, *, config: Settings = settings
     timeout = httpx.Timeout(float(config.BACKUP_TELEGRAM_TIMEOUT_SECONDS), connect=30.0)
     with result.path.open("rb") as file, httpx.Client(timeout=timeout) as client:
         response = client.post(
-            _telegram_method_url("sendDocument", config),
+            _telegram_method_url("sendDocument", config, bot_token),
             data={
-                "chat_id": config.BACKUP_TELEGRAM_CHAT_ID,
+                "chat_id": destination,
                 "caption": caption[:1024],
             },
             files={
                 "document": (
                     result.path.name,
                     file,
-                    "application/octet-stream",
+                    "application/octet-stream" if result.encrypted else "application/gzip",
                 ),
             },
         )
@@ -366,6 +441,10 @@ def send_backup_to_telegram(result: BackupResult, *, config: Settings = settings
 
 
 def ensure_required_backup_tools() -> None:
-    missing = [tool for tool in ("pg_dump", "pg_restore", "openssl") if not shutil.which(tool)]
+    missing = [
+        tool
+        for tool in ("pg_dump", "pg_restore", "psql", "openssl")
+        if not shutil.which(tool)
+    ]
     if missing:
         raise BackupError(f"Missing required backup tools: {', '.join(missing)}")

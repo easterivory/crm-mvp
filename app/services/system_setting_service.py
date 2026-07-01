@@ -11,6 +11,10 @@ from app.models.system_setting import SystemSetting
 
 BUYER_BOT_TOKEN_KEY = "buyer_bot_token"
 BUYER_BOT_USERNAME_KEY = "buyer_bot_username"
+TG_BACKUP_BOT_TOKEN_KEY = "tg_backup_bot_token"
+TG_BACKUP_CHANNEL_ID_KEY = "tg_backup_channel_id"
+TG_BACKUP_ENABLED_KEY = "is_tg_backup_enabled"
+ADMIN_BOT_TOKEN_KEY = "admin_bot_token"
 TRANSLATION_PROVIDER_KEY = "translation_provider"
 TRANSLATION_API_KEY = "translation_api_key"
 TRANSLATION_BASE_URL_KEY = "translation_base_url"
@@ -27,6 +31,14 @@ class TranslationProviderConfig:
     provider: Optional[str]
     api_key: Optional[str]
     base_url: Optional[str]
+
+
+@dataclass(frozen=True, slots=True)
+class SystemGlobalConfig:
+    tg_backup_bot_token: Optional[str]
+    tg_backup_channel_id: Optional[str]
+    is_tg_backup_enabled: bool
+    admin_bot_token: Optional[str]
 
 
 class SystemSettingService:
@@ -75,6 +87,56 @@ class SystemSettingService:
         await self.set_value(BUYER_BOT_USERNAME_KEY, self._normalize_username(username))
         return await self.get_buyer_bot_config()
 
+    async def get_global_config(self) -> SystemGlobalConfig:
+        backup_token = await self.get_value(TG_BACKUP_BOT_TOKEN_KEY)
+        channel_id = await self.get_value(TG_BACKUP_CHANNEL_ID_KEY)
+        backup_enabled = await self.get_value(TG_BACKUP_ENABLED_KEY)
+        admin_bot_token = await self.get_value(ADMIN_BOT_TOKEN_KEY)
+        return SystemGlobalConfig(
+            tg_backup_bot_token=self._normalize_optional_value(backup_token),
+            tg_backup_channel_id=self._normalize_optional_value(channel_id),
+            is_tg_backup_enabled=self._parse_bool(backup_enabled),
+            admin_bot_token=self._normalize_optional_value(admin_bot_token),
+        )
+
+    async def get_effective_global_config(self) -> SystemGlobalConfig:
+        config = await self.get_global_config()
+        return SystemGlobalConfig(
+            tg_backup_bot_token=(
+                config.tg_backup_bot_token
+                or self._normalize_optional_value(settings.BACKUP_TELEGRAM_BOT_TOKEN)
+            ),
+            tg_backup_channel_id=(
+                config.tg_backup_channel_id
+                or self._normalize_optional_value(settings.BACKUP_TELEGRAM_CHAT_ID)
+            ),
+            is_tg_backup_enabled=config.is_tg_backup_enabled,
+            admin_bot_token=config.admin_bot_token,
+        )
+
+    async def set_global_config(
+        self,
+        *,
+        tg_backup_bot_token: Optional[str],
+        tg_backup_channel_id: Optional[str],
+        is_tg_backup_enabled: bool,
+        admin_bot_token: Optional[str],
+    ) -> SystemGlobalConfig:
+        await self.set_value(
+            TG_BACKUP_BOT_TOKEN_KEY,
+            self._normalize_optional_value(tg_backup_bot_token),
+        )
+        await self.set_value(
+            TG_BACKUP_CHANNEL_ID_KEY,
+            self._normalize_optional_value(tg_backup_channel_id),
+        )
+        await self.set_value(TG_BACKUP_ENABLED_KEY, "true" if is_tg_backup_enabled else "false")
+        await self.set_value(
+            ADMIN_BOT_TOKEN_KEY,
+            self._normalize_optional_value(admin_bot_token),
+        )
+        return await self.get_global_config()
+
     async def get_translation_provider_config(self) -> TranslationProviderConfig:
         provider = await self.get_value(TRANSLATION_PROVIDER_KEY)
         api_key = await self.get_value(TRANSLATION_API_KEY)
@@ -112,6 +174,10 @@ class SystemSettingService:
             return None
         normalized = value.strip()
         return normalized or None
+
+    @staticmethod
+    def _parse_bool(value: Optional[str]) -> bool:
+        return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     @classmethod
     def _normalize_username(cls, username: Optional[str]) -> Optional[str]:

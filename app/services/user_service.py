@@ -236,6 +236,12 @@ class UserService:
                 detail="Role does not exist",
             )
 
+        if target.is_root and next_role.name != RoleName.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Root role cannot be downgraded",
+            )
+
         if next_role.name == RoleName.SUPER_ADMIN:
             values["project_id"] = None
             next_project_ids: list[UUID] = []
@@ -404,6 +410,11 @@ class UserService:
 
     @classmethod
     def _ensure_can_manage_target(cls, actor: User, target: User) -> None:
+        if target.is_root and not actor.is_root:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Root account cannot be managed by other users",
+            )
         target_role = target.role_name
         if actor.role_name == RoleName.SUPER_ADMIN:
             return

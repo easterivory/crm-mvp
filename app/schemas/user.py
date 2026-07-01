@@ -41,6 +41,7 @@ class UserOut(OrmBase):
     telegram_id: Optional[int] = None
     handler_code: Optional[str] = None
     role_name: Optional[str] = None
+    is_root: bool = False
     created_at: datetime
     is_deleted: bool
 

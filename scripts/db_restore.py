@@ -11,7 +11,11 @@ from app.services.backup_service import BackupError, ensure_required_backup_tool
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Restore a PostgreSQL database backup.")
-    parser.add_argument("backup_file", type=Path, help="Path to .dump or .dump.enc backup file.")
+    parser.add_argument(
+        "backup_file",
+        type=Path,
+        help="Path to .sql.gz/.sql.gz.enc or a legacy .dump/.dump.enc backup file.",
+    )
     parser.add_argument(
         "--database-url",
         help="Override target database URL. Defaults to DATABASE_URL from .env.",
@@ -19,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-clean",
         action="store_true",
-        help="Do not pass --clean/--if-exists to pg_restore.",
+        help="Do not reset the public schema before restoring the SQL dump.",
     )
     parser.add_argument(
         "--yes",

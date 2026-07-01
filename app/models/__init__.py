@@ -26,6 +26,7 @@ from app.models.alert import Alert  # noqa: F401
 from app.models.daily_stats import DailyStats  # noqa: F401
 from app.models.bot import Bot, BotConfigAuditLog, BotVersion, BotStep, ChatBotState  # noqa: F401
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend  # noqa: F401
+from app.models.tracking_alert import TrackingConversionAlertState  # noqa: F401
 from app.models.funnel import (  # noqa: F401
     ChatFunnelState,
     Funnel,
@@ -75,6 +76,7 @@ __all__ = [
     "ChatBotState",
     "TrackingLink",
     "TrackingSpend",
+    "TrackingConversionAlertState",
     "TrackingEvent",
     "Funnel",
     "FunnelVersion",
