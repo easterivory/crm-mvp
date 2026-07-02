@@ -77,3 +77,9 @@ class SystemGlobalConfigUpdate(BaseModel):
 
 class BackupJobOut(BaseModel):
     job_id: str
+
+
+class ServerLogExportOut(BaseModel):
+    file_name: str
+    size_bytes: int
+    period_minutes: int = 30

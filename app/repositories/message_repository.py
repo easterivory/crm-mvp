@@ -213,14 +213,20 @@ class MessageRepository(BaseRepository[Message]):
         )
         return list(result.scalars().all())
 
-    async def mark_funnel_processed(self, message_ids: list[UUID]) -> None:
-        if not message_ids:
-            return
-        await self.db.execute(
+    async def claim_funnel_processing(self, message_ids: list[UUID]) -> bool:
+        """Atomically reserve unprocessed messages for one funnel execution."""
+        unique_ids = list(dict.fromkeys(message_ids))
+        if not unique_ids:
+            return False
+        result = await self.db.execute(
             update(Message)
-            .where(Message.id.in_(message_ids))
+            .where(
+                Message.id.in_(unique_ids),
+                Message.funnel_processed_at.is_(None),
+            )
             .values(funnel_processed_at=datetime.now(timezone.utc))
         )
+        return result.rowcount == len(unique_ids)
 
     async def create_message(
         self,

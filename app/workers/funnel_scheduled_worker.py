@@ -20,7 +20,9 @@ async def run_once(limit: int = 100) -> int:
             limit=limit,
         )
         for job in jobs:
-            await repo.mark_scheduled_job_running(job.id)
+            if not await repo.claim_scheduled_job(job.id):
+                logger.info("Skipped already claimed funnel scheduled job job_id=%s", job.id)
+                continue
             runtime = FunnelRuntimeService(db)
             try:
                 await runtime.process_scheduled_job(job)
@@ -48,7 +50,13 @@ async def process_funnel_scheduled_job_task(ctx: dict, job_id: str) -> dict:
         if job.status != "pending":
             return {"status": "skipped", "job_id": job_id, "job_status": job.status}
 
-        await repo.mark_scheduled_job_running(job.id)
+        if not await repo.claim_scheduled_job(job.id):
+            refreshed = await repo.get_scheduled_job(job.id)
+            return {
+                "status": "skipped",
+                "job_id": job_id,
+                "job_status": refreshed.status if refreshed is not None else "not_found",
+            }
         runtime = FunnelRuntimeService(db)
         try:
             await runtime.process_scheduled_job(job)

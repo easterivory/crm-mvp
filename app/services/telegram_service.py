@@ -204,7 +204,7 @@ class TelegramService:
             message.text,
         )
         if chat.is_blocked:
-            await self.message_repo.mark_funnel_processed([msg.id])
+            await self.message_repo.claim_funnel_processing([msg.id])
             logger.info(
                 "Ignored blocked Telegram chat bot_id=%s project_id=%s chat_id=%s",
                 bot_id,
@@ -237,6 +237,13 @@ class TelegramService:
         )
         start_requested = should_start_runtime or self._is_start_command(message.text)
         if start_requested:
+            if not await self.message_repo.claim_funnel_processing([msg.id]):
+                logger.info(
+                    "Skipped duplicate Telegram start processing chat_id=%s message_id=%s",
+                    chat.id,
+                    msg.id,
+                )
+                return
             await self._process_runtime_or_legacy(
                 chat=chat,
                 project_id=project_id,
@@ -245,7 +252,29 @@ class TelegramService:
                 start_requested=True,
                 fresh_lifecycle=should_start_runtime,
             )
-            await self.message_repo.mark_funnel_processed([msg.id])
+            return
+
+        if message.contact is not None:
+            if not await self.message_repo.claim_funnel_processing([msg.id]):
+                logger.info(
+                    "Skipped duplicate Telegram contact processing chat_id=%s message_id=%s",
+                    chat.id,
+                    msg.id,
+                )
+                return
+            await self._process_runtime_or_legacy(
+                chat=chat,
+                project_id=project_id,
+                bot_id=bot_id,
+                user_message=msg,
+                start_requested=False,
+                fresh_lifecycle=False,
+            )
+            logger.info(
+                "Telegram contact processed immediately chat_id=%s message_id=%s",
+                chat.id,
+                msg.id,
+            )
             return
 
         queued = await enqueue_user_input(chat.id, msg.id)
@@ -263,6 +292,8 @@ class TelegramService:
             chat.id,
             msg.id,
         )
+        if not await self.message_repo.claim_funnel_processing([msg.id]):
+            return
         await self._process_runtime_or_legacy(
             chat=chat,
             project_id=project_id,
@@ -271,7 +302,6 @@ class TelegramService:
             start_requested=False,
             fresh_lifecycle=False,
         )
-        await self.message_repo.mark_funnel_processed([msg.id])
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -477,8 +507,11 @@ class TelegramService:
         if not batch:
             return "already_processed"
 
+        batch_ids = [item.id for item in batch]
+        if not await self.message_repo.claim_funnel_processing(batch_ids):
+            return "already_processing"
+
         if chat.is_blocked:
-            await self.message_repo.mark_funnel_processed([item.id for item in batch])
             return "blocked"
 
         chunks = [
@@ -498,7 +531,6 @@ class TelegramService:
             start_requested=False,
             fresh_lifecycle=False,
         )
-        await self.message_repo.mark_funnel_processed([item.id for item in batch])
         logger.info(
             "Debounced Telegram input processed chat_id=%s messages=%s chars=%s",
             chat_id,

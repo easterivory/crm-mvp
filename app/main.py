@@ -30,7 +30,11 @@ from app.api.v1.routers import (
     users,
 )
 from app.core.config import settings
+from app.core.logging_config import configure_file_logging
 from app.core.redis import close_redis
+
+
+configure_file_logging()
 
 
 @asynccontextmanager

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_root_user, get_current_user, get_db
 from app.core.constants import RoleName
+from app.core.redis import get_redis
 from app.models.user import User
 from app.schemas.system_setting import (
     BuyerBotConfigOut,
     BuyerBotConfigUpdate,
     BackupJobOut,
+    ServerLogExportOut,
     SystemGlobalConfigOut,
     SystemGlobalConfigUpdate,
     TranslationProviderConfigOut,
@@ -17,8 +21,14 @@ from app.schemas.system_setting import (
 )
 from app.services.system_setting_service import SystemSettingService
 from app.services.backup_queue import enqueue_manual_backup
+from app.services.server_log_service import (
+    ServerLogExportError,
+    collect_recent_server_logs,
+    send_server_logs_to_telegram,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/buyer-bot", response_model=BuyerBotConfigOut)
@@ -145,6 +155,54 @@ async def run_manual_backup(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Backup queue is unavailable",
         ) from exc
+
+
+@router.post("/global/logs/export", response_model=ServerLogExportOut)
+async def export_recent_server_logs(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ServerLogExportOut:
+    _ensure_super_admin(current_user)
+    config = await SystemSettingService(db).get_effective_global_config()
+    if not config.tg_backup_bot_token or not config.tg_backup_channel_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Сначала настройте backup-бота и ID канала",
+        )
+
+    redis = await get_redis()
+    lock_key = "system:server-log-export:cooldown"
+    acquired = await redis.set(lock_key, str(current_user.id), ex=60, nx=True)
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Выгрузку логов можно запускать не чаще одного раза в минуту",
+        )
+
+    content = collect_recent_server_logs(minutes=30)
+    try:
+        file_name = await send_server_logs_to_telegram(
+            content,
+            bot_token=config.tg_backup_bot_token,
+            chat_id=config.tg_backup_channel_id,
+            minutes=30,
+        )
+    except ServerLogExportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    logger.info(
+        "Super admin exported recent server logs user_id=%s file_name=%s size_bytes=%s",
+        current_user.id,
+        file_name,
+        len(content),
+    )
+    return ServerLogExportOut(
+        file_name=file_name,
+        size_bytes=len(content),
+        period_minutes=30,
+    )
 
 
 def _ensure_settings_admin(current_user: User) -> None:

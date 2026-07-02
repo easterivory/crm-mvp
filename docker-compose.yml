@@ -35,6 +35,8 @@ services:
     env_file:
       - .env
     environment:
+      APP_SERVICE_NAME: api
+      LOG_STORAGE_PATH: /app/storage/logs
       BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
       CHAT_ATTACHMENT_STORAGE_PATH: /app/storage/chat_attachments
     volumes:
@@ -42,6 +44,7 @@ services:
       - landers_data:/app/storage/landers
       - broadcast_uploads_data:/app/storage/broadcast_uploads
       - chat_attachments_data:/app/storage/chat_attachments
+      - logs_data:/app/storage/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,11 +58,14 @@ services:
     env_file:
       - .env
     environment:
+      APP_SERVICE_NAME: worker
+      LOG_STORAGE_PATH: /app/storage/logs
       BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
       CHAT_ATTACHMENT_STORAGE_PATH: /app/storage/chat_attachments
     volumes:
       - broadcast_uploads_data:/app/storage/broadcast_uploads
       - chat_attachments_data:/app/storage/chat_attachments
+      - logs_data:/app/storage/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,11 +79,14 @@ services:
     env_file:
       - .env
     environment:
+      APP_SERVICE_NAME: jobs
+      LOG_STORAGE_PATH: /app/storage/logs
       BROADCAST_UPLOAD_STORAGE_PATH: /app/storage/broadcast_uploads
       CHAT_ATTACHMENT_STORAGE_PATH: /app/storage/chat_attachments
     volumes:
       - broadcast_uploads_data:/app/storage/broadcast_uploads
       - chat_attachments_data:/app/storage/chat_attachments
+      - logs_data:/app/storage/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,8 +99,12 @@ services:
     command: arq app.workers.backup_worker.WorkerSettings
     env_file:
       - .env
+    environment:
+      APP_SERVICE_NAME: backup
+      LOG_STORAGE_PATH: /app/storage/logs
     volumes:
       - backups_data:/backups
+      - logs_data:/app/storage/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,3 +116,4 @@ volumes:
   landers_data:
   broadcast_uploads_data:
   chat_attachments_data:
+  logs_data:

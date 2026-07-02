@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db_session
+from app.core.logging_config import configure_file_logging
 from app.models.lead import Lead
 from app.models.tracking import TrackingLink
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover - production installs arq from requireme
     RedisSettings = None
 
 logger = logging.getLogger(__name__)
+configure_file_logging()
 
 
 async def run_once() -> int:

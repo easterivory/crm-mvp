@@ -1359,32 +1359,39 @@ class FunnelRuntimeService:
         if "{{" not in source:
             return source
 
-        chat = await self.chat_repo.get_by_id(chat_id)
-        lead = await self.repo.get_lead_by_chat(chat_id)
+        context = await self.repo.get_message_template_context(chat_id)
         state = await self.repo.get_chat_funnel_state(chat_id)
-        custom_fields = dict(lead.custom_fields or {}) if lead is not None else {}
-        name = lead.name if lead is not None else None
+        custom_fields = dict(context.get("custom_fields") or {})
+        name = context.get("name") or context.get("contact_name")
         values: dict[str, Any] = {
+            # Direct custom keys remain supported for already published funnels.
             **custom_fields,
             "name": name,
             "first_name": name.split(maxsplit=1)[0] if name else None,
-            "phone": lead.phone if lead is not None else None,
-            "username": lead.username if lead is not None else None,
-            "age": lead.age if lead is not None else None,
-            "country": lead.country if lead is not None else None,
-            "call_time": lead.call_time_text if lead is not None else None,
-            "call_time_text": lead.call_time_text if lead is not None else None,
-            "telegram_id": chat.external_user_id if chat is not None else None,
+            "phone": context.get("phone"),
+            "username": context.get("username"),
+            "age": context.get("age"),
+            "country": context.get("country"),
+            "call_time": context.get("call_time_text"),
+            "call_time_text": context.get("call_time_text"),
+            "lead_status": context.get("lead_status"),
+            "project": context.get("project"),
+            "bot": context.get("bot"),
+            "telegram_id": context.get("external_user_id"),
             "chat_id": str(chat_id),
             "last_answer": (state.runtime_json or {}).get("last_answer") if state else None,
         }
 
         def replace_variable(match: re.Match[str]) -> str:
             key = match.group(1)
-            lookup_key = key.removeprefix("custom.")
-            if lookup_key not in values or values[lookup_key] is None:
+            if key.startswith("custom."):
+                value = custom_fields.get(key.removeprefix("custom."))
+                return "" if value is None else str(value)
+            if key not in values:
                 return match.group(0)
-            value = values[lookup_key]
+            value = values[key]
+            if value is None:
+                return ""
             if isinstance(value, (dict, list)):
                 return match.group(0)
             return str(value)
@@ -2887,13 +2894,23 @@ class FunnelRuntimeService:
                     or raw.get("id")
                     or label
                 ).strip()
+                raw_type = str(raw.get("type") or "").strip().lower()
+                is_contact = bool(
+                    raw.get("request_contact") is True
+                    or raw_type in {"contact", "request_contact"}
+                    or (not raw.get("url") and value.lower() == "contact")
+                )
                 button = {
                     "id": str(raw.get("id") or f"btn_{index + 1}"),
                     "label": label,
-                    "value": value or label,
-                    "type": str(raw.get("type") or ("url" if raw.get("url") else "branch")),
-                    "target_step_id": raw.get("target_step_id"),
-                    "url": raw.get("url"),
+                    "value": "contact" if is_contact else value or label,
+                    "type": (
+                        "contact"
+                        if is_contact
+                        else raw_type or ("url" if raw.get("url") else "branch")
+                    ),
+                    "target_step_id": None if is_contact else raw.get("target_step_id"),
+                    "url": None if is_contact else raw.get("url"),
                 }
             else:
                 continue

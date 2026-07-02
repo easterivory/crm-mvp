@@ -6,6 +6,7 @@ import logging
 from arq import cron
 
 from app.core.config import settings
+from app.core.logging_config import configure_file_logging
 from app.services.backup_service import (
     BackupError,
     create_database_backup,
@@ -17,6 +18,7 @@ from app.services.backup_queue import backup_redis_settings
 from app.utils.backup_manager import run_configured_telegram_backup
 
 logger = logging.getLogger(__name__)
+configure_file_logging()
 
 
 async def run_tg_backup_job(ctx: dict, force: bool = False) -> dict:

@@ -899,6 +899,11 @@ export default function DocsPage() {
                 voice, video_note и document. Медиа можно загрузить или указать Telegram file_id.
                 В карточке шага нужно смотреть имя файла, тип и размер, чтобы понимать, что именно прикреплено.
               </p>
+              <p className="mt-2 text-sm leading-6 text-gray-400">
+                В тексте работают переменные first_name, username, phone, lead_status, project, bot
+                и custom.&lt;ключ&gt;. Кнопка запроса контакта сохраняет присланный Telegram номер в
+                поле phone, после чего он доступен как {'{{phone}}'}.
+              </p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <h3 className="flex items-center gap-2 font-semibold text-white">
@@ -1171,6 +1176,11 @@ export default function DocsPage() {
                 <Pill>BACKUP_TELEGRAM_CHAT_ID</Pill>
                 <Pill>BACKUP_TELEGRAM_MAX_UPLOAD_MB</Pill>
               </div>
+              <p className="mt-3 text-sm leading-6 text-gray-400">
+                Super Admin может из системных настроек отправить в тот же канал диагностические
+                логи API и workers за последние 30 минут. Файлы ротируются по размеру, секреты
+                маскируются, экспорт ограничен 2 МБ и одним запуском в минуту.
+              </p>
             </div>
           </div>
           <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">

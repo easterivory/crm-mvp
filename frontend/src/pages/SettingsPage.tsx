@@ -1,6 +1,7 @@
 import {
   Check,
   ChevronDown,
+  FileText,
   KeyRound,
   Languages,
   LoaderCircle,
@@ -280,6 +281,7 @@ export default function SettingsPage() {
   const [isSavingTranslationProvider, setIsSavingTranslationProvider] = useState(false)
   const [isSavingGlobalSettings, setIsSavingGlobalSettings] = useState(false)
   const [isRunningBackup, setIsRunningBackup] = useState(false)
+  const [isExportingLogs, setIsExportingLogs] = useState(false)
   const [isAddingUser, setIsAddingUser] = useState(false)
   const [isAddingStatus, setIsAddingStatus] = useState(false)
   const [isAddingTag, setIsAddingTag] = useState(false)
@@ -760,6 +762,27 @@ export default function SettingsPage() {
       setError(getErrorMessage(err, 'Не удалось запустить резервное копирование.'))
     } finally {
       setIsRunningBackup(false)
+    }
+  }
+
+  const handleExportServerLogs = async () => {
+    if (currentRoleName !== 'super_admin' || isExportingLogs) {
+      return
+    }
+    setIsExportingLogs(true)
+    setError('')
+    setNotice('')
+    try {
+      const { data } = await api.post<{ file_name: string; size_bytes: number }>(
+        '/settings/global/logs/export',
+      )
+      setNotice(
+        `Логи за последние 30 минут отправлены: ${data.file_name} (${Math.ceil(data.size_bytes / 1024)} КБ).`,
+      )
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось отправить серверные логи.'))
+    } finally {
+      setIsExportingLogs(false)
     }
   }
 
@@ -1337,6 +1360,16 @@ export default function SettingsPage() {
                   Запустить backup сейчас
                 </button>
               ) : null}
+              <button
+                type="button"
+                onClick={() => void handleExportServerLogs()}
+                disabled={isExportingLogs || !tgBackupBotToken.trim() || !tgBackupChannelId.trim()}
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-300/30 px-4 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Отправить в backup-канал логи приложения за последние 30 минут"
+              >
+                {isExportingLogs ? <LoaderCircle size={16} className="animate-spin" /> : <FileText size={16} />}
+                Отправить логи за 30 минут
+              </button>
             </div>
           </form>
         ) : null}

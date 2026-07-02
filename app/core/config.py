@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "CRM MVP"
     DEBUG: bool = False
     BASE_URL: str = "http://localhost:8000"
+    APP_SERVICE_NAME: str = "api"
+    LOG_STORAGE_PATH: str = "storage/logs"
+    LOG_FILE_MAX_MB: int = 10
+    LOG_FILE_BACKUP_COUNT: int = 3
+    LOG_EXPORT_MAX_MB: int = 2
 
     # Database (postgresql+asyncpg:// required)
     DATABASE_URL: str

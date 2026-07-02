@@ -22,6 +22,8 @@ from app.models.funnel import (
     FunnelVersion,
 )
 from app.models.lead import Lead
+from app.models.lead_status import LeadStatus
+from app.models.project import Project
 from app.repositories.base import BaseRepository
 from app.schemas.funnel import (
     FunnelEdgeIn,
@@ -799,8 +801,8 @@ class FunnelRepository(BaseRepository[Funnel]):
         )
         return list(result.scalars().all())
 
-    async def mark_scheduled_job_running(self, job_id: UUID) -> None:
-        await self.db.execute(
+    async def claim_scheduled_job(self, job_id: UUID) -> bool:
+        result = await self.db.execute(
             update(FunnelScheduledJob)
             .where(FunnelScheduledJob.id == job_id, FunnelScheduledJob.status == "pending")
             .values(
@@ -809,6 +811,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                 updated_at=func.now(),
             )
         )
+        return result.rowcount == 1
 
     async def mark_scheduled_job_done(self, job_id: UUID) -> None:
         await self.db.execute(
@@ -1039,6 +1042,36 @@ class FunnelRepository(BaseRepository[Funnel]):
             .where(Lead.chat_id == chat_id, Chat.reset_at.is_(None), Lead.is_deleted.is_(False))
         )
         return result.scalar_one_or_none()
+
+    async def get_message_template_context(self, chat_id: UUID) -> dict:
+        result = await self.db.execute(
+            select(
+                Chat.external_user_id,
+                Chat.contact_name,
+                Lead.name,
+                Lead.phone,
+                Lead.username,
+                Lead.age,
+                Lead.country,
+                Lead.call_time_text,
+                Lead.custom_fields,
+                LeadStatus.code.label("lead_status"),
+                Project.name.label("project"),
+                Bot.name.label("bot"),
+            )
+            .select_from(Chat)
+            .outerjoin(
+                Lead,
+                (Lead.chat_id == Chat.id) & Lead.is_deleted.is_(False),
+            )
+            .outerjoin(LeadStatus, LeadStatus.id == Lead.status_id)
+            .join(Project, Project.id == Chat.project_id)
+            .outerjoin(Bot, Bot.id == Chat.bot_id)
+            .where(Chat.id == chat_id, Chat.reset_at.is_(None))
+            .limit(1)
+        )
+        row = result.mappings().first()
+        return dict(row) if row is not None else {}
 
     async def update_lead_mapped_fields(
         self,

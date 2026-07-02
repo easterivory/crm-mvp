@@ -178,13 +178,21 @@ export function normalizeButton(raw: unknown, index: number): ButtonConfig {
   }
   const item = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
   const label = String(item.label ?? item.text ?? item.title ?? item.value ?? `Кнопка ${index + 1}`)
+  const rawType = String(item.type ?? '').trim().toLowerCase()
+  const rawValue = String(item.value ?? item.key ?? label)
+  const isContact =
+    rawType === 'contact' ||
+    rawType === 'request_contact' ||
+    item.request_contact === true ||
+    (!item.url && rawValue.trim().toLowerCase() === 'contact')
   return {
     id: String(item.id ?? `btn_${index + 1}`),
     label,
-    value: String(item.value ?? item.key ?? label),
-    type: item.type === 'url' || item.url ? 'url' : 'branch',
-    target_step_id: typeof item.target_step_id === 'string' ? item.target_step_id : '',
-    url: typeof item.url === 'string' ? item.url : '',
+    value: isContact ? 'contact' : rawValue,
+    type: isContact ? 'contact' : rawType === 'url' || item.url ? 'url' : 'branch',
+    target_step_id:
+      !isContact && typeof item.target_step_id === 'string' ? item.target_step_id : '',
+    url: !isContact && typeof item.url === 'string' ? item.url : '',
   }
 }
 
