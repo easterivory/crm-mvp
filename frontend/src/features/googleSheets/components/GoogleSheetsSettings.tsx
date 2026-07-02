@@ -8,7 +8,7 @@ import {
   Save,
   SendHorizontal,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
   fetchGoogleSheetsConfig,
@@ -17,6 +17,7 @@ import {
   updateGoogleSheetsConfig,
 } from '../api'
 import type { GoogleSheetsConfig, LeadStatusOption } from '../types'
+import { fetchBots, type Bot } from '../../bots'
 
 type GoogleSheetsSettingsProps = {
   projectId: string | null
@@ -26,6 +27,24 @@ type Banner = {
   tone: 'success' | 'error'
   message: string
 }
+
+const exportFieldOptions = [
+  ['created_at', 'Дата создания'],
+  ['name', 'Имя'],
+  ['phone', 'Телефон'],
+  ['telegram', 'Telegram'],
+  ['country', 'Страна'],
+  ['age', 'Возраст'],
+  ['tracking_link', 'Трекинг-ссылка'],
+  ['buyer', 'Баер'],
+  ['status', 'Статус'],
+  ['cpl', 'CPL'],
+  ['score', 'Качество лида'],
+  ['manager', 'Менеджер'],
+  ['bot', 'Бот'],
+  ['chat_id', 'CRM Chat ID'],
+  ['telegram_id', 'Telegram ID'],
+] as const
 
 function getErrorMessage(err: unknown, fallback = 'Не удалось выполнить запрос.') {
   if (axios.isAxiosError(err)) {
@@ -46,16 +65,23 @@ function emptyForm(config?: GoogleSheetsConfig | null) {
     sheetName: config?.sheet_name ?? 'Лиды',
     isEnabled: config?.is_enabled ?? false,
     triggerStatuses: config?.trigger_statuses ?? [],
+    botIds: config?.bot_ids ?? [],
+    exportFields: config?.export_fields ?? exportFieldOptions.slice(0, 11).map(([key]) => key),
+    customFieldKeys: config?.custom_field_keys?.join(', ') ?? '',
   }
 }
 
 export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettingsProps) {
   const [config, setConfig] = useState<GoogleSheetsConfig | null>(null)
   const [statuses, setStatuses] = useState<LeadStatusOption[]>([])
+  const [bots, setBots] = useState<Bot[]>([])
   const [spreadsheetId, setSpreadsheetId] = useState('')
   const [sheetName, setSheetName] = useState('Лиды')
   const [isEnabled, setIsEnabled] = useState(false)
   const [triggerStatuses, setTriggerStatuses] = useState<string[]>([])
+  const [botIds, setBotIds] = useState<string[]>([])
+  const [exportFields, setExportFields] = useState<string[]>([])
+  const [customFieldKeys, setCustomFieldKeys] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
@@ -79,28 +105,37 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
     if (!projectId) {
       setConfig(null)
       setStatuses([])
+      setBots([])
       const form = emptyForm(null)
       setSpreadsheetId(form.spreadsheetId)
       setSheetName(form.sheetName)
       setIsEnabled(form.isEnabled)
       setTriggerStatuses(form.triggerStatuses)
+      setBotIds(form.botIds)
+      setExportFields(form.exportFields)
+      setCustomFieldKeys(form.customFieldKeys)
       return
     }
 
     setIsLoading(true)
     setBanner(null)
     try {
-      const [configData, statusItems] = await Promise.all([
+      const [configData, statusItems, botItems] = await Promise.all([
         fetchGoogleSheetsConfig(projectId),
         fetchLeadStatusOptions(),
+        fetchBots(projectId),
       ])
       setConfig(configData)
       setStatuses(statusItems)
+      setBots(botItems)
       const form = emptyForm(configData)
       setSpreadsheetId(form.spreadsheetId)
       setSheetName(form.sheetName)
       setIsEnabled(form.isEnabled)
       setTriggerStatuses(form.triggerStatuses)
+      setBotIds(form.botIds)
+      setExportFields(form.exportFields)
+      setCustomFieldKeys(form.customFieldKeys)
     } catch (err) {
       setBanner({
         tone: 'error',
@@ -123,6 +158,11 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
       return [...current, statusId]
     })
   }
+
+  const toggleListValue = (
+    value: string,
+    setter: Dispatch<SetStateAction<string[]>>,
+  ) => setter((current) => current.includes(value) ? current.filter((item) => item !== value) : [...current, value])
 
   const handleCopyEmail = async () => {
     if (!serviceAccountEmail) {
@@ -150,6 +190,9 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
         sheet_name: sheetName.trim(),
         is_enabled: isEnabled,
         trigger_statuses: triggerStatuses,
+        bot_ids: botIds,
+        export_fields: exportFields,
+        custom_field_keys: customFieldKeys.split(',').map((item) => item.trim()).filter(Boolean),
       })
       setConfig(updated)
       const form = emptyForm(updated)
@@ -157,6 +200,9 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
       setSheetName(form.sheetName)
       setIsEnabled(form.isEnabled)
       setTriggerStatuses(form.triggerStatuses)
+      setBotIds(form.botIds)
+      setExportFields(form.exportFields)
+      setCustomFieldKeys(form.customFieldKeys)
       setBanner({ tone: 'success', message: 'Настройки Google Таблиц сохранены.' })
     } catch (err) {
       setBanner({
@@ -176,6 +222,16 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
     setIsTesting(true)
     setBanner(null)
     try {
+      const updated = await updateGoogleSheetsConfig(projectId, {
+        spreadsheet_id: spreadsheetId.trim() || null,
+        sheet_name: sheetName.trim(),
+        is_enabled: isEnabled,
+        trigger_statuses: triggerStatuses,
+        bot_ids: botIds,
+        export_fields: exportFields,
+        custom_field_keys: customFieldKeys.split(',').map((item) => item.trim()).filter(Boolean),
+      })
+      setConfig(updated)
       const result = await testGoogleSheetsConnection(projectId)
       setBanner({
         tone: result.success ? 'success' : 'error',
@@ -321,9 +377,54 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
               </div>
             </div>
 
+            <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
+              <div>
+                <p className="text-sm font-medium text-zinc-200">Боты для экспорта</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Пустой выбор означает все боты проекта.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {bots.map((bot) => (
+                  <label key={bot.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2 text-sm text-zinc-200 transition hover:border-zinc-700">
+                    <input type="checkbox" checked={botIds.includes(bot.id)} onChange={() => toggleListValue(bot.id, setBotIds)} className="h-4 w-4 accent-emerald-500" />
+                    <span className="min-w-0 truncate">{bot.name}{bot.bot_username ? ` · @${bot.bot_username}` : ''}</span>
+                  </label>
+                ))}
+                {bots.length === 0 ? <p className="text-sm text-zinc-500">В проекте пока нет ботов.</p> : null}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
+              <div>
+                <p className="text-sm font-medium text-zinc-200">Колонки выгрузки</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Порядок колонок соответствует порядку ниже. Для изменённого набора используйте пустой лист.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {exportFieldOptions.map(([key, label]) => (
+                  <label key={key} className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2 text-sm text-zinc-200 transition hover:border-zinc-700">
+                    <input type="checkbox" checked={exportFields.includes(key)} onChange={() => toggleListValue(key, setExportFields)} className="h-4 w-4 accent-emerald-500" />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-300">Дополнительные поля лида</span>
+                <input
+                  value={customFieldKeys}
+                  onChange={(event) => setCustomFieldKeys(event.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                  placeholder="city, budget, source_detail"
+                />
+                <p className="mt-1 text-xs text-zinc-500">Ключи custom_fields через запятую.</p>
+              </label>
+            </div>
+
             <div className="relative">
               <span className="mb-1 block text-sm font-medium text-zinc-300">
-                Trigger Statuses
+                Статусы для выгрузки
               </span>
               <button
                 type="button"
@@ -373,7 +474,7 @@ export default function GoogleSheetsSettings({ projectId }: GoogleSheetsSettings
               <button
                 type="button"
                 onClick={() => void handleSave()}
-                disabled={isSaving || !sheetName.trim()}
+                disabled={isSaving || !sheetName.trim() || exportFields.length === 0}
                 className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSaving ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}

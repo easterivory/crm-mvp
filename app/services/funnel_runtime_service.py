@@ -48,6 +48,7 @@ DIRECT_LEAD_FIELDS = {
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^\+?[0-9][0-9\s().-]{8,24}$")
+TEMPLATE_VARIABLE_RE = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_.]{0,99})\s*}}")
 MANUAL_STATUS_CODE_CANDIDATES = (
     "manual_processing",
     "manual",
@@ -361,7 +362,9 @@ class FunnelRuntimeService:
             message_index = self._waiting_message_index(step, state.runtime_json)
             messages = self._message_sequence(step)
             item = messages[message_index] if message_index is not None else None
-            if item is not None and self._buttons_from_message_item(item):
+            if item is not None and self._has_callback_buttons(
+                self._buttons_from_message_item(item)
+            ):
                 logger.info(
                     "Ignoring text while funnel message waits for button callback "
                     "chat_id=%s step_id=%s",
@@ -369,7 +372,10 @@ class FunnelRuntimeService:
                     step.id,
                 )
                 return True
-            if item is not None and self._message_item_waits_for_answer(item):
+            if item is not None and (
+                self._message_item_waits_for_answer(item)
+                or self._has_contact_button(self._buttons_from_message_item(item))
+            ):
                 await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
                 await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
                 runtime_json = self._runtime_with_answer(
@@ -1266,7 +1272,7 @@ class FunnelRuntimeService:
         if chat is None:
             return
         normalized_type = self._normalize_message_type(message_type)
-        message_text = text.strip()
+        message_text = (await self._render_text_template(chat_id, text)).strip()
         if broadcast_upload_id is not None and normalized_type != MessageType.TEXT:
             if chat.bot_id is None:
                 raise RuntimeError("Chat bot is not configured for funnel media send")
@@ -1347,6 +1353,43 @@ class FunnelRuntimeService:
                 reply_markup=reply_markup,
             ),
         )
+
+    async def _render_text_template(self, chat_id: UUID, text: str | None) -> str:
+        source = str(text or "")
+        if "{{" not in source:
+            return source
+
+        chat = await self.chat_repo.get_by_id(chat_id)
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        custom_fields = dict(lead.custom_fields or {}) if lead is not None else {}
+        name = lead.name if lead is not None else None
+        values: dict[str, Any] = {
+            **custom_fields,
+            "name": name,
+            "first_name": name.split(maxsplit=1)[0] if name else None,
+            "phone": lead.phone if lead is not None else None,
+            "username": lead.username if lead is not None else None,
+            "age": lead.age if lead is not None else None,
+            "country": lead.country if lead is not None else None,
+            "call_time": lead.call_time_text if lead is not None else None,
+            "call_time_text": lead.call_time_text if lead is not None else None,
+            "telegram_id": chat.external_user_id if chat is not None else None,
+            "chat_id": str(chat_id),
+            "last_answer": (state.runtime_json or {}).get("last_answer") if state else None,
+        }
+
+        def replace_variable(match: re.Match[str]) -> str:
+            key = match.group(1)
+            lookup_key = key.removeprefix("custom.")
+            if lookup_key not in values or values[lookup_key] is None:
+                return match.group(0)
+            value = values[lookup_key]
+            if isinstance(value, (dict, list)):
+                return match.group(0)
+            return str(value)
+
+        return TEMPLATE_VARIABLE_RE.sub(replace_variable, source)
 
     async def _send_message_item(
         self,
@@ -2774,6 +2817,16 @@ class FunnelRuntimeService:
     ) -> Optional[dict]:
         if not buttons:
             return None
+        contact_buttons = [button for button in buttons if button.get("type") == "contact"]
+        if contact_buttons:
+            return {
+                "keyboard": [
+                    [{"text": button["label"], "request_contact": True}]
+                    for button in contact_buttons
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True,
+            }
         rows = []
         for index, button in enumerate(buttons):
             item = {"text": button["label"]}
@@ -2847,6 +2900,14 @@ class FunnelRuntimeService:
             if label:
                 buttons.append(button)
         return buttons
+
+    @staticmethod
+    def _has_callback_buttons(buttons: list[dict[str, Any]]) -> bool:
+        return any(button.get("type") != "contact" for button in buttons)
+
+    @staticmethod
+    def _has_contact_button(buttons: list[dict[str, Any]]) -> bool:
+        return any(button.get("type") == "contact" for button in buttons)
 
     @staticmethod
     def _parse_callback_data(

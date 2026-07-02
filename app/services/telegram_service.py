@@ -32,6 +32,7 @@ Error handling:
 import logging
 import re
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -45,6 +46,7 @@ from app.models.lead import Lead
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.message_repository import MessageRepository
 from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.message import MessageCreate, MessageOut
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
@@ -55,6 +57,8 @@ from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
 from app.services.utm_bridge_service import UtmBridgeService
+from app.services.user_input_queue import enqueue_user_input
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +80,7 @@ class TelegramService:
         self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
         self.lead_repo = LeadRepository(db)
+        self.message_repo = MessageRepository(db)
         self.tracking_repo = TrackingRepository(db)
         self.message_service = MessageService(db)
         self.bot_engine = BotEngineService(db)
@@ -181,6 +186,14 @@ class TelegramService:
             tracking_link_id=tracking_link_id,
         )
         msg = await self._create_message(chat.id, project_id, message)
+        persisted_message = await self.message_repo.get_by_id(msg.id)
+        if persisted_message is not None and persisted_message.funnel_processed_at is not None:
+            logger.info(
+                "Duplicate Telegram message already processed chat_id=%s message_id=%s",
+                chat.id,
+                msg.id,
+            )
+            return
         logger.info(
             "Incoming Telegram message persisted bot_id=%s project_id=%s chat_id=%s "
             "message_id=%s text=%s",
@@ -191,6 +204,7 @@ class TelegramService:
             message.text,
         )
         if chat.is_blocked:
+            await self.message_repo.mark_funnel_processed([msg.id])
             logger.info(
                 "Ignored blocked Telegram chat bot_id=%s project_id=%s chat_id=%s",
                 bot_id,
@@ -204,19 +218,60 @@ class TelegramService:
             message,
             reset_existing=is_reactivated_cycle,
         )
+        if lead is not None and message.contact is not None:
+            await self.lead_repo.update_contact(
+                lead.id,
+                project_id,
+                phone=message.contact.phone_number,
+                name=" ".join(
+                    part
+                    for part in [message.contact.first_name, message.contact.last_name]
+                    if part
+                ).strip()
+                or lead.name,
+            )
         await self._attach_utm_bridge_data(
             lead,
             start_payload.utm_key,
             start_payload.utm_data,
+        )
+        start_requested = should_start_runtime or self._is_start_command(message.text)
+        if start_requested:
+            await self._process_runtime_or_legacy(
+                chat=chat,
+                project_id=project_id,
+                bot_id=bot_id,
+                user_message=msg,
+                start_requested=True,
+                fresh_lifecycle=should_start_runtime,
+            )
+            await self.message_repo.mark_funnel_processed([msg.id])
+            return
+
+        queued = await enqueue_user_input(chat.id, msg.id)
+        if queued:
+            logger.info(
+                "Incoming Telegram input deferred chat_id=%s message_id=%s delay_seconds=%s",
+                chat.id,
+                msg.id,
+                settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS,
+            )
+            return
+
+        logger.warning(
+            "Debounce queue unavailable; processing input immediately chat_id=%s message_id=%s",
+            chat.id,
+            msg.id,
         )
         await self._process_runtime_or_legacy(
             chat=chat,
             project_id=project_id,
             bot_id=bot_id,
             user_message=msg,
-            start_requested=should_start_runtime or self._is_start_command(message.text),
-            fresh_lifecycle=should_start_runtime,
+            start_requested=False,
+            fresh_lifecycle=False,
         )
+        await self.message_repo.mark_funnel_processed([msg.id])
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -391,6 +446,66 @@ class TelegramService:
             await self.bot_engine.initialize_chat(chat.id, project_id)
         else:
             await self.bot_engine.process_chat(chat.id, user_message=user_message)
+
+    async def process_debounced_user_input(
+        self,
+        *,
+        chat_id: UUID,
+        trigger_message_id: UUID,
+    ) -> str:
+        chat = await self.chat_repo.get_by_id(chat_id)
+        if chat is None or chat.is_deleted or chat.reset_at is not None or chat.bot_id is None:
+            return "chat_unavailable"
+
+        latest = await self.message_repo.get_latest_user_message(chat_id)
+        if latest is None:
+            return "no_input"
+        if latest.id != trigger_message_id:
+            return "superseded"
+
+        created_at = latest.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        quiet_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+        if quiet_seconds < max(settings.TELEGRAM_INPUT_QUIET_SECONDS, 1):
+            return "still_typing"
+
+        batch = await self.message_repo.list_unprocessed_user_input_batch(
+            chat_id,
+            through_message=latest,
+        )
+        if not batch:
+            return "already_processed"
+
+        if chat.is_blocked:
+            await self.message_repo.mark_funnel_processed([item.id for item in batch])
+            return "blocked"
+
+        chunks = [
+            str(item.body or item.caption or item.message_type).strip()
+            for item in batch
+            if str(item.body or item.caption or item.message_type).strip()
+        ]
+        combined_text = "\n".join(chunks)
+        representative = MessageOut.model_validate(latest).model_copy(
+            update={"body": combined_text, "caption": None},
+        )
+        await self._process_runtime_or_legacy(
+            chat=chat,
+            project_id=chat.project_id,
+            bot_id=chat.bot_id,
+            user_message=representative,
+            start_requested=False,
+            fresh_lifecycle=False,
+        )
+        await self.message_repo.mark_funnel_processed([item.id for item in batch])
+        logger.info(
+            "Debounced Telegram input processed chat_id=%s messages=%s chars=%s",
+            chat_id,
+            len(batch),
+            len(combined_text),
+        )
+        return "processed"
 
     async def _run_active_funnel_runtime(
         self,
@@ -828,6 +943,13 @@ class TelegramService:
                 **base,
                 message_type=MessageType.TEXT,
                 body=message.text,
+            )
+
+        if message.contact is not None:
+            return MessageCreate(
+                **base,
+                message_type=MessageType.CONTACT,
+                body=message.contact.phone_number,
             )
 
         if message.photo:

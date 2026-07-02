@@ -61,6 +61,15 @@ class TelegramSticker(TelegramFile):
     emoji: Optional[str] = None
 
 
+class TelegramContact(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    phone_number: str
+    first_name: str
+    last_name: Optional[str] = None
+    user_id: Optional[int] = None
+
+
 class TelegramMessage(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -79,6 +88,7 @@ class TelegramMessage(BaseModel):
     audio: Optional[TelegramAudio] = None
     sticker: Optional[TelegramSticker] = None
     animation: Optional[TelegramAnimation] = None
+    contact: Optional[TelegramContact] = None
 
 
 class TelegramCallbackQuery(BaseModel):

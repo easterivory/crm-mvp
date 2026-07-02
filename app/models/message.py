@@ -55,6 +55,9 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     media_group_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     raw_payload_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    funnel_processed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # Relationships
     chat: Mapped[Chat] = relationship("Chat", back_populates="messages")

@@ -29,6 +29,7 @@ class MessageType:
     ANIMATION = "animation"
     FILE = "file"
     STICKER = "sticker"
+    CONTACT = "contact"
     SYSTEM = "system"
     UNKNOWN = "unknown"
 
@@ -45,6 +46,7 @@ class MessageType:
             ANIMATION,
             FILE,
             STICKER,
+            CONTACT,
             SYSTEM,
             UNKNOWN,
         }

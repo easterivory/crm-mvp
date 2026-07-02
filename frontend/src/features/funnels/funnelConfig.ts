@@ -4,7 +4,7 @@ export type ButtonConfig = {
   id: string
   label: string
   value: string
-  type: 'branch' | 'url'
+  type: 'branch' | 'url' | 'contact'
   target_step_id?: string
   url?: string
 }

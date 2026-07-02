@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.constants import RoleName
 from app.models.google_sheets import ProjectGoogleSheetsConfig
+from app.models.bot import Bot
 from app.models.lead_status import LeadStatus
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
@@ -59,6 +60,11 @@ class GoogleSheetsConfigService:
         if "trigger_statuses" in values and values["trigger_statuses"] is not None:
             values["trigger_statuses"] = await self._normalize_existing_status_ids(
                 values["trigger_statuses"]
+            )
+        if "bot_ids" in values and values["bot_ids"] is not None:
+            values["bot_ids"] = await self._normalize_project_bot_ids(
+                project_id,
+                values["bot_ids"],
             )
 
         for field, value in values.items():
@@ -121,6 +127,30 @@ class GoogleSheetsConfigService:
                 detail=f"Unknown lead status ids: {', '.join(missing)}",
             )
         return normalized_ids
+
+    async def _normalize_project_bot_ids(
+        self,
+        project_id: UUID,
+        bot_ids: list[str],
+    ) -> list[str]:
+        if not bot_ids:
+            return []
+        parsed_ids = [UUID(item) for item in bot_ids]
+        result = await self.db.execute(
+            select(Bot.id).where(
+                Bot.id.in_(parsed_ids),
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+        )
+        existing = {str(item) for item in result.scalars().all()}
+        missing = [str(item) for item in parsed_ids if str(item) not in existing]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown project bot ids: {', '.join(missing)}",
+            )
+        return [str(item) for item in parsed_ids]
 
     @staticmethod
     def _to_out(config: ProjectGoogleSheetsConfig) -> GoogleSheetsConfigOut:

@@ -74,10 +74,10 @@ git reset --hard origin/dev
 
 echo "=== Cleanup stale runtime containers ==="
 docker rm -f crm_mvp_dev-frontend-1 2>/dev/null || true
-docker compose rm -sf api worker backup
+docker compose rm -sf api worker jobs backup
 
 echo "=== Build and restart DEV containers ==="
-docker compose up -d --build postgres redis api worker backup
+docker compose up -d --build postgres redis api worker jobs backup
 
 echo "=== Frontend static assets ==="
 if [ "$BUILD_FRONTEND_ON_SERVER" = "1" ]; then

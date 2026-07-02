@@ -68,7 +68,7 @@ async def test_google_sheets_connection(
     if success:
         return GoogleSheetsTestConnectionOut(
             success=True,
-            message="Тестовая строка успешно добавлена в таблицу!",
+            message=message,
         )
     return GoogleSheetsTestConnectionOut(
         success=False,

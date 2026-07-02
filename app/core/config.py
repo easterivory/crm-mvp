@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # If set, every incoming request is validated against
     # X-Telegram-Bot-Api-Secret-Token header. Leave empty to disable.
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
+    TELEGRAM_INPUT_DEBOUNCE_SECONDS: int = 4
+    TELEGRAM_INPUT_QUIET_SECONDS: int = 2
 
     # Buyer Telegram bot
     BUYER_BOT_TOKEN: Optional[str] = None

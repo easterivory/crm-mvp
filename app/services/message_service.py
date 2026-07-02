@@ -1133,21 +1133,21 @@ class MessageService:
 
     @staticmethod
     def _media_content_type(message_type: str, mime_type: str | None) -> str:
+        if message_type in {MessageType.PHOTO, MessageType.IMAGE, MessageType.STICKER}:
+            return mime_type or ("image/webp" if message_type == MessageType.STICKER else "image/jpeg")
+        if message_type in {MessageType.VIDEO, MessageType.VIDEO_NOTE, MessageType.ANIMATION}:
+            return mime_type if mime_type and mime_type.startswith("video/") else "video/mp4"
+        if message_type == MessageType.VOICE:
+            return mime_type if mime_type and mime_type.startswith("audio/") else "audio/ogg"
+        if message_type == MessageType.AUDIO:
+            return mime_type if mime_type and mime_type.startswith("audio/") else "audio/mpeg"
         if mime_type:
             return mime_type
-        if message_type in {MessageType.PHOTO, MessageType.IMAGE, MessageType.STICKER}:
-            return "image/jpeg"
-        if message_type == MessageType.VIDEO:
-            return "video/mp4"
-        if message_type == MessageType.VOICE:
-            return "audio/ogg"
-        if message_type == MessageType.AUDIO:
-            return "audio/mpeg"
         return "application/octet-stream"
 
     @staticmethod
     def _content_disposition(message_type: str, file_name: str | None) -> str:
-        disposition = "attachment" if message_type == MessageType.DOCUMENT else "inline"
+        disposition = "inline"
         if not file_name:
             return disposition
         return f"{disposition}; filename*=UTF-8''{quote(file_name)}"

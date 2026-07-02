@@ -28,6 +28,7 @@ type AuthState = {
   isAuthenticated: boolean
   login: (email: string, password: string) => Promise<void>
   loginWithTelegram: (authData: TelegramAuthPayload) => Promise<void>
+  completeLogin: (accessToken: string) => Promise<void>
   logout: () => void
   fetchMe: () => Promise<void>
 }
@@ -75,6 +76,12 @@ export const useAuthStore = create<AuthState>((set) => ({
 
     set({ token: data.access_token, isAuthenticated: true })
 
+    await useAuthStore.getState().fetchMe()
+  },
+
+  completeLogin: async (accessToken: string) => {
+    localStorage.setItem(TOKEN_KEY, accessToken)
+    set({ token: accessToken, isAuthenticated: true })
     await useAuthStore.getState().fetchMe()
   },
 

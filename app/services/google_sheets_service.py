@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 import gspread
+from google.auth.exceptions import GoogleAuthError
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError, SpreadsheetNotFound, WorksheetNotFound
 from sqlalchemy import distinct, func, select
@@ -19,23 +20,28 @@ from app.models.chat import Chat
 from app.models.google_sheets import ProjectGoogleSheetsConfig
 from app.models.lead import Lead
 from app.models.tracking import TrackingLink, TrackingSpend
+from app.schemas.google_sheets import DEFAULT_GOOGLE_SHEETS_EXPORT_FIELDS
 
 logger = logging.getLogger(__name__)
 
 GOOGLE_SHEETS_SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
-LEAD_EXPORT_HEADER = [
-    "Дата создания",
-    "Имя",
-    "Телефон",
-    "Telegram",
-    "Страна",
-    "Возраст",
-    "Ссылка",
-    "Баер",
-    "Статус",
-    "CPL ($)",
-    "Уверенность (%)",
-]
+EXPORT_FIELD_LABELS = {
+    "created_at": "Дата создания",
+    "name": "Имя",
+    "phone": "Телефон",
+    "telegram": "Telegram",
+    "country": "Страна",
+    "age": "Возраст",
+    "tracking_link": "Ссылка",
+    "buyer": "Баер",
+    "status": "Статус",
+    "cpl": "CPL ($)",
+    "score": "Уверенность (%)",
+    "manager": "Менеджер",
+    "bot": "Бот",
+    "chat_id": "CRM Chat ID",
+    "telegram_id": "Telegram ID",
+}
 
 
 class GoogleSheetsService:
@@ -55,12 +61,21 @@ class GoogleSheetsService:
                 project_id,
             )
             return
+        if config.bot_ids and (
+            lead.chat is None or str(lead.chat.bot_id) not in set(config.bot_ids)
+        ):
+            logger.info(
+                "Google Sheets export skipped by bot filter lead_id=%s bot_id=%s",
+                lead_id,
+                lead.chat.bot_id if lead.chat else None,
+            )
+            return
 
         try:
             worksheet = await self._get_or_create_worksheet(config)
             await asyncio.to_thread(
                 worksheet.append_row,
-                await self._build_lead_row(lead),
+                await self._build_lead_row(lead, config),
                 value_input_option="USER_ENTERED",
             )
         except APIError as exc:
@@ -83,7 +98,7 @@ class GoogleSheetsService:
                 settings.GOOGLE_SERVICE_ACCOUNT_EMAIL,
                 exc,
             )
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, GoogleAuthError, PermissionError) as exc:
             logger.warning(
                 "Google Sheets export skipped due to invalid service account config "
                 "lead_id=%s project_id=%s error=%s",
@@ -103,17 +118,17 @@ class GoogleSheetsService:
 
         try:
             worksheet = await self._get_or_create_worksheet(config)
-            await asyncio.to_thread(
-                worksheet.append_row,
-                [
-                    "ТЕСТ ПОДКЛЮЧЕНИЯ CRM",
-                    "Соединение успешно!",
-                    f"Дата: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
-                ],
-                value_input_option="USER_ENTERED",
+            return True, (
+                f"Подключение работает. Лист «{worksheet.title}» доступен для записи "
+                f"аккаунту {settings.GOOGLE_SERVICE_ACCOUNT_EMAIL}."
             )
-            return True, "Тестовая строка успешно добавлена в таблицу!"
-        except (APIError, SpreadsheetNotFound) as exc:
+        except SpreadsheetNotFound:
+            return False, (
+                "Таблица не найдена или не расшарена сервисному аккаунту "
+                f"{settings.GOOGLE_SERVICE_ACCOUNT_EMAIL or 'не определён'}. "
+                "Проверьте Spreadsheet ID и выдайте этому email роль Редактор в самой таблице."
+            )
+        except APIError as exc:
             logger.warning(
                 "Google Sheets test connection failed project_id=%s spreadsheet_id=%s "
                 "service_account_email=%s error=%s",
@@ -122,15 +137,15 @@ class GoogleSheetsService:
                 settings.GOOGLE_SERVICE_ACCOUNT_EMAIL,
                 exc,
             )
-            return False, str(exc)
-        except (json.JSONDecodeError, ValueError) as exc:
+            return False, self._api_error_message(exc)
+        except (json.JSONDecodeError, ValueError, GoogleAuthError, PermissionError) as exc:
             logger.warning(
                 "Google Sheets test connection skipped due to invalid service account config "
                 "project_id=%s error=%s",
                 project_id,
                 exc,
             )
-            return False, str(exc)
+            return False, self._credentials_error_message(exc)
 
     async def _get_config(
         self,
@@ -159,6 +174,7 @@ class GoogleSheetsService:
                 selectinload(Lead.chat)
                 .selectinload(Chat.tracking_link)
                 .selectinload(TrackingLink.buyer),
+                selectinload(Lead.chat).selectinload(Chat.bot),
                 selectinload(Lead.manager),
                 selectinload(Lead.status),
             )
@@ -178,20 +194,16 @@ class GoogleSheetsService:
         spreadsheet = await asyncio.to_thread(client.open_by_key, config.spreadsheet_id)
 
         try:
-            return await asyncio.to_thread(spreadsheet.worksheet, config.sheet_name)
+            worksheet = await asyncio.to_thread(spreadsheet.worksheet, config.sheet_name)
         except WorksheetNotFound:
             worksheet = await asyncio.to_thread(
                 spreadsheet.add_worksheet,
                 title=config.sheet_name,
                 rows=1000,
-                cols=len(LEAD_EXPORT_HEADER),
+                cols=max(len(self._export_header(config)), 1),
             )
-            await asyncio.to_thread(
-                worksheet.append_row,
-                LEAD_EXPORT_HEADER,
-                value_input_option="USER_ENTERED",
-            )
-            return worksheet
+        await self._ensure_header(worksheet, config)
+        return worksheet
 
     async def _authorize_client(self) -> gspread.Client:
         credentials = Credentials.from_service_account_info(
@@ -207,23 +219,96 @@ class GoogleSheetsService:
         payload = json.loads(settings.GOOGLE_SERVICE_ACCOUNT_JSON)
         if not isinstance(payload, dict):
             raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON must be a JSON object")
+        private_key = payload.get("private_key")
+        if isinstance(private_key, str):
+            payload["private_key"] = private_key.replace("\\n", "\n")
+        required = {"client_email", "private_key", "token_uri"}
+        missing = sorted(key for key in required if not payload.get(key))
+        if missing:
+            raise ValueError(
+                f"GOOGLE_SERVICE_ACCOUNT_JSON is missing fields: {', '.join(missing)}"
+            )
         return payload
 
-    async def _build_lead_row(self, lead: Lead) -> list[str | int | float]:
+    async def _build_lead_row(
+        self,
+        lead: Lead,
+        config: ProjectGoogleSheetsConfig,
+    ) -> list[str | int | float]:
         tracking_link = lead.chat.tracking_link if lead.chat else None
-        return [
-            self._format_datetime(lead.created_at),
-            lead.name or "",
-            lead.phone or "",
-            self._telegram_value(lead),
-            lead.country or "",
-            lead.age or "",
-            tracking_link.title if tracking_link else "",
-            self._buyer_name(lead, tracking_link),
-            lead.status.name if lead.status else "",
-            float(await self._calculate_cpl(tracking_link.id if tracking_link else None)),
-            lead.score_percent if lead.score_percent is not None else "",
+        values: dict[str, str | int | float] = {
+            "created_at": self._format_datetime(lead.created_at),
+            "name": lead.name or "",
+            "phone": lead.phone or "",
+            "telegram": self._telegram_value(lead),
+            "country": lead.country or "",
+            "age": lead.age or "",
+            "tracking_link": tracking_link.title if tracking_link else "",
+            "buyer": self._buyer_name(lead, tracking_link),
+            "status": lead.status.name if lead.status else "",
+            "cpl": float(await self._calculate_cpl(tracking_link.id if tracking_link else None)),
+            "score": lead.score_percent if lead.score_percent is not None else "",
+            "manager": lead.manager.name if lead.manager else "",
+            "bot": lead.chat.bot.name if lead.chat and lead.chat.bot else "",
+            "chat_id": str(lead.chat_id),
+            "telegram_id": lead.chat.external_user_id if lead.chat else "",
+        }
+        export_fields = config.export_fields or DEFAULT_GOOGLE_SHEETS_EXPORT_FIELDS
+        row = [values.get(field, "") for field in export_fields]
+        custom_fields = dict(lead.custom_fields or {})
+        row.extend(self._sheet_scalar(custom_fields.get(key)) for key in config.custom_field_keys or [])
+        return row
+
+    async def _ensure_header(
+        self,
+        worksheet: gspread.Worksheet,
+        config: ProjectGoogleSheetsConfig,
+    ) -> None:
+        expected = self._export_header(config)
+        existing = await asyncio.to_thread(worksheet.row_values, 1)
+        if not existing:
+            await asyncio.to_thread(
+                worksheet.append_row,
+                expected,
+                value_input_option="USER_ENTERED",
+            )
+            return
+        if existing[: len(expected)] != expected or len(existing) != len(expected):
+            raise ValueError(
+                "Заголовки листа не совпадают с выбранными полями экспорта. "
+                "Выберите пустой лист или верните прежний набор полей."
+            )
+
+    @staticmethod
+    def _export_header(config: ProjectGoogleSheetsConfig) -> list[str]:
+        fields = config.export_fields or DEFAULT_GOOGLE_SHEETS_EXPORT_FIELDS
+        return [EXPORT_FIELD_LABELS[field] for field in fields] + [
+            f"Доп. поле: {key}" for key in config.custom_field_keys or []
         ]
+
+    @staticmethod
+    def _sheet_scalar(value: object) -> str | int | float:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "Да" if value else "Нет"
+        if isinstance(value, (str, int, float)):
+            return value
+        return json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _credentials_error_message(exc: Exception) -> str:
+        return (
+            f"Не удалось прочитать service-account credentials ({exc.__class__.__name__}: {exc}). "
+            "Передайте полный JSON одной строкой; private_key должен содержать корректные переносы \\n."
+        )
+
+    @staticmethod
+    def _api_error_message(exc: APIError) -> str:
+        return (
+            f"Google Sheets API отклонил запрос: {exc}. Проверьте, что Sheets API включён "
+            "в том же Google Cloud project и таблица расшарена сервисному аккаунту как Редактор."
+        )
 
     async def _calculate_cpl(self, tracking_link_id: UUID | None) -> Decimal:
         if tracking_link_id is None:

@@ -4,48 +4,34 @@ import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
 import api from '../api/client'
-import { useAuthStore, type TelegramAuthPayload } from '../store/authStore'
+import { useAuthStore } from '../store/authStore'
 
-type TelegramLoginUser = TelegramAuthPayload & {
-  id?: number | string
-  first_name?: string
-  last_name?: string
-  username?: string
-  photo_url?: string
-  auth_date?: number | string
-  hash?: string
+type TelegramSession = {
+  session_token: string
+  deep_link: string
+  bot_username: string
+  expires_in: number
 }
 
-declare global {
-  interface Window {
-    onTelegramAuth?: (user: TelegramLoginUser) => void
-  }
+type TelegramSessionStatus = {
+  status: 'pending' | 'completed' | 'expired' | 'not_registered'
+  access_token: string | null
 }
-
-const fallbackTelegramBotUsername = (
-  import.meta.env.VITE_TELEGRAM_LOGIN_BOT_USERNAME ||
-  import.meta.env.VITE_BUYER_BOT_USERNAME ||
-  ''
-).replace(/^@/, '')
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const login = useAuthStore((state) => state.login)
-  const loginWithTelegram = useAuthStore((state) => state.loginWithTelegram)
+  const completeLogin = useAuthStore((state) => state.completeLogin)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
-  const telegramWidgetRef = useRef<HTMLDivElement | null>(null)
+  const telegramPollRef = useRef<number | null>(null)
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isTelegramLoading, setIsTelegramLoading] = useState(false)
-  const [telegramBotUsername, setTelegramBotUsername] = useState(
-    fallbackTelegramBotUsername,
-  )
-  const [isTelegramConfigured, setIsTelegramConfigured] = useState(
-    Boolean(fallbackTelegramBotUsername),
-  )
+  const [telegramBotUsername, setTelegramBotUsername] = useState('')
+  const [isTelegramConfigured, setIsTelegramConfigured] = useState(false)
   const [isTelegramConfigLoading, setIsTelegramConfigLoading] = useState(true)
 
   useEffect(() => {
@@ -68,9 +54,7 @@ export default function LoginPage() {
         setIsTelegramConfigured(data.is_configured)
       })
       .catch(() => {
-        if (!cancelled) {
-          setIsTelegramConfigured(Boolean(fallbackTelegramBotUsername))
-        }
+        if (!cancelled) setIsTelegramConfigured(false)
       })
       .finally(() => {
         if (!cancelled) {
@@ -82,50 +66,64 @@ export default function LoginPage() {
     }
   }, [])
 
-  useEffect(() => {
-    window.onTelegramAuth = (user: TelegramLoginUser) => {
-      setError('')
-      setIsTelegramLoading(true)
-      void loginWithTelegram(user)
-        .then(() => navigate('/chats', { replace: true }))
-        .catch((err) => {
+  useEffect(() => () => {
+    if (telegramPollRef.current !== null) window.clearInterval(telegramPollRef.current)
+  }, [])
+
+  const handleTelegramLogin = async () => {
+    if (isTelegramLoading) return
+    setError('')
+    setIsTelegramLoading(true)
+    const telegramWindow = window.open('about:blank', 'crm-telegram-login')
+    try {
+      const { data } = await api.post<TelegramSession>('/auth/telegram-login/sessions')
+      if (telegramWindow) {
+        telegramWindow.opener = null
+        telegramWindow.location.href = data.deep_link
+      } else {
+        throw new Error('Telegram popup was blocked')
+      }
+
+      const checkStatus = async () => {
+        const response = await api.post<TelegramSessionStatus>(
+          '/auth/telegram-login/sessions/status',
+          { session_token: data.session_token },
+        )
+        if (response.data.status === 'pending') return
+        if (telegramPollRef.current !== null) {
+          window.clearInterval(telegramPollRef.current)
+          telegramPollRef.current = null
+        }
+        if (response.data.status === 'completed' && response.data.access_token) {
+          telegramWindow.close()
+          await completeLogin(response.data.access_token)
+          navigate('/chats', { replace: true })
+          return
+        }
+        setIsTelegramLoading(false)
+        setError(
+          response.data.status === 'not_registered'
+            ? 'Этот Telegram не привязан к аккаунту CRM.'
+            : 'Ссылка входа истекла. Запустите вход ещё раз.',
+        )
+      }
+
+      const poll = () => {
+        void checkStatus().catch((err) => {
+          if (telegramPollRef.current !== null) window.clearInterval(telegramPollRef.current)
+          telegramPollRef.current = null
+          setIsTelegramLoading(false)
           setError(extractAuthError(err))
         })
-        .finally(() => setIsTelegramLoading(false))
+      }
+      telegramPollRef.current = window.setInterval(poll, 1500)
+      poll()
+    } catch (err) {
+      telegramWindow?.close()
+      setIsTelegramLoading(false)
+      setError(extractAuthError(err))
     }
-
-    return () => {
-      delete window.onTelegramAuth
-    }
-  }, [loginWithTelegram, navigate])
-
-  useEffect(() => {
-    if (
-      isTelegramConfigLoading ||
-      !isTelegramConfigured ||
-      !telegramBotUsername ||
-      !telegramWidgetRef.current
-    ) {
-      return
-    }
-
-    const widgetContainer = telegramWidgetRef.current
-    widgetContainer.innerHTML = ''
-
-    const script = document.createElement('script')
-    script.src = 'https://telegram.org/js/telegram-widget.js?22'
-    script.async = true
-    script.setAttribute('data-telegram-login', telegramBotUsername)
-    script.setAttribute('data-size', 'large')
-    script.setAttribute('data-radius', '12')
-    script.setAttribute('data-request-access', 'write')
-    script.setAttribute('data-onauth', 'onTelegramAuth(user)')
-    widgetContainer.appendChild(script)
-
-    return () => {
-      widgetContainer.innerHTML = ''
-    }
-  }, [isTelegramConfigLoading, isTelegramConfigured, telegramBotUsername])
+  }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -203,7 +201,15 @@ export default function LoginPage() {
           {isTelegramConfigLoading ? (
             <LoaderCircle size={18} className="animate-spin text-zinc-500" />
           ) : isTelegramConfigured && telegramBotUsername ? (
-            <div className={isTelegramLoading ? 'pointer-events-none opacity-60' : ''} ref={telegramWidgetRef} />
+            <button
+              type="button"
+              onClick={() => void handleTelegramLogin()}
+              disabled={isTelegramLoading}
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-sky-400/30 bg-sky-500/10 px-4 text-sm font-semibold text-sky-100 transition hover:bg-sky-500/15 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isTelegramLoading ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
+              {isTelegramLoading ? 'Подтвердите вход в Telegram' : 'Войти через Telegram'}
+            </button>
           ) : (
             <button
               type="button"
@@ -236,6 +242,10 @@ function extractAuthError(err: unknown) {
     if (err.code === 'ERR_NETWORK') {
       return 'API недоступен. Проверьте backend или контейнер.'
     }
+  }
+
+  if (err instanceof Error && err.message === 'Telegram popup was blocked') {
+    return 'Браузер заблокировал окно Telegram. Разрешите всплывающие окна для CRM и повторите вход.'
   }
 
   return 'Не удалось войти. Попробуйте снова.'

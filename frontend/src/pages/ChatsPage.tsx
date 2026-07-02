@@ -4,7 +4,7 @@ import {
   Bot,
   CheckCheck,
   Clock3,
-  Download,
+  Eye,
   FileText,
   Film,
   Image as ImageIcon,
@@ -19,6 +19,7 @@ import {
   Send,
   UserRound,
   Video,
+  Phone,
   X,
   Zap,
 } from 'lucide-react'
@@ -95,6 +96,11 @@ type ChatAttachmentDraft = {
   mime_type: string
   file_size: number
   media_type: OutgoingMediaType
+}
+
+type MediaPreview = {
+  message: Message
+  url: string
 }
 
 type ProjectSnippet = {
@@ -210,6 +216,7 @@ const mediaLabels: Record<string, string> = {
   video: 'Видео',
   video_note: 'Кружок',
   voice: 'Голосовое',
+  contact: 'Контакт',
 }
 
 function normalizeLanguageCode(value: string | null | undefined) {
@@ -367,6 +374,9 @@ function getMediaIcon(messageType: string) {
   }
   if (messageType === 'audio') {
     return Music
+  }
+  if (messageType === 'contact') {
+    return Phone
   }
   if (messageType === 'animation' || messageType === 'sticker') {
     return Film
@@ -649,6 +659,7 @@ export default function ChatsPage() {
   const [isScheduling, setIsScheduling] = useState(false)
   const [cancellingScheduledMessageId, setCancellingScheduledMessageId] = useState<string | null>(null)
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
+  const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isResettingChat, setIsResettingChat] = useState(false)
   const [isBlockConfirmOpen, setIsBlockConfirmOpen] = useState(false)
@@ -1942,24 +1953,22 @@ export default function ChatsPage() {
         responseType: 'blob',
       })
       const blobUrl = window.URL.createObjectURL(data)
-      const isDocument = message.message_type === 'document' || message.message_type === 'file'
-      if (isDocument) {
-        const link = document.createElement('a')
-        link.href = blobUrl
-        link.download = message.file_name || 'telegram-file'
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
-        window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000)
-      } else {
-        window.open(blobUrl, '_blank', 'noopener,noreferrer')
-        window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 15000)
-      }
+      setMediaPreview((current) => {
+        if (current) window.URL.revokeObjectURL(current.url)
+        return { message, url: blobUrl }
+      })
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) || 'Не удалось открыть медиа.' })
     } finally {
       setOpeningMediaId(null)
     }
+  }
+
+  const closeMediaPreview = () => {
+    setMediaPreview((current) => {
+      if (current) window.URL.revokeObjectURL(current.url)
+      return null
+    })
   }
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2233,9 +2242,9 @@ export default function ChatsPage() {
                           <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
                           <span>{formatDateTime(message.created_at)}</span>
                         </div>
-                        {message.message_type === 'text' || message.message_type === 'system' ? (
+                        {message.message_type === 'text' || message.message_type === 'system' || message.message_type === 'contact' ? (
                           <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                            {visibleBody || ''}
+                            {message.message_type === 'contact' ? `Телефон: ${visibleBody || 'не указан'}` : visibleBody || ''}
                           </p>
                         ) : (
                           <div className="space-y-2">
@@ -2267,7 +2276,7 @@ export default function ChatsPage() {
                                         {openingMediaId === message.id ? (
                                           <LoaderCircle size={15} className="animate-spin" />
                                         ) : (
-                                          <Download size={15} />
+                                          <Eye size={15} />
                                         )}
                                       </button>
                                     ) : null}
@@ -2802,6 +2811,42 @@ export default function ChatsPage() {
                 {isSending ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
                 Отправить
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {mediaPreview ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <button type="button" className="absolute inset-0" aria-label="Закрыть просмотр медиа" onClick={closeMediaPreview} />
+          <div className="relative flex max-h-[calc(100dvh-24px)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0d1222] shadow-2xl">
+            <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-white">{mediaPreview.message.file_name || getMediaLabel(mediaPreview.message)}</p>
+                <p className="text-xs text-gray-500">{getMediaLabel(mediaPreview.message)}</p>
+              </div>
+              <button type="button" onClick={closeMediaPreview} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 transition hover:border-white/25 hover:text-white" aria-label="Закрыть">
+                <X size={17} />
+              </button>
+            </div>
+            <div className="touch-scroll flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black/25 p-3 md:p-5">
+              {mediaPreview.message.message_type === 'photo' || mediaPreview.message.message_type === 'image' || mediaPreview.message.message_type === 'sticker' ? (
+                <img src={mediaPreview.url} alt={mediaPreview.message.file_name || 'Медиа Telegram'} className="max-h-[calc(100dvh-8rem)] max-w-full object-contain" />
+              ) : mediaPreview.message.message_type === 'video' || mediaPreview.message.message_type === 'animation' || mediaPreview.message.message_type === 'video_note' ? (
+                <video
+                  src={mediaPreview.url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className={mediaPreview.message.message_type === 'video_note' ? 'aspect-square max-h-[min(70dvh,32rem)] max-w-full rounded-full bg-black object-cover' : 'max-h-[calc(100dvh-8rem)] max-w-full bg-black object-contain'}
+                />
+              ) : mediaPreview.message.message_type === 'voice' || mediaPreview.message.message_type === 'audio' ? (
+                <div className="w-full max-w-xl rounded-lg border border-white/10 bg-white/[0.04] p-5">
+                  <audio src={mediaPreview.url} controls autoPlay className="w-full" />
+                </div>
+              ) : (
+                <iframe src={mediaPreview.url} title={mediaPreview.message.file_name || 'Документ Telegram'} className="h-[75dvh] w-full rounded-lg border-0 bg-white" />
+              )}
             </div>
           </div>
         </div>

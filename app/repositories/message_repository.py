@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import extract, func, select, update
+from sqlalchemy import extract, func, select, tuple_, update
 from sqlalchemy.orm import aliased
 
 from app.core.constants import SenderType
@@ -181,6 +181,46 @@ class MessageRepository(BaseRepository[Message]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_latest_user_message(self, chat_id: UUID) -> Optional[Message]:
+        result = await self.db.execute(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.sender_type == SenderType.USER,
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_unprocessed_user_input_batch(
+        self,
+        chat_id: UUID,
+        *,
+        through_message: Message,
+    ) -> list[Message]:
+        result = await self.db.execute(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.sender_type == SenderType.USER,
+                Message.funnel_processed_at.is_(None),
+                tuple_(Message.created_at, Message.id)
+                <= tuple_(through_message.created_at, through_message.id),
+            )
+            .order_by(Message.created_at.asc(), Message.id.asc())
+        )
+        return list(result.scalars().all())
+
+    async def mark_funnel_processed(self, message_ids: list[UUID]) -> None:
+        if not message_ids:
+            return
+        await self.db.execute(
+            update(Message)
+            .where(Message.id.in_(message_ids))
+            .values(funnel_processed_at=datetime.now(timezone.utc))
+        )
 
     async def create_message(
         self,

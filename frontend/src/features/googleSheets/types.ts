@@ -5,6 +5,9 @@ export type GoogleSheetsConfig = {
   spreadsheet_id: string | null
   sheet_name: string
   trigger_statuses: string[]
+  bot_ids: string[]
+  export_fields: string[]
+  custom_field_keys: string[]
   service_account_email: string | null
   created_at: string
   updated_at: string
@@ -15,6 +18,9 @@ export type GoogleSheetsConfigUpdate = {
   sheet_name?: string
   is_enabled?: boolean
   trigger_statuses?: string[]
+  bot_ids?: string[]
+  export_fields?: string[]
+  custom_field_keys?: string[]
 }
 
 export type GoogleSheetsTestConnectionResult = {

@@ -51,6 +51,40 @@ class ProjectGoogleSheetsConfig(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtM
         default=list,
         server_default=text("'[]'::jsonb"),
     )
+    bot_ids: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    export_fields: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=lambda: [
+            "created_at",
+            "name",
+            "phone",
+            "telegram",
+            "country",
+            "age",
+            "tracking_link",
+            "buyer",
+            "status",
+            "cpl",
+            "score",
+        ],
+        server_default=text(
+            "'[\"created_at\", \"name\", \"phone\", \"telegram\", "
+            "\"country\", \"age\", \"tracking_link\", \"buyer\", "
+            "\"status\", \"cpl\", \"score\"]'::jsonb"
+        ),
+    )
+    custom_field_keys: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
 
     project: Mapped[Project] = relationship(
         "Project",

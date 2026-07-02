@@ -35,7 +35,9 @@ from app.models.lead_status import LeadStatus
 from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User
+from app.repositories.user_repository import UserRepository
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
+from app.services.telegram_login_service import TelegramLoginSessionService
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +285,27 @@ class BuyerBotService:
         command, argument = self._split_command(text)
         command = self._normalize_command(command)
         if self._is_start_command(command):
+            login_token = TelegramLoginSessionService.parse_start_argument(argument)
+            if login_token is not None:
+                telegram_id = message.from_user.id if message.from_user is not None else chat_id
+                user = await UserRepository(self.db).get_by_telegram_id(telegram_id)
+                if user is None or user.is_deleted:
+                    await self.telegram.send_message(
+                        chat_id,
+                        "Этот Telegram не привязан к аккаунту CRM. Попросите администратора указать ваш Telegram ID в настройках команды.",
+                    )
+                    return
+                approved = await TelegramLoginSessionService().approve(
+                    login_token,
+                    telegram_id,
+                )
+                await self.telegram.send_message(
+                    chat_id,
+                    "Вход подтверждён. Вернитесь в CRM."
+                    if approved
+                    else "Ссылка входа истекла. Создайте новую на странице CRM.",
+                )
+                return
             if argument:
                 await self._activate(chat_id, argument)
                 return

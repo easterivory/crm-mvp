@@ -15,6 +15,7 @@ from app.models.tracking import TrackingLink
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.google_sheets_service import GoogleSheetsService
 from app.services.postback_service import PostbackService
+from app.services.telegram_service import TelegramService
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
 from app.workers.funnel_scheduled_worker import process_funnel_scheduled_job_task
 
@@ -172,6 +173,34 @@ async def send_fb_capi_event_task(
         return {"status": "failed", "error": str(exc)[:1000]}
 
 
+async def process_user_input_task(
+    ctx: dict,
+    chat_id: str,
+    trigger_message_id: str,
+) -> dict:
+    try:
+        chat_uuid = UUID(chat_id)
+        message_uuid = UUID(trigger_message_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    try:
+        async with get_db_session() as db:
+            result = await TelegramService(db).process_debounced_user_input(
+                chat_id=chat_uuid,
+                trigger_message_id=message_uuid,
+            )
+            await db.commit()
+        return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
+    except Exception as exc:
+        logger.exception(
+            "Debounced Telegram input task failed chat_id=%s message_id=%s",
+            chat_id,
+            trigger_message_id,
+        )
+        raise RuntimeError(str(exc)) from exc
+
+
 def _redis_settings_from_url() -> Any:
     if RedisSettings is None:
         return None
@@ -191,6 +220,7 @@ class WorkerSettings:
         send_lead_postback,
         export_lead_to_sheets_task,
         send_fb_capi_event_task,
+        process_user_input_task,
         process_broadcast,
         process_due_broadcasts,
         process_funnel_scheduled_job_task,
