@@ -23,9 +23,20 @@ from app.repositories.project_metrics_repository import ProjectMetricsRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.services.access_control import accessible_project_ids
 from app.services.system_setting_service import SystemSettingService
+from app.services.telegram_chart_service import render_stats_chart
+from app.services.telegram_login_service import TelegramLoginSessionService
 from app.services.tracking_conversion import calculate_conversion_status
 
 logger = logging.getLogger(__name__)
+
+ADMIN_STATS_MARKUP: dict[str, Any] = {
+    "inline_keyboard": [
+        [
+            {"text": "График 7 дней", "callback_data": "admin_chart:7"},
+            {"text": "График 30 дней", "callback_data": "admin_chart:30"},
+        ]
+    ]
+}
 
 
 class AdminTelegramClient:
@@ -34,24 +45,70 @@ class AdminTelegramClient:
         self.session = httpx.AsyncClient(timeout=35.0)
 
     async def get_updates(self, offset: int | None = None, timeout_seconds: int = 25) -> list[dict]:
-        payload: dict[str, Any] = {"timeout": timeout_seconds, "allowed_updates": ["message"]}
+        payload: dict[str, Any] = {
+            "timeout": timeout_seconds,
+            "allowed_updates": ["message", "callback_query"],
+        }
         if offset is not None:
             payload["offset"] = offset
         data = await self._post("getUpdates", payload)
         result = data.get("result")
         return result if isinstance(result, list) else []
 
-    async def send_message(self, chat_id: int, text: str) -> None:
-        await self._post(
-            "sendMessage",
-            {"chat_id": chat_id, "text": text[:4096], "disable_web_page_preview": True},
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text[:4096],
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        await self._post("sendMessage", payload)
+
+    async def send_photo(self, chat_id: int, photo: bytes, *, caption: str) -> None:
+        response = await self.session.post(
+            f"{self.base_url}/sendPhoto",
+            data={"chat_id": str(chat_id), "caption": caption[:1024]},
+            files={"photo": ("stats.png", photo, "image/png")},
         )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Telegram sendPhoto returned non-JSON response") from exc
+        if response.status_code >= 400 or data.get("ok") is not True:
+            raise RuntimeError(
+                f"Telegram sendPhoto failed: {data.get('description') or response.text[:500]}"
+            )
+
+    async def answer_callback_query(self, callback_query_id: str) -> None:
+        try:
+            await self._post("answerCallbackQuery", {"callback_query_id": callback_query_id})
+        except RuntimeError:
+            logger.debug("Admin bot answerCallbackQuery failed", exc_info=True)
 
     async def set_commands(self) -> None:
         await self._post(
             "setMyCommands",
-            {"commands": [{"command": "stats", "description": "Статистика по проектам"}]},
+            {
+                "commands": [
+                    {"command": "stats", "description": "Статистика по проектам"},
+                    {"command": "chart", "description": "График за 7 или 30 дней"},
+                ]
+            },
         )
+
+    async def get_me(self) -> dict[str, Any]:
+        data = await self._post("getMe", {})
+        result = data.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Telegram getMe did not return a bot profile")
+        return result
 
     async def close(self) -> None:
         await self.session.aclose()
@@ -75,6 +132,11 @@ class AdminBotService:
         self.telegram = telegram
 
     async def handle_update(self, raw_update: dict[str, Any]) -> None:
+        callback_query = raw_update.get("callback_query")
+        if isinstance(callback_query, dict):
+            await self._handle_callback(callback_query)
+            return
+
         message = raw_update.get("message")
         if not isinstance(message, dict):
             return
@@ -83,6 +145,23 @@ class AdminBotService:
             return
         chat_id = int(chat["id"])
         text = str(message.get("text") or "").strip()
+        command, _, argument = text.partition(" ")
+        command = command.split("@", 1)[0].lower()
+        login_token = (
+            TelegramLoginSessionService.parse_start_argument(argument)
+            if command == "/start"
+            else None
+        )
+        if login_token is not None:
+            sender = message.get("from")
+            telegram_id = sender.get("id") if isinstance(sender, dict) else chat_id
+            await self._approve_crm_login(
+                chat_id=chat_id,
+                telegram_id=int(telegram_id),
+                login_token=login_token,
+            )
+            return
+
         user = await self._get_admin(chat_id)
         if user is None:
             await self.telegram.send_message(
@@ -90,11 +169,70 @@ class AdminBotService:
                 "Доступ запрещён. Укажи этот Telegram ID в профиле администратора CRM.",
             )
             return
-        command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()
         if command in {"/start", "/stats"}:
-            await self.telegram.send_message(chat_id, await self._build_stats(user))
+            await self.telegram.send_message(
+                chat_id,
+                await self._build_stats(user),
+                reply_markup=ADMIN_STATS_MARKUP,
+            )
             return
-        await self.telegram.send_message(chat_id, "Используй /stats для сводки по проектам.")
+        if command == "/chart":
+            days = 30 if argument.strip() == "30" else 7
+            await self._send_chart(user, chat_id, days=days)
+            return
+        await self.telegram.send_message(
+            chat_id,
+            "Используй /stats для сводки или /chart 7 и /chart 30 для графика.",
+        )
+
+    async def _handle_callback(self, callback_query: dict[str, Any]) -> None:
+        callback_id = str(callback_query.get("id") or "")
+        if callback_id:
+            await self.telegram.answer_callback_query(callback_id)
+        data = str(callback_query.get("data") or "")
+        message = callback_query.get("message")
+        chat = message.get("chat") if isinstance(message, dict) else None
+        sender = callback_query.get("from")
+        if not isinstance(chat, dict) or not isinstance(chat.get("id"), int):
+            return
+        if not isinstance(sender, dict) or not isinstance(sender.get("id"), int):
+            return
+        chat_id = int(chat["id"])
+        user = await self._get_admin(int(sender["id"]))
+        if user is None:
+            await self.telegram.send_message(chat_id, "Доступ к статистике запрещён.")
+            return
+        if data.startswith("admin_chart:"):
+            days = 30 if data.removeprefix("admin_chart:") == "30" else 7
+            await self._send_chart(user, chat_id, days=days)
+
+    async def _approve_crm_login(
+        self,
+        *,
+        chat_id: int,
+        telegram_id: int,
+        login_token: str,
+    ) -> None:
+        result = await self.db.execute(
+            select(User).where(
+                User.telegram_id == telegram_id,
+                User.is_deleted.is_(False),
+            )
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            await self.telegram.send_message(
+                chat_id,
+                "Этот Telegram не привязан к аккаунту CRM. Попросите администратора указать ваш Telegram ID в настройках команды.",
+            )
+            return
+        approved = await TelegramLoginSessionService().approve(login_token, telegram_id)
+        await self.telegram.send_message(
+            chat_id,
+            "Вход подтверждён. Вернитесь в CRM."
+            if approved
+            else "Ссылка входа истекла. Создайте новую на странице CRM.",
+        )
 
     async def _get_admin(self, telegram_id: int) -> User | None:
         result = await self.db.execute(
@@ -109,15 +247,9 @@ class AdminBotService:
         return result.scalar_one_or_none()
 
     async def _build_stats(self, user: User) -> str:
-        stmt = select(Project).where(Project.is_deleted.is_(False), Project.status == "active")
-        if user.role_name != RoleName.SUPER_ADMIN:
-            project_ids = accessible_project_ids(user)
-            if not project_ids:
-                return "У аккаунта нет доступных активных проектов."
-            stmt = stmt.where(Project.id.in_(project_ids))
-        projects = list((await self.db.execute(stmt.order_by(Project.name.asc()))).scalars().all())
+        projects = await self._list_projects(user)
         if not projects:
-            return "Активные проекты не найдены."
+            return "Активные проекты не найдены или недоступны аккаунту."
 
         metrics_repo = ProjectMetricsRepository(self.db)
         lines = [f"Сводка за {date.today().isoformat()}:"]
@@ -130,6 +262,49 @@ class AdminBotService:
                 f"Доход: ${income} | Расход: ${_money(metrics['spend_today'])}"
             )
         return "\n\n".join(lines)
+
+    async def _list_projects(self, user: User) -> list[Project]:
+        stmt = select(Project).where(Project.is_deleted.is_(False), Project.status == "active")
+        if user.role_name != RoleName.SUPER_ADMIN:
+            project_ids = accessible_project_ids(user)
+            if not project_ids:
+                return []
+            stmt = stmt.where(Project.id.in_(project_ids))
+        return list((await self.db.execute(stmt.order_by(Project.name.asc()))).scalars().all())
+
+    async def _send_chart(self, user: User, chat_id: int, *, days: int) -> None:
+        projects = await self._list_projects(user)
+        if not projects:
+            await self.telegram.send_message(chat_id, "Нет доступных активных проектов.")
+            return
+        metrics_repo = ProjectMetricsRepository(self.db)
+        today = date.today()
+        period_days = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
+        starts: list[int] = []
+        leads: list[int] = []
+        spend: list[float] = []
+        for day in period_days:
+            daily_metrics = [
+                await metrics_repo.header_metrics(project.id, day)
+                for project in projects
+            ]
+            starts.append(sum(int(item["subscribers_today"]) for item in daily_metrics))
+            leads.append(sum(int(item["leads_today"]) for item in daily_metrics))
+            spend.append(sum(float(item["spend_today"]) for item in daily_metrics))
+        chart = render_stats_chart(
+            title=f"Сводная эффективность CRM - {days} дней",
+            labels=[day.strftime("%d.%m") for day in period_days],
+            leads=leads,
+            submitted=starts,
+            spend=spend,
+            primary_label="Лиды",
+            secondary_label="Старты",
+        )
+        await self.telegram.send_photo(
+            chat_id,
+            chart,
+            caption=f"Сводная динамика доступных проектов за {days} дней.",
+        )
 
     async def _project_income(self, project_id: UUID, day: date) -> Decimal:
         start_at = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)

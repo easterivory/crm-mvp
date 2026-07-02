@@ -15,6 +15,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         gcc \
+        fonts-dejavu-core \
         libpq-dev \
         openssl \
         postgresql-client-16; \

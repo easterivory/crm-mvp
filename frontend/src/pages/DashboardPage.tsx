@@ -43,12 +43,23 @@ function percent(value: number | string | null | undefined) {
   return `${toNumber(value).toFixed(1)}%`
 }
 
+function isoDateDaysAgo(days: number) {
+  const value = new Date()
+  value.setDate(value.getDate() - days)
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export default function DashboardPage() {
   const currentUser = useAuthStore((state) => state.user)
   const { selectedProjectId } = useProjectBotSelection()
   const [items, setItems] = useState<BuyerPerformance[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [dateFrom, setDateFrom] = useState(() => isoDateDaysAgo(29))
+  const [dateTo, setDateTo] = useState(() => isoDateDaysAgo(0))
 
   const activeProjectId = selectedProjectId ?? currentUser?.project_id ?? null
   const canViewBuyerAnalytics =
@@ -63,13 +74,16 @@ export default function DashboardPage() {
     setIsLoading(true)
     setError('')
     try {
-      setItems(await fetchBuyerPerformance(activeProjectId))
+      setItems(await fetchBuyerPerformance(activeProjectId, {
+        date_from: dateFrom,
+        date_to: dateTo,
+      }))
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось загрузить аналитику баеров.'))
     } finally {
       setIsLoading(false)
     }
-  }, [activeProjectId, canViewBuyerAnalytics])
+  }, [activeProjectId, canViewBuyerAnalytics, dateFrom, dateTo])
 
   useEffect(() => {
     void loadData()
@@ -134,15 +148,37 @@ export default function DashboardPage() {
             Расходы, клики, лиды, CPL и поданные лиды по закупщикам выбранного проекта.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void loadData()}
-          disabled={isLoading || !activeProjectId}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-gray-100 transition hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <RefreshCcw size={16} className={isLoading ? 'animate-spin' : undefined} />
-          Обновить
-        </button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+          <label className="block min-w-36">
+            <span className="mb-1 block text-xs font-medium text-gray-500">С</span>
+            <input
+              type="date"
+              value={dateFrom}
+              max={dateTo}
+              onChange={(event) => setDateFrom(event.target.value)}
+              className="h-10 w-full rounded-lg border border-white/10 bg-background/70 px-3 text-base text-gray-100 outline-none ring-cyan-300/40 focus:ring-2 sm:text-sm"
+            />
+          </label>
+          <label className="block min-w-36">
+            <span className="mb-1 block text-xs font-medium text-gray-500">По</span>
+            <input
+              type="date"
+              value={dateTo}
+              min={dateFrom}
+              onChange={(event) => setDateTo(event.target.value)}
+              className="h-10 w-full rounded-lg border border-white/10 bg-background/70 px-3 text-base text-gray-100 outline-none ring-cyan-300/40 focus:ring-2 sm:text-sm"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void loadData()}
+            disabled={isLoading || !activeProjectId || !dateFrom || !dateTo}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-gray-100 transition hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCcw size={16} className={isLoading ? 'animate-spin' : undefined} />
+            Обновить
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">

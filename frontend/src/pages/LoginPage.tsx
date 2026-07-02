@@ -214,7 +214,7 @@ export default function LoginPage() {
             <button
               type="button"
               disabled
-              title="Telegram Login bot username is not configured"
+              title="Админ-бот Telegram не настроен"
               className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-400/20 bg-sky-500/10 px-4 text-sm font-semibold text-sky-100 opacity-60"
             >
               <Send size={16} />

@@ -56,6 +56,8 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
         index=True,
     )
     handler_code: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    buyer_fb_pixel_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    buyer_fb_capi_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     project: Mapped[Optional[Project]] = relationship("Project", back_populates="users")

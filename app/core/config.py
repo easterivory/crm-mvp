@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     CLIENT_BOT_USERNAME: Optional[str] = None
     BUYER_BOT_POLL_TIMEOUT_SECONDS: int = 25
     BUYER_BOT_FSM_TTL_SECONDS: int = 3600
+    ADMIN_BOT_TOKEN: Optional[str] = None
 
     # Broadcast worker
     BROADCAST_BATCH_SIZE: int = 25

@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 from urllib.parse import quote
 
@@ -11,6 +12,7 @@ from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import TokenOut
 from app.services.auth_service import AuthService
+from app.services.admin_bot_service import AdminTelegramClient
 from app.services.system_setting_service import SystemSettingService
 from app.services.telegram_login_service import (
     LOGIN_SESSION_TTL_SECONDS,
@@ -19,6 +21,7 @@ from app.services.telegram_login_service import (
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 class TelegramLoginConfigOut(BaseModel):
@@ -46,10 +49,17 @@ class TelegramLoginSessionStatusOut(BaseModel):
 async def telegram_login_config(
     db: AsyncSession = Depends(get_db),
 ) -> TelegramLoginConfigOut:
-    config = await SystemSettingService(db).get_effective_buyer_bot_config()
+    token = (await SystemSettingService(db).get_effective_global_config()).admin_bot_token
+    if not token:
+        return TelegramLoginConfigOut(username=None, is_configured=False)
+    try:
+        username = await _admin_bot_username(token)
+    except Exception:
+        logger.exception("Could not resolve admin bot username for Telegram login")
+        return TelegramLoginConfigOut(username=None, is_configured=False)
     return TelegramLoginConfigOut(
-        username=config.username,
-        is_configured=bool(config.username and config.token),
+        username=username,
+        is_configured=bool(username),
     )
 
 
@@ -57,13 +67,20 @@ async def telegram_login_config(
 async def create_telegram_login_session(
     db: AsyncSession = Depends(get_db),
 ) -> TelegramLoginSessionOut:
-    config = await SystemSettingService(db).get_effective_buyer_bot_config()
-    username = (config.username or "").removeprefix("@").strip()
-    if not config.token or not username:
+    token = (await SystemSettingService(db).get_effective_global_config()).admin_bot_token
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Telegram login bot is not configured",
+            detail="Admin Telegram bot is not configured",
         )
+    try:
+        username = await _admin_bot_username(token)
+    except Exception as exc:
+        logger.exception("Could not resolve admin bot username for Telegram login session")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Admin Telegram bot token is invalid or Telegram API is unavailable",
+        ) from exc
 
     sessions = TelegramLoginSessionService()
     token = await sessions.create()
@@ -110,10 +127,10 @@ async def telegram_login(
     auth_data: dict[str, Any],
     db: AsyncSession = Depends(get_db),
 ) -> TokenOut:
-    config = await SystemSettingService(db).get_effective_buyer_bot_config()
-    if not config.token or not AuthService.verify_telegram_auth(
+    token = (await SystemSettingService(db).get_effective_global_config()).admin_bot_token
+    if not token or not AuthService.verify_telegram_auth(
         auth_data,
-        bot_token=config.token,
+        bot_token=token,
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -135,6 +152,18 @@ async def telegram_login(
         )
 
     return TokenOut(access_token=create_access_token(subject=user.id))
+
+
+async def _admin_bot_username(token: str) -> str:
+    client = AdminTelegramClient(token)
+    try:
+        profile = await client.get_me()
+    finally:
+        await client.close()
+    username = str(profile.get("username") or "").removeprefix("@").strip()
+    if not username:
+        raise RuntimeError("Admin bot does not have a username")
+    return username
 
 
 def _extract_telegram_id(auth_data: dict[str, Any]) -> int | None:

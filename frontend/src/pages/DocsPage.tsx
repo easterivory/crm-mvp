@@ -970,11 +970,17 @@ export default function DocsPage() {
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <h3 className="font-semibold text-white">Баер-бот</h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                Баер получает инвайт, привязывает Telegram ID и отправляет расходы. Для удобства
-                лучше использовать кнопки прямо в сообщениях, а не постоянную клавиатуру.
+                Баер получает инвайт, привязывает Telegram ID, отправляет расходы и смотрит
+                статистику или график за 7/30 дней. В разделе Facebook Pixel он задает Pixel ID и
+                CAPI token: замена обновляет все его старые ссылки, а новые наследуют эти данные.
               </p>
             </div>
           </div>
+          <InfoCallout title="Вход через Telegram" tone="cyan">
+            Вход в веб-CRM подтверждается через админ-бота, а не через баер-бота. Укажите Telegram
+            ID в аккаунте сотрудника и настройте токен админ-бота в системных настройках. Настройка
+            домена Telegram Login Widget для этого сценария не требуется.
+          </InfoCallout>
           <InfoCallout title="Как читать качество ссылки" tone="cyan">
             Если sample меньше min_sample_size, ссылка помечается как insufficient_data. При достаточной
             выборке CR сравнивается с base_conversion_rate: выше 120% от базы - high_cr, ниже 70% -

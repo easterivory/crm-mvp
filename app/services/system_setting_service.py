@@ -111,7 +111,10 @@ class SystemSettingService:
                 or self._normalize_optional_value(settings.BACKUP_TELEGRAM_CHAT_ID)
             ),
             is_tg_backup_enabled=config.is_tg_backup_enabled,
-            admin_bot_token=config.admin_bot_token,
+            admin_bot_token=(
+                config.admin_bot_token
+                or self._normalize_optional_value(settings.ADMIN_BOT_TOKEN)
+            ),
         )
 
     async def set_global_config(

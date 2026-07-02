@@ -35,9 +35,9 @@ from app.models.lead_status import LeadStatus
 from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User
-from app.repositories.user_repository import UserRepository
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
-from app.services.telegram_login_service import TelegramLoginSessionService
+from app.schemas.tracking import normalize_fb_capi_token, normalize_fb_pixel_id
+from app.services.telegram_chart_service import render_stats_chart
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
             {"text": "Статистика", "callback_data": "menu:stats"},
         ],
         [{"text": "Воронка отвалов", "callback_data": "menu:funnel"}],
+        [{"text": "Facebook Pixel", "callback_data": "menu:pixel"}],
         [{"text": "Сменить проект", "callback_data": "menu:project"}],
     ]
 }
@@ -68,6 +69,10 @@ STATS_ACTION_MARKUP: dict[str, Any] = {
             {"text": "Обновить статистику", "callback_data": "menu:stats"},
             {"text": "Воронка отвалов", "callback_data": "menu:funnel"},
         ],
+        [
+            {"text": "График 7 дней", "callback_data": "stats_chart:7"},
+            {"text": "График 30 дней", "callback_data": "stats_chart:30"},
+        ],
         [{"text": "Мои ссылки", "callback_data": "menu:links"}],
     ]
 }
@@ -76,6 +81,8 @@ STATE_CREATE_LINK_NAME = "create_link_name"
 STATE_SPEND_DATE = "spend_date"
 STATE_SPEND_AMOUNT = "spend_amount"
 STATE_SELECT_PROJECT = "select_project"
+STATE_PIXEL_ID = "pixel_id"
+STATE_PIXEL_TOKEN = "pixel_token"
 MAX_LINKS_IN_KEYBOARD = 30
 REF_CODE_LENGTH = 6
 
@@ -213,6 +220,21 @@ class BuyerTelegramClient:
             payload["reply_markup"] = reply_markup
         await self._post("sendMessage", payload)
 
+    async def send_photo(self, chat_id: int, photo: bytes, *, caption: str) -> None:
+        response = await self.session.post(
+            f"{self.base_url}/sendPhoto",
+            data={"chat_id": str(chat_id), "caption": caption[:1024]},
+            files={"photo": ("stats.png", photo, "image/png")},
+        )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Telegram sendPhoto returned non-JSON response") from exc
+        if response.status_code >= 400 or data.get("ok") is not True:
+            raise RuntimeError(
+                f"Telegram sendPhoto failed: {data.get('description') or response.text[:500]}"
+            )
+
     async def answer_callback_query(self, callback_query_id: str) -> None:
         try:
             await self._post("answerCallbackQuery", {"callback_query_id": callback_query_id})
@@ -228,8 +250,10 @@ class BuyerTelegramClient:
                     {"command": "create_link", "description": "Создать ссылку"},
                     {"command": "spend", "description": "Ввести расход"},
                     {"command": "stats", "description": "Статистика"},
+                    {"command": "chart", "description": "График за 7 или 30 дней"},
                     {"command": "project", "description": "Сменить активный проект"},
                     {"command": "funnel", "description": "Воронка отвалов"},
+                    {"command": "pixel", "description": "Настроить Facebook Pixel"},
                     {"command": "cancel", "description": "Отменить текущее действие"},
                 ]
             },
@@ -285,27 +309,6 @@ class BuyerBotService:
         command, argument = self._split_command(text)
         command = self._normalize_command(command)
         if self._is_start_command(command):
-            login_token = TelegramLoginSessionService.parse_start_argument(argument)
-            if login_token is not None:
-                telegram_id = message.from_user.id if message.from_user is not None else chat_id
-                user = await UserRepository(self.db).get_by_telegram_id(telegram_id)
-                if user is None or user.is_deleted:
-                    await self.telegram.send_message(
-                        chat_id,
-                        "Этот Telegram не привязан к аккаунту CRM. Попросите администратора указать ваш Telegram ID в настройках команды.",
-                    )
-                    return
-                approved = await TelegramLoginSessionService().approve(
-                    login_token,
-                    telegram_id,
-                )
-                await self.telegram.send_message(
-                    chat_id,
-                    "Вход подтверждён. Вернитесь в CRM."
-                    if approved
-                    else "Ссылка входа истекла. Создайте новую на странице CRM.",
-                )
-                return
             if argument:
                 await self._activate(chat_id, argument)
                 return
@@ -346,8 +349,15 @@ class BuyerBotService:
         if command in {"/stats", "Статистика"}:
             await self._run_project_action(chat_id, buyer, "stats")
             return
+        if command == "/chart":
+            days = 30 if argument.strip() == "30" else 7
+            await self._run_project_action(chat_id, buyer, f"chart_{days}")
+            return
         if command in {"/funnel", "Воронка отвалов"}:
             await self._run_project_action(chat_id, buyer, "funnel")
+            return
+        if command in {"/pixel", "Facebook Pixel"}:
+            await self._start_pixel_setup(chat_id, buyer)
             return
         if command in {"/project", "Сменить проект"}:
             await self._prompt_project_selection(chat_id, buyer, "menu")
@@ -359,6 +369,12 @@ class BuyerBotService:
             return
         if state and state.get("state") == STATE_SPEND_AMOUNT:
             await self._finish_spend(chat_id, buyer, state, text)
+            return
+        if state and state.get("state") == STATE_PIXEL_ID:
+            await self._accept_pixel_id(chat_id, text)
+            return
+        if state and state.get("state") == STATE_PIXEL_TOKEN:
+            await self._finish_pixel_setup(chat_id, buyer, state, text)
             return
 
         await self.telegram.send_message(
@@ -389,6 +405,11 @@ class BuyerBotService:
             await self._select_project(chat_id, buyer, data.removeprefix("project:"))
             return
 
+        if data.startswith("stats_chart:"):
+            days = 30 if data.removeprefix("stats_chart:") == "30" else 7
+            await self._run_project_action(chat_id, buyer, f"chart_{days}")
+            return
+
         if data.startswith("spend_link:"):
             await self._select_spend_link(chat_id, buyer, data.removeprefix("spend_link:"))
             return
@@ -412,6 +433,9 @@ class BuyerBotService:
             return
         if action == "funnel":
             await self._run_project_action(chat_id, buyer, "funnel")
+            return
+        if action == "pixel":
+            await self._start_pixel_setup(chat_id, buyer)
             return
         if action == "project":
             await self._prompt_project_selection(chat_id, buyer, "menu")
@@ -543,6 +567,8 @@ class BuyerBotService:
                     buyer_name=buyer.name,
                     invite_link=invite_link,
                     created_by_user_id=buyer.id,
+                    fb_pixel_id=buyer.buyer_fb_pixel_id,
+                    fb_capi_token=buyer.buyer_fb_capi_token,
                 )
             )
             try:
@@ -563,6 +589,74 @@ class BuyerBotService:
         await self.telegram.send_message(
             chat_id,
             f"Ссылка создана:\n{title}\n\n{invite_link}",
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
+        )
+
+    async def _start_pixel_setup(self, chat_id: int, buyer: User) -> None:
+        await self._set_flow_state(chat_id, {"state": STATE_PIXEL_ID})
+        current = (
+            f"Сейчас подключён Pixel ID: {buyer.buyer_fb_pixel_id}."
+            if buyer.buyer_fb_pixel_id
+            else "Pixel пока не настроен."
+        )
+        await self.telegram.send_message(
+            chat_id,
+            f"{current}\n\nПришли новый Facebook Pixel ID (только цифры). "
+            "После сохранения он заменится во всех твоих существующих ссылках и будет использоваться в новых.",
+            reply_markup=CANCEL_INLINE_MARKUP,
+        )
+
+    async def _accept_pixel_id(self, chat_id: int, raw_pixel_id: str) -> None:
+        try:
+            pixel_id = normalize_fb_pixel_id(raw_pixel_id)
+        except ValueError:
+            pixel_id = None
+        if pixel_id is None:
+            await self.telegram.send_message(
+                chat_id,
+                "Pixel ID должен содержать от 5 до 50 цифр. Попробуй ещё раз или отправь /cancel.",
+                reply_markup=CANCEL_INLINE_MARKUP,
+            )
+            return
+        await self._set_flow_state(
+            chat_id,
+            {"state": STATE_PIXEL_TOKEN, "fb_pixel_id": pixel_id},
+        )
+        await self.telegram.send_message(
+            chat_id,
+            "Теперь пришли access token для Facebook Conversion API. Токен не будет показан в сообщениях бота.",
+            reply_markup=CANCEL_INLINE_MARKUP,
+        )
+
+    async def _finish_pixel_setup(
+        self,
+        chat_id: int,
+        buyer: User,
+        state: dict[str, Any],
+        raw_token: str,
+    ) -> None:
+        pixel_id = normalize_fb_pixel_id(str(state.get("fb_pixel_id") or ""))
+        capi_token = normalize_fb_capi_token(raw_token)
+        if pixel_id is None or capi_token is None or len(capi_token) > 4096:
+            await self.telegram.send_message(
+                chat_id,
+                "Токен пустой или некорректный. Пришли access token ещё раз или отправь /cancel.",
+                reply_markup=CANCEL_INLINE_MARKUP,
+            )
+            return
+
+        buyer.buyer_fb_pixel_id = pixel_id
+        buyer.buyer_fb_capi_token = capi_token
+        await self.db.execute(
+            update(TrackingLink)
+            .where(TrackingLink.buyer_id == buyer.id)
+            .values(fb_pixel_id=pixel_id, fb_capi_token=capi_token, updated_at=func.now())
+        )
+        await self.db.commit()
+        await self._clear_flow_state(chat_id)
+        await self.telegram.send_message(
+            chat_id,
+            f"Facebook Pixel {pixel_id} сохранён. Все существующие ссылки обновлены; новые будут создаваться с этими данными.",
             reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
@@ -816,6 +910,41 @@ class BuyerBotService:
                 )
         await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=STATS_ACTION_MARKUP)
 
+    async def _send_stats_chart(
+        self,
+        chat_id: int,
+        buyer: User,
+        project_id: UUID,
+        *,
+        days: int,
+    ) -> None:
+        today = date.today()
+        period_days = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
+        daily_stats = [
+            await self._get_buyer_period_stats(
+                buyer.id,
+                day.isoformat(),
+                day,
+                day,
+                project_id=project_id,
+            )
+            for day in period_days
+        ]
+        chart = render_stats_chart(
+            title=f"Эффективность баера - {days} дней",
+            labels=[day.strftime("%d.%m") for day in period_days],
+            leads=[item.leads for item in daily_stats],
+            submitted=[item.submitted_leads for item in daily_stats],
+            spend=[float(item.spend) for item in daily_stats],
+            primary_label="Лиды",
+            secondary_label="Подано",
+        )
+        await self.telegram.send_photo(
+            chat_id,
+            chart,
+            caption=f"Динамика твоих ссылок за {days} дней. Расход показан отдельно от количества лидов.",
+        )
+
     async def _send_funnel(self, chat_id: int, buyer: User, project_id: UUID) -> None:
         steps = await self._get_buyer_funnel_dropoff(buyer.id, project_id=project_id)
         if not steps:
@@ -862,6 +991,13 @@ class BuyerBotService:
             await self._start_spend(chat_id, buyer, project_id)
         elif action == "stats":
             await self._send_stats(chat_id, buyer, project_id)
+        elif action in {"chart_7", "chart_30"}:
+            await self._send_stats_chart(
+                chat_id,
+                buyer,
+                project_id,
+                days=30 if action == "chart_30" else 7,
+            )
         elif action == "funnel":
             await self._send_funnel(chat_id, buyer, project_id)
         else:
