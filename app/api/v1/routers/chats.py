@@ -332,10 +332,11 @@ async def get_funnel_trace(
     db: AsyncSession = Depends(get_db),
 ) -> list[FunnelRuntimeLogOut]:
     _ensure_chat_trace_access(current_user)
-    await ChatService(db).get_chat(chat_id=chat_id, project_id=project_id)
+    chat = await ChatService(db).get_chat(chat_id=chat_id, project_id=project_id)
     logs = await FunnelRepository(db).list_runtime_logs_by_chat(
         chat_id=chat_id,
         limit=limit,
+        since=chat.current_cycle_started_at,
     )
     return [FunnelRuntimeLogOut.from_runtime_log(log) for log in logs]
 

@@ -68,14 +68,13 @@ export default function ButtonListEditor({
         <span className="text-xs font-medium uppercase tracking-wide text-gray-500">{title}</span>
         <button
           type="button"
-          disabled={buttons.some((button) => button.type === 'contact')}
           onClick={() =>
             onChange([
               ...buttons,
               { id: configId('btn'), label: 'Кнопка', value: 'button', type: 'branch' },
             ])
           }
-          className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 px-2 text-xs text-gray-100 transition hover:border-accent-300/35 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 px-2 text-xs text-gray-100 transition hover:border-accent-300/35"
         >
           <Plus size={13} />
           Добавить
@@ -133,21 +132,25 @@ export default function ButtonListEditor({
                 const nextButton = {
                   ...button,
                   type,
-                  target_step_id: type === 'branch' ? button.target_step_id : undefined,
+                  target_step_id:
+                    type === 'branch' || type === 'contact'
+                      ? button.target_step_id
+                      : undefined,
                   url: type === 'url' ? button.url : undefined,
                   value: type === 'contact' ? 'contact' : button.value,
                 }
-                if (type === 'contact') {
-                  onChange([nextButton])
-                } else {
-                  update(index, nextButton)
-                }
+                update(index, nextButton)
               }}
               className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
             >
               <option value="branch">Ветка</option>
               <option value="url">URL</option>
-              <option value="contact">Запросить номер Telegram</option>
+              <option
+                value="contact"
+                disabled={buttons.some((item, itemIndex) => itemIndex !== index && item.type === 'contact')}
+              >
+                Запросить номер Telegram
+              </option>
             </select>
             {button.type !== 'contact' ? (
               <input
@@ -165,10 +168,18 @@ export default function ButtonListEditor({
                 className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
               />
             ) : button.type === 'contact' ? (
-              <div className="flex items-start gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2 text-xs leading-5 text-emerald-100/80">
-                <Phone size={14} className="mt-0.5 shrink-0" />
-                Кнопка появится под сообщением и запросит номер через Telegram.
-              </div>
+              <>
+                <div className="flex items-start gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2 text-xs leading-5 text-emerald-100/80">
+                  <Phone size={14} className="mt-0.5 shrink-0" />
+                  Кнопка появится под сообщением и запросит номер через Telegram.
+                </div>
+                <TargetSelect
+                  value={button.target_step_id}
+                  currentStepId={currentStepId}
+                  steps={steps}
+                  onChange={(value) => update(index, { target_step_id: value })}
+                />
+              </>
             ) : (
               <>
                 <TargetSelect

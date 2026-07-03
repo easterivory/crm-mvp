@@ -72,6 +72,35 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     # UNIQUE(chat_id, external_message_id) WHERE external_message_id IS NOT NULL
     # Cannot be expressed purely through __table_args__ Index; must be in migration.
 
+    @property
+    def buttons(self) -> list[str]:
+        payload = self.raw_payload_json if isinstance(self.raw_payload_json, dict) else {}
+        reply_markup = payload.get("reply_markup")
+        if not isinstance(reply_markup, dict):
+            telegram_result = payload.get("telegram_result")
+            reply_markup = (
+                telegram_result.get("reply_markup")
+                if isinstance(telegram_result, dict)
+                else None
+            )
+        if not isinstance(reply_markup, dict):
+            return []
+
+        labels: list[str] = []
+        rows = reply_markup.get("inline_keyboard") or reply_markup.get("keyboard") or []
+        if not isinstance(rows, list):
+            return labels
+        for row in rows:
+            if not isinstance(row, list):
+                continue
+            for button in row:
+                if not isinstance(button, dict):
+                    continue
+                label = str(button.get("text") or "").strip()
+                if label:
+                    labels.append(label)
+        return labels
+
 
 class MessageUpload(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "message_uploads"

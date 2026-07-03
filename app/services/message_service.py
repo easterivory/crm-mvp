@@ -363,6 +363,11 @@ class MessageService:
                 data=data,
             )
 
+        if data.reply_markup:
+            raw_payload_json = dict(data.raw_payload_json or {})
+            raw_payload_json["reply_markup"] = data.reply_markup
+            data = data.model_copy(update={"raw_payload_json": raw_payload_json})
+
         # ── 1.2 Insert inside SAVEPOINT — race-condition safe idempotency ─────
         # If a concurrent request inserted the same external_message_id between
         # our pre-check and this INSERT, the partial UNIQUE index fires and raises

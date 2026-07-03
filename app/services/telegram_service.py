@@ -677,6 +677,7 @@ class TelegramService:
         handled = await self.funnel_runtime.process_incoming_message(
             chat_id=chat.id,
             text=user_message.body or user_message.caption or user_message.message_type,
+            message_type=user_message.message_type,
         )
         if not handled:
             logger.error(

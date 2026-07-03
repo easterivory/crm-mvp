@@ -339,6 +339,7 @@ class FunnelRuntimeService:
         *,
         chat_id: UUID,
         text: Optional[str],
+        message_type: Optional[str] = None,
     ) -> bool:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None:
@@ -363,9 +364,13 @@ class FunnelRuntimeService:
             message_index = self._waiting_message_index(step, state.runtime_json)
             messages = self._message_sequence(step)
             item = messages[message_index] if message_index is not None else None
-            if item is not None and self._has_callback_buttons(
-                self._buttons_from_message_item(item)
-            ):
+            buttons = self._buttons_from_message_item(item) if item is not None else []
+            contact_button = (
+                self._contact_button(buttons)
+                if message_type == MessageType.CONTACT
+                else None
+            )
+            if item is not None and self._has_callback_buttons(buttons) and contact_button is None:
                 logger.info(
                     "Ignoring text while funnel message waits for button callback "
                     "chat_id=%s step_id=%s",
@@ -375,7 +380,7 @@ class FunnelRuntimeService:
                 return True
             if item is not None and (
                 self._message_item_waits_for_answer(item)
-                or self._has_contact_button(self._buttons_from_message_item(item))
+                or contact_button is not None
             ):
                 await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
                 await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
@@ -393,12 +398,19 @@ class FunnelRuntimeService:
                     waiting_for_answer=False,
                     runtime_json=runtime_json,
                 )
-                next_step = await self._execute_message_sequence(
-                    chat_id=chat_id,
-                    step=step,
-                    start_index=(message_index or 0) + 1,
-                    answer=text,
-                )
+                if contact_button and contact_button.get("target_step_id"):
+                    next_step = await self._move_to_step_id(
+                        chat_id=chat_id,
+                        target_step_id=contact_button.get("target_step_id"),
+                        from_step=step,
+                    )
+                else:
+                    next_step = await self._execute_message_sequence(
+                        chat_id=chat_id,
+                        step=step,
+                        start_index=(message_index or 0) + 1,
+                        answer=text,
+                    )
                 if next_step is not None:
                     if next_step.id != step.id:
                         await self._execute_from_step(chat_id=chat_id, step=next_step, answer=text)
@@ -433,7 +445,16 @@ class FunnelRuntimeService:
                     )
                 return True
 
-            validation = self._validate_input_answer(step, text)
+            contact_choice = (
+                self._contact_button(self._buttons_from_step(step))
+                if message_type == MessageType.CONTACT
+                else None
+            )
+            validation = (
+                {"valid": True, "normalized": text}
+                if contact_choice is not None
+                else self._validate_input_answer(step, text)
+            )
             if not validation["valid"]:
                 retry_count = self._input_retry_count(state.runtime_json, step.id) + 1
                 max_retries = self._input_max_retries(step)
@@ -500,7 +521,7 @@ class FunnelRuntimeService:
                 waiting_for_answer=False,
                 runtime_json=runtime_json,
             )
-            choice = self._choice_for_answer(step, text)
+            choice = contact_choice or self._choice_for_answer(step, text)
             if choice and choice.get("target_step_id"):
                 next_step = await self._move_to_step_id(
                     chat_id=chat_id,
@@ -1334,6 +1355,7 @@ class FunnelRuntimeService:
                         "telegram_result": telegram_result,
                         "broadcast_upload_id": str(upload.id),
                     },
+                    reply_markup=reply_markup,
                 ),
                 send_to_telegram=False,
             )
@@ -2909,7 +2931,7 @@ class FunnelRuntimeService:
                         if is_contact
                         else raw_type or ("url" if raw.get("url") else "branch")
                     ),
-                    "target_step_id": None if is_contact else raw.get("target_step_id"),
+                    "target_step_id": raw.get("target_step_id"),
                     "url": None if is_contact else raw.get("url"),
                 }
             else:
@@ -2925,6 +2947,10 @@ class FunnelRuntimeService:
     @staticmethod
     def _has_contact_button(buttons: list[dict[str, Any]]) -> bool:
         return any(button.get("type") == "contact" for button in buttons)
+
+    @staticmethod
+    def _contact_button(buttons: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        return next((button for button in buttons if button.get("type") == "contact"), None)
 
     @staticmethod
     def _parse_callback_data(

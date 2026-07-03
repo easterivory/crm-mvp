@@ -972,14 +972,18 @@ class FunnelRepository(BaseRepository[Funnel]):
         *,
         chat_id: UUID,
         limit: int = 200,
+        since: Optional[datetime] = None,
     ) -> list[FunnelRuntimeLog]:
-        result = await self.db.execute(
+        stmt = (
             select(FunnelRuntimeLog)
             .options(selectinload(FunnelRuntimeLog.step))
             .where(FunnelRuntimeLog.chat_id == chat_id)
             .order_by(FunnelRuntimeLog.created_at.asc(), FunnelRuntimeLog.id.asc())
             .limit(limit)
         )
+        if since is not None:
+            stmt = stmt.where(FunnelRuntimeLog.created_at >= since)
+        result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
     async def list_active_chat_ids_for_funnel(self, funnel_id: UUID) -> list[UUID]:

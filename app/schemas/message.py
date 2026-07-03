@@ -58,6 +58,7 @@ class MessageOut(OrmBase):
     mime_type: Optional[str] = None
     file_size: Optional[int] = None
     media_group_id: Optional[str] = None
+    buttons: list[str] = Field(default_factory=list)
     created_at: datetime
 
 

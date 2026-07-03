@@ -12,6 +12,7 @@ import {
   LoaderCircle,
   Mic,
   MessageSquareText,
+  MousePointerClick,
   Music,
   Paperclip,
   Plus,
@@ -85,6 +86,7 @@ type Message = {
   mime_type: string | null
   file_size: number | null
   media_group_id: string | null
+  buttons?: string[]
   created_at: string
 }
 
@@ -2173,6 +2175,7 @@ export default function ChatsPage() {
                 const isOutgoing =
                   message.sender_type === 'manager' || message.sender_type === 'bot'
                 const isBot = message.sender_type === 'bot'
+                const messageButtons = message.buttons ?? []
                 const operator = userById.get(message.operator_id ?? message.sender_id ?? '')
                 const operatorName = userLabel(
                   operator,
@@ -2291,6 +2294,24 @@ export default function ChatsPage() {
                             ) : null}
                           </div>
                         )}
+                        {messageButtons.length > 0 ? (
+                          <div className="mt-2 border-t border-white/10 pt-2">
+                            <p className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] font-medium opacity-70">
+                              <MousePointerClick size={12} />
+                              Кнопки сообщения
+                            </p>
+                            <div className="grid gap-1.5">
+                              {messageButtons.map((label, index) => (
+                                <span
+                                  key={`${message.id}:button:${index}`}
+                                  className="block min-h-8 rounded-lg border border-white/15 bg-black/10 px-3 py-1.5 text-center text-xs leading-5"
+                                >
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         {canUseMessageTextToggle ? (
                           <div className="mt-2 flex justify-end border-t border-white/10 pt-1.5">
                             <button

@@ -191,7 +191,7 @@ export function normalizeButton(raw: unknown, index: number): ButtonConfig {
     value: isContact ? 'contact' : rawValue,
     type: isContact ? 'contact' : rawType === 'url' || item.url ? 'url' : 'branch',
     target_step_id:
-      !isContact && typeof item.target_step_id === 'string' ? item.target_step_id : '',
+      typeof item.target_step_id === 'string' ? item.target_step_id : '',
     url: !isContact && typeof item.url === 'string' ? item.url : '',
   }
 }
@@ -441,10 +441,10 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
     const messages = normalizeMessages(step.config_json)
     const outputs = messages.flatMap((message) =>
       message.buttons
-        .filter((button) => button.type === 'branch')
+        .filter((button) => button.type === 'branch' || button.type === 'contact')
         .map((button) => ({
           key: `message:${message.id}:button:${button.id}`,
-          label: button.label,
+          label: button.type === 'contact' ? `Контакт · ${button.label}` : button.label,
           targetStepId: button.target_step_id,
         })),
     )
