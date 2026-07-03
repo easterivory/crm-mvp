@@ -120,6 +120,7 @@ class PartnerRequestConfig(BaseModel):
 
     method: RequestMethod = "POST"
     body_format: RequestBodyFormat = "json"
+    omit_null_values: bool = True
     payload_template: dict[str, Any] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
     query_params: dict[str, str] = Field(default_factory=dict)

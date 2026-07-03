@@ -33,6 +33,7 @@ export type PartnerRetryConfig = {
 export type PartnerRequestConfig = {
   method: 'POST' | 'PUT' | 'PATCH'
   body_format: 'json' | 'form'
+  omit_null_values: boolean
   payload_template: Record<string, unknown>
   headers: Record<string, string>
   query_params: Record<string, string>

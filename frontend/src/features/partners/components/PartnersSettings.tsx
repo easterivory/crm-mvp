@@ -54,6 +54,7 @@ type PartnerFormState = {
   is_active: boolean
   request_method: 'POST' | 'PUT' | 'PATCH'
   body_format: 'json' | 'form'
+  omit_null_values: boolean
   payload_mode: 'mapping' | 'template'
   payload_template: string
   headers_config: string
@@ -117,6 +118,7 @@ const emptyForm = (): PartnerFormState => ({
   is_active: true,
   request_method: 'POST',
   body_format: 'json',
+  omit_null_values: true,
   payload_mode: 'mapping',
   payload_template: '{\n  "profile": {\n    "firstName": "{{lead.first_name}}",\n    "phone": "{{lead.phone_digits}}"\n  }\n}',
   headers_config: '{}',
@@ -207,6 +209,7 @@ function formFromPartner(partner: PartnerIntegration): PartnerFormState {
     is_active: partner.is_active,
     request_method: requestConfig?.method ?? 'POST',
     body_format: requestConfig?.body_format ?? 'json',
+    omit_null_values: requestConfig?.omit_null_values ?? true,
     payload_mode: Object.keys(requestConfig?.payload_template ?? {}).length > 0 ? 'template' : 'mapping',
     payload_template: formatJson(requestConfig?.payload_template ?? {}),
     headers_config: formatJson(requestConfig?.headers ?? {}),
@@ -311,6 +314,7 @@ function toPayload(projectId: string, form: PartnerFormState): PartnerIntegratio
     request_config: {
       method: form.request_method,
       body_format: form.body_format,
+      omit_null_values: form.omit_null_values,
       payload_template: payloadTemplate,
       headers,
       query_params: queryParams,
@@ -733,6 +737,16 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
               </button>
             ))}
           </div>
+
+          <label className="mt-4 flex min-h-10 items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#090E18] px-3 text-sm text-zinc-300">
+            Не отправлять необязательные поля со значением null
+            <input
+              type="checkbox"
+              checked={form.omit_null_values}
+              onChange={(event) => patchForm({ omit_null_values: event.target.checked })}
+              className="h-4 w-4 accent-emerald-500"
+            />
+          </label>
 
           {form.payload_mode === 'template' ? (
             <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">

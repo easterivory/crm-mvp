@@ -3,6 +3,9 @@ from ipaddress import IPv4Address, IPv4Network
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 from app.schemas.partner import PartnerRequestConfig
 from app.services.partner_service import PartnerService
 from app.services.postback_service import PostbackService
@@ -145,7 +148,7 @@ def test_headers_query_and_form_request_are_rendered_from_same_context():
     lead = make_lead()
     context = service()._build_template_context(lead, integration)
 
-    request = service()._build_request(integration, context=context)
+    request = service().build_request(integration, context=context)
 
     assert request["method"] == "PATCH"
     assert request["body_format"] == "form"
@@ -201,3 +204,71 @@ def test_only_failed_partner_submissions_allow_retry():
     assert PartnerService._has_blocking_submission(
         [SimpleNamespace(status="completed")]
     )
+
+
+def test_missing_partner_secret_stops_preview_and_submission_payload():
+    integration = make_integration(
+        payload_template={"affc": "{{secret.AFFC}}"},
+        secret_variables={},
+    )
+
+    with pytest.raises(ValueError, match="AFFC"):
+        service().build_payload(make_lead(), integration)
+
+
+def test_missing_ipv4_pool_stops_preview_and_submission_payload():
+    integration = make_integration(
+        payload_template={"ip": "{{random.ipv4}}"},
+        generator_config={"password_length": 12, "ipv4_cidrs": []},
+    )
+
+    with pytest.raises(ValueError, match="IPv4 CIDR"):
+        service().build_payload(make_lead(), integration)
+
+
+def test_optional_null_template_fields_are_omitted_by_default():
+    integration = make_integration(
+        payload_template={
+            "required": "value",
+            "subId": "{{tracking.missing}}",
+            "profile": {"phone": "123", "optional": "{{custom.missing}}"},
+        },
+    )
+
+    payload = service().build_payload(make_lead(), integration)
+
+    assert payload == {"required": "value", "profile": {"phone": "123"}}
+
+
+def test_active_partner_configuration_rejects_missing_runtime_values():
+    config = {
+        "payload_template": {
+            "affc": "{{secret.AFFC}}",
+            "ip": "{{random.ipv4}}",
+        },
+        "secret_variables": {},
+        "generator_config": {"ipv4_cidrs": []},
+    }
+
+    with pytest.raises(HTTPException, match="AFFC"):
+        PartnerService._validate_request_config(config, is_active=True)
+
+    config["secret_variables"] = {"AFFC": "configured"}
+    with pytest.raises(HTTPException, match="IPv4 CIDR"):
+        PartnerService._validate_request_config(config, is_active=True)
+
+    config["generator_config"] = {"ipv4_cidrs": ["31.31.64.0/24"]}
+    PartnerService._validate_request_config(config, is_active=True)
+
+
+def test_active_partner_configuration_validates_header_secrets_too():
+    config = {
+        "payload_template": {"lead": "{{lead.id}}"},
+        "headers": {"x-api-key": "{{secret.API_KEY}}"},
+        "query_params": {},
+        "secret_variables": {},
+        "generator_config": {"ipv4_cidrs": []},
+    }
+
+    with pytest.raises(HTTPException, match="API_KEY"):
+        PartnerService._validate_request_config(config, is_active=True)

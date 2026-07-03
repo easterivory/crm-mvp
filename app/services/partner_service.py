@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -27,6 +28,7 @@ from app.services.postback_service import PostbackService
 
 class PartnerService:
     RETRYABLE_SUBMISSION_STATUSES = frozenset({"failed"})
+    TEMPLATE_PATTERN = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.]{0,127})\s*}}")
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -54,6 +56,8 @@ class PartnerService:
     ) -> PartnerIntegrationOut:
         self._ensure_can_manage(actor)
         self._ensure_project_access(actor, data.project_id)
+        request_config = data.request_config.model_dump()
+        self._validate_request_config(request_config, is_active=data.is_active)
         integration = await self.repo.create_in_project(
             project_id=data.project_id,
             name=data.name,
@@ -65,7 +69,7 @@ class PartnerService:
             required_fields=data.required_fields,
             response_mapping=data.response_mapping.model_dump(exclude_none=True),
             retry_config=data.retry_config.model_dump(),
-            request_config=data.request_config.model_dump(),
+            request_config=request_config,
             is_active=data.is_active,
         )
         return self._integration_out(integration)
@@ -105,6 +109,10 @@ class PartnerService:
                 current.auth_config or {},
                 values["auth_config"],
             )
+        self._validate_request_config(
+            values.get("request_config", current.request_config or {}),
+            is_active=values.get("is_active", current.is_active),
+        )
         integration = await self.repo.update_in_project(
             integration_id,
             project_id,
@@ -178,6 +186,56 @@ class PartnerService:
             for item in submissions
         )
 
+    @classmethod
+    def _validate_request_config(cls, config: dict, *, is_active: bool) -> None:
+        if not is_active:
+            return
+        placeholders: set[str] = set()
+        for template_source in (
+            config.get("payload_template") or {},
+            config.get("headers") or {},
+            config.get("query_params") or {},
+        ):
+            placeholders.update(cls._collect_placeholders(template_source))
+        secrets = config.get("secret_variables") or {}
+        missing_secrets = sorted(
+            placeholder.removeprefix("secret.")
+            for placeholder in placeholders
+            if placeholder.startswith("secret.")
+            and not secrets.get(placeholder.removeprefix("secret."))
+        )
+        if missing_secrets:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Не заполнены секретные переменные партнёра: "
+                    + ", ".join(missing_secrets)
+                ),
+            )
+        if "random.ipv4" in placeholders:
+            ipv4_cidrs = (config.get("generator_config") or {}).get("ipv4_cidrs") or []
+            if not ipv4_cidrs:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Не заполнен IPv4 CIDR pool для генерации IP",
+                )
+
+    @classmethod
+    def _collect_placeholders(cls, value: object) -> set[str]:
+        if isinstance(value, dict):
+            result: set[str] = set()
+            for item in value.values():
+                result.update(cls._collect_placeholders(item))
+            return result
+        if isinstance(value, list):
+            result = set()
+            for item in value:
+                result.update(cls._collect_placeholders(item))
+            return result
+        if isinstance(value, str):
+            return set(cls.TEMPLATE_PATTERN.findall(value))
+        return set()
+
     async def list_lead_submissions(
         self,
         *,
@@ -227,7 +285,13 @@ class PartnerService:
         integration = await self._get_or_404(partner_id, project_id)
         try:
             postback_service = PostbackService(self.db)
-            payload = postback_service.build_payload(lead, integration)
+            context = postback_service._build_template_context(lead, integration)
+            payload = postback_service.build_payload(
+                lead,
+                integration,
+                context=context,
+            )
+            postback_service.build_request(integration, context=context)
             payload = postback_service.redact_payload(payload, integration)
         except ValueError as exc:
             raise HTTPException(

@@ -72,7 +72,11 @@ class PostbackService:
             rendered = self._render_template_value(payload_template, template_context)
             if not isinstance(rendered, dict):
                 raise ValueError("Шаблон тела запроса должен быть JSON-объектом")
-            payload = rendered
+            payload = (
+                self._omit_null_dict_values(rendered)
+                if request_config.get("omit_null_values", True)
+                else rendered
+            )
         elif mapping:
             payload = {}
             for partner_field, crm_path in mapping.items():
@@ -291,6 +295,7 @@ class PostbackService:
                 integration,
                 context=context,
             )
+            request = self.build_request(integration, context=context)
         except ValueError as exc:
             return {
                 "ok": False,
@@ -304,7 +309,6 @@ class PostbackService:
                 "error_message": str(exc),
             }
 
-        request = self._build_request(integration, context=context)
         timeout_seconds = float((integration.retry_config or {}).get("timeout_seconds") or 30)
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
@@ -414,6 +418,7 @@ class PostbackService:
         try:
             context = self._build_template_context(lead, integration)
             payload = self.build_payload(lead, integration, context=context)
+            request = self.build_request(integration, context=context)
         except ValueError as exc:
             self._mark_failed(submission, str(exc))
             await self.db.flush()
@@ -426,7 +431,6 @@ class PostbackService:
             return
 
         submission.request_payload = self.redact_payload(payload, integration)
-        request = self._build_request(integration, context=context)
         retry_config = integration.retry_config or {}
         max_attempts = int(retry_config.get("max_attempts") or 1)
         delays = [int(delay) for delay in retry_config.get("delays_seconds") or []]
@@ -602,7 +606,7 @@ class PostbackService:
             project_id=lead.project_id,
         )
 
-    def _build_request(
+    def build_request(
         self,
         integration: PartnerIntegration,
         *,
@@ -866,13 +870,32 @@ class PostbackService:
 
         full_match = self.FULL_TEMPLATE_PATTERN.match(value)
         if full_match:
-            return self._json_safe(self._get_path_value(context, full_match.group(1)))
+            placeholder = full_match.group(1)
+            resolved = self._get_path_value(context, placeholder)
+            self._validate_required_placeholder(placeholder, resolved)
+            return self._json_safe(resolved)
 
         def replace(match: re.Match[str]) -> str:
-            resolved = self._get_path_value(context, match.group(1))
+            placeholder = match.group(1)
+            resolved = self._get_path_value(context, placeholder)
+            self._validate_required_placeholder(placeholder, resolved)
             return "" if resolved is None else str(resolved)
 
         return self.TEMPLATE_PATTERN.sub(replace, value)
+
+    @staticmethod
+    def _validate_required_placeholder(placeholder: str, value: Any) -> None:
+        if value not in (None, ""):
+            return
+        if placeholder.startswith("secret."):
+            secret_name = placeholder.removeprefix("secret.")
+            raise ValueError(
+                f"Не заполнена секретная переменная партнёра '{secret_name}'"
+            )
+        if placeholder == "random.ipv4":
+            raise ValueError(
+                "Не настроен IPv4 CIDR pool для генерации IP партнёрского запроса"
+            )
 
     def _render_string_mapping(
         self,
@@ -885,6 +908,26 @@ class PostbackService:
             if value is not None:
                 rendered[str(key)] = str(value)
         return rendered
+
+    @classmethod
+    def _omit_null_dict_values(cls, value: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if item is None:
+                continue
+            if isinstance(item, dict):
+                result[key] = cls._omit_null_dict_values(item)
+            elif isinstance(item, list):
+                result[key] = [
+                    cls._omit_null_dict_values(element)
+                    if isinstance(element, dict)
+                    else element
+                    for element in item
+                    if element is not None
+                ]
+            else:
+                result[key] = item
+        return result
 
     @staticmethod
     def _generate_password(length: int) -> str:
