@@ -10,7 +10,7 @@ from app.core.config import settings
 
 
 LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\s")
-BOT_TOKEN_RE = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b")
+BOT_TOKEN_RE = re.compile(r"(?i)\b(?:bot)?\d{6,12}:[A-Za-z0-9_-]{20,}\b")
 BEARER_RE = re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+")
 SECRET_RE = re.compile(
     r"(?i)(\b(?:api[_-]?key|access[_-]?token|bot[_-]?token|password|secret)\b\s*[:=]\s*)"

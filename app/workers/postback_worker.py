@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 from app.core.database import get_db_session
 from app.core.logging_config import configure_file_logging
@@ -259,3 +260,4 @@ class WorkerSettings:
         process_funnel_scheduled_job_task,
     ]
     redis_settings = _redis_settings_from_url()
+    queue_name = JOBS_QUEUE_NAME

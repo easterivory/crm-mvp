@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 
 try:
@@ -47,6 +48,7 @@ async def enqueue_funnel_start(
             str(message_id),
             fresh_lifecycle,
             _job_id=f"funnel-start:{message_id}",
+            _queue_name=JOBS_QUEUE_NAME,
         )
         return True
     except Exception:

@@ -7,6 +7,7 @@ from uuid import uuid4
 from arq import create_pool
 from arq.connections import RedisSettings
 
+from app.core.arq_queues import BACKUP_QUEUE_NAME
 from app.core.config import settings
 
 
@@ -25,7 +26,12 @@ async def enqueue_manual_backup() -> str:
     redis = await create_pool(backup_redis_settings())
     try:
         job_id = f"manual-backup:{uuid4().hex}"
-        job = await redis.enqueue_job("run_tg_backup_job", True, _job_id=job_id)
+        job = await redis.enqueue_job(
+            "run_tg_backup_job",
+            True,
+            _job_id=job_id,
+            _queue_name=BACKUP_QUEUE_NAME,
+        )
         if job is None:
             raise RuntimeError("Could not enqueue backup job")
         return job.job_id

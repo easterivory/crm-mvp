@@ -5,6 +5,7 @@ import logging
 
 from arq import cron
 
+from app.core.arq_queues import BACKUP_QUEUE_NAME
 from app.core.config import settings
 from app.core.logging_config import configure_file_logging
 from app.services.backup_service import (
@@ -34,6 +35,7 @@ class WorkerSettings:
     functions = [run_tg_backup_job]
     cron_jobs = [cron(run_tg_backup_job, hour=3, minute=0, run_at_startup=False)]
     redis_settings = backup_redis_settings()
+    queue_name = BACKUP_QUEUE_NAME
 
 
 async def _safe_run_backup_once() -> None:

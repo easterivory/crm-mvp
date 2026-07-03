@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 
 try:
@@ -45,6 +46,7 @@ async def enqueue_funnel_scheduled_job(job_id: UUID, delay_seconds: int) -> str 
             "process_funnel_scheduled_job_task",
             str(job_id),
             _job_id=f"funnel-scheduled:{job_id}",
+            _queue_name=JOBS_QUEUE_NAME,
             _defer_by=max(delay_seconds, 0),
         )
         return job.job_id if job is not None else None

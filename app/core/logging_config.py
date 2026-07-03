@@ -14,6 +14,10 @@ class UTCFormatter(logging.Formatter):
 
 def configure_file_logging() -> None:
     """Add one bounded per-service log file while preserving console logs."""
+    # HTTP request URLs can contain Telegram bot tokens and polling produces
+    # high-volume noise. Application-level delivery logs remain enabled.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     root = logging.getLogger()
     if any(getattr(handler, "_crm_file_handler", False) for handler in root.handlers):
         return

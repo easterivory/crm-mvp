@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 
 try:
@@ -56,6 +57,7 @@ async def enqueue_facebook_capi_event(
             custom_data or {},
             event_time,
             _job_id=f"facebook-capi:{lead_id}:{event_name}:{uuid4().hex}",
+            _queue_name=JOBS_QUEUE_NAME,
             _defer_by=1,
         )
         return job.job_id if job is not None else None

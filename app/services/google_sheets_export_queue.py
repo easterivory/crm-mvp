@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 
 try:
@@ -46,6 +47,7 @@ async def enqueue_lead_sheets_export(lead_id: UUID, project_id: UUID) -> str | N
             str(lead_id),
             str(project_id),
             _job_id=f"google-sheets-export:{lead_id}:{uuid4().hex}",
+            _queue_name=JOBS_QUEUE_NAME,
             _defer_by=1,
         )
         return job.job_id if job is not None else None

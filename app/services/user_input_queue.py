@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 
 try:
@@ -43,6 +44,7 @@ async def enqueue_user_input(chat_id: UUID, message_id: UUID) -> bool:
             str(chat_id),
             str(message_id),
             _job_id=f"telegram-input:{message_id}",
+            _queue_name=JOBS_QUEUE_NAME,
             _defer_by=max(settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS, 2),
         )
         # None means a job with the same message-based id already exists.

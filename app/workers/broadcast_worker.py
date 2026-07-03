@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 from app.core.database import get_db_session
 from app.models.broadcast import Broadcast, BroadcastRecipient
@@ -328,6 +329,7 @@ async def enqueue_broadcast_job(broadcast_id: UUID, project_id: UUID) -> str | N
             str(broadcast_id),
             str(project_id),
             _job_id=f"broadcast:{broadcast_id}",
+            _queue_name=JOBS_QUEUE_NAME,
         )
         if job is None:
             fallback_job_id = f"broadcast:{broadcast_id}:{uuid4().hex}"
@@ -341,6 +343,7 @@ async def enqueue_broadcast_job(broadcast_id: UUID, project_id: UUID) -> str | N
                 str(broadcast_id),
                 str(project_id),
                 _job_id=fallback_job_id,
+                _queue_name=JOBS_QUEUE_NAME,
             )
         return job.job_id if job is not None else None
     finally:
