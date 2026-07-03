@@ -26,7 +26,8 @@ export async function updatePartnerIntegration(
   projectId: string,
   payload: Partial<PartnerIntegrationPayload>,
 ) {
-  const { data } = await api.put<PartnerIntegration>(`/partners/${partnerId}`, payload, {
+  const { project_id: _projectId, ...updatePayload } = payload
+  const { data } = await api.put<PartnerIntegration>(`/partners/${partnerId}`, updatePayload, {
     params: { project_id: projectId },
   })
   return data

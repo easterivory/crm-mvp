@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { BarChart3, LoaderCircle, RefreshCcw, ShieldAlert } from 'lucide-react'
+import { BarChart3, LoaderCircle, RefreshCcw, ShieldAlert, UsersRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Bar,
@@ -14,6 +14,8 @@ import {
 
 import { fetchBuyerPerformance } from '../features/buyers'
 import type { BuyerPerformance } from '../features/buyers'
+import { fetchManagerPerformance } from '../features/analytics'
+import type { ManagerPerformance } from '../features/analytics'
 import { useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
@@ -54,8 +56,9 @@ function isoDateDaysAgo(days: number) {
 
 export default function DashboardPage() {
   const currentUser = useAuthStore((state) => state.user)
-  const { selectedProjectId } = useProjectBotSelection()
+  const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
   const [items, setItems] = useState<BuyerPerformance[]>([])
+  const [managers, setManagers] = useState<ManagerPerformance[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [dateFrom, setDateFrom] = useState(() => isoDateDaysAgo(29))
@@ -68,22 +71,34 @@ export default function DashboardPage() {
   const loadData = useCallback(async () => {
     if (!activeProjectId || !canViewBuyerAnalytics) {
       setItems([])
+      setManagers([])
       return
     }
 
     setIsLoading(true)
     setError('')
     try {
-      setItems(await fetchBuyerPerformance(activeProjectId, {
-        date_from: dateFrom,
-        date_to: dateTo,
-      }))
+      const selectedBotId = selectedBotIds.length === 1 ? selectedBotIds[0] : undefined
+      const [buyerItems, managerItems] = await Promise.all([
+        fetchBuyerPerformance(activeProjectId, {
+          date_from: dateFrom,
+          date_to: dateTo,
+          bot_id: selectedBotId,
+        }),
+        fetchManagerPerformance({
+          project_id: activeProjectId,
+          date_from: dateFrom,
+          date_to: dateTo,
+        }),
+      ])
+      setItems(buyerItems)
+      setManagers(managerItems)
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось загрузить аналитику баеров.'))
     } finally {
       setIsLoading(false)
     }
-  }, [activeProjectId, canViewBuyerAnalytics, dateFrom, dateTo])
+  }, [activeProjectId, canViewBuyerAnalytics, dateFrom, dateTo, selectedBotIds])
 
   useEffect(() => {
     void loadData()
@@ -119,6 +134,20 @@ export default function DashboardPage() {
     [sortedItems],
   )
 
+  const managerTotals = useMemo(
+    () =>
+      managers.reduce(
+        (acc, manager) => ({
+          taken: acc.taken + manager.chats_taken,
+          submitted: acc.submitted + manager.submitted_leads,
+          valid: acc.valid + manager.valid_leads,
+          returned: acc.returned + manager.returned_to_funnel,
+        }),
+        { taken: 0, submitted: 0, valid: 0, returned: 0 },
+      ),
+    [managers],
+  )
+
   if (!canViewBuyerAnalytics) {
     return (
       <section className="flex h-full min-h-0 items-center justify-center rounded-xl border border-white/5 bg-surface/80 p-6 text-gray-200 shadow-card">
@@ -128,7 +157,7 @@ export default function DashboardPage() {
           </div>
           <h1 className="mt-4 text-2xl font-semibold text-white">Аналитика доступна администраторам</h1>
           <p className="mt-2 text-sm leading-6 text-gray-500">
-            Данные расходов и эффективности баеров видят только Admin и Super Admin.
+            Данные эффективности баеров и менеджеров видят только Admin и Super Admin.
           </p>
         </div>
       </section>
@@ -141,11 +170,11 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.24em] text-cyan-300">
             <BarChart3 size={16} />
-            Analytics / Buyers
+            Аналитика команды
           </div>
-          <h1 className="mt-3 text-2xl font-semibold text-white">Эффективность баеров</h1>
+          <h1 className="mt-3 text-2xl font-semibold text-white">Эффективность команды</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Расходы, клики, лиды, CPL и поданные лиды по закупщикам выбранного проекта.
+            Результаты баеров и качество обработки лидов менеджерами выбранного проекта.
           </p>
         </div>
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
@@ -184,7 +213,7 @@ export default function DashboardPage() {
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {!activeProjectId ? (
           <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5 text-sm text-gray-500">
-            Выберите проект в верхнем селекторе, чтобы загрузить аналитику баеров.
+            Выберите проект в верхнем селекторе, чтобы загрузить аналитику команды.
           </div>
         ) : null}
 
@@ -396,8 +425,123 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+
+        <section className="mt-5 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <UsersRound size={18} className="text-violet-300" />
+                <h2 className="font-semibold text-white">Эффективность менеджеров</h2>
+              </div>
+              <p className="mt-1 text-sm text-gray-500">
+                Взятые чаты, подачи, подтверждённые партнёром лиды и возвраты в воронку.
+              </p>
+            </div>
+            <p className="max-w-md text-xs leading-5 text-gray-500">
+              Валид учитывается после обратной связи партнёра по подаче конкретного менеджера.
+            </p>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Взято чатов" value={String(managerTotals.taken)} tone="zinc" />
+            <MetricCard label="Подано" value={String(managerTotals.submitted)} tone="violet" />
+            <MetricCard label="Валидных" value={String(managerTotals.valid)} tone="emerald" />
+            <MetricCard label="Возвращено" value={String(managerTotals.returned)} tone="cyan" />
+          </div>
+
+          <div className="mt-4 hidden overflow-x-auto rounded-xl border border-white/10 lg:block">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-4 py-3">Менеджер</th>
+                  <th className="px-4 py-3 text-right">Взял</th>
+                  <th className="px-4 py-3 text-right">Подал</th>
+                  <th className="px-4 py-3 text-right">Валид</th>
+                  <th className="px-4 py-3 text-right">Взял → подал</th>
+                  <th className="px-4 py-3 text-right">Подал → валид</th>
+                  <th className="px-4 py-3 text-right">Взял → валид</th>
+                  <th className="px-4 py-3 text-right">Вернул</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-10 text-center text-gray-500">
+                      <LoaderCircle size={18} className="mr-2 inline animate-spin" />
+                      Загрузка аналитики
+                    </td>
+                  </tr>
+                ) : managers.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-10 text-center text-gray-500">
+                      За выбранный период нет действий менеджеров.
+                    </td>
+                  </tr>
+                ) : (
+                  managers.map((manager) => (
+                    <tr key={manager.manager_id}>
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-white">{manager.name}</div>
+                        <div className="mt-0.5 text-xs text-gray-500">
+                          {manager.handler_code ? `#${manager.handler_code} · ` : ''}{manager.email}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-200">{manager.chats_taken}</td>
+                      <td className="px-4 py-3 text-right font-mono text-violet-200">{manager.submitted_leads}</td>
+                      <td className="px-4 py-3 text-right font-mono text-emerald-200">{manager.valid_leads}</td>
+                      <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.taken_to_submitted_percent)}</td>
+                      <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.submitted_to_valid_percent)}</td>
+                      <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.taken_to_valid_percent)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-300">{manager.returned_to_funnel}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-4 grid gap-3 lg:hidden">
+            {!isLoading && managers.length === 0 ? (
+              <div className="rounded-xl border border-white/10 px-4 py-8 text-center text-sm text-gray-500">
+                За выбранный период нет действий менеджеров.
+              </div>
+            ) : null}
+            {managers.map((manager) => (
+              <article key={manager.manager_id} className="rounded-xl border border-white/10 bg-background/40 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-white">{manager.name}</p>
+                    <p className="mt-1 truncate text-xs text-gray-500">
+                      {manager.handler_code ? `#${manager.handler_code} · ` : ''}{manager.email}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-xs text-gray-500">Вернул: {manager.returned_to_funnel}</span>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-3">
+                  <CompactMetric label="Взял" value={String(manager.chats_taken)} />
+                  <CompactMetric label="Подал" value={String(manager.submitted_leads)} />
+                  <CompactMetric label="Валид" value={String(manager.valid_leads)} />
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/10 pt-3">
+                  <CompactMetric label="Взял → подал" value={percent(manager.taken_to_submitted_percent)} />
+                  <CompactMetric label="Подал → валид" value={percent(manager.submitted_to_valid_percent)} />
+                  <CompactMetric label="Взял → валид" value={percent(manager.taken_to_valid_percent)} />
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       </div>
     </section>
+  )
+}
+
+function CompactMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs leading-4 text-gray-500">{label}</div>
+      <div className="mt-1 truncate font-mono text-sm text-gray-100">{value}</div>
+    </div>
   )
 }
 

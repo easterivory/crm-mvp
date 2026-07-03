@@ -11,6 +11,7 @@ import {
   TrendingUp,
   Undo2,
   UserRound,
+  WalletCards,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
@@ -87,6 +88,8 @@ function customFieldEntries(customFields: Record<string, unknown> | null | undef
   return Object.entries(customFields)
     .filter(([key, value]) => (
       key !== 'fb_data'
+      && key !== 'expected_start_amount'
+      && key !== 'budget'
       && !key.startsWith('__')
       && value !== null
       && value !== undefined
@@ -97,6 +100,13 @@ function customFieldEntries(customFields: Record<string, unknown> | null | undef
       key.replace(/_/g, ' ').replace(/^\p{L}/u, (letter) => letter.toUpperCase()),
       typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value),
     ] as const)
+}
+
+function expectedStartAmount(customFields: Record<string, unknown> | null | undefined) {
+  const value = customFields?.expected_start_amount ?? customFields?.budget
+  return value === null || value === undefined || String(value).trim() === ''
+    ? 'Не указано'
+    : String(value)
 }
 
 export default function LeadCard({
@@ -161,6 +171,11 @@ export default function LeadCard({
         <Info icon={<CalendarDays size={15} />} label="Создан" value={formatDate(lead.created_at)} />
         <Info icon={<UserRound size={15} />} label="Менеджер" value={empty(lead.manager_name)} />
         <Info icon={<Globe2 size={15} />} label="Страна" value={empty(lead.country)} />
+        <Info
+          icon={<WalletCards size={15} />}
+          label="Сумма для старта"
+          value={expectedStartAmount(lead.custom_fields)}
+        />
         <Info
           icon={<Tag size={15} />}
           label="Трекинг"

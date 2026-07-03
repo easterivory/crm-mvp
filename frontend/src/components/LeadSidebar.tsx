@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Tag,
   UserRound,
+  WalletCards,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -180,6 +181,8 @@ function customFieldEntries(customFields: Record<string, unknown> | undefined) {
   return Object.entries(customFields)
     .filter(([key, value]) => (
       key !== 'fb_data'
+      && key !== 'expected_start_amount'
+      && key !== 'budget'
       && !key.startsWith('__')
       && value !== null
       && value !== undefined
@@ -190,6 +193,13 @@ function customFieldEntries(customFields: Record<string, unknown> | undefined) {
       key.replace(/_/g, ' ').replace(/^\p{L}/u, (letter) => letter.toUpperCase()),
       typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value),
     ] as const)
+}
+
+function expectedStartAmount(customFields: Record<string, unknown> | undefined) {
+  const value = customFields?.expected_start_amount ?? customFields?.budget
+  return value === null || value === undefined || String(value).trim() === ''
+    ? null
+    : String(value)
 }
 
 function getErrorMessage(err: unknown) {
@@ -292,6 +302,10 @@ export default function LeadSidebar({
 
   const attributionDetails = useMemo(
     () => attributionEntries(lead?.custom_fields),
+    [lead?.custom_fields],
+  )
+  const startAmount = useMemo(
+    () => expectedStartAmount(lead?.custom_fields),
     [lead?.custom_fields],
   )
 
@@ -685,6 +699,18 @@ export default function LeadSidebar({
                   isCopied={copiedField === 'telegram_id'}
                   onCopy={() => void handleCopy('telegram_id', lead.external_user_id ?? lead.external_chat_id)}
                 />
+              </div>
+
+              <div className="mb-4 flex items-center gap-3 rounded-xl border border-emerald-300/20 bg-emerald-400/[0.07] px-3 py-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-300/10 text-emerald-200">
+                  <WalletCards size={17} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-emerald-100/60">Ожидаемая сумма для старта</p>
+                  <p className="mt-0.5 truncate text-sm font-semibold text-emerald-50">
+                    {startAmount ?? 'Не указана'}
+                  </p>
+                </div>
               </div>
 
               <label className="block">

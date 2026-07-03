@@ -32,6 +32,7 @@ LEAD_FIELD_KEYS = [
     "call_time_to",
     "has_card",
     "experience",
+    "expected_start_amount",
     "status",
     "source",
     "comment",
@@ -73,6 +74,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("ask_number", "Число"),
         ("ask_date", "Дата"),
         ("ask_time", "Время"),
+        ("ask_expected_start_amount", "Ожидаемая сумма для старта"),
     ],
     "condition": [
         ("generic_condition", "Условие"),

@@ -275,6 +275,7 @@ export default function MessageSequenceEditor({
                 text: '',
                 delay_seconds: 0,
                 wait_for_answer: false,
+                button_mode: 'inline',
                 buttons: [],
               },
             ])
@@ -476,6 +477,8 @@ export default function MessageSequenceEditor({
             <div className="mt-3">
               <ButtonListEditor
                 buttons={message.buttons}
+                buttonMode={message.button_mode}
+                onButtonModeChange={(buttonMode) => update(index, { button_mode: buttonMode })}
                 currentStepId={currentStepId}
                 steps={steps}
                 onChange={(buttons) => update(index, { buttons })}

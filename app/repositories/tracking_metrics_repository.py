@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import distinct, false, func, or_, select
+from sqlalchemy import case, distinct, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode, MessageType, SenderType, TrackingCostModel
@@ -31,7 +31,7 @@ class TrackingMetricsRepository:
     - clicks: TrackingEvent.clicks grouped by TrackingEvent.created_at.
     - starts: unique Chat rows with an incoming Telegram /start message.
     - leads/submitted: Lead rows filtered by configured project lead statuses.
-    - deposits/age/country: absent in current schema, returned as zero/empty.
+    - demographic breakdowns: active leads grouped by fields stored on Lead.
     - funnel: current ChatBotState.current_step_id snapshot, not step history.
     """
 
@@ -367,7 +367,31 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
     ) -> list[dict[str, Any]]:
-        return []
+        age_key = case(
+            (Lead.age.is_(None), "unknown"),
+            (Lead.age < 18, "under_18"),
+            (Lead.age <= 24, "18_24"),
+            (Lead.age <= 34, "25_34"),
+            (Lead.age <= 44, "35_44"),
+            (Lead.age <= 54, "45_54"),
+            else_="55_plus",
+        )
+        age_label = case(
+            (Lead.age.is_(None), "Не указан"),
+            (Lead.age < 18, "До 18"),
+            (Lead.age <= 24, "18–24"),
+            (Lead.age <= 34, "25–34"),
+            (Lead.age <= 44, "35–44"),
+            (Lead.age <= 54, "45–54"),
+            else_="55+",
+        )
+        return await self._get_lead_breakdown_by_link(
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+            key_expression=age_key,
+            label_expression=age_label,
+        )
 
     async def get_country_breakdown_by_link(
         self,
@@ -375,7 +399,114 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
     ) -> list[dict[str, Any]]:
-        return []
+        country = func.nullif(func.btrim(Lead.country), "")
+        return await self._get_lead_breakdown_by_link(
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+            key_expression=func.coalesce(func.lower(country), "unknown"),
+            label_expression=func.coalesce(func.initcap(func.lower(country)), "Не указана"),
+        )
+
+    async def get_city_breakdown_by_link(
+        self,
+        link_id: UUID,
+        date_from: date,
+        date_to: date,
+    ) -> list[dict[str, Any]]:
+        city = func.nullif(func.btrim(Lead.custom_fields["city"].astext), "")
+        return await self._get_lead_breakdown_by_link(
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+            key_expression=func.coalesce(func.lower(city), "unknown"),
+            label_expression=func.coalesce(func.initcap(func.lower(city)), "Не указан"),
+        )
+
+    async def get_status_breakdown_by_link(
+        self,
+        link_id: UUID,
+        date_from: date,
+        date_to: date,
+    ) -> list[dict[str, Any]]:
+        return await self._get_lead_breakdown_by_link(
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+            key_expression=LeadStatus.code,
+            label_expression=LeadStatus.name,
+            join_status=True,
+        )
+
+    async def get_card_breakdown_by_link(
+        self,
+        link_id: UUID,
+        date_from: date,
+        date_to: date,
+    ) -> list[dict[str, Any]]:
+        card_key = case(
+            (Lead.has_card.is_(True), "yes"),
+            (Lead.has_card.is_(False), "no"),
+            else_="unknown",
+        )
+        card_label = case(
+            (Lead.has_card.is_(True), "Есть карта"),
+            (Lead.has_card.is_(False), "Нет карты"),
+            else_="Не указано",
+        )
+        return await self._get_lead_breakdown_by_link(
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+            key_expression=card_key,
+            label_expression=card_label,
+        )
+
+    async def _get_lead_breakdown_by_link(
+        self,
+        *,
+        link_id: UUID,
+        date_from: date,
+        date_to: date,
+        key_expression,
+        label_expression,
+        join_status: bool = False,
+    ) -> list[dict[str, Any]]:
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        lifecycle_at = self._lead_lifecycle_at()
+        stmt = (
+            select(
+                key_expression.label("key"),
+                label_expression.label("label"),
+                func.count(distinct(Lead.id)).label("count"),
+            )
+            .select_from(Lead)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .where(
+                Chat.tracking_link_id == link_id,
+                Lead.is_deleted.is_(False),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                lifecycle_at >= start_at,
+                lifecycle_at < end_at,
+            )
+        )
+        if join_status:
+            stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id)
+        result = await self.db.execute(
+            stmt.group_by(key_expression, label_expression).order_by(
+                func.count(distinct(Lead.id)).desc(),
+                label_expression.asc(),
+            )
+        )
+        return [
+            {
+                "key": str(row.key),
+                "label": str(row.label),
+                "count": int(row.count or 0),
+            }
+            for row in result.all()
+        ]
 
     async def get_funnel_breakdown_by_link(
         self,

@@ -14,10 +14,12 @@ from app.repositories.lead_repository import LeadRepository
 from app.schemas.partner import (
     LeadSubmissionPreviewOut,
     LeadSubmissionOut,
+    PartnerAuthConfig,
     PartnerConnectionTestOut,
     PartnerIntegrationCreate,
     PartnerIntegrationOut,
     PartnerIntegrationUpdate,
+    PartnerRequestConfig,
 )
 from app.services.access_control import require_project_access
 from app.services.postback_service import PostbackService
@@ -61,6 +63,7 @@ class PartnerService:
             required_fields=data.required_fields,
             response_mapping=data.response_mapping.model_dump(exclude_none=True),
             retry_config=data.retry_config.model_dump(),
+            request_config=data.request_config.model_dump(),
             is_active=data.is_active,
         )
         return self._integration_out(integration)
@@ -85,11 +88,21 @@ class PartnerService:
     ) -> PartnerIntegrationOut:
         self._ensure_can_manage(actor)
         self._ensure_project_access(actor, project_id)
-        await self._get_or_404(integration_id, project_id)
+        current = await self._get_or_404(integration_id, project_id)
         values = data.model_dump(exclude_unset=True, mode="json")
         if not values:
             integration = await self._get_or_404(integration_id, project_id)
             return self._integration_out(integration)
+        if "request_config" in values:
+            values["request_config"] = self._merge_request_config_secrets(
+                current.request_config or {},
+                values["request_config"],
+            )
+        if "auth_config" in values:
+            values["auth_config"] = self._merge_auth_secret(
+                current.auth_config or {},
+                values["auth_config"],
+            )
         integration = await self.repo.update_in_project(
             integration_id,
             project_id,
@@ -193,7 +206,9 @@ class PartnerService:
             raise HTTPException(status_code=404, detail="Lead not found")
         integration = await self._get_or_404(partner_id, project_id)
         try:
-            payload = PostbackService(self.db).build_payload(lead, integration)
+            postback_service = PostbackService(self.db)
+            payload = postback_service.build_payload(lead, integration)
+            payload = postback_service.redact_payload(payload, integration)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -214,9 +229,45 @@ class PartnerService:
     @staticmethod
     def _integration_out(integration: PartnerIntegration) -> PartnerIntegrationOut:
         auth_config = integration.auth_config or {}
+        request_config = dict(integration.request_config or {})
+        secret_variables = dict(request_config.get("secret_variables") or {})
+        request_config["secret_variables"] = {key: "" for key in secret_variables}
         return PartnerIntegrationOut.model_validate(integration).model_copy(
-            update={"has_auth_token": bool(integration.auth_token or auth_config.get("token"))}
+            update={
+                "has_auth_token": bool(integration.auth_token or auth_config.get("token")),
+                "auth_config": PartnerAuthConfig.model_validate(
+                    {**auth_config, "token": None}
+                ),
+                "request_config": PartnerRequestConfig.model_validate(request_config),
+                "secret_variable_keys": sorted(secret_variables),
+            }
         )
+
+    @staticmethod
+    def _merge_auth_secret(current: dict, incoming: dict) -> dict:
+        merged = {**current, **incoming}
+        if not incoming.get("token"):
+            if current.get("token"):
+                merged["token"] = current["token"]
+            else:
+                merged.pop("token", None)
+        return merged
+
+    @staticmethod
+    def _merge_request_config_secrets(
+        current: dict,
+        incoming: dict,
+    ) -> dict:
+        merged = {**current, **incoming}
+        if "secret_variables" not in incoming:
+            return merged
+        current_secrets = dict(current.get("secret_variables") or {})
+        incoming_secrets = dict(incoming.get("secret_variables") or {})
+        merged["secret_variables"] = {
+            key: current_secrets.get(key, "") if value == "" else value
+            for key, value in incoming_secrets.items()
+        }
+        return merged
 
     @staticmethod
     def _ensure_project_access(actor: User, project_id: UUID) -> None:

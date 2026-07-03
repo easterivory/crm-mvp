@@ -14,7 +14,6 @@ import {
   Search,
   Trash2,
   TrendingUp,
-  UsersRound,
   WalletCards,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
@@ -31,15 +30,14 @@ import {
 
 import { fetchBots } from '../features/bots/api'
 import type { Bot } from '../features/bots/types'
-import { fetchBuyerPerformance, fetchBuyers } from '../features/buyers'
-import type { BuyerPerformance, BuyerUser } from '../features/buyers'
+import { fetchBuyers } from '../features/buyers'
+import type { BuyerUser } from '../features/buyers'
 import {
   archiveTrackingLink,
   createTrackingLink,
   createTrackingSpend,
   deleteTrackingSpend,
   fetchLinkTrackingMetrics,
-  fetchManagerPerformance,
   fetchProjectTrackingMetrics,
   fetchTrackingLinks,
   fetchTrackingTargetSteps,
@@ -51,7 +49,6 @@ import {
 import type {
   BreakdownItem,
   FunnelStepMetric,
-  ManagerPerformance,
   TrackingConversionStatus,
   TrackingCostModel,
   TrackingLink,
@@ -148,6 +145,10 @@ function formatMoney(value: string | number | null | undefined, currency = 'USD'
 
 function formatPercent(value: string | number | null | undefined) {
   return `${toNumber(value).toFixed(1)}%`
+}
+
+function ratioPercent(numerator: number, denominator: number) {
+  return denominator > 0 ? `${((numerator / denominator) * 100).toFixed(1)}%` : '0.0%'
 }
 
 function formatBenchmarkPercent(value: string | number | null | undefined) {
@@ -339,8 +340,6 @@ export default function TrackingPage() {
   const [bots, setBots] = useState<Bot[]>([])
   const [links, setLinks] = useState<TrackingLink[]>([])
   const [metrics, setMetrics] = useState<TrackingProjectMetricsResponse | null>(null)
-  const [managerPerformance, setManagerPerformance] = useState<ManagerPerformance[]>([])
-  const [buyerPerformance, setBuyerPerformance] = useState<BuyerPerformance[]>([])
   const [buyers, setBuyers] = useState<BuyerUser[]>([])
   const [dateFrom, setDateFrom] = useState(daysAgoIso(6))
   const [dateTo, setDateTo] = useState(todayIso())
@@ -443,18 +442,20 @@ export default function TrackingPage() {
   const chartData = useMemo(() => {
     return (metrics?.daily ?? []).map((item) => ({
       date: formatShortDate(item.date),
+      clicks: item.clicks,
       starts: item.starts,
       leads: item.leads,
-      spend: toNumber(item.spend),
+      submitted: item.submitted_leads,
     }))
   }, [metrics?.daily])
 
   const detailChartData = useMemo(() => {
     return (detailMetrics?.daily ?? []).map((item) => ({
       date: formatShortDate(item.date),
+      clicks: item.clicks,
       starts: item.starts,
       leads: item.leads,
-      spend: toNumber(item.spend),
+      submitted: item.submitted_leads,
     }))
   }, [detailMetrics?.daily])
 
@@ -463,8 +464,6 @@ export default function TrackingPage() {
       setBots([])
       setLinks([])
       setMetrics(null)
-      setManagerPerformance([])
-      setBuyerPerformance([])
       setBuyers([])
       return
     }
@@ -485,8 +484,6 @@ export default function TrackingPage() {
         botItems,
         linkResponse,
         projectMetrics,
-        managerItems,
-        buyerItems,
         buyerUsers,
       ] = await Promise.all([
         fetchBots(selectedProjectId),
@@ -498,24 +495,12 @@ export default function TrackingPage() {
           offset: 0,
         }),
         fetchProjectTrackingMetrics(params),
-        fetchManagerPerformance({
-          project_id: selectedProjectId,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-        }),
-        fetchBuyerPerformance(selectedProjectId, {
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-          bot_id: selectedBotIdForQuery,
-        }),
         fetchBuyers(selectedProjectId),
       ])
 
       setBots(botItems)
       setLinks(linkResponse.items)
       setMetrics(projectMetrics)
-      setManagerPerformance(managerItems)
-      setBuyerPerformance(buyerItems)
       setBuyers(buyerUsers)
     } catch (err) {
       setError(getErrorMessage(err, 'Could not load tracking data.'))
@@ -1010,7 +995,8 @@ export default function TrackingPage() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          {metricCard('Клики', formatNumber(summary.clicks))}
           {metricCard('Старты', formatNumber(summary.starts))}
           {metricCard('Лиды', formatNumber(summary.leads), `CR ${formatPercent(summary.cr_to_lead)}`)}
           {metricCard('Отправлены', formatNumber(summary.submitted_leads), `CR ${formatPercent(summary.cr_to_submit)}`)}
@@ -1023,7 +1009,7 @@ export default function TrackingPage() {
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-semibold text-white">Динамика трафика</h2>
-                <p className="text-sm text-gray-500">Старты, лиды и расходы</p>
+                <p className="text-sm text-gray-500">Клики, старты, лиды и подачи</p>
               </div>
               <Activity size={18} className="text-accent-300" />
             </div>
@@ -1058,6 +1044,8 @@ export default function TrackingPage() {
                     />
                     <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="url(#startsGradient)" strokeWidth={2} />
                     <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="url(#leadsGradient)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
+                    <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
               )}
@@ -1071,7 +1059,7 @@ export default function TrackingPage() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-white">Конверсия</p>
-                <p className="text-xs text-gray-500">CR в лиды по проекту</p>
+                <p className="text-xs text-gray-500">Конверсионная цепочка проекта</p>
               </div>
             </div>
             <p className="mt-5 text-4xl font-semibold text-white">
@@ -1079,187 +1067,20 @@ export default function TrackingPage() {
             </p>
             <div className="mt-5 space-y-3 text-sm">
               <div className="flex justify-between text-gray-400">
-                <span>Депозиты</span>
-                <span>{formatNumber(summary.deposits)}</span>
+                <span>Клик → старт</span>
+                <span>{ratioPercent(summary.starts, summary.clicks)}</span>
               </div>
               <div className="flex justify-between text-gray-400">
-                <span>CPD</span>
-                <span>{formatMoney(summary.cpd)}</span>
+                <span>Старт → лид</span>
+                <span>{formatPercent(summary.cr_to_lead)}</span>
               </div>
               <div className="flex justify-between text-gray-400">
-                <span>CR в депозит</span>
-                <span>{formatPercent(summary.cr_to_deposit)}</span>
+                <span>Лид → подача</span>
+                <span>{formatPercent(summary.cr_to_submit)}</span>
               </div>
             </div>
           </div>
         </div>
-
-        <section className="mt-5 rounded-xl border border-white/5 bg-surface p-4 shadow-card">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <UsersRound size={18} className="text-accent-300" />
-                <h2 className="font-semibold text-white">Качество менеджеров</h2>
-              </div>
-              <p className="mt-1 text-sm text-gray-500">
-                Взятые чаты, личные подачи и валидность по обратной связи партнёра.
-              </p>
-            </div>
-            <p className="text-xs leading-5 text-gray-500">
-              Валид считается по подаче менеджера, когда партнёр вернул финальный статус.
-            </p>
-          </div>
-
-          {managerPerformance.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-7 text-sm text-gray-500">
-              В выбранном проекте пока нет менеджеров или действий за период.
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[930px] text-left text-sm">
-                  <thead className="border-b border-white/10 text-xs uppercase tracking-[0.12em] text-gray-500">
-                    <tr>
-                      <th className="px-3 py-3 font-semibold">Менеджер</th>
-                      <th className="px-3 py-3 text-right font-semibold">Взял</th>
-                      <th className="px-3 py-3 text-right font-semibold">Подал</th>
-                      <th className="px-3 py-3 text-right font-semibold">Валид</th>
-                      <th className="px-3 py-3 text-right font-semibold">Взял → подал</th>
-                      <th className="px-3 py-3 text-right font-semibold">Подал → валид</th>
-                      <th className="px-3 py-3 text-right font-semibold">Взял → валид</th>
-                      <th className="px-3 py-3 text-right font-semibold">Вернул</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {managerPerformance.map((manager) => (
-                      <tr key={manager.manager_id} className="border-b border-white/[0.06] last:border-0">
-                        <td className="px-3 py-3">
-                          <p className="font-medium text-gray-100">{manager.name}</p>
-                          <p className="mt-0.5 text-xs text-gray-500">
-                            {manager.handler_code ? `#${manager.handler_code} · ` : ''}{manager.email}
-                          </p>
-                        </td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatNumber(manager.chats_taken)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatNumber(manager.submitted_leads)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-emerald-200">{formatNumber(manager.valid_leads)}</td>
-                        <td className="px-3 py-3 text-right text-accent-100">{formatPercent(manager.taken_to_submitted_percent)}</td>
-                        <td className="px-3 py-3 text-right text-accent-100">{formatPercent(manager.submitted_to_valid_percent)}</td>
-                        <td className="px-3 py-3 text-right text-accent-100">{formatPercent(manager.taken_to_valid_percent)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-300">{formatNumber(manager.returned_to_funnel)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-4 grid gap-3 lg:hidden">
-                {managerPerformance.map((manager) => (
-                  <article key={manager.manager_id} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium text-gray-100">{manager.name}</p>
-                        <p className="mt-1 truncate text-xs text-gray-500">
-                          {manager.handler_code ? `#${manager.handler_code} · ` : ''}{manager.email}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-xs text-gray-500">Вернул: {formatNumber(manager.returned_to_funnel)}</span>
-                    </div>
-                    <div className="mt-4 grid grid-cols-3 gap-2">
-                      <div><p className="text-xs text-gray-500">Взял</p><p className="mt-1 font-mono text-gray-100">{formatNumber(manager.chats_taken)}</p></div>
-                      <div><p className="text-xs text-gray-500">Подал</p><p className="mt-1 font-mono text-gray-100">{formatNumber(manager.submitted_leads)}</p></div>
-                      <div><p className="text-xs text-gray-500">Валид</p><p className="mt-1 font-mono text-emerald-200">{formatNumber(manager.valid_leads)}</p></div>
-                    </div>
-                    <div className="mt-4 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-3 text-xs">
-                      <div><p className="text-gray-500">Взял → подал</p><p className="mt-1 text-accent-100">{formatPercent(manager.taken_to_submitted_percent)}</p></div>
-                      <div><p className="text-gray-500">Подал → валид</p><p className="mt-1 text-accent-100">{formatPercent(manager.submitted_to_valid_percent)}</p></div>
-                      <div><p className="text-gray-500">Взял → валид</p><p className="mt-1 text-accent-100">{formatPercent(manager.taken_to_valid_percent)}</p></div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-
-        <section className="mt-5 rounded-xl border border-white/5 bg-surface p-4 shadow-card">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <WalletCards size={18} className="text-emerald-300" />
-                <h2 className="font-semibold text-white">Статистика баеров</h2>
-              </div>
-              <p className="mt-1 text-sm text-gray-500">
-                Сводные показатели по всем ссылкам каждого баера за выбранный период.
-              </p>
-            </div>
-            <p className="text-xs leading-5 text-gray-500">
-              Количество ссылок показано целиком, остальные показатели следуют фильтру дат.
-            </p>
-          </div>
-
-          {buyerPerformance.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-7 text-sm text-gray-500">
-              Для выбранного проекта пока нет баеров с привязанными ссылками.
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[860px] text-left text-sm">
-                  <thead className="border-b border-white/10 text-xs uppercase tracking-[0.12em] text-gray-500">
-                    <tr>
-                      <th className="px-3 py-3 font-semibold">Баер</th>
-                      <th className="px-3 py-3 text-right font-semibold">Ссылки</th>
-                      <th className="px-3 py-3 text-right font-semibold">Расход</th>
-                      <th className="px-3 py-3 text-right font-semibold">Клики</th>
-                      <th className="px-3 py-3 text-right font-semibold">Лиды</th>
-                      <th className="px-3 py-3 text-right font-semibold">CPL</th>
-                      <th className="px-3 py-3 text-right font-semibold">Подано</th>
-                      <th className="px-3 py-3 text-right font-semibold">CR в подачу</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {buyerPerformance.map((buyer) => (
-                      <tr key={buyer.buyer_id} className="border-b border-white/[0.06] last:border-0">
-                        <td className="px-3 py-3">
-                          <p className="font-medium text-gray-100">{buyer.name}</p>
-                          <p className="mt-0.5 text-xs text-gray-500">{buyer.email}</p>
-                        </td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatNumber(buyer.links_count)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatMoney(buyer.total_spend)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatNumber(buyer.clicks)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatNumber(buyer.leads)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-accent-100">{formatMoney(buyer.cpl)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-gray-200">{formatNumber(buyer.submitted_leads)}</td>
-                        <td className="px-3 py-3 text-right text-emerald-200">{formatPercent(buyer.submitted_conversion_percent)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-4 grid gap-3 lg:hidden">
-                {buyerPerformance.map((buyer) => (
-                  <article key={buyer.buyer_id} className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
-                    <p className="truncate font-medium text-gray-100">{buyer.name}</p>
-                    <p className="mt-1 truncate text-xs text-gray-500">{buyer.email}</p>
-                    <div className="mt-4 grid grid-cols-3 gap-2">
-                      <div><p className="text-xs text-gray-500">Ссылки</p><p className="mt-1 font-mono text-gray-100">{formatNumber(buyer.links_count)}</p></div>
-                      <div><p className="text-xs text-gray-500">Расход</p><p className="mt-1 font-mono text-gray-100">{formatMoney(buyer.total_spend)}</p></div>
-                      <div><p className="text-xs text-gray-500">Клики</p><p className="mt-1 font-mono text-gray-100">{formatNumber(buyer.clicks)}</p></div>
-                      <div><p className="text-xs text-gray-500">Лиды</p><p className="mt-1 font-mono text-gray-100">{formatNumber(buyer.leads)}</p></div>
-                      <div><p className="text-xs text-gray-500">CPL</p><p className="mt-1 font-mono text-accent-100">{formatMoney(buyer.cpl)}</p></div>
-                      <div><p className="text-xs text-gray-500">Подано</p><p className="mt-1 font-mono text-gray-100">{formatNumber(buyer.submitted_leads)}</p></div>
-                    </div>
-                    <div className="mt-4 border-t border-white/[0.06] pt-3 text-xs">
-                      <p className="text-gray-500">Конверсия лид → подача</p>
-                      <p className="mt-1 text-emerald-200">{formatPercent(buyer.submitted_conversion_percent)}</p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
 
         <div className="mt-5 flex flex-col gap-3 rounded-xl border border-white/5 bg-surface p-4 shadow-card md:flex-row md:items-center md:justify-between">
           <div className="relative min-w-0 flex-1">
@@ -2060,13 +1881,17 @@ export default function TrackingPage() {
 
           {detailMetrics ? (
             <div className="space-y-5">
-              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
                 {metricCard('Старты', formatNumber(detailMetrics.summary.starts))}
                 {metricCard('Лиды', formatNumber(detailMetrics.summary.leads))}
                 {metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
                 {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
                 {metricCard('CPL', formatMoney(detailMetrics.summary.cpl))}
-                {metricCard('CPD', formatMoney(detailMetrics.summary.cpd))}
+                {metricCard('CPSL', formatMoney(detailMetrics.summary.cpsl))}
+                {metricCard('Клик → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.clicks))}
+                {metricCard('Старт → лид', formatPercent(detailMetrics.summary.cr_to_lead))}
+                {metricCard('Лид → подача', formatPercent(detailMetrics.summary.cr_to_submit))}
               </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
@@ -2121,24 +1946,49 @@ export default function TrackingPage() {
                         />
                         <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="#22d3ee22" strokeWidth={2} />
                         <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="#a855f722" strokeWidth={2} />
+                        <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
+                        <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
                       </AreaChart>
                     </ResponsiveContainer>
                   )}
                 </div>
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-3">
+              <div>
                 <div>
                   <h3 className="mb-3 font-semibold text-white">Шаги воронки</h3>
                   {funnelList(detailMetrics.funnel_steps)}
                 </div>
+              </div>
+
+              <div>
+                <div className="mb-3">
+                  <h3 className="font-semibold text-white">Аудитория ссылки</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Распределение лидов за выбранный период. Проценты считаются отдельно внутри каждого среза.
+                  </p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <div>
-                  <h3 className="mb-3 font-semibold text-white">Возраст</h3>
+                  <h4 className="mb-3 text-sm font-semibold text-gray-200">Возраст</h4>
                   {breakdownList(detailMetrics.age_breakdown, 'Данных по возрасту пока нет.')}
                 </div>
                 <div>
-                  <h3 className="mb-3 font-semibold text-white">Страна</h3>
+                  <h4 className="mb-3 text-sm font-semibold text-gray-200">Страна</h4>
                   {breakdownList(detailMetrics.country_breakdown, 'Данных по странам пока нет.')}
+                </div>
+                  <div>
+                    <h4 className="mb-3 text-sm font-semibold text-gray-200">Город</h4>
+                    {breakdownList(detailMetrics.city_breakdown ?? [], 'Данных по городам пока нет.')}
+                  </div>
+                  <div>
+                    <h4 className="mb-3 text-sm font-semibold text-gray-200">Статус лида</h4>
+                    {breakdownList(detailMetrics.status_breakdown ?? [], 'Данных по статусам пока нет.')}
+                  </div>
+                  <div>
+                    <h4 className="mb-3 text-sm font-semibold text-gray-200">Наличие карты</h4>
+                    {breakdownList(detailMetrics.card_breakdown ?? [], 'Данных о карте пока нет.')}
+                  </div>
                 </div>
               </div>
 

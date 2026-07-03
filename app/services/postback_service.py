@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import logging
+import re
+import secrets
+import string
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -27,6 +32,8 @@ class PostbackService:
     COMPLETED_STATUS = "completed"
     FAILED_STATUS = "failed"
     DUPLICATE_STATUS = "duplicate"
+    TEMPLATE_PATTERN = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.]{0,127})\s*}}")
+    FULL_TEMPLATE_PATTERN = re.compile(r"^\s*{{\s*([A-Za-z_][A-Za-z0-9_.]{0,127})\s*}}\s*$")
 
     DEFAULT_STATUS_TO_LEAD_STATUS = {
         "completed": [LeadStatusCode.SUBMITTED],
@@ -49,13 +56,30 @@ class PostbackService:
         self.identity_service = LeadIdentityService(db)
         self.google_sheets_trigger = GoogleSheetsTriggerService(db)
 
-    def build_payload(self, lead: Lead, integration: PartnerIntegration) -> dict[str, Any]:
+    def build_payload(
+        self,
+        lead: Lead,
+        integration: PartnerIntegration,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        request_config = getattr(integration, "request_config", None) or {}
+        payload_template = request_config.get("payload_template") or {}
         mapping = integration.field_mapping or {}
-        payload: dict[str, Any] = {}
+        template_context = context or self._build_template_context(lead, integration)
 
-        if mapping:
+        if payload_template:
+            rendered = self._render_template_value(payload_template, template_context)
+            if not isinstance(rendered, dict):
+                raise ValueError("Шаблон тела запроса должен быть JSON-объектом")
+            payload = rendered
+        elif mapping:
+            payload = {}
             for partner_field, crm_path in mapping.items():
-                value = self._get_path_value(lead, crm_path)
+                if self.TEMPLATE_PATTERN.search(crm_path):
+                    value = self._render_template_value(crm_path, template_context)
+                else:
+                    value = self._get_path_value(lead, crm_path)
                 self._set_path_value(payload, partner_field, self._json_safe(value))
         else:
             payload = self._default_lead_payload(lead)
@@ -68,6 +92,33 @@ class PostbackService:
                 )
 
         return payload
+
+    def redact_payload(
+        self,
+        payload: dict[str, Any],
+        integration: PartnerIntegration,
+    ) -> dict[str, Any]:
+        secrets_to_hide = {
+            str(value)
+            for value in (getattr(integration, "request_config", None) or {})
+            .get("secret_variables", {})
+            .values()
+            if value not in (None, "")
+        }
+
+        def redact(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(key): redact(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            if not isinstance(value, str):
+                return value
+            result = value
+            for secret_value in secrets_to_hide:
+                result = result.replace(secret_value, "***")
+            return result
+
+        return redact(payload)
 
     def parse_response(
         self,
@@ -232,8 +283,14 @@ class PostbackService:
         }
 
     async def test_connection(self, integration: PartnerIntegration) -> dict[str, Any]:
+        test_lead = self._test_lead(integration)
+        context = self._build_template_context(test_lead, integration)
         try:
-            payload = self.build_payload(self._test_lead(integration), integration)
+            payload = self.build_payload(
+                test_lead,
+                integration,
+                context=context,
+            )
         except ValueError as exc:
             return {
                 "ok": False,
@@ -247,13 +304,15 @@ class PostbackService:
                 "error_message": str(exc),
             }
 
-        request = self._build_request(integration)
+        request = self._build_request(integration, context=context)
         timeout_seconds = float((integration.retry_config or {}).get("timeout_seconds") or 30)
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                response = await client.post(
+                response = await client.request(
+                    request["method"],
                     integration.postback_url,
-                    json=payload,
+                    json=payload if request["body_format"] == "json" else None,
+                    data=self._form_payload(payload) if request["body_format"] == "form" else None,
                     headers=request["headers"],
                     params=request["params"],
                 )
@@ -264,7 +323,7 @@ class PostbackService:
                 "mapping_valid": True,
                 "accepted": False,
                 "status": "timeout",
-                "request_payload": payload,
+                "request_payload": self.redact_payload(payload, integration),
                 "response_payload": None,
                 "parsed_response": None,
                 "error_message": "Request timeout",
@@ -277,7 +336,7 @@ class PostbackService:
                 "mapping_valid": True,
                 "accepted": False,
                 "status": "request_failed",
-                "request_payload": payload,
+                "request_payload": self.redact_payload(payload, integration),
                 "response_payload": None,
                 "parsed_response": None,
                 "error_message": str(exc)[:1000],
@@ -294,7 +353,7 @@ class PostbackService:
             "accepted": accepted,
             "status": parsed["status"],
             "status_code": response.status_code,
-            "request_payload": payload,
+            "request_payload": self.redact_payload(payload, integration),
             "response_payload": {
                 "json": response_json,
                 "body": response.text[:1000],
@@ -353,7 +412,8 @@ class PostbackService:
             return
 
         try:
-            payload = self.build_payload(lead, integration)
+            context = self._build_template_context(lead, integration)
+            payload = self.build_payload(lead, integration, context=context)
         except ValueError as exc:
             self._mark_failed(submission, str(exc))
             await self.db.flush()
@@ -365,8 +425,8 @@ class PostbackService:
             )
             return
 
-        submission.request_payload = payload
-        request = self._build_request(integration)
+        submission.request_payload = self.redact_payload(payload, integration)
+        request = self._build_request(integration, context=context)
         retry_config = integration.retry_config or {}
         max_attempts = int(retry_config.get("max_attempts") or 1)
         delays = [int(delay) for delay in retry_config.get("delays_seconds") or []]
@@ -376,9 +436,15 @@ class PostbackService:
         for attempt in range(1, max_attempts + 1):
             try:
                 async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                    response = await client.post(
+                    response = await client.request(
+                        request["method"],
                         integration.postback_url,
-                        json=payload,
+                        json=payload if request["body_format"] == "json" else None,
+                        data=(
+                            self._form_payload(payload)
+                            if request["body_format"] == "form"
+                            else None
+                        ),
                         headers=request["headers"],
                         params=request["params"],
                     )
@@ -536,24 +602,51 @@ class PostbackService:
             project_id=lead.project_id,
         )
 
-    def _build_request(self, integration: PartnerIntegration) -> dict[str, dict[str, str]]:
-        headers = {"Content-Type": "application/json"}
-        params: dict[str, str] = {}
+    def _build_request(
+        self,
+        integration: PartnerIntegration,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        request_config = getattr(integration, "request_config", None) or {}
+        template_context = context or self._build_template_context(
+            self._test_lead(integration),
+            integration,
+        )
+        body_format = str(request_config.get("body_format") or "json").lower()
+        method = str(request_config.get("method") or "POST").upper()
+        headers = {
+            "Content-Type": (
+                "application/x-www-form-urlencoded"
+                if body_format == "form"
+                else "application/json"
+            )
+        }
+        headers.update(
+            self._render_string_mapping(request_config.get("headers") or {}, template_context)
+        )
+        params = self._render_string_mapping(
+            request_config.get("query_params") or {},
+            template_context,
+        )
         auth_config = dict(integration.auth_config or {})
         token = auth_config.get("token") or integration.auth_token
-        if not token:
-            return {"headers": headers, "params": params}
-
-        if integration.auth_type == "bearer":
-            headers["Authorization"] = f"Bearer {token}"
-        elif integration.auth_type == "query_param":
-            param_name = auth_config.get("query_param_name")
-            if param_name:
-                params[str(param_name)] = str(token)
-        elif integration.auth_type == "header":
-            header_name = auth_config.get("header_name") or "Authorization"
-            headers[str(header_name)] = str(token)
-        return {"headers": headers, "params": params}
+        if token:
+            if integration.auth_type == "bearer":
+                headers["Authorization"] = f"Bearer {token}"
+            elif integration.auth_type == "query_param":
+                param_name = auth_config.get("query_param_name")
+                if param_name:
+                    params[str(param_name)] = str(token)
+            elif integration.auth_type == "header":
+                header_name = auth_config.get("header_name") or "Authorization"
+                headers[str(header_name)] = str(token)
+        return {
+            "method": method,
+            "body_format": body_format,
+            "headers": headers,
+            "params": params,
+        }
 
     def _parsed_response(
         self,
@@ -660,6 +753,172 @@ class PostbackService:
         if scalar is not None:
             values.append(scalar)
         return {cls._normalize_status(value) for value in values if value is not None}
+
+    def _build_template_context(
+        self,
+        lead: Lead | SimpleNamespace,
+        integration: PartnerIntegration,
+    ) -> dict[str, Any]:
+        request_config = getattr(integration, "request_config", None) or {}
+        generator_config = request_config.get("generator_config") or {}
+        chat = getattr(lead, "chat", None)
+        tracking = getattr(chat, "tracking_link", None) if chat is not None else None
+        buyer = getattr(tracking, "buyer", None) if tracking is not None else None
+        project = getattr(lead, "project", None)
+        bot = getattr(chat, "bot", None) if chat is not None else None
+        custom_fields = dict(getattr(lead, "custom_fields", None) or {})
+
+        full_name = str(getattr(lead, "name", None) or "").strip()
+        name_parts = full_name.split(maxsplit=1)
+        first_name = name_parts[0] if name_parts else ""
+        last_name = name_parts[1] if len(name_parts) > 1 else first_name
+        telegram_id = (
+            getattr(chat, "external_user_id", None)
+            or custom_fields.get("telegram_id")
+            or custom_fields.get("tg_id")
+        )
+        phone = getattr(lead, "phone", None)
+        phone_digits = re.sub(r"\D", "", str(phone or ""))
+        tracking_buyer_name = getattr(tracking, "buyer_name", None) if tracking else None
+        buyer_name = getattr(buyer, "name", None) or tracking_buyer_name
+        tracking_code = None
+        if tracking is not None:
+            tracking_code = getattr(tracking, "code", None) or getattr(
+                tracking,
+                "ref_code",
+                None,
+            )
+        password_length = int(generator_config.get("password_length") or 12)
+
+        return {
+            "lead": {
+                "id": str(getattr(lead, "id", "")),
+                "project_id": str(getattr(lead, "project_id", "")),
+                "chat_id": str(getattr(lead, "chat_id", "")),
+                "name": full_name,
+                "first_name": first_name,
+                "last_name": last_name,
+                "phone": phone,
+                "phone_digits": phone_digits or None,
+                "username": getattr(lead, "username", None),
+                "telegram_id": str(telegram_id) if telegram_id not in (None, "") else None,
+                "telegram_email": (
+                    f"tg{telegram_id}@lead.auto"
+                    if telegram_id not in (None, "")
+                    else None
+                ),
+                "age": getattr(lead, "age", None),
+                "country": getattr(lead, "country", None),
+                "call_time": (
+                    getattr(lead, "preferred_call_time", None)
+                    or getattr(lead, "call_time_text", None)
+                ),
+                "has_card": getattr(lead, "has_card", None),
+                "score_percent": getattr(lead, "score_percent", None),
+                "created_at": self._json_safe(getattr(lead, "created_at", None)),
+                "custom": custom_fields,
+            },
+            "custom": custom_fields,
+            "tracking": {
+                "id": str(getattr(tracking, "id", "")) if tracking else None,
+                "code": tracking_code,
+                "ref_code": getattr(tracking, "ref_code", None) if tracking else None,
+                "title": getattr(tracking, "title", None) if tracking else None,
+                "buyer_name": buyer_name,
+            },
+            "buyer": {
+                "id": str(getattr(buyer, "id", "")) if buyer else None,
+                "name": buyer_name,
+                "email": getattr(buyer, "email", None) if buyer else None,
+                "telegram_id": getattr(buyer, "buyer_telegram_id", None) if buyer else None,
+            },
+            "project": {
+                "id": str(getattr(lead, "project_id", "")),
+                "name": getattr(project, "name", None) if project else None,
+            },
+            "bot": {
+                "id": str(getattr(bot, "id", "")) if bot else None,
+                "name": getattr(bot, "name", None) if bot else None,
+                "username": getattr(bot, "bot_username", None) if bot else None,
+            },
+            "secret": dict(request_config.get("secret_variables") or {}),
+            "random": {
+                "password": self._generate_password(password_length),
+                "ipv4": self._generate_ipv4(generator_config.get("ipv4_cidrs") or []),
+            },
+        }
+
+    def _render_template_value(self, value: Any, context: dict[str, Any]) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): self._render_template_value(item, context)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._render_template_value(item, context) for item in value]
+        if not isinstance(value, str):
+            return self._json_safe(value)
+
+        full_match = self.FULL_TEMPLATE_PATTERN.match(value)
+        if full_match:
+            return self._json_safe(self._get_path_value(context, full_match.group(1)))
+
+        def replace(match: re.Match[str]) -> str:
+            resolved = self._get_path_value(context, match.group(1))
+            return "" if resolved is None else str(resolved)
+
+        return self.TEMPLATE_PATTERN.sub(replace, value)
+
+    def _render_string_mapping(
+        self,
+        mapping: dict[str, str],
+        context: dict[str, Any],
+    ) -> dict[str, str]:
+        rendered: dict[str, str] = {}
+        for key, template in mapping.items():
+            value = self._render_template_value(template, context)
+            if value is not None:
+                rendered[str(key)] = str(value)
+        return rendered
+
+    @staticmethod
+    def _generate_password(length: int) -> str:
+        safe_length = min(max(length, 8), 64)
+        required = [
+            secrets.choice(string.ascii_lowercase),
+            secrets.choice(string.ascii_uppercase),
+            secrets.choice(string.digits),
+        ]
+        alphabet = string.ascii_letters + string.digits
+        characters = required + [
+            secrets.choice(alphabet) for _ in range(safe_length - len(required))
+        ]
+        secrets.SystemRandom().shuffle(characters)
+        return "".join(characters)
+
+    @staticmethod
+    def _generate_ipv4(cidrs: list[str]) -> str | None:
+        if not cidrs:
+            return None
+        network = ipaddress.IPv4Network(secrets.choice(cidrs), strict=False)
+        has_reserved_edges = network.num_addresses > 2
+        first = int(network.network_address) + (1 if has_reserved_edges else 0)
+        last = int(network.broadcast_address) - (1 if has_reserved_edges else 0)
+        return str(ipaddress.IPv4Address(first + secrets.randbelow(last - first + 1)))
+
+    @staticmethod
+    def _form_payload(payload: dict[str, Any]) -> dict[str, str]:
+        form: dict[str, str] = {}
+        for key, value in payload.items():
+            if value is None:
+                form[str(key)] = ""
+            elif isinstance(value, (dict, list)):
+                form[str(key)] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            elif isinstance(value, bool):
+                form[str(key)] = "true" if value else "false"
+            else:
+                form[str(key)] = str(value)
+        return form
 
     @staticmethod
     def _default_lead_payload(lead: Lead) -> dict[str, Any]:

@@ -121,6 +121,50 @@ class TelegramSenderService:
             mime_type=mime_type,
         )
 
+    async def edit_message_reply_markup(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        message_id: int,
+        reply_markup: dict | None = None,
+    ) -> bool:
+        token = await self._get_token(project_id, bot_id)
+        if not token:
+            return False
+        payload: dict[str, Any] = {
+            "chat_id": external_chat_id,
+            "message_id": message_id,
+            "reply_markup": reply_markup or {"inline_keyboard": []},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{token}/editMessageReplyMarkup",
+                    json=payload,
+                )
+                response.raise_for_status()
+                return response.json().get("ok") is True
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Telegram editMessageReplyMarkup failed: project_id=%s chat_id=%s "
+                "message_id=%s error_type=%s",
+                project_id,
+                external_chat_id,
+                message_id,
+                exc.__class__.__name__,
+            )
+            return False
+        except Exception:
+            logger.exception(
+                "Unexpected Telegram editMessageReplyMarkup failure: "
+                "project_id=%s chat_id=%s message_id=%s",
+                project_id,
+                external_chat_id,
+                message_id,
+            )
+            return False
+
     async def send_video(
         self,
         project_id: UUID,

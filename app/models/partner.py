@@ -73,6 +73,12 @@ class PartnerIntegration(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    request_config: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     project: Mapped[Project] = relationship("Project", back_populates="partner_integrations")

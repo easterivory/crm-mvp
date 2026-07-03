@@ -7,7 +7,11 @@ export type ButtonConfig = {
   type: 'branch' | 'url' | 'contact'
   target_step_id?: string
   url?: string
+  contact_mode?: 'mini_app' | 'native'
+  hide_after_click?: boolean
 }
+
+export type ButtonDisplayMode = 'inline' | 'reply'
 
 export type FunnelMessageMediaType = 'photo' | 'video' | 'voice' | 'video_note' | 'document'
 
@@ -28,6 +32,7 @@ export type MessageConfig = {
   caption?: string
   delay_seconds: number
   wait_for_answer?: boolean
+  button_mode: ButtonDisplayMode
   buttons: ButtonConfig[]
   media?: MessageMediaConfig
 }
@@ -90,6 +95,7 @@ export const leadFields = [
   ['country', 'Страна'],
   ['call_time_text', 'Время созвона'],
   ['has_card', 'Есть карта'],
+  ['expected_start_amount', 'Ожидаемая сумма для старта'],
   ['experience', 'Опыт'],
 ] as const
 
@@ -193,6 +199,9 @@ export function normalizeButton(raw: unknown, index: number): ButtonConfig {
     target_step_id:
       typeof item.target_step_id === 'string' ? item.target_step_id : '',
     url: !isContact && typeof item.url === 'string' ? item.url : '',
+    contact_mode:
+      isContact && item.contact_mode === 'native' ? 'native' : 'mini_app',
+    hide_after_click: item.hide_after_click === true,
   }
 }
 
@@ -256,6 +265,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
           typeof item.wait_for_answer === 'boolean'
             ? item.wait_for_answer
             : item.waitForAnswer === true,
+        button_mode: item.button_mode === 'reply' ? 'reply' : 'inline',
         buttons: normalizeButtons(item.buttons),
         ...(media ? { media } : {}),
       }
@@ -272,6 +282,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
       caption: textValue(config, 'caption') || undefined,
       delay_seconds: numberValue(config, 'delay_seconds', 0),
       wait_for_answer: boolValue(config, 'wait_for_answer', false),
+      button_mode: config.button_mode === 'reply' ? 'reply' : 'inline',
       buttons: normalizeButtons(config.buttons),
       ...(legacyMedia ? { media: legacyMedia } : {}),
     },

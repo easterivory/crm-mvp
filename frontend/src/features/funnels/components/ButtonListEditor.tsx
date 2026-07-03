@@ -7,6 +7,7 @@ import {
   funnelStepNumberMap,
   orderedFunnelSteps,
   type ButtonConfig,
+  type ButtonDisplayMode,
 } from '../funnelConfig'
 
 type TargetSelectProps = {
@@ -41,6 +42,8 @@ type ButtonListEditorProps = {
   currentStepId: string
   steps: FunnelStep[]
   onChange: (buttons: ButtonConfig[]) => void
+  buttonMode?: ButtonDisplayMode
+  onButtonModeChange?: (mode: ButtonDisplayMode) => void
   title?: string
 }
 
@@ -49,6 +52,8 @@ export default function ButtonListEditor({
   currentStepId,
   steps,
   onChange,
+  buttonMode = 'inline',
+  onButtonModeChange,
   title = 'Кнопки',
 }: ButtonListEditorProps) {
   const update = (index: number, patch: Partial<ButtonConfig>) => {
@@ -80,6 +85,34 @@ export default function ButtonListEditor({
           Добавить
         </button>
       </div>
+
+      {onButtonModeChange ? (
+        <label className="block">
+          <span className="mb-1 block text-xs text-gray-500">Размещение</span>
+          <select
+            value={buttonMode}
+            onChange={(event) => {
+              const mode = event.target.value as ButtonDisplayMode
+              onButtonModeChange(mode)
+              onChange(buttons.map((button) =>
+                button.type === 'contact'
+                  ? { ...button, contact_mode: mode === 'reply' ? 'native' : 'mini_app' }
+                  : button,
+              ))
+            }}
+            disabled={buttons.some((button) => button.type === 'url')}
+            className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <option value="inline">Inline под сообщением</option>
+            <option value="reply">Клавиатура у поля ввода</option>
+          </select>
+          {buttons.some((button) => button.type === 'url') ? (
+            <span className="mt-1 block text-xs text-gray-500">
+              URL-кнопки поддерживаются только в inline-режиме.
+            </span>
+          ) : null}
+        </label>
+      ) : null}
 
       {buttons.length === 0 ? (
         <p className="rounded-lg border border-dashed border-white/10 px-3 py-2 text-xs text-gray-500">
@@ -138,6 +171,10 @@ export default function ButtonListEditor({
                       : undefined,
                   url: type === 'url' ? button.url : undefined,
                   value: type === 'contact' ? 'contact' : button.value,
+                  contact_mode: type === 'contact' ? button.contact_mode ?? 'mini_app' : undefined,
+                }
+                if (type === 'url') {
+                  onButtonModeChange?.('inline')
                 }
                 update(index, nextButton)
               }}
@@ -169,9 +206,26 @@ export default function ButtonListEditor({
               />
             ) : button.type === 'contact' ? (
               <>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-gray-500">Способ запроса</span>
+                  <select
+                    value={button.contact_mode ?? 'mini_app'}
+                    onChange={(event) => {
+                      const contactMode = event.target.value as 'mini_app' | 'native'
+                      update(index, { contact_mode: contactMode })
+                      onButtonModeChange?.(contactMode === 'native' ? 'reply' : 'inline')
+                    }}
+                    className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                  >
+                    <option value="mini_app">Mini App под сообщением</option>
+                    <option value="native">Нативная кнопка Telegram</option>
+                  </select>
+                </label>
                 <div className="flex items-start gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2 text-xs leading-5 text-emerald-100/80">
                   <Phone size={14} className="mt-0.5 shrink-0" />
-                  Кнопка появится под сообщением и запросит номер через Telegram.
+                  {(button.contact_mode ?? 'mini_app') === 'native'
+                    ? 'Telegram запросит номер нативно и скроет одноразовую клавиатуру после отправки.'
+                    : 'Mini App запросит номер через Telegram, после отправки кнопка будет убрана.'}
                 </div>
                 <TargetSelect
                   value={button.target_step_id}
@@ -195,6 +249,16 @@ export default function ButtonListEditor({
                 ) : null}
               </>
             )}
+            {button.type === 'branch' && buttonMode === 'inline' ? (
+              <label className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.025] px-3 py-2 text-xs text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={button.hide_after_click === true}
+                  onChange={(event) => update(index, { hide_after_click: event.target.checked })}
+                />
+                Убрать inline-кнопки после нажатия
+              </label>
+            ) : null}
           </div>
         </div>
       ))}

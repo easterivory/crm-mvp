@@ -365,12 +365,23 @@ class FunnelRuntimeService:
             messages = self._message_sequence(step)
             item = messages[message_index] if message_index is not None else None
             buttons = self._buttons_from_message_item(item) if item is not None else []
+            button_mode = self._message_item_button_mode(item) if item is not None else "inline"
             contact_button = (
                 self._contact_button(buttons)
                 if message_type == MessageType.CONTACT
                 else None
             )
-            if item is not None and self._has_callback_buttons(buttons) and contact_button is None:
+            reply_choice = (
+                self._choice_for_buttons(buttons, text)
+                if button_mode == "reply" and message_type != MessageType.CONTACT
+                else None
+            )
+            if (
+                item is not None
+                and button_mode == "inline"
+                and self._has_callback_buttons(buttons)
+                and contact_button is None
+            ):
                 logger.info(
                     "Ignoring text while funnel message waits for button callback "
                     "chat_id=%s step_id=%s",
@@ -381,6 +392,7 @@ class FunnelRuntimeService:
             if item is not None and (
                 self._message_item_waits_for_answer(item)
                 or contact_button is not None
+                or reply_choice is not None
             ):
                 await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
                 await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
@@ -388,6 +400,7 @@ class FunnelRuntimeService:
                     state.runtime_json,
                     step_id=step.id,
                     answer=text,
+                    button=contact_button or reply_choice,
                 )
                 await self.repo.upsert_chat_funnel_state(
                     chat_id=chat_id,
@@ -398,10 +411,11 @@ class FunnelRuntimeService:
                     waiting_for_answer=False,
                     runtime_json=runtime_json,
                 )
-                if contact_button and contact_button.get("target_step_id"):
+                selected_button = contact_button or reply_choice
+                if selected_button and selected_button.get("target_step_id"):
                     next_step = await self._move_to_step_id(
                         chat_id=chat_id,
-                        target_step_id=contact_button.get("target_step_id"),
+                        target_step_id=selected_button.get("target_step_id"),
                         from_step=step,
                     )
                 else:
@@ -1128,6 +1142,7 @@ class FunnelRuntimeService:
                     step=step,
                     buttons=buttons,
                     message_index=index,
+                    button_mode=self._message_item_button_mode(item),
                 ),
             )
             if not sent:
@@ -2623,6 +2638,7 @@ class FunnelRuntimeService:
             "caption": config.get("caption"),
             "delay_seconds": config.get("delay_seconds") or 0,
             "wait_for_answer": bool(config.get("wait_for_answer")),
+            "button_mode": "reply" if config.get("button_mode") == "reply" else "inline",
             "buttons": config.get("buttons") or [],
             "media": config.get("media"),
             "telegram_file_id": config.get("telegram_file_id")
@@ -2822,6 +2838,7 @@ class FunnelRuntimeService:
             "ask_country": "В какой вы стране?",
             "ask_call_time": "Когда удобно созвониться?",
             "ask_choice": "Выберите вариант",
+            "ask_expected_start_amount": "С какой суммы планируете начать?",
         }
         return str(
             config.get("prompt")
@@ -2836,7 +2853,11 @@ class FunnelRuntimeService:
 
     def _reply_markup_for_step(self, step: FunnelStep) -> Optional[dict]:
         buttons = self._buttons_from_step(step)
-        return self._reply_markup_for_buttons(step=step, buttons=buttons)
+        return self._reply_markup_for_buttons(
+            step=step,
+            buttons=buttons,
+            button_mode=self._step_button_mode(step),
+        )
 
     def _reply_markup_for_buttons(
         self,
@@ -2844,9 +2865,30 @@ class FunnelRuntimeService:
         step: FunnelStep,
         buttons: list[dict[str, Any]],
         message_index: Optional[int] = None,
+        button_mode: str = "inline",
     ) -> Optional[dict]:
         if not buttons:
             return None
+        normalized_mode = "reply" if button_mode == "reply" else "inline"
+        if normalized_mode == "reply" and any(
+            button.get("type") == "url" for button in buttons
+        ):
+            normalized_mode = "inline"
+
+        if normalized_mode == "reply":
+            keyboard = []
+            for button in buttons:
+                item = {"text": button["label"]}
+                if button.get("type") == "contact":
+                    item["request_contact"] = True
+                keyboard.append([item])
+            return {
+                "keyboard": keyboard,
+                "resize_keyboard": True,
+                "one_time_keyboard": True,
+                "is_persistent": False,
+            }
+
         rows = []
         for index, button in enumerate(buttons):
             item = {"text": button["label"]}
@@ -2933,6 +2975,12 @@ class FunnelRuntimeService:
                     ),
                     "target_step_id": raw.get("target_step_id"),
                     "url": None if is_contact else raw.get("url"),
+                    "contact_mode": (
+                        "native"
+                        if is_contact and raw.get("contact_mode") == "native"
+                        else "mini_app"
+                    ),
+                    "hide_after_click": raw.get("hide_after_click") is True,
                 }
             else:
                 continue
@@ -2951,6 +2999,49 @@ class FunnelRuntimeService:
     @staticmethod
     def _contact_button(buttons: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
         return next((button for button in buttons if button.get("type") == "contact"), None)
+
+    @staticmethod
+    def _message_item_button_mode(item: dict[str, Any] | None) -> str:
+        if not isinstance(item, dict):
+            return "inline"
+        raw_buttons = item.get("buttons") or item.get("choices") or []
+        has_native_contact = isinstance(raw_buttons, list) and any(
+            isinstance(button, dict)
+            and button.get("contact_mode") == "native"
+            for button in raw_buttons
+        )
+        return "reply" if item.get("button_mode") == "reply" or has_native_contact else "inline"
+
+    @classmethod
+    def _step_button_mode(cls, step: FunnelStep) -> str:
+        config = step.config_json or {}
+        raw_buttons = config.get("buttons") or config.get("choices") or []
+        has_native_contact = isinstance(raw_buttons, list) and any(
+            isinstance(button, dict)
+            and button.get("contact_mode") == "native"
+            for button in raw_buttons
+        )
+        return "reply" if config.get("button_mode") == "reply" or has_native_contact else "inline"
+
+    @staticmethod
+    def _choice_for_buttons(
+        buttons: list[dict[str, Any]],
+        answer: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        normalized = str(answer or "").strip().lower()
+        return next(
+            (
+                button
+                for button in buttons
+                if normalized
+                in {
+                    str(button.get("value") or "").strip().lower(),
+                    str(button.get("label") or "").strip().lower(),
+                    str(button.get("id") or "").strip().lower(),
+                }
+            ),
+            None,
+        )
 
     @staticmethod
     def _parse_callback_data(
@@ -3114,7 +3205,12 @@ class FunnelRuntimeService:
             return "email"
         if block_type == "ask_name":
             return "name"
-        if block_type in {"ask_number", "ask_age", "ask_budget"}:
+        if block_type in {
+            "ask_number",
+            "ask_age",
+            "ask_budget",
+            "ask_expected_start_amount",
+        }:
             return "number"
         if block_type == "ask_choice":
             return "choice"
@@ -3143,6 +3239,7 @@ class FunnelRuntimeService:
             "ask_comment": "comment",
             "ask_city": "city",
             "ask_budget": "budget",
+            "ask_expected_start_amount": "expected_start_amount",
         }
         return fallback_by_block.get(step.block_type)
 
@@ -3152,15 +3249,7 @@ class FunnelRuntimeService:
         return f"+{digits}" if digits else value.strip()
 
     def _choice_for_answer(self, step: FunnelStep, answer: Optional[str]) -> Optional[dict[str, Any]]:
-        normalized = str(answer or "").strip().lower()
-        for choice in self._buttons_from_step(step):
-            if normalized in {
-                str(choice.get("value") or "").strip().lower(),
-                str(choice.get("label") or "").strip().lower(),
-                str(choice.get("id") or "").strip().lower(),
-            }:
-                return choice
-        return None
+        return self._choice_for_buttons(self._buttons_from_step(step), answer)
 
     @staticmethod
     def _runtime_with_answer(

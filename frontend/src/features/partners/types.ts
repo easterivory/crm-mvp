@@ -30,6 +30,19 @@ export type PartnerRetryConfig = {
   timeout_seconds: number
 }
 
+export type PartnerRequestConfig = {
+  method: 'POST' | 'PUT' | 'PATCH'
+  body_format: 'json' | 'form'
+  payload_template: Record<string, unknown>
+  headers: Record<string, string>
+  query_params: Record<string, string>
+  secret_variables: Record<string, string>
+  generator_config: {
+    password_length: number
+    ipv4_cidrs: string[]
+  }
+}
+
 export type PartnerIntegration = {
   id: string
   project_id: string
@@ -42,6 +55,8 @@ export type PartnerIntegration = {
   required_fields: string[]
   response_mapping: PartnerResponseMapping
   retry_config: PartnerRetryConfig
+  request_config: PartnerRequestConfig
+  secret_variable_keys: string[]
   is_active: boolean
   created_at: string
   updated_at: string
@@ -57,6 +72,7 @@ export type PartnerIntegrationPayload = {
   required_fields: string[]
   response_mapping: PartnerResponseMapping
   retry_config: PartnerRetryConfig
+  request_config: PartnerRequestConfig
   is_active: boolean
 }
 

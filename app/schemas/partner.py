@@ -8,6 +8,8 @@ from app.schemas.common import OrmBase
 
 
 AuthType = Literal["header", "query_param", "bearer"]
+RequestMethod = Literal["POST", "PUT", "PATCH"]
+RequestBodyFormat = Literal["json", "form"]
 
 
 def _normalize_string_list(value: list[str]) -> list[str]:
@@ -93,6 +95,54 @@ class PartnerRetryConfig(BaseModel):
         return value
 
 
+class PartnerGeneratorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password_length: int = Field(12, ge=8, le=64)
+    ipv4_cidrs: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("ipv4_cidrs")
+    @classmethod
+    def validate_ipv4_cidrs(cls, value: list[str]) -> list[str]:
+        from ipaddress import IPv4Network
+
+        normalized = _normalize_string_list(value)
+        for cidr in normalized:
+            try:
+                IPv4Network(cidr, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"Invalid IPv4 CIDR: {cidr}") from exc
+        return normalized
+
+
+class PartnerRequestConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: RequestMethod = "POST"
+    body_format: RequestBodyFormat = "json"
+    payload_template: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    query_params: dict[str, str] = Field(default_factory=dict)
+    secret_variables: dict[str, str] = Field(default_factory=dict)
+    generator_config: PartnerGeneratorConfig = Field(default_factory=PartnerGeneratorConfig)
+
+    @field_validator("headers", "query_params")
+    @classmethod
+    def validate_string_mappings(cls, value: dict[str, str]) -> dict[str, str]:
+        return _normalize_string_mapping(value)
+
+    @field_validator("secret_variables")
+    @classmethod
+    def validate_secret_variables(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, secret in value.items():
+            normalized_key = key.strip()
+            if not normalized_key:
+                raise ValueError("Secret variable names must be non-empty strings")
+            normalized[normalized_key] = secret
+        return normalized
+
+
 class PartnerIntegrationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -106,6 +156,7 @@ class PartnerIntegrationCreate(BaseModel):
     required_fields: list[str] = Field(default_factory=list)
     response_mapping: PartnerResponseMapping = Field(default_factory=PartnerResponseMapping)
     retry_config: PartnerRetryConfig = Field(default_factory=PartnerRetryConfig)
+    request_config: PartnerRequestConfig = Field(default_factory=PartnerRequestConfig)
     is_active: bool = True
 
     @field_validator("field_mapping")
@@ -142,6 +193,7 @@ class PartnerIntegrationUpdate(BaseModel):
     required_fields: Optional[list[str]] = None
     response_mapping: Optional[PartnerResponseMapping] = None
     retry_config: Optional[PartnerRetryConfig] = None
+    request_config: Optional[PartnerRequestConfig] = None
     is_active: Optional[bool] = None
 
     @field_validator("field_mapping")
@@ -176,6 +228,8 @@ class PartnerIntegrationOut(OrmBase):
     required_fields: list[str]
     response_mapping: PartnerResponseMapping
     retry_config: PartnerRetryConfig
+    request_config: PartnerRequestConfig
+    secret_variable_keys: list[str] = Field(default_factory=list)
     is_active: bool
     created_at: datetime
     updated_at: datetime

@@ -220,7 +220,17 @@ class TelegramService:
             message,
             reset_existing=is_reactivated_cycle,
         )
-        await self._save_shared_contact(lead=lead, project_id=project_id, message=message)
+        contact_saved = await self._save_shared_contact(
+            lead=lead,
+            project_id=project_id,
+            message=message,
+        )
+        if contact_saved:
+            await self._clear_latest_contact_button(
+                chat=chat,
+                project_id=project_id,
+                bot_id=bot_id,
+            )
         await self._attach_utm_bridge_data(
             lead,
             start_payload.utm_key,
@@ -334,6 +344,50 @@ class TelegramService:
         # The phone must be visible in CRM even if later funnel delivery fails.
         await self.db.commit()
         return True
+
+    async def _clear_latest_contact_button(
+        self,
+        *,
+        chat: Chat,
+        project_id: UUID,
+        bot_id: UUID,
+    ) -> None:
+        outgoing = next(
+            (
+                message
+                for message in await self.message_repo.list_recent_outgoing_with_buttons(chat.id)
+                if self._has_contact_web_app(message.raw_payload_json)
+            ),
+            None,
+        )
+        if outgoing is None:
+            return
+        await self.telegram_sender.edit_message_reply_markup(
+            project_id,
+            bot_id,
+            chat.external_chat_id,
+            int(outgoing.external_message_id),
+        )
+
+    @staticmethod
+    def _has_contact_web_app(raw_payload: dict | None) -> bool:
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+        reply_markup = payload.get("reply_markup")
+        if not isinstance(reply_markup, dict):
+            return False
+        rows = reply_markup.get("inline_keyboard")
+        if not isinstance(rows, list):
+            return False
+        return any(
+            isinstance(button, dict)
+            and isinstance(button.get("web_app"), dict)
+            and str(button["web_app"].get("url") or "").endswith(
+                "/telegram/contact-request"
+            )
+            for row in rows
+            if isinstance(row, list)
+            for button in row
+        )
 
     async def _find_or_create_chat(
         self,
@@ -836,14 +890,15 @@ class TelegramService:
             bot_id,
             project_id,
         )
-        selected_value = (
-            await self.funnel_runtime.resolve_callback_value(
+        selected_button = (
+            await self.funnel_runtime.resolve_callback_button(
                 chat_id=chat.id,
                 callback_data=callback_query.data,
             )
             if active_version is not None and active_funnel is not None
             else None
         )
+        selected_value = (selected_button or {}).get("value")
         body = selected_value or callback_query.data or "Нажата кнопка"
         msg = await self.message_service.create_message(
             chat_id=chat.id,
@@ -878,6 +933,14 @@ class TelegramService:
             )
             if handled:
                 return
+
+        if selected_button and selected_button.get("hide_after_click") is True:
+            await self.telegram_sender.edit_message_reply_markup(
+                project_id,
+                bot_id,
+                chat.external_chat_id,
+                callback_query.message.message_id,
+            )
 
         await self._process_callback_runtime_or_legacy(
             chat=chat,

@@ -29,6 +29,7 @@ export default function MessageBlockSettings({
       message_type: firstMessage?.type ?? 'text',
       media: firstMessage?.media,
       wait_for_answer: firstMessage?.wait_for_answer ?? false,
+      button_mode: firstMessage?.button_mode ?? 'inline',
       buttons: firstMessage?.buttons ?? [],
     })
   }

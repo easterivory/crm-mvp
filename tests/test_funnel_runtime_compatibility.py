@@ -112,6 +112,103 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("web_app", markup["inline_keyboard"][0][0])
         self.assertIn("callback_data", markup["inline_keyboard"][1][0])
 
+    def test_native_contact_uses_one_time_reply_keyboard(self) -> None:
+        step = SimpleNamespace(id=uuid4())
+        buttons = self.service._normalize_buttons(
+            [
+                {
+                    "label": "Отправить номер",
+                    "type": "contact",
+                    "contact_mode": "native",
+                }
+            ]
+        )
+
+        markup = self.service._reply_markup_for_buttons(
+            step=step,
+            buttons=buttons,
+            button_mode="reply",
+        )
+
+        self.assertTrue(markup["keyboard"][0][0]["request_contact"])
+        self.assertTrue(markup["one_time_keyboard"])
+        self.assertNotIn("inline_keyboard", markup)
+
+    async def test_reply_button_text_uses_configured_message_target(self) -> None:
+        step_id = uuid4()
+        target_step_id = uuid4()
+        step = SimpleNamespace(
+            id=step_id,
+            step_type="message",
+            block_type="generic_message",
+            config_json={
+                "messages": [
+                    {
+                        "id": "message_1",
+                        "text": "Выберите вариант",
+                        "button_mode": "reply",
+                        "buttons": [
+                            {
+                                "id": "yes",
+                                "label": "Да",
+                                "value": "yes",
+                                "type": "branch",
+                                "target_step_id": str(target_step_id),
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        state = SimpleNamespace(
+            funnel_id=uuid4(),
+            funnel_version_id=uuid4(),
+            current_step_id=step_id,
+            entered_step_at=None,
+            waiting_for_answer=True,
+            is_paused=False,
+            completed_at=None,
+            runtime_json={"message_sequence": {"step_id": str(step_id), "message_index": 0}},
+        )
+        self.service.repo = SimpleNamespace(
+            get_chat_funnel_state=AsyncMock(return_value=state),
+            get_step=AsyncMock(return_value=step),
+            upsert_chat_funnel_state=AsyncMock(),
+        )
+        self.service.apply_field_mappings = AsyncMock()
+        self.service._log_step_event = AsyncMock()
+        next_step = SimpleNamespace(id=target_step_id)
+        self.service._move_to_step_id = AsyncMock(return_value=next_step)
+        self.service._execute_from_step = AsyncMock()
+
+        chat_id = uuid4()
+        handled = await self.service.process_incoming_message(
+            chat_id=chat_id,
+            text="Да",
+            message_type=MessageType.TEXT,
+        )
+
+        self.assertTrue(handled)
+        self.service._move_to_step_id.assert_awaited_once_with(
+            chat_id=chat_id,
+            target_step_id=str(target_step_id),
+            from_step=step,
+        )
+        self.service._execute_from_step.assert_awaited_once()
+
+    def test_expected_start_amount_has_own_field_without_changing_legacy_budget(self) -> None:
+        expected_step = SimpleNamespace(
+            block_type="ask_expected_start_amount",
+            config_json={},
+        )
+        legacy_step = SimpleNamespace(block_type="ask_budget", config_json={})
+
+        self.assertEqual(
+            self.service._input_target_field(expected_step),
+            "expected_start_amount",
+        )
+        self.assertEqual(self.service._input_target_field(legacy_step), "budget")
+
     async def test_contact_uses_its_target_even_with_callback_button(self) -> None:
         step_id = uuid4()
         target_step_id = uuid4()
@@ -225,6 +322,48 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             name="Анна Иванова",
         )
         telegram_service.db.commit.assert_awaited_once()
+
+    async def test_contact_web_app_button_is_removed_after_contact(self) -> None:
+        telegram_service = TelegramService.__new__(TelegramService)
+        outgoing = SimpleNamespace(
+            external_message_id="77",
+            raw_payload_json={
+                "reply_markup": {
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "Отправить номер",
+                                "web_app": {
+                                    "url": "https://crm.example.com/telegram/contact-request"
+                                },
+                            }
+                        ]
+                    ]
+                }
+            },
+        )
+        telegram_service.message_repo = SimpleNamespace(
+            list_recent_outgoing_with_buttons=AsyncMock(return_value=[outgoing])
+        )
+        telegram_service.telegram_sender = SimpleNamespace(
+            edit_message_reply_markup=AsyncMock(return_value=True)
+        )
+        chat = SimpleNamespace(id=uuid4(), external_chat_id="42")
+        project_id = uuid4()
+        bot_id = uuid4()
+
+        await telegram_service._clear_latest_contact_button(
+            chat=chat,
+            project_id=project_id,
+            bot_id=bot_id,
+        )
+
+        telegram_service.telegram_sender.edit_message_reply_markup.assert_awaited_once_with(
+            project_id,
+            bot_id,
+            "42",
+            77,
+        )
 
     async def test_contact_web_app_calls_native_contact_request(self) -> None:
         response = await telegram_contact_request()

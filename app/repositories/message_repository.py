@@ -194,6 +194,23 @@ class MessageRepository(BaseRepository[Message]):
         )
         return result.scalar_one_or_none()
 
+    async def list_recent_outgoing_with_buttons(self, chat_id: UUID) -> list[Message]:
+        result = await self.db.execute(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.sender_type.in_((SenderType.BOT, SenderType.MANAGER)),
+                Message.external_message_id.is_not(None),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(20)
+        )
+        return [
+            message
+            for message in result.scalars().all()
+            if message.buttons and str(message.external_message_id or "").isdigit()
+        ]
+
     async def list_unprocessed_user_input_batch(
         self,
         chat_id: UUID,

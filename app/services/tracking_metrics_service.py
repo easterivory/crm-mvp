@@ -247,6 +247,27 @@ class TrackingMetricsService:
                     date_to=date_to,
                 )
             ),
+            city_breakdown=self._build_breakdown(
+                await self.metrics_repo.get_city_breakdown_by_link(
+                    link_id=link_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            ),
+            status_breakdown=self._build_breakdown(
+                await self.metrics_repo.get_status_breakdown_by_link(
+                    link_id=link_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            ),
+            card_breakdown=self._build_breakdown(
+                await self.metrics_repo.get_card_breakdown_by_link(
+                    link_id=link_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            ),
         )
 
     async def _aggregate_clicks_by_link(

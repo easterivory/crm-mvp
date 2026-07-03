@@ -39,6 +39,7 @@ export const universalBlocks: UniversalBlock[] = [
     defaultConfig: {
       message_type: 'text',
       text: 'Введите текст сообщения',
+      button_mode: 'inline',
       buttons: [],
       messages: [
         {
@@ -46,6 +47,7 @@ export const universalBlocks: UniversalBlock[] = [
           type: 'text',
           text: 'Введите текст сообщения',
           delay_seconds: 0,
+          button_mode: 'inline',
           buttons: [],
         },
       ],
@@ -68,6 +70,7 @@ export const universalBlocks: UniversalBlock[] = [
       validation: { type: 'text' },
       retry_message: '',
       choices: [],
+      button_mode: 'inline',
       timeout_target_step_id: '',
     },
   },
@@ -233,6 +236,19 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
       { stepType: 'input', blockType: 'ask_number', label: 'Число', defaultTitle: 'Спросить число' },
       { stepType: 'input', blockType: 'ask_date', label: 'Дата', defaultTitle: 'Спросить дату' },
       { stepType: 'input', blockType: 'ask_time', label: 'Время', defaultTitle: 'Спросить время' },
+      {
+        stepType: 'input',
+        blockType: 'ask_expected_start_amount',
+        label: 'Сумма для старта',
+        defaultTitle: 'Ожидаемая сумма для старта',
+        defaultConfig: {
+          prompt: 'С какой суммы планируете начать?',
+          answer_type: 'number',
+          save_to: 'expected_start_amount',
+          wait_for_answer: true,
+          validation: { type: 'number' },
+        },
+      },
     ],
   },
   {

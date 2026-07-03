@@ -1040,12 +1040,18 @@ export default function DocsPage() {
               <Send className="h-6 w-6 text-cyan-200" />
               <h3 className="mt-3 font-semibold text-white">Партнерская CRM</h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                Настраиваются postback URL, auth_type header/query_param/bearer, токен, mapping полей,
-                required_fields, response_mapping и retry_config. Перед подачей можно собрать preview payload.
+                Настраиваются URL, HTTP-метод, JSON/Form, авторизация, заголовки, query-параметры,
+                обязательные поля, разбор ответа и повторы. Простой mapping сохранен для плоских API,
+                а JSON-шаблон собирает вложенное тело без отдельной разработки под партнера.
               </p>
               <p className="mt-3 text-sm leading-6 text-gray-400">
                 Успех по умолчанию распознается как success, accepted или ok. Дубликат - duplicate.
                 Ошибка - rejected или error.
+              </p>
+              <p className="mt-3 text-sm leading-6 text-gray-400">
+                В шаблоне доступны lead, custom, tracking, buyer, project и bot. Секреты вызываются
+                через secret.KEY, пароль и IP из настроенного CIDR-пула - через random.password и random.ipv4.
+                Секретные значения не возвращаются в браузер и скрываются в preview.
               </p>
             </article>
             <article className="rounded-xl border border-white/10 bg-white/[0.03] p-4">

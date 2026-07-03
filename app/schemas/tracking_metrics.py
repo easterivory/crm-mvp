@@ -89,6 +89,9 @@ class TrackingLinkMetricsResponse(BaseModel):
     tracking_lead_status_codes: list[str] = Field(default_factory=list)
     summary: TrackingMetricSummary
     daily: list[TrackingDailyMetric]
-    funnel_steps: list[TrackingFunnelStepItem] = []
-    age_breakdown: list[TrackingBreakdownItem] = []
-    country_breakdown: list[TrackingBreakdownItem] = []
+    funnel_steps: list[TrackingFunnelStepItem] = Field(default_factory=list)
+    age_breakdown: list[TrackingBreakdownItem] = Field(default_factory=list)
+    country_breakdown: list[TrackingBreakdownItem] = Field(default_factory=list)
+    city_breakdown: list[TrackingBreakdownItem] = Field(default_factory=list)
+    status_breakdown: list[TrackingBreakdownItem] = Field(default_factory=list)
+    card_breakdown: list[TrackingBreakdownItem] = Field(default_factory=list)

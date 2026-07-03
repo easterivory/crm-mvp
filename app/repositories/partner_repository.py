@@ -7,6 +7,8 @@ from sqlalchemy import Text, delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.models.lead import Lead
+from app.models.chat import Chat
+from app.models.tracking import TrackingLink
 from app.models.partner import LeadSubmission, PartnerIntegration
 from app.repositories.base import BaseRepository
 
@@ -64,6 +66,7 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         required_fields: list[str],
         response_mapping: dict[str, Any],
         retry_config: dict[str, Any],
+        request_config: dict[str, Any],
         is_active: bool,
     ) -> PartnerIntegration:
         integration = PartnerIntegration(
@@ -77,6 +80,7 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
             required_fields=required_fields,
             response_mapping=response_mapping,
             retry_config=retry_config,
+            request_config=request_config,
             is_active=is_active,
         )
         self.db.add(integration)
@@ -111,7 +115,15 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
 
     async def get_lead_in_project(self, lead_id: UUID, project_id: UUID) -> Optional[Lead]:
         result = await self.db.execute(
-            select(Lead).where(
+            select(Lead)
+            .options(
+                selectinload(Lead.project),
+                selectinload(Lead.chat)
+                .selectinload(Chat.tracking_link)
+                .selectinload(TrackingLink.buyer),
+                selectinload(Lead.chat).selectinload(Chat.bot),
+            )
+            .where(
                 Lead.id == lead_id,
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
@@ -160,7 +172,16 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
     async def list_pending_submissions(self, limit: int = 20) -> list[LeadSubmission]:
         result = await self.db.execute(
             select(LeadSubmission)
-            .options(selectinload(LeadSubmission.lead))
+            .options(
+                selectinload(LeadSubmission.lead).selectinload(Lead.project),
+                selectinload(LeadSubmission.lead)
+                .selectinload(Lead.chat)
+                .selectinload(Chat.tracking_link)
+                .selectinload(TrackingLink.buyer),
+                selectinload(LeadSubmission.lead)
+                .selectinload(Lead.chat)
+                .selectinload(Chat.bot),
+            )
             .options(selectinload(LeadSubmission.partner_integration))
             .where(LeadSubmission.status == "pending")
             .order_by(LeadSubmission.submitted_at.asc(), LeadSubmission.id.asc())
@@ -171,7 +192,16 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
     async def get_submission(self, submission_id: UUID) -> Optional[LeadSubmission]:
         result = await self.db.execute(
             select(LeadSubmission)
-            .options(selectinload(LeadSubmission.lead))
+            .options(
+                selectinload(LeadSubmission.lead).selectinload(Lead.project),
+                selectinload(LeadSubmission.lead)
+                .selectinload(Lead.chat)
+                .selectinload(Chat.tracking_link)
+                .selectinload(TrackingLink.buyer),
+                selectinload(LeadSubmission.lead)
+                .selectinload(Lead.chat)
+                .selectinload(Chat.bot),
+            )
             .options(selectinload(LeadSubmission.partner_integration))
             .where(LeadSubmission.id == submission_id)
         )
