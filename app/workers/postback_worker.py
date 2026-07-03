@@ -203,6 +203,36 @@ async def process_user_input_task(
         raise RuntimeError(str(exc)) from exc
 
 
+async def process_funnel_start_task(
+    ctx: dict,
+    chat_id: str,
+    trigger_message_id: str,
+    fresh_lifecycle: bool = False,
+) -> dict:
+    try:
+        chat_uuid = UUID(chat_id)
+        message_uuid = UUID(trigger_message_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    try:
+        async with get_db_session() as db:
+            result = await TelegramService(db).process_queued_funnel_start(
+                chat_id=chat_uuid,
+                trigger_message_id=message_uuid,
+                fresh_lifecycle=bool(fresh_lifecycle),
+            )
+            await db.commit()
+        return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
+    except Exception as exc:
+        logger.exception(
+            "Queued funnel start failed chat_id=%s message_id=%s",
+            chat_id,
+            trigger_message_id,
+        )
+        raise RuntimeError(str(exc)) from exc
+
+
 def _redis_settings_from_url() -> Any:
     if RedisSettings is None:
         return None
@@ -223,6 +253,7 @@ class WorkerSettings:
         export_lead_to_sheets_task,
         send_fb_capi_event_task,
         process_user_input_task,
+        process_funnel_start_task,
         process_broadcast,
         process_due_broadcasts,
         process_funnel_scheduled_job_task,

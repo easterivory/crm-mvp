@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import spa
+from app.api import spa, telegram_contact
 from app.api.v1.routers import (
     analytics,
     assignments,
@@ -92,6 +92,7 @@ app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)
+app.include_router(telegram_contact.router)
 
 # BrowserRouter pages need an explicit index.html fallback on direct requests.
 # Keep these routes before the broad public /{slug} lander route.

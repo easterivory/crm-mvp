@@ -1259,7 +1259,7 @@ export default function ChatsPage() {
     void loadSnippets()
     const timer = window.setInterval(() => {
       void loadChats()
-    }, 15000)
+    }, 5000)
 
     return () => {
       window.clearInterval(timer)

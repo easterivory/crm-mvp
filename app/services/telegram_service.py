@@ -29,6 +29,7 @@ Error handling:
   - All unexpected exceptions propagate to the caller (the router), which
     logs them and returns 200 to Telegram anyway (Telegram must not retry).
 """
+from hashlib import sha256
 import logging
 import re
 from dataclasses import dataclass, replace
@@ -40,6 +41,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
 from app.models.chat import Chat
 from app.models.lead import Lead
@@ -54,11 +56,11 @@ from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
 from app.services.funnel_runtime_service import FunnelRuntimeService
+from app.services.funnel_start_queue import enqueue_funnel_start
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
 from app.services.utm_bridge_service import UtmBridgeService
 from app.services.user_input_queue import enqueue_user_input
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -218,18 +220,7 @@ class TelegramService:
             message,
             reset_existing=is_reactivated_cycle,
         )
-        if lead is not None and message.contact is not None:
-            await self.lead_repo.update_contact(
-                lead.id,
-                project_id,
-                phone=message.contact.phone_number,
-                name=" ".join(
-                    part
-                    for part in [message.contact.first_name, message.contact.last_name]
-                    if part
-                ).strip()
-                or lead.name,
-            )
+        await self._save_shared_contact(lead=lead, project_id=project_id, message=message)
         await self._attach_utm_bridge_data(
             lead,
             start_payload.utm_key,
@@ -237,6 +228,21 @@ class TelegramService:
         )
         start_requested = should_start_runtime or self._is_start_command(message.text)
         if start_requested:
+            # Make the chat and lead visible before Telegram network calls made by the funnel.
+            await self.db.commit()
+            queued = await enqueue_funnel_start(
+                chat.id,
+                msg.id,
+                fresh_lifecycle=should_start_runtime,
+            )
+            if queued:
+                logger.info(
+                    "Funnel start queued chat_id=%s message_id=%s fresh_lifecycle=%s",
+                    chat.id,
+                    msg.id,
+                    should_start_runtime,
+                )
+                return
             if not await self.message_repo.claim_funnel_processing([msg.id]):
                 logger.info(
                     "Skipped duplicate Telegram start processing chat_id=%s message_id=%s",
@@ -304,6 +310,30 @@ class TelegramService:
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
+
+    async def _save_shared_contact(
+        self,
+        *,
+        lead: Optional[Lead],
+        project_id: UUID,
+        message: TelegramMessage,
+    ) -> bool:
+        if lead is None or message.contact is None:
+            return False
+        await self.lead_repo.update_contact(
+            lead.id,
+            project_id,
+            phone=message.contact.phone_number,
+            name=" ".join(
+                part
+                for part in [message.contact.first_name, message.contact.last_name]
+                if part
+            ).strip()
+            or lead.name,
+        )
+        # The phone must be visible in CRM even if later funnel delivery fails.
+        await self.db.commit()
+        return True
 
     async def _find_or_create_chat(
         self,
@@ -536,6 +566,35 @@ class TelegramService:
             chat_id,
             len(batch),
             len(combined_text),
+        )
+        return "processed"
+
+    async def process_queued_funnel_start(
+        self,
+        *,
+        chat_id: UUID,
+        trigger_message_id: UUID,
+        fresh_lifecycle: bool,
+    ) -> str:
+        chat = await self.chat_repo.get_by_id(chat_id)
+        message = await self.message_repo.get_by_id(trigger_message_id)
+        if (
+            chat is None
+            or message is None
+            or chat.is_deleted
+            or chat.reset_at is not None
+            or chat.bot_id is None
+        ):
+            return "unavailable"
+        if not await self.message_repo.claim_funnel_processing([message.id]):
+            return "already_processed"
+        await self._process_runtime_or_legacy(
+            chat=chat,
+            project_id=chat.project_id,
+            bot_id=chat.bot_id,
+            user_message=MessageOut.model_validate(message),
+            start_requested=True,
+            fresh_lifecycle=fresh_lifecycle,
         )
         return "processed"
 
@@ -789,7 +848,7 @@ class TelegramService:
             chat_id=chat.id,
             project_id=project_id,
             data=MessageCreate(
-                external_message_id=f"callback:{callback_query.id}",
+                external_message_id=self._callback_message_external_id(callback_query),
                 message_type=MessageType.TEXT,
                 sender_type=SenderType.USER,
                 sender_id=None,
@@ -801,6 +860,13 @@ class TelegramService:
                 ),
             ),
         )
+        if not await self.message_repo.claim_funnel_processing([msg.id]):
+            logger.info(
+                "Ignored repeated Telegram callback chat_id=%s callback_data=%s",
+                chat.id,
+                callback_query.data,
+            )
+            return
 
         if callback_query.data and callback_query.data.startswith("bcf:"):
             handled = await self.broadcasts.process_start_funnel_callback(
@@ -820,6 +886,15 @@ class TelegramService:
             user_message=msg,
             fallback_text=body,
         )
+
+    @staticmethod
+    def _callback_message_external_id(callback_query: TelegramCallbackQuery) -> str:
+        source_message_id = (
+            callback_query.message.message_id if callback_query.message is not None else 0
+        )
+        source = callback_query.data or callback_query.id
+        digest = sha256(source.encode("utf-8")).hexdigest()[:24]
+        return f"callback:{source_message_id}:{digest}"
 
     @staticmethod
     def _contact_name_from_message(message: TelegramMessage) -> Optional[str]:

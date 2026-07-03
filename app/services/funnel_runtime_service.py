@@ -11,6 +11,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
 from app.models.user import User
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
@@ -2824,20 +2825,12 @@ class FunnelRuntimeService:
     ) -> Optional[dict]:
         if not buttons:
             return None
-        contact_buttons = [button for button in buttons if button.get("type") == "contact"]
-        if contact_buttons:
-            return {
-                "keyboard": [
-                    [{"text": button["label"], "request_contact": True}]
-                    for button in contact_buttons
-                ],
-                "resize_keyboard": True,
-                "one_time_keyboard": True,
-            }
         rows = []
         for index, button in enumerate(buttons):
             item = {"text": button["label"]}
-            if button.get("type") == "url" and button.get("url"):
+            if button.get("type") == "contact":
+                item["web_app"] = {"url": self._contact_web_app_url()}
+            elif button.get("type") == "url" and button.get("url"):
                 item["url"] = button["url"]
             else:
                 if message_index is None:
@@ -2846,6 +2839,13 @@ class FunnelRuntimeService:
                     item["callback_data"] = f"fr:{step.id.hex}:{message_index}:{index}"
             rows.append([item])
         return {"inline_keyboard": rows}
+
+    @staticmethod
+    def _contact_web_app_url() -> str:
+        base_url = settings.BASE_URL.rstrip("/")
+        if not base_url.lower().startswith("https://"):
+            raise RuntimeError("BASE_URL must use HTTPS for Telegram contact Web App buttons")
+        return f"{base_url}/telegram/contact-request"
 
     def _buttons_from_step(
         self,

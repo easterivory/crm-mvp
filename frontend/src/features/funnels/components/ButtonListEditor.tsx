@@ -167,7 +167,7 @@ export default function ButtonListEditor({
             ) : button.type === 'contact' ? (
               <div className="flex items-start gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2 text-xs leading-5 text-emerald-100/80">
                 <Phone size={14} className="mt-0.5 shrink-0" />
-                Telegram покажет системную кнопку отправки номера. Она работает в личном чате с ботом.
+                Кнопка появится под сообщением и запросит номер через Telegram.
               </div>
             ) : (
               <>

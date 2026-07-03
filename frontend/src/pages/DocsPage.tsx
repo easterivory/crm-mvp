@@ -901,8 +901,9 @@ export default function DocsPage() {
               </p>
               <p className="mt-2 text-sm leading-6 text-gray-400">
                 В тексте работают переменные first_name, username, phone, lead_status, project, bot
-                и custom.&lt;ключ&gt;. Кнопка запроса контакта сохраняет присланный Telegram номер в
-                поле phone, после чего он доступен как {'{{phone}}'}.
+                и custom.&lt;ключ&gt;. Контактная inline-кнопка открывает Telegram Mini App с нативным
+                запросом номера, сохраняет присланный номер в поле phone, после чего он доступен как
+                {'{{phone}}'}. Для кнопки нужен публичный HTTPS BASE_URL.
               </p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
