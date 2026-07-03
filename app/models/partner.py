@@ -12,7 +12,6 @@ from sqlalchemy import (
     Index,
     String,
     Text,
-    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -91,11 +90,6 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     """Tracks lead submissions to partner CRMs."""
     __tablename__ = "lead_submissions"
     __table_args__ = (
-        UniqueConstraint(
-            "lead_id",
-            "partner_integration_id",
-            name="uq_lead_submissions_lead_partner",
-        ),
         Index("ix_lead_submissions_lead_id", "lead_id"),
         Index("ix_lead_submissions_partner_integration_id", "partner_integration_id"),
         Index("ix_lead_submissions_status", "status"),

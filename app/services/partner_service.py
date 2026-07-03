@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import RoleName
-from app.models.partner import PartnerIntegration
+from app.models.partner import LeadSubmission, PartnerIntegration
 from app.models.user import User
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.repositories.lead_repository import LeadRepository
@@ -26,6 +26,8 @@ from app.services.postback_service import PostbackService
 
 
 class PartnerService:
+    RETRYABLE_SUBMISSION_STATUSES = frozenset({"failed"})
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.repo = PartnerIntegrationRepository(db)
@@ -143,6 +145,17 @@ class PartnerService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Partner integration is not active",
             )
+        existing_submissions = await self.repo.list_submissions_for_lead_partner(
+            lead_id=lead.id,
+            partner_integration_id=integration.id,
+            project_id=project_id,
+            for_update=True,
+        )
+        if self._has_blocking_submission(existing_submissions):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Lead submission is already queued or completed for this partner",
+            )
         try:
             async with self.db.begin_nested():
                 submission = await self.repo.create_submission(
@@ -157,6 +170,13 @@ class PartnerService:
                 detail="Lead was already submitted to this partner",
             ) from exc
         return LeadSubmissionOut.model_validate(submission)
+
+    @classmethod
+    def _has_blocking_submission(cls, submissions: list[LeadSubmission]) -> bool:
+        return any(
+            str(item.status).lower() not in cls.RETRYABLE_SUBMISSION_STATUSES
+            for item in submissions
+        )
 
     async def list_lead_submissions(
         self,

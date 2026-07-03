@@ -151,6 +151,29 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         await self.db.refresh(submission)
         return submission
 
+    async def list_submissions_for_lead_partner(
+        self,
+        *,
+        lead_id: UUID,
+        partner_integration_id: UUID,
+        project_id: UUID,
+        for_update: bool = False,
+    ) -> list[LeadSubmission]:
+        stmt = (
+            select(LeadSubmission)
+            .join(Lead, Lead.id == LeadSubmission.lead_id)
+            .where(
+                LeadSubmission.lead_id == lead_id,
+                LeadSubmission.partner_integration_id == partner_integration_id,
+                Lead.project_id == project_id,
+            )
+            .order_by(LeadSubmission.submitted_at.desc(), LeadSubmission.id.desc())
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_submissions_for_lead(
         self,
         lead_id: UUID,

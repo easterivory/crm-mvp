@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.schemas.partner import PartnerRequestConfig
+from app.services.partner_service import PartnerService
 from app.services.postback_service import PostbackService
 
 
@@ -55,6 +56,7 @@ def make_lead():
     )
     chat = SimpleNamespace(
         external_user_id="99112233",
+        contact_name="Ivan Telegramov",
         tracking_link=tracking,
         bot=SimpleNamespace(id=uuid4(), name="Sales Bot", bot_username="sales_bot"),
     )
@@ -172,3 +174,30 @@ def test_boolean_success_response_and_secret_redaction():
 def test_redacted_secret_values_are_valid_for_edit_roundtrip():
     config = PartnerRequestConfig(secret_variables={"AFFC": ""})
     assert config.secret_variables == {"AFFC": ""}
+
+
+def test_name_falls_back_to_telegram_contact_name():
+    integration = make_integration(
+        payload_template={
+            "firstName": "{{lead.first_name}}",
+            "lastName": "{{lead.last_name}}",
+        }
+    )
+    lead = make_lead()
+    lead.name = None
+
+    payload = service().build_payload(lead, integration)
+
+    assert payload == {"firstName": "Ivan", "lastName": "Telegramov"}
+
+
+def test_only_failed_partner_submissions_allow_retry():
+    assert not PartnerService._has_blocking_submission(
+        [SimpleNamespace(status="failed"), SimpleNamespace(status="FAILED")]
+    )
+    assert PartnerService._has_blocking_submission(
+        [SimpleNamespace(status="failed"), SimpleNamespace(status="pending")]
+    )
+    assert PartnerService._has_blocking_submission(
+        [SimpleNamespace(status="completed")]
+    )

@@ -100,6 +100,7 @@ type DuplicatePartnerConflict = {
 }
 
 const SUCCESSFUL_DUPLICATE_STATUSES = new Set(['completed', 'success'])
+const RETRYABLE_SUBMISSION_STATUSES = new Set(['failed'])
 
 function normalizePartnerName(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -265,9 +266,23 @@ export default function LeadSubmissionDrawer({
     [lead.id, onSubmitted, projectId],
   )
 
-  const statusCopy = finalStatusCopy(submission)
   const selectedPartner = activePartners.find((partner) => partner.id === partnerId) ?? null
-  const duplicateSubmission = submissions.find((item) => item.partner_integration_id === partnerId)
+  const partnerSubmissions = submissions.filter(
+    (item) => item.partner_integration_id === partnerId,
+  )
+  const blockingSubmission = partnerSubmissions.find(
+    (item) => !RETRYABLE_SUBMISSION_STATUSES.has(item.status.toLowerCase()),
+  )
+  const retryableSubmission = blockingSubmission
+    ? null
+    : partnerSubmissions.find((item) => RETRYABLE_SUBMISSION_STATUSES.has(item.status.toLowerCase())) ?? null
+  const visibleSubmission = submission?.partner_integration_id === partnerId
+    ? submission
+    : partnerSubmissions[0] ?? null
+  const statusCopy = finalStatusCopy(visibleSubmission)
+  const blockingStatus = blockingSubmission?.status.toLowerCase() ?? ''
+  const submissionInProgress = ['pending', 'sending'].includes(blockingStatus)
+  const partnerReportedDuplicate = blockingStatus === 'duplicate'
   const duplicateConflictByPartnerId = useMemo(() => {
     const conflicts = new Map<string, DuplicatePartnerConflict>()
 
@@ -289,7 +304,11 @@ export default function LeadSubmissionDrawer({
         (partner) =>
           partner.id !== partnerId &&
           !duplicateConflictByPartnerId.has(partner.id) &&
-          !submissions.some((item) => item.partner_integration_id === partner.id),
+          !submissions.some(
+            (item) =>
+              item.partner_integration_id === partner.id &&
+              !RETRYABLE_SUBMISSION_STATUSES.has(item.status.toLowerCase()),
+          ),
       ) ?? null,
     [activePartners, duplicateConflictByPartnerId, partnerId, submissions],
   )
@@ -299,7 +318,7 @@ export default function LeadSubmissionDrawer({
       !previewError &&
       !isPreviewLoading &&
       !isSubmitting &&
-      !duplicateSubmission &&
+      !blockingSubmission &&
       !duplicatePartnerConflict,
   )
 
@@ -309,7 +328,7 @@ export default function LeadSubmissionDrawer({
       previewError ||
       !preview ||
       isSubmitting ||
-      duplicateSubmission ||
+      blockingSubmission ||
       duplicatePartnerConflict
     ) {
       return
@@ -417,20 +436,34 @@ export default function LeadSubmissionDrawer({
               </div>
             ) : null}
 
-            {duplicateSubmission && selectedPartner ? (
+            {blockingSubmission && selectedPartner ? (
               <div className="rounded-xl border border-orange-400/35 bg-orange-500/15 px-4 py-3 text-sm text-orange-100">
                 <div className="flex items-center gap-2 font-semibold">
                   <AlertTriangle size={17} />
-                  Повторная отправка заблокирована
+                  {submissionInProgress
+                    ? 'Отправка уже выполняется'
+                    : partnerReportedDuplicate
+                      ? 'Партнёр отметил лида как дубль'
+                    : 'Повторная отправка заблокирована'}
                 </div>
                 <p className="mt-2 leading-6">
-                  Этот лид уже отправлялся рекламодателю {selectedPartner.name}. Повторная отправка заблокирована во избежание дублей.
+                  {submissionInProgress
+                    ? `Лид уже находится в очереди отправки рекламодателю ${selectedPartner.name}.`
+                    : partnerReportedDuplicate
+                      ? `Рекламодатель ${selectedPartner.name} вернул статус дубля. Автоматический повтор заблокирован.`
+                      : `Этот лид уже был принят рекламодателем ${selectedPartner.name}. Повторная отправка заблокирована во избежание дублей.`}
                 </p>
-                {duplicateSubmission.partner_feedback ? (
+                {blockingSubmission.partner_feedback ? (
                   <p className="mt-2 rounded-lg border border-orange-300/20 bg-black/15 px-3 py-2 text-xs leading-5">
-                    {duplicateSubmission.partner_feedback}
+                    {blockingSubmission.partner_feedback}
                   </p>
                 ) : null}
+              </div>
+            ) : null}
+
+            {retryableSubmission && selectedPartner ? (
+              <div className="rounded-xl border border-sky-400/25 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                Предыдущая отправка в {selectedPartner.name} завершилась ошибкой. После исправления настроек её можно повторить; старая попытка останется в истории.
               </div>
             ) : null}
 
@@ -574,7 +607,7 @@ export default function LeadSubmissionDrawer({
               className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSubmitting ? <LoaderCircle size={17} className="animate-spin" /> : <Send size={17} />}
-              Подтвердить и отправить
+              {retryableSubmission ? 'Повторить отправку' : 'Подтвердить и отправить'}
             </button>
           </div>
         </footer>
