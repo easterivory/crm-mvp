@@ -14,6 +14,8 @@ class LeadCreate(BaseModel):
 
 class LeadUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
+    first_name: Optional[str] = Field(None, max_length=255)
+    last_name: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)
     username: Optional[str] = Field(None, max_length=255)
     age: Optional[int] = Field(None, ge=0, le=150)
@@ -64,6 +66,8 @@ class LeadOut(OrmBase):
     manager_id: Optional[uuid.UUID]
     status_id: uuid.UUID
     name: Optional[str]
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     phone: Optional[str]
     username: Optional[str]
     age: Optional[int]

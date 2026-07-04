@@ -197,6 +197,23 @@ def test_name_falls_back_to_telegram_contact_name():
     assert payload == {"firstName": "Ivan", "lastName": "Telegramov"}
 
 
+def test_partner_payload_never_uses_username_as_last_name():
+    integration = make_integration(
+        payload_template={
+            "firstName": "{{lead.first_name}}",
+            "lastName": "{{lead.last_name}}",
+        }
+    )
+    lead = make_lead()
+    lead.name = "Виктор @smmirnovvictor"
+    lead.username = "smmirnovvictor"
+    lead.custom_fields = {}
+
+    payload = service().build_payload(lead, integration)
+
+    assert payload == {"firstName": "Виктор", "lastName": "Виктор"}
+
+
 def test_only_failed_partner_submissions_allow_retry():
     assert not PartnerService._has_blocking_submission(
         [SimpleNamespace(status="failed"), SimpleNamespace(status="FAILED")]

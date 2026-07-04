@@ -34,6 +34,8 @@ type Lead = {
   manager_id: string | null
   status_id: string
   name: string | null
+  first_name: string | null
+  last_name: string | null
   phone: string | null
   username: string | null
   age: number | null
@@ -202,11 +204,19 @@ function expectedStartAmount(customFields: Record<string, unknown> | undefined) 
     : String(value)
 }
 
-function getErrorMessage(err: unknown) {
+function getErrorMessage(err: unknown, fallback = 'Не удалось выполнить запрос.') {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
     if (typeof detail === 'string' && detail.length > 0) {
       return detail
+    }
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => item?.msg)
+        .filter((message): message is string => typeof message === 'string')
+      if (messages.length > 0) {
+        return messages.join('; ')
+      }
     }
     if (err.response?.status === 404) {
       return 'Лид для этого чата ещё не создан.'
@@ -216,7 +226,7 @@ function getErrorMessage(err: unknown) {
     }
   }
 
-  return 'Не удалось загрузить лида.'
+  return fallback
 }
 
 export default function LeadSidebar({
@@ -239,7 +249,8 @@ export default function LeadSidebar({
   const [tags, setTags] = useState<ProjectTag[]>([])
   const [selectedTagId, setSelectedTagId] = useState('')
   const [tagSearch, setTagSearch] = useState('')
-  const [nameDraft, setNameDraft] = useState('')
+  const [firstNameDraft, setFirstNameDraft] = useState('')
+  const [lastNameDraft, setLastNameDraft] = useState('')
   const [usernameDraft, setUsernameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
   const [preferredCallTimeDraft, setPreferredCallTimeDraft] = useState('')
@@ -269,7 +280,8 @@ export default function LeadSidebar({
 
   const isContactDirty = Boolean(
     lead &&
-      (nameDraft.trim() !== (lead.name ?? '') ||
+      (firstNameDraft.trim() !== (lead.first_name ?? '') ||
+        lastNameDraft.trim() !== (lead.last_name ?? '') ||
         usernameDraft.trim() !== (lead.username ?? '') ||
         phoneDraft.trim() !== (lead.phone ?? '') ||
         preferredCallTimeDraft.trim() !== (lead.preferred_call_time ?? lead.call_time_text ?? '')),
@@ -355,7 +367,8 @@ export default function LeadSidebar({
   const loadLead = useCallback(async () => {
     if (!activeChatId) {
       setLead(null)
-      setNameDraft('')
+      setFirstNameDraft('')
+      setLastNameDraft('')
       setUsernameDraft('')
       setPhoneDraft('')
       setPreferredCallTimeDraft('')
@@ -371,13 +384,15 @@ export default function LeadSidebar({
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
-      setNameDraft(data.name ?? '')
+      setFirstNameDraft(data.first_name ?? '')
+      setLastNameDraft(data.last_name ?? '')
       setUsernameDraft(data.username ?? '')
       setPhoneDraft(data.phone ?? '')
       setPreferredCallTimeDraft(data.preferred_call_time ?? data.call_time_text ?? '')
     } catch (err) {
       setLead(null)
-      setNameDraft('')
+      setFirstNameDraft('')
+      setLastNameDraft('')
       setUsernameDraft('')
       setPhoneDraft('')
       setPreferredCallTimeDraft('')
@@ -462,10 +477,12 @@ export default function LeadSidebar({
     try {
       const username = usernameDraft.trim()
       const phone = phoneDraft.trim()
-      const name = nameDraft.trim()
+      const firstName = firstNameDraft.trim()
+      const lastName = lastNameDraft.trim()
       const preferredCallTime = preferredCallTimeDraft.trim()
       const { data } = await api.patch<Lead>(`/leads/${lead.id}`, {
-        name: name || null,
+        first_name: firstName || null,
+        last_name: lastName || null,
         username: username || null,
         phone: phone || null,
         preferred_call_time: preferredCallTime || null,
@@ -473,13 +490,14 @@ export default function LeadSidebar({
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
       setLead(data)
-      setNameDraft(data.name ?? '')
+      setFirstNameDraft(data.first_name ?? '')
+      setLastNameDraft(data.last_name ?? '')
       setUsernameDraft(data.username ?? '')
       setPhoneDraft(data.phone ?? '')
       setPreferredCallTimeDraft(data.preferred_call_time ?? data.call_time_text ?? '')
       onLeadStatusChanged?.()
     } catch (err) {
-      setError(getErrorMessage(err))
+      setError(getErrorMessage(err, 'Не удалось сохранить контакты лида.'))
     } finally {
       setIsSavingContact(false)
     }
@@ -1012,19 +1030,34 @@ export default function LeadSidebar({
                   </button>
                 </div>
 	                <div className="space-y-3">
-                  <label className="block">
-                    <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
-                      <UserRound size={14} />
-                      ФИО
-                    </span>
-                    <input
-                      value={nameDraft}
-                      onChange={(event) => setNameDraft(event.target.value)}
-                      maxLength={255}
-                      placeholder="ФИО клиента"
-                      className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
-                    />
-                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
+                        <UserRound size={14} />
+                        Имя
+                      </span>
+                      <input
+                        value={firstNameDraft}
+                        onChange={(event) => setFirstNameDraft(event.target.value)}
+                        maxLength={255}
+                        placeholder="Имя клиента"
+                        className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">
+                        <UserRound size={14} />
+                        Фамилия
+                      </span>
+                      <input
+                        value={lastNameDraft}
+                        onChange={(event) => setLastNameDraft(event.target.value)}
+                        maxLength={255}
+                        placeholder="Фамилия клиента"
+                        className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                      />
+                    </label>
+                  </div>
 
                   <label className="block">
                     <span className="mb-1 flex items-center gap-2 text-xs text-gray-500">

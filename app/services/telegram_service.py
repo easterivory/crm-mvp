@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
+from app.core.lead_names import compose_lead_name, normalize_name_part
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.repositories.bot_repository import BotRepository
@@ -413,6 +414,14 @@ class TelegramService:
             bot_id=bot_id,
         )
         if chat is not None:
+            contact_name = self._contact_name_from_message(message)
+            if contact_name and contact_name != chat.contact_name:
+                updated_chat = await self.chat_repo.update_by_id(
+                    chat.id,
+                    contact_name=contact_name,
+                )
+                if updated_chat is not None:
+                    chat = updated_chat
             return chat, False, False
 
         # Build a human-readable contact name from available sender fields
@@ -964,16 +973,19 @@ class TelegramService:
     def _contact_name_from_message(message: TelegramMessage) -> Optional[str]:
         if not message.from_user:
             return None
+        return compose_lead_name(
+            message.from_user.first_name,
+            message.from_user.last_name,
+        )
 
-        parts = [
-            p
-            for p in [
-                message.from_user.first_name,
-                f"@{message.from_user.username}" if message.from_user.username else None,
-            ]
-            if p
-        ]
-        return " ".join(parts) or None
+    @staticmethod
+    def _telegram_profile_fields(message: TelegramMessage) -> tuple[str | None, str | None]:
+        if message.from_user is None:
+            return None, None
+        return (
+            normalize_name_part(message.from_user.first_name),
+            normalize_name_part(message.from_user.last_name),
+        )
 
     async def _resolve_tracking_link_id(
         self,
@@ -1194,10 +1206,20 @@ class TelegramService:
                     if message.from_user and message.from_user.username
                     else None
                 )
+                first_name, last_name = self._telegram_profile_fields(message)
                 reset_lead = await self.lead_repo.reset_existing_for_new_cycle(
                     existing.id,
                     project_id,
                     username=username,
+                    name=compose_lead_name(first_name, last_name),
+                    custom_fields={
+                        key: value
+                        for key, value in {
+                            "first_name": first_name,
+                            "last_name": last_name,
+                        }.items()
+                        if value
+                    },
                 )
                 if reset_lead is None:
                     logger.error(
@@ -1207,7 +1229,7 @@ class TelegramService:
                     )
                     return existing
                 return reset_lead
-            return existing
+            return await self._sync_lead_telegram_profile(existing, message, project_id)
 
         # Resolve the 'new' status — must exist in the reference table
         new_status = await self.lead_repo.get_status_by_code(LeadStatusCode.NEW)
@@ -1224,6 +1246,15 @@ class TelegramService:
         username: Optional[str] = None
         if message.from_user and message.from_user.username:
             username = message.from_user.username
+        first_name, last_name = self._telegram_profile_fields(message)
+        custom_fields = {
+            key: value
+            for key, value in {
+                "first_name": first_name,
+                "last_name": last_name,
+            }.items()
+            if value
+        }
 
         try:
             async with self.db.begin_nested():
@@ -1231,7 +1262,9 @@ class TelegramService:
                     project_id=project_id,
                     chat_id=chat_id,
                     status_id=new_status.id,
+                    name=compose_lead_name(first_name, last_name),
                     username=username,
+                    custom_fields=custom_fields,
                 )
             logger.info(
                 "Created lead id=%s chat_id=%s project_id=%s",
@@ -1259,6 +1292,38 @@ class TelegramService:
                 project_id,
             )
             return await self.lead_repo.get_by_chat(chat_id, project_id)
+
+    async def _sync_lead_telegram_profile(
+        self,
+        lead: Lead,
+        message: TelegramMessage,
+        project_id: UUID,
+    ) -> Lead:
+        first_name, last_name = self._telegram_profile_fields(message)
+        if not first_name and not last_name:
+            return lead
+
+        custom_fields = dict(lead.custom_fields or {})
+        changed = False
+        if first_name and not normalize_name_part(custom_fields.get("first_name")):
+            custom_fields["first_name"] = first_name
+            changed = True
+        if last_name and not normalize_name_part(custom_fields.get("last_name")):
+            custom_fields["last_name"] = last_name
+            changed = True
+        if not changed:
+            return lead
+
+        updated = await self.lead_repo.update_contact(
+            lead.id,
+            project_id,
+            name=compose_lead_name(
+                custom_fields.get("first_name"),
+                custom_fields.get("last_name"),
+            ),
+            custom_fields=custom_fields,
+        )
+        return updated or lead
 
     async def _attach_utm_bridge_data(
         self,

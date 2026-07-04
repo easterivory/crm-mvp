@@ -88,7 +88,9 @@ export const answerTypes = [
 
 export const leadFields = [
   ['', 'Не сохранять'],
-  ['name', 'Имя'],
+  ['name', 'Имя / ФИО'],
+  ['first_name', 'Имя'],
+  ['last_name', 'Фамилия'],
   ['phone', 'Телефон'],
   ['username', 'Username'],
   ['age', 'Возраст'],

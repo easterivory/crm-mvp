@@ -18,6 +18,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ChatEventType, LeadStatusCode
+from app.core.lead_names import compose_lead_name, resolve_lead_names, split_lead_name
 from app.models.lead import Lead
 from app.models.partner import LeadSubmission, PartnerIntegration
 from app.repositories.lead_repository import LeadRepository
@@ -900,15 +901,17 @@ class PostbackService:
         bot = getattr(chat, "bot", None) if chat is not None else None
         custom_fields = dict(getattr(lead, "custom_fields", None) or {})
 
-        full_name = str(
-            getattr(lead, "name", None)
-            or getattr(chat, "contact_name", None)
-            or getattr(lead, "username", None)
-            or ""
-        ).strip().removeprefix("@")
-        name_parts = full_name.split(maxsplit=1)
-        first_name = name_parts[0] if name_parts else ""
-        last_name = name_parts[1] if len(name_parts) > 1 else first_name
+        first_name, last_name = resolve_lead_names(lead)
+        if not first_name:
+            first_name, contact_last_name = split_lead_name(
+                getattr(chat, "contact_name", None),
+                username=getattr(lead, "username", None),
+            )
+            last_name = last_name or contact_last_name
+        if not first_name:
+            first_name = str(getattr(lead, "username", None) or "").removeprefix("@")
+        full_name = compose_lead_name(first_name, last_name) or first_name
+        last_name = last_name or first_name
         telegram_id = (
             getattr(chat, "external_user_id", None)
             or custom_fields.get("telegram_id")

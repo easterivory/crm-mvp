@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
+from app.core.lead_names import normalize_name_part, split_lead_name
 from app.models.user import User
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
 from app.repositories.bot_repository import BotRepository
@@ -1401,11 +1402,16 @@ class FunnelRuntimeService:
         state = await self.repo.get_chat_funnel_state(chat_id)
         custom_fields = dict(context.get("custom_fields") or {})
         name = context.get("name") or context.get("contact_name")
+        legacy_first_name, legacy_last_name = split_lead_name(
+            name,
+            username=context.get("username"),
+        )
         values: dict[str, Any] = {
             # Direct custom keys remain supported for already published funnels.
             **custom_fields,
             "name": name,
-            "first_name": name.split(maxsplit=1)[0] if name else None,
+            "first_name": normalize_name_part(custom_fields.get("first_name")) or legacy_first_name,
+            "last_name": normalize_name_part(custom_fields.get("last_name")) or legacy_last_name,
             "phone": context.get("phone"),
             "username": context.get("username"),
             "age": context.get("age"),

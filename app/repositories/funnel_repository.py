@@ -24,6 +24,7 @@ from app.models.funnel import (
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.project import Project
+from app.core.lead_names import compose_lead_name, resolve_lead_names
 from app.repositories.base import BaseRepository
 from app.schemas.funnel import (
     FunnelEdgeIn,
@@ -1093,6 +1094,11 @@ class FunnelRepository(BaseRepository[Funnel]):
             existing = dict(lead.custom_fields or {}) if lead is not None else {}
             existing.update(custom_values)
             values["custom_fields"] = existing
+            if lead is not None and {"first_name", "last_name"} & set(custom_values):
+                first_name, last_name = resolve_lead_names(lead)
+                first_name = custom_values.get("first_name", first_name)
+                last_name = custom_values.get("last_name", last_name)
+                values["name"] = compose_lead_name(first_name, last_name)
         if not values:
             return
         values["updated_at"] = func.now()

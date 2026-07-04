@@ -33,6 +33,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode
+from app.core.lead_names import (
+    compose_lead_name,
+    normalize_name_part,
+    resolve_lead_names,
+    split_lead_name,
+)
 
 logger = logging.getLogger(__name__)
 from app.repositories.chat_repository import ChatRepository
@@ -517,6 +523,46 @@ class LeadService:
         old_call_time = lead.preferred_call_time or lead.call_time_text
         values = data.model_dump(exclude_unset=True)
         requested_fields = set(values)
+        requested_first_name = values.pop("first_name", None) if "first_name" in values else None
+        requested_last_name = values.pop("last_name", None) if "last_name" in values else None
+        profile_fields_requested = bool({"first_name", "last_name"} & requested_fields)
+
+        if profile_fields_requested:
+            current_first_name, current_last_name = resolve_lead_names(lead)
+            first_name = (
+                normalize_name_part(requested_first_name)
+                if "first_name" in requested_fields
+                else current_first_name
+            )
+            last_name = (
+                normalize_name_part(requested_last_name)
+                if "last_name" in requested_fields
+                else current_last_name
+            )
+            custom_fields = dict(lead.custom_fields or {})
+            for key, value in (("first_name", first_name), ("last_name", last_name)):
+                if value:
+                    custom_fields[key] = value
+                else:
+                    custom_fields.pop(key, None)
+            values["custom_fields"] = custom_fields
+            values["name"] = compose_lead_name(first_name, last_name)
+            requested_fields.add("name")
+        elif "name" in values:
+            normalized_name = self._normalize_optional(values["name"])
+            first_name, last_name = split_lead_name(
+                normalized_name,
+                username=lead.username,
+            )
+            custom_fields = dict(lead.custom_fields or {})
+            for key, value in (("first_name", first_name), ("last_name", last_name)):
+                if value:
+                    custom_fields[key] = value
+                else:
+                    custom_fields.pop(key, None)
+            values["name"] = compose_lead_name(first_name, last_name)
+            values["custom_fields"] = custom_fields
+
         for field_name in ("name", "country", "call_time_text", "preferred_call_time"):
             if field_name in values:
                 values[field_name] = self._normalize_optional(values[field_name])
@@ -557,6 +603,8 @@ class LeadService:
         context = await self.lead_repo.get_lead_context(lead.id)
         return LeadOut.model_validate(lead).model_copy(
             update={
+                "first_name": resolve_lead_names(lead)[0],
+                "last_name": resolve_lead_names(lead)[1],
                 "tags": [
                     LeadTagOut(id=tag.id, name=tag.name, color=tag.color)
                     for tag in tags

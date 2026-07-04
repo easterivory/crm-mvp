@@ -514,6 +514,8 @@ class LeadRepository(BaseRepository[Lead]):
         project_id: UUID,
         *,
         username: Optional[str],
+        name: Optional[str] = None,
+        custom_fields: Optional[dict] = None,
     ) -> Optional[Lead]:
         new_status = await self.get_status_by_code("new")
         if new_status is None:
@@ -531,7 +533,7 @@ class LeadRepository(BaseRepository[Lead]):
                 is_deleted=False,
                 is_trash=False,
                 manager_id=None,
-                name=None,
+                name=name,
                 phone=None,
                 username=username,
                 age=None,
@@ -539,7 +541,7 @@ class LeadRepository(BaseRepository[Lead]):
                 call_time_text=None,
                 preferred_call_time=None,
                 has_card=None,
-                custom_fields={},
+                custom_fields=custom_fields or {},
                 updated_at=func.now(),
             )
         )

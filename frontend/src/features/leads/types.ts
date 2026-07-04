@@ -11,6 +11,8 @@ export type Lead = {
   manager_id: string | null
   status_id: string
   name: string | null
+  first_name: string | null
+  last_name: string | null
   phone: string | null
   username: string | null
   age: number | null

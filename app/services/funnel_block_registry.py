@@ -21,6 +21,8 @@ class BlockDefinition:
 
 LEAD_FIELD_KEYS = [
     "name",
+    "first_name",
+    "last_name",
     "username",
     "phone",
     "age",
