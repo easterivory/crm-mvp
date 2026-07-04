@@ -9,7 +9,7 @@ import pytest
 import httpx
 from fastapi import HTTPException
 
-from app.schemas.partner import PartnerRequestConfig
+from app.schemas.partner import PartnerRequestConfig, _normalize_postback_url
 from app.services.partner_service import PartnerService
 from app.services.postback_service import PostbackService
 
@@ -316,3 +316,24 @@ def test_http_request_matches_partner_curl_wire_format():
     assert response.status_code == 201
     assert metadata["headers"]["x-api-key"] == "***2199 (length=36)"
     assert metadata["headers"]["Content-Type"] == "application/json"
+
+
+def test_partner_endpoint_rejects_placeholder_and_malformed_hosts():
+    with pytest.raises(ValueError, match="real domain"):
+        _normalize_postback_url("{{host}}/api/external/integration/lead")
+    with pytest.raises(ValueError, match="valid domain"):
+        _normalize_postback_url("https://https://partner.example/path")
+    assert (
+        _normalize_postback_url(" https://partner.example/api/external/integration/lead ")
+        == "https://partner.example/api/external/integration/lead"
+    )
+
+
+def test_dns_failure_message_names_the_unresolved_host():
+    request = httpx.Request("POST", "https://missing.example/path")
+    error = httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+
+    message = service()._connection_error_message(str(request.url), error)
+
+    assert "missing.example" in message
+    assert "DNS" in message

@@ -630,6 +630,7 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
                 API Endpoint URL
               </span>
               <input
+                type="url"
                 value={form.postback_url}
                 onChange={(event) => patchForm({ postback_url: event.target.value })}
                 required

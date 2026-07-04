@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -33,6 +34,25 @@ def _normalize_string_mapping(value: dict[str, str]) -> dict[str, str]:
         if not source or not target:
             raise ValueError("Mapping keys and values must be non-empty strings")
         normalized[source] = target
+    return normalized
+
+
+def _normalize_postback_url(value: str) -> str:
+    normalized = value.strip()
+    if "{{" in normalized or "}}" in normalized:
+        raise ValueError("API Endpoint URL must contain a real domain, not {{host}}")
+    if any(character.isspace() for character in normalized):
+        raise ValueError("API Endpoint URL must not contain spaces")
+    try:
+        parsed = urlsplit(normalized)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("API Endpoint URL is malformed") from exc
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("API Endpoint URL must start with http:// or https://")
+    if not hostname or parsed.path.startswith("//"):
+        raise ValueError("API Endpoint URL must contain a valid domain")
     return normalized
 
 
@@ -160,6 +180,11 @@ class PartnerIntegrationCreate(BaseModel):
     request_config: PartnerRequestConfig = Field(default_factory=PartnerRequestConfig)
     is_active: bool = True
 
+    @field_validator("postback_url")
+    @classmethod
+    def validate_postback_url(cls, value: str) -> str:
+        return _normalize_postback_url(value)
+
     @field_validator("field_mapping")
     @classmethod
     def validate_field_mapping(cls, value: dict[str, str]) -> dict[str, str]:
@@ -196,6 +221,11 @@ class PartnerIntegrationUpdate(BaseModel):
     retry_config: Optional[PartnerRetryConfig] = None
     request_config: Optional[PartnerRequestConfig] = None
     is_active: Optional[bool] = None
+
+    @field_validator("postback_url")
+    @classmethod
+    def validate_postback_url(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_postback_url(value) if value is not None else None
 
     @field_validator("field_mapping")
     @classmethod

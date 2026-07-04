@@ -10,6 +10,7 @@ import string
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -333,6 +334,25 @@ class PostbackService:
                 "parsed_response": None,
                 "error_message": "Request timeout",
             }
+        except httpx.ConnectError as exc:
+            error_message = self._connection_error_message(integration.postback_url, exc)
+            logger.warning(
+                "Partner connection failed integration_id=%s reason=%s",
+                integration.id,
+                error_message,
+            )
+            return {
+                "ok": False,
+                "connected": False,
+                "mapping_valid": True,
+                "accepted": False,
+                "status": "dns_error" if self._is_dns_error(exc) else "connection_failed",
+                "request_payload": self.redact_payload(payload, integration),
+                "request_metadata": request_metadata,
+                "response_payload": None,
+                "parsed_response": None,
+                "error_message": error_message,
+            }
         except Exception as exc:
             logger.exception("Partner test connection failed integration_id=%s", integration.id)
             return {
@@ -469,6 +489,17 @@ class PostbackService:
                     integration.id,
                     attempt,
                     max_attempts,
+                )
+            except httpx.ConnectError as exc:
+                last_error = self._connection_error_message(integration.postback_url, exc)
+                logger.warning(
+                    "Postback connection failed lead_id=%s integration_id=%s "
+                    "attempt=%s/%s reason=%s",
+                    lead.id,
+                    integration.id,
+                    attempt,
+                    max_attempts,
+                    last_error,
                 )
             except Exception as exc:
                 last_error = str(exc)[:1000]
@@ -725,6 +756,29 @@ class PostbackService:
         normalized = str(value)
         suffix = normalized[-4:] if len(normalized) >= 4 else ""
         return f"***{suffix} (length={len(normalized)})"
+
+    @staticmethod
+    def _is_dns_error(exc: httpx.ConnectError) -> bool:
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "name or service not known",
+                "nodename nor servname provided",
+                "temporary failure in name resolution",
+                "getaddrinfo failed",
+            )
+        )
+
+    @classmethod
+    def _connection_error_message(cls, url: str, exc: httpx.ConnectError) -> str:
+        hostname = urlsplit(url).hostname or url
+        if cls._is_dns_error(exc):
+            return (
+                f"DNS не может определить адрес API-домена '{hostname}'. "
+                "Укажите реальный домен вместо {{host}} и проверьте DNS-запись домена."
+            )
+        return f"Не удалось подключиться к API-домену '{hostname}': {str(exc)[:500]}"
 
     def _parsed_response(
         self,
