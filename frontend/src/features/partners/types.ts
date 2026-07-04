@@ -85,6 +85,7 @@ export type PartnerConnectionTestResult = {
   status: string
   status_code?: number | null
   request_payload: Record<string, unknown>
+  request_metadata: Record<string, unknown>
   response_payload?: Record<string, unknown> | null
   parsed_response?: Record<string, unknown> | null
   error_message?: string | null

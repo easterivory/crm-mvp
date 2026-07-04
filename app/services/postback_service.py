@@ -304,21 +304,21 @@ class PostbackService:
                 "accepted": False,
                 "status": "mapping_failed",
                 "request_payload": {},
+                "request_metadata": {},
                 "response_payload": None,
                 "parsed_response": None,
                 "error_message": str(exc),
             }
 
         timeout_seconds = float((integration.retry_config or {}).get("timeout_seconds") or 30)
+        request_metadata = self.request_metadata(integration, request)
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                response = await client.request(
-                    request["method"],
-                    integration.postback_url,
-                    json=payload if request["body_format"] == "json" else None,
-                    data=self._form_payload(payload) if request["body_format"] == "form" else None,
-                    headers=request["headers"],
-                    params=request["params"],
+                response = await self.send_http_request(
+                    client,
+                    integration,
+                    payload,
+                    request,
                 )
         except httpx.TimeoutException:
             return {
@@ -328,6 +328,7 @@ class PostbackService:
                 "accepted": False,
                 "status": "timeout",
                 "request_payload": self.redact_payload(payload, integration),
+                "request_metadata": request_metadata,
                 "response_payload": None,
                 "parsed_response": None,
                 "error_message": "Request timeout",
@@ -341,6 +342,7 @@ class PostbackService:
                 "accepted": False,
                 "status": "request_failed",
                 "request_payload": self.redact_payload(payload, integration),
+                "request_metadata": request_metadata,
                 "response_payload": None,
                 "parsed_response": None,
                 "error_message": str(exc)[:1000],
@@ -358,6 +360,7 @@ class PostbackService:
             "status": parsed["status"],
             "status_code": response.status_code,
             "request_payload": self.redact_payload(payload, integration),
+            "request_metadata": request_metadata,
             "response_payload": {
                 "json": response_json,
                 "body": response.text[:1000],
@@ -435,22 +438,25 @@ class PostbackService:
         max_attempts = int(retry_config.get("max_attempts") or 1)
         delays = [int(delay) for delay in retry_config.get("delays_seconds") or []]
         timeout_seconds = float(retry_config.get("timeout_seconds") or 30)
+        request_metadata = self.request_metadata(integration, request)
+        logger.info(
+            "Partner request prepared integration_id=%s method=%s url=%s body_format=%s headers=%s",
+            integration.id,
+            request_metadata["method"],
+            request_metadata["url"],
+            request_metadata["body_format"],
+            sorted(request["headers"]),
+        )
 
         last_error: str | None = None
         for attempt in range(1, max_attempts + 1):
             try:
                 async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                    response = await client.request(
-                        request["method"],
-                        integration.postback_url,
-                        json=payload if request["body_format"] == "json" else None,
-                        data=(
-                            self._form_payload(payload)
-                            if request["body_format"] == "form"
-                            else None
-                        ),
-                        headers=request["headers"],
-                        params=request["params"],
+                    response = await self.send_http_request(
+                        client,
+                        integration,
+                        payload,
+                        request,
                     )
                 await self._apply_http_response(submission, response, integration, lead)
                 await self.db.flush()
@@ -651,6 +657,74 @@ class PostbackService:
             "headers": headers,
             "params": params,
         }
+
+    async def send_http_request(
+        self,
+        client: httpx.AsyncClient,
+        integration: PartnerIntegration,
+        payload: dict[str, Any],
+        request: dict[str, Any],
+    ) -> httpx.Response:
+        return await client.request(
+            request["method"],
+            integration.postback_url,
+            json=payload if request["body_format"] == "json" else None,
+            data=self._form_payload(payload) if request["body_format"] == "form" else None,
+            headers=request["headers"],
+            params=request["params"],
+        )
+
+    def request_metadata(
+        self,
+        integration: PartnerIntegration,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "method": request["method"],
+            "url": integration.postback_url,
+            "body_format": request["body_format"],
+            "headers": {
+                name: self._safe_request_value(name, value, integration)
+                for name, value in request["headers"].items()
+            },
+            "query_params": {
+                name: self._safe_request_value(name, value, integration)
+                for name, value in request["params"].items()
+            },
+        }
+
+    @staticmethod
+    def _safe_request_value(
+        name: str,
+        value: str,
+        integration: PartnerIntegration,
+    ) -> str:
+        normalized_name = name.strip().lower()
+        sensitive_name = any(
+            marker in normalized_name
+            for marker in ("authorization", "api-key", "apikey", "token", "secret")
+        )
+        auth_config = integration.auth_config or {}
+        auth_token = auth_config.get("token") or integration.auth_token
+        secret_values = {
+            str(item)
+            for item in (getattr(integration, "request_config", None) or {})
+            .get("secret_variables", {})
+            .values()
+            if item not in (None, "")
+        }
+        if sensitive_name or (auth_token and str(auth_token) in value):
+            return PostbackService._masked_credential(value)
+        result = value
+        for secret_value in secret_values:
+            result = result.replace(secret_value, PostbackService._masked_credential(secret_value))
+        return result
+
+    @staticmethod
+    def _masked_credential(value: str) -> str:
+        normalized = str(value)
+        suffix = normalized[-4:] if len(normalized) >= 4 else ""
+        return f"***{suffix} (length={len(normalized)})"
 
     def _parsed_response(
         self,

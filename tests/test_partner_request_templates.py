@@ -1,9 +1,12 @@
+import asyncio
+import json
 from datetime import datetime, timezone
 from ipaddress import IPv4Address, IPv4Network
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
 from app.schemas.partner import PartnerRequestConfig
@@ -272,3 +275,44 @@ def test_active_partner_configuration_validates_header_secrets_too():
 
     with pytest.raises(HTTPException, match="API_KEY"):
         PartnerService._validate_request_config(config, is_active=True)
+
+
+def test_http_request_matches_partner_curl_wire_format():
+    integration = make_integration()
+    integration.postback_url = "https://partner.example/api/external/integration/lead"
+    integration.auth_type = "header"
+    integration.auth_config = {
+        "header_name": "x-api-key",
+        "token": "6aca18d1-10eb-4e2f-8f1a-da0a74e52199",
+    }
+    payload = {
+        "affc": "AFF-test",
+        "bxc": "BX-test",
+        "vtc": "VT-test",
+        "profile": {"firstName": "Test", "phone": "79191452418"},
+    }
+    request_config = service().build_request(integration)
+
+    async def run_request() -> httpx.Response:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            assert request.method == "POST"
+            assert request.headers["x-api-key"] == integration.auth_config["token"]
+            assert request.headers["content-type"].startswith("application/json")
+            assert json.loads(request.content) == payload
+            return httpx.Response(201, json={"success": True, "leadId": "lead-1"})
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await service().send_http_request(
+                client,
+                integration,
+                payload,
+                request_config,
+            )
+
+    response = asyncio.run(run_request())
+    metadata = service().request_metadata(integration, request_config)
+
+    assert response.status_code == 201
+    assert metadata["headers"]["x-api-key"] == "***2199 (length=36)"
+    assert metadata["headers"]["Content-Type"] == "application/json"

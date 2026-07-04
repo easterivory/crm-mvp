@@ -1018,6 +1018,7 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
               <pre className="mt-3 max-h-44 overflow-auto rounded-lg border border-white/5 bg-[#0a0f1d] p-3 text-xs text-zinc-300">
                 {formatJson({
                   status_code: testResult.status_code,
+                  request_metadata: testResult.request_metadata,
                   request_payload: testResult.request_payload,
                   parsed_response: testResult.parsed_response,
                   response_payload: testResult.response_payload,

@@ -260,6 +260,7 @@ class PartnerConnectionTestOut(BaseModel):
     status: str
     status_code: Optional[int] = None
     request_payload: dict[str, Any] = Field(default_factory=dict)
+    request_metadata: dict[str, Any] = Field(default_factory=dict)
     response_payload: Optional[dict[str, Any]] = None
     parsed_response: Optional[dict[str, Any]] = None
     error_message: Optional[str] = None
