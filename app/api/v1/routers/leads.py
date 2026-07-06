@@ -43,6 +43,7 @@ async def create_lead(
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
+    _ensure_lead_operator(current_user)
     return await LeadService(db).create_lead(
         data=data,
         project_id=project_id,
@@ -70,6 +71,7 @@ async def change_status(
     Writes a 'lead.status_changed' entry to audit_logs with the before/after
     status codes and the actor's user id.
     """
+    _ensure_lead_operator(current_user)
     return await LeadService(db).change_status(
         lead_id=lead_id,
         project_id=project_id,
@@ -95,6 +97,10 @@ async def list_leads(
     age_from: Optional[int] = Query(default=None, ge=0, le=150),
     age_to: Optional[int] = Query(default=None, ge=0, le=150),
     country: Optional[str] = Query(default=None, max_length=100),
+    submission_state: Optional[str] = Query(
+        default=None,
+        pattern="^(active|submitted)$",
+    ),
     q: Optional[str] = Query(default=None, max_length=255),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
@@ -121,6 +127,7 @@ async def list_leads(
         age_from=age_from,
         age_to=age_to,
         country=country,
+        submission_state=submission_state,
         limit=limit,
         offset=offset,
     )
@@ -225,6 +232,7 @@ async def update_lead(
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
+    _ensure_lead_operator(current_user)
     return await LeadService(db).update_contact(
         lead_id=lead_id,
         project_id=project_id,
@@ -270,6 +278,7 @@ async def submit_lead(
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
+    _ensure_lead_operator(current_user)
     return await LeadService(db).submit_lead(
         lead_id=lead_id,
         project_id=project_id,
@@ -284,6 +293,7 @@ async def reject_lead(
     current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadOut:
+    _ensure_lead_operator(current_user)
     return await LeadService(db).reject_lead(
         lead_id=lead_id,
         project_id=project_id,

@@ -14,7 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import TrackingCostModel, TrackingSpendSource
+from app.core.constants import RoleName, TrackingCostModel, TrackingSpendSource
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
 from app.models.funnel import FunnelStep, FunnelVersion
@@ -258,17 +258,21 @@ class TrackingService:
         if bot_id is not None:
             await self._ensure_bot_in_project(bot_id, project_id)
 
+        buyer_id = actor.id if actor.role_name == RoleName.BUYER else None
+
         links = await self.link_repo.list_links(
             project_id=project_id,
             limit=limit,
             offset=offset,
             bot_id=bot_id,
             is_active=is_active,
+            buyer_id=buyer_id,
         )
         total = await self.link_repo.count_links(
             project_id=project_id,
             bot_id=bot_id,
             is_active=is_active,
+            buyer_id=buyer_id,
         )
         return [await self._to_read(link, include_total_spend=True) for link in links], total
 
@@ -350,11 +354,14 @@ class TrackingService:
             bot.bot_username,
             code,
         )
-        buyer_id, buyer_name = await self._resolve_buyer(
-            project_id=project.id,
-            buyer_id=data.buyer_id,
-            buyer_name=data.buyer_name,
-        )
+        if actor.role_name == RoleName.BUYER:
+            buyer_id, buyer_name = actor.id, actor.name
+        else:
+            buyer_id, buyer_name = await self._resolve_buyer(
+                project_id=project.id,
+                buyer_id=data.buyer_id,
+                buyer_name=data.buyer_name,
+            )
 
         try:
             link = await self.link_repo.create_link(
@@ -399,12 +406,15 @@ class TrackingService:
     ) -> TrackingLinkRead:
         link = await self._get_link_for_actor(link_id, actor)
         values = self._build_link_update_values(data, link=link, allow_code_update=False)
+        if actor.role_name == RoleName.BUYER:
+            values.pop("buyer_id", None)
+            values.pop("buyer_name", None)
         if {"cost_model", "price_per_unit"} & values.keys():
             self._validate_cost_configuration(
                 values.get("cost_model", link.cost_model),
                 values.get("price_per_unit", link.price_per_unit),
             )
-        if "buyer_id" in data.model_fields_set:
+        if actor.role_name != RoleName.BUYER and "buyer_id" in data.model_fields_set:
             buyer_id, buyer_name = await self._resolve_buyer(
                 project_id=link.project_id,
                 buyer_id=data.buyer_id,
@@ -533,6 +543,11 @@ class TrackingService:
             )
         await self._ensure_project_access(actor, link.project_id)
         await self._get_active_project_or_404(link.project_id)
+        if actor.role_name == RoleName.BUYER and link.buyer_id != actor.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tracking link not found",
+            )
         return link
 
     async def _get_spend_for_actor(self, spend_id: UUID, actor: User) -> TrackingSpend:

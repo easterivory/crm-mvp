@@ -204,14 +204,20 @@ async def sync_bot_telegram_identity(
 async def get_bot_telegram_status(
     bot_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BotTelegramStatusOut:
+    _ensure_bot_management_access(current_user)
     return await BotService(db).telegram_status(bot_id=bot_id, project_id=project_id)
 
 
 def _ensure_bot_management_access(current_user: Any) -> None:
-    if current_user.role_name == RoleName.MANAGER:
+    if current_user.role_name not in {
+        RoleName.SUPER_ADMIN,
+        RoleName.ADMIN,
+        RoleName.OPERATOR,
+    }:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managers cannot manage bots",
+            detail="Current user cannot manage bots",
         )

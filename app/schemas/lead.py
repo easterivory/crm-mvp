@@ -13,15 +13,15 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
-    name: Optional[str] = Field(None, max_length=255)
-    first_name: Optional[str] = Field(None, max_length=255)
-    last_name: Optional[str] = Field(None, max_length=255)
-    phone: Optional[str] = Field(None, max_length=50)
-    username: Optional[str] = Field(None, max_length=255)
-    age: Optional[int] = Field(None, ge=0, le=150)
-    country: Optional[str] = Field(None, max_length=100)
-    call_time_text: Optional[str] = Field(None, max_length=255)
-    preferred_call_time: Optional[str] = Field(None, max_length=255)
+    name: Optional[str] = Field(default=None, max_length=255)
+    first_name: Optional[str] = Field(default=None, max_length=255)
+    last_name: Optional[str] = Field(default=None, max_length=255)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    username: Optional[str] = Field(default=None, max_length=255)
+    age: Optional[int] = Field(default=None, ge=0, le=150)
+    country: Optional[str] = Field(default=None, max_length=100)
+    call_time_text: Optional[str] = Field(default=None, max_length=255)
+    preferred_call_time: Optional[str] = Field(default=None, max_length=255)
     has_card: Optional[bool] = None
 
 
@@ -95,3 +95,6 @@ class LeadOut(OrmBase):
     manager_name: Optional[str] = None
     status_code: Optional[str] = None
     status_name: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    submission_status: Optional[str] = None
+    submission_partner_name: Optional[str] = None

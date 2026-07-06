@@ -1,4 +1,4 @@
-const USER_ROLES = ['super_admin', 'admin', 'manager', 'operator'] as const
+const USER_ROLES = ['super_admin', 'admin', 'manager', 'buyer', 'operator'] as const
 
 type UserRole = (typeof USER_ROLES)[number]
 
@@ -22,4 +22,8 @@ export function isSuperAdminRole(roleName?: string | null): boolean {
 
 export function isManagerRole(roleName?: string | null): boolean {
   return normalizeRoleName(roleName) === 'manager'
+}
+
+export function isBuyerRole(roleName?: string | null): boolean {
+  return normalizeRoleName(roleName) === 'buyer'
 }

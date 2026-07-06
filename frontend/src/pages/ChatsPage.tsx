@@ -721,6 +721,7 @@ export default function ChatsPage() {
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const canCreateSnippets = user?.role_name === 'manager' || user?.role_name === 'admin' || user?.role_name === 'super_admin'
+  const isBuyer = user?.role_name === 'buyer'
   const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
   const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users])
   const timelineItems = useMemo<TimelineItem[]>(
@@ -2346,7 +2347,7 @@ export default function ChatsPage() {
         </div>
 
         <form
-          className="relative z-10 shrink-0 border-t border-white/5 bg-surface/95 p-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4"
+          className={`${isBuyer ? 'hidden' : 'relative z-10'} shrink-0 border-t border-white/5 bg-surface/95 p-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4`}
           onSubmit={handleSend}
         >
           {attachment ? (
@@ -2602,7 +2603,7 @@ export default function ChatsPage() {
           isUpdatingChatBlock={isUpdatingChatBlock}
           currentUserId={user?.id ?? null}
           currentUserRole={user?.role_name ?? null}
-          onSetBlocked={user?.role_name === 'manager'
+          onSetBlocked={user?.role_name === 'manager' || isBuyer
             ? undefined
             : (isBlocked) => {
                 if (isBlocked) {
@@ -2611,7 +2612,7 @@ export default function ChatsPage() {
                 }
                 void handleSetChatBlocked(false)
               }}
-          onResetRequest={user?.role_name === 'manager' ? undefined : () => setIsResetConfirmOpen(true)}
+          onResetRequest={user?.role_name === 'manager' || isBuyer ? undefined : () => setIsResetConfirmOpen(true)}
           onLeadStatusChanged={() => void loadChats()}
         />
       </div>
@@ -2906,7 +2907,7 @@ export default function ChatsPage() {
               isUpdatingChatBlock={isUpdatingChatBlock}
               currentUserId={user?.id ?? null}
               currentUserRole={user?.role_name ?? null}
-              onSetBlocked={user?.role_name === 'manager'
+              onSetBlocked={user?.role_name === 'manager' || isBuyer
                 ? undefined
                 : (isBlocked) => {
                     if (isBlocked) {
@@ -2915,7 +2916,7 @@ export default function ChatsPage() {
                     }
                     void handleSetChatBlocked(false)
                   }}
-              onResetRequest={user?.role_name === 'manager' ? undefined : () => setIsResetConfirmOpen(true)}
+              onResetRequest={user?.role_name === 'manager' || isBuyer ? undefined : () => setIsResetConfirmOpen(true)}
               onLeadStatusChanged={() => void loadChats()}
             />
           </div>

@@ -1358,6 +1358,7 @@ class FunnelService:
             RoleName.SUPER_ADMIN,
             RoleName.ADMIN,
             RoleName.MANAGER,
+            RoleName.BUYER,
             RoleName.OPERATOR,
         }:
             raise HTTPException(

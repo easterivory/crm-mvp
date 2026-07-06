@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
-from app.core.constants import MessageType, SenderType
+from app.core.constants import MessageType, RoleName, SenderType
 from app.core.config import settings
 from app.schemas.common import PaginatedResponse
 from app.schemas.message import (
@@ -37,6 +37,7 @@ async def create_message(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MessageOut:
+    _ensure_message_write_access(current_user)
     payload, upload = await _read_message_request(request)
     message_service = MessageService(db)
     auto_translate = _optional_bool(
@@ -130,6 +131,7 @@ async def preview_outgoing_translation(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MessageTranslationPreviewOut:
+    _ensure_message_write_access(current_user)
     return await MessageService(db).preview_outgoing_translation(
         chat_id=chat_id,
         project_id=project_id,
@@ -143,8 +145,10 @@ async def translate_message(
     chat_id: UUID,
     message_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MessageOut:
+    _ensure_message_write_access(current_user)
     return await MessageService(db).translate_message_on_demand(
         chat_id=chat_id,
         project_id=project_id,
@@ -189,6 +193,7 @@ async def upload_chat_attachment(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MessageUploadOut:
+    _ensure_message_write_access(current_user)
     return await MessageService(db).upload_attachment(
         chat_id=chat_id,
         project_id=project_id,
@@ -205,6 +210,7 @@ async def schedule_chat_message(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ScheduledMessageOut:
+    _ensure_message_write_access(current_user)
     payload, upload = await _read_message_request(request)
     raw_scheduled_at = str(payload.get("scheduled_at") or "").strip()
     try:
@@ -278,6 +284,7 @@ async def cancel_scheduled_chat_message(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_message_write_access(current_user)
     await ScheduledMessageService(db).cancel_message(
         project_id=project_id,
         chat_id=chat_id,
@@ -358,3 +365,11 @@ def _optional_bool(value, *, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise HTTPException(status_code=422, detail="auto_translate must be a boolean")
+
+
+def _ensure_message_write_access(current_user) -> None:
+    if current_user.role_name == RoleName.BUYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Buyers have read-only chat access",
+        )

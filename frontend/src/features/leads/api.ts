@@ -1,6 +1,6 @@
 import api from '../../api/client'
 import type { PaginatedResponse } from '../../shared/types'
-import type { DuplicateLeadDetail, Lead, LeadListParams, LeadStatus } from './types'
+import type { DuplicateLeadDetail, Lead, LeadListParams, LeadStatus, LeadUpdate } from './types'
 
 export async function fetchLeads(params: LeadListParams) {
   const { data } = await api.get<PaginatedResponse<Lead>>('/leads', {
@@ -18,11 +18,19 @@ export async function fetchLeads(params: LeadListParams) {
       age_from: params.age_from ?? undefined,
       age_to: params.age_to ?? undefined,
       country: params.country?.trim() || undefined,
+      submission_state: params.submission_state,
       limit: params.limit ?? 50,
       offset: params.offset ?? 0,
     },
   })
 
+  return data
+}
+
+export async function updateLead(leadId: string, projectId: string, payload: LeadUpdate) {
+  const { data } = await api.patch<Lead>(`/leads/${leadId}`, payload, {
+    params: { project_id: projectId },
+  })
   return data
 }
 

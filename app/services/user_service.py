@@ -111,7 +111,7 @@ class UserService:
         if actor.role_name == RoleName.ADMIN and role.name not in RoleName.ADMIN_MANAGED:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin can create only manager/operator users",
+                detail="Admin can create only manager/buyer/operator users",
             )
 
         if role.name == RoleName.SUPER_ADMIN and actor.role_name != RoleName.SUPER_ADMIN:
@@ -217,7 +217,7 @@ class UserService:
             if actor.role_name == RoleName.ADMIN and role.name not in RoleName.ADMIN_MANAGED:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Admin can assign only manager/operator roles",
+                    detail="Admin can assign only manager/buyer/operator roles",
                 )
 
         if "telegram_id" in values and values["telegram_id"] is not None:
@@ -435,7 +435,7 @@ class UserService:
             if target_role not in RoleName.ADMIN_MANAGED:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Admin can manage only manager/operator users",
+                    detail="Admin can manage only manager/buyer/operator users",
                 )
             return
 

@@ -8,7 +8,7 @@ from app.models.base import Base, UUIDPrimaryKey
 
 class Role(Base, UUIDPrimaryKey):
     """
-    Static reference table: super_admin / admin / manager.
+    Static reference table: super_admin / admin / manager / buyer / operator.
     Populated via seed migration — not editable through the API.
     """
     __tablename__ = "roles"

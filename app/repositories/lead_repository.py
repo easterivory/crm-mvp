@@ -25,7 +25,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, true, update
+from sqlalchemy.orm import aliased
 
 from app.core.constants import LeadStatusCode
 from app.models.bot import Bot
@@ -33,13 +34,14 @@ from app.models.chat import Chat
 from app.models.lead import Lead
 from app.models.lead import LeadTag
 from app.models.lead_status import LeadStatus
-from app.models.partner import LeadSubmission
+from app.models.partner import LeadSubmission, PartnerIntegration
 from app.models.tracking import TrackingLink
 from app.models.user import User
 from app.repositories.base import BaseRepository
 
 
 DEFAULT_EXCLUDED_STATUS_CODES = frozenset({LeadStatusCode.LOST, "rejected"})
+SUCCESSFUL_SUBMISSION_STATUSES = frozenset({"completed", "success"})
 
 
 class LeadRepository(BaseRepository[Lead]):
@@ -111,6 +113,7 @@ class LeadRepository(BaseRepository[Lead]):
         age_from: Optional[int] = None,
         age_to: Optional[int] = None,
         country: Optional[str] = None,
+        submission_state: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Lead]:
@@ -131,7 +134,12 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.where(Lead.status_id == status_id)
         if status_code is not None:
             stmt = stmt.where(LeadStatus.code == status_code)
-        if status_id is None and status_code is None and not is_trash:
+        if (
+            status_id is None
+            and status_code is None
+            and not is_trash
+            and submission_state != "submitted"
+        ):
             stmt = stmt.where(~LeadStatus.code.in_(DEFAULT_EXCLUDED_STATUS_CODES))
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
@@ -159,6 +167,11 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.join(LeadSubmission, LeadSubmission.lead_id == Lead.id).where(
                 LeadSubmission.partner_integration_id == partner_id
             )
+        stmt = self._apply_submission_state(
+            stmt,
+            submission_state,
+            partner_id=partner_id if submission_state == "submitted" else None,
+        )
         if age_from is not None:
             stmt = stmt.where(Lead.age >= age_from)
         if age_to is not None:
@@ -207,6 +220,7 @@ class LeadRepository(BaseRepository[Lead]):
         age_from: Optional[int] = None,
         age_to: Optional[int] = None,
         country: Optional[str] = None,
+        submission_state: Optional[str] = None,
     ) -> int:
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -225,7 +239,12 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.where(Lead.status_id == status_id)
         if status_code is not None:
             stmt = stmt.where(LeadStatus.code == status_code)
-        if status_id is None and status_code is None and not is_trash:
+        if (
+            status_id is None
+            and status_code is None
+            and not is_trash
+            and submission_state != "submitted"
+        ):
             stmt = stmt.where(~LeadStatus.code.in_(DEFAULT_EXCLUDED_STATUS_CODES))
         if manager_id is not None:
             stmt = stmt.where(Lead.manager_id == manager_id)
@@ -253,6 +272,11 @@ class LeadRepository(BaseRepository[Lead]):
             stmt = stmt.join(LeadSubmission, LeadSubmission.lead_id == Lead.id).where(
                 LeadSubmission.partner_integration_id == partner_id
             )
+        stmt = self._apply_submission_state(
+            stmt,
+            submission_state,
+            partner_id=partner_id if submission_state == "submitted" else None,
+        )
         if age_from is not None:
             stmt = stmt.where(Lead.age >= age_from)
         if age_to is not None:
@@ -278,7 +302,51 @@ class LeadRepository(BaseRepository[Lead]):
         result = await self.db.execute(stmt)
         return result.scalar_one()
 
+    @staticmethod
+    def _apply_submission_state(
+        stmt,
+        submission_state: Optional[str],
+        *,
+        partner_id: Optional[UUID] = None,
+    ):
+        if submission_state not in {"active", "submitted"}:
+            return stmt
+        submission = aliased(LeadSubmission)
+        successful_submission = (
+            select(submission.id)
+            .where(
+                submission.lead_id == Lead.id,
+                func.lower(submission.status).in_(SUCCESSFUL_SUBMISSION_STATUSES),
+            )
+        )
+        if partner_id is not None:
+            successful_submission = successful_submission.where(
+                submission.partner_integration_id == partner_id
+            )
+        successful_submission = successful_submission.exists()
+        return stmt.where(
+            successful_submission if submission_state == "submitted" else ~successful_submission
+        )
+
     async def get_lead_context(self, lead_id: UUID) -> dict:
+        latest_successful_submission = (
+            select(
+                LeadSubmission.submitted_at.label("submitted_at"),
+                LeadSubmission.status.label("submission_status"),
+                LeadSubmission.partner_integration_id.label("partner_integration_id"),
+            )
+            .where(
+                LeadSubmission.lead_id == Lead.id,
+                func.lower(LeadSubmission.status).in_(SUCCESSFUL_SUBMISSION_STATUSES),
+            )
+            .order_by(
+                LeadSubmission.completed_at.desc().nullslast(),
+                LeadSubmission.submitted_at.desc(),
+            )
+            .limit(1)
+            .correlate(Lead)
+            .lateral("latest_successful_submission")
+        )
         result = await self.db.execute(
             select(
                 Chat.bot_id,
@@ -295,6 +363,9 @@ class LeadRepository(BaseRepository[Lead]):
                 User.name.label("manager_name"),
                 LeadStatus.code.label("status_code"),
                 LeadStatus.name.label("status_name"),
+                latest_successful_submission.c.submitted_at,
+                latest_successful_submission.c.submission_status,
+                PartnerIntegration.name.label("submission_partner_name"),
             )
             .select_from(Lead)
             .join(Chat, Chat.id == Lead.chat_id)
@@ -302,6 +373,12 @@ class LeadRepository(BaseRepository[Lead]):
             .outerjoin(Bot, Bot.id == Chat.bot_id)
             .outerjoin(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
             .outerjoin(User, User.id == Lead.manager_id)
+            .outerjoin(latest_successful_submission, true())
+            .outerjoin(
+                PartnerIntegration,
+                PartnerIntegration.id
+                == latest_successful_submission.c.partner_integration_id,
+            )
             .where(Lead.id == lead_id)
         )
         row = result.mappings().first()

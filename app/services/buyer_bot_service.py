@@ -78,6 +78,7 @@ STATS_ACTION_MARKUP: dict[str, Any] = {
 }
 
 STATE_CREATE_LINK_NAME = "create_link_name"
+STATE_CREATE_LINK_BOT = "create_link_bot"
 STATE_SPEND_DATE = "spend_date"
 STATE_SPEND_AMOUNT = "spend_amount"
 STATE_SELECT_PROJECT = "select_project"
@@ -405,6 +406,14 @@ class BuyerBotService:
             await self._select_project(chat_id, buyer, data.removeprefix("project:"))
             return
 
+        if data.startswith("create_bot:"):
+            await self._select_create_link_bot(
+                chat_id,
+                buyer,
+                data.removeprefix("create_bot:"),
+            )
+            return
+
         if data.startswith("stats_chart:"):
             days = 30 if data.removeprefix("stats_chart:") == "30" else 7
             await self._run_project_action(chat_id, buyer, f"chart_{days}")
@@ -461,7 +470,7 @@ class BuyerBotService:
         user_result = await self.db.execute(
             select(User).options(selectinload(User.role), selectinload(User.project_accesses)).where(
                 User.buyer_invite_token == token,
-                User.role.has(name=RoleName.MANAGER),
+                User.role.has(name=RoleName.BUYER),
                 User.is_deleted.is_(False),
             )
         )
@@ -513,12 +522,94 @@ class BuyerBotService:
         )
 
     async def _start_create_link(self, chat_id: int, project_id: UUID) -> None:
+        bots = await self._list_client_bots(project_id)
+        if not bots:
+            await self.telegram.send_message(
+                chat_id,
+                "В проекте нет Telegram-ботов с username. Проверь настройки ботов в CRM.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
+            return
+        if len(bots) == 1:
+            await self._prompt_create_link_name(chat_id, project_id, bots[0])
+            return
+
         await self._set_flow_state(
             chat_id,
-            {"state": STATE_CREATE_LINK_NAME, "project_id": str(project_id)},
+            {"state": STATE_CREATE_LINK_BOT, "project_id": str(project_id)},
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{
+                    "text": f"{bot.name} (@{(bot.bot_username or '').removeprefix('@')})",
+                    "callback_data": f"create_bot:{bot.id}",
+                }]
+                for bot in bots
+            ] + [[{"text": "Отмена", "callback_data": "menu:cancel"}]]
+        }
+        await self.telegram.send_message(
+            chat_id,
+            "Выбери бота, для которого создаётся ссылка:",
+            reply_markup=keyboard,
+        )
+
+    async def _select_create_link_bot(
+        self,
+        chat_id: int,
+        buyer: User,
+        raw_bot_id: str,
+    ) -> None:
+        state = await self.state_store.get(chat_id) or {}
+        project_id = self._parse_uuid(state.get("project_id"))
+        bot_id = self._parse_uuid(raw_bot_id)
+        if (
+            state.get("state") != STATE_CREATE_LINK_BOT
+            or project_id is None
+            or bot_id is None
+            or not await self._buyer_has_project(buyer, project_id)
+        ):
+            await self.telegram.send_message(
+                chat_id,
+                "Выбор устарел. Начни создание ссылки заново.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
+            await self._clear_flow_state(chat_id)
+            return
+        bot = next(
+            (
+                item
+                for item in await self._list_client_bots(project_id)
+                if item.id == bot_id
+            ),
+            None,
+        )
+        if bot is None:
+            await self.telegram.send_message(
+                chat_id,
+                "Этот бот больше недоступен. Начни создание ссылки заново.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
+            await self._clear_flow_state(chat_id)
+            return
+        await self._prompt_create_link_name(chat_id, project_id, bot)
+
+    async def _prompt_create_link_name(
+        self,
+        chat_id: int,
+        project_id: UUID,
+        bot: Bot,
+    ) -> None:
+        await self._set_flow_state(
+            chat_id,
+            {
+                "state": STATE_CREATE_LINK_NAME,
+                "project_id": str(project_id),
+                "bot_id": str(bot.id),
+            },
         )
         await self.telegram.send_message(
             chat_id,
+            f"Бот: @{(bot.bot_username or '').removeprefix('@')}\n"
             "Пришли название ссылки, например: tiktok_camp_3.\n\n"
             "Команда /cancel отменит действие.",
             reply_markup=CANCEL_INLINE_MARKUP,
@@ -534,6 +625,7 @@ class BuyerBotService:
             return
         state = await self.state_store.get(chat_id)
         project_id = self._parse_uuid((state or {}).get("project_id"))
+        bot_id = self._parse_uuid((state or {}).get("bot_id"))
         if project_id is None or not await self._buyer_has_project(buyer, project_id):
             await self.telegram.send_message(
                 chat_id,
@@ -542,7 +634,10 @@ class BuyerBotService:
             await self._clear_flow_state(chat_id)
             return
 
-        bot = await self._resolve_client_bot(project_id)
+        bot = next(
+            (item for item in await self._list_client_bots(project_id) if item.id == bot_id),
+            None,
+        )
         if bot is None or not bot.bot_username:
             await self.telegram.send_message(
                 chat_id,
@@ -1120,7 +1215,7 @@ class BuyerBotService:
             .where(
                 User.buyer_telegram_id == chat_id,
                 User.is_deleted.is_(False),
-                User.role.has(name=RoleName.MANAGER),
+                User.role.has(name=RoleName.BUYER),
             )
         )
         return result.scalar_one_or_none()
@@ -1140,6 +1235,18 @@ class BuyerBotService:
             stmt = stmt.order_by(Bot.active_funnel_version_id.is_(None), Bot.created_at.asc())
         result = await self.db.execute(stmt.limit(1))
         return result.scalar_one_or_none()
+
+    async def _list_client_bots(self, project_id: UUID) -> list[Bot]:
+        result = await self.db.execute(
+            select(Bot)
+            .where(
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+                Bot.bot_username.is_not(None),
+            )
+            .order_by(Bot.name.asc(), Bot.created_at.asc())
+        )
+        return list(result.scalars().all())
 
     async def _list_buyer_links(
         self,

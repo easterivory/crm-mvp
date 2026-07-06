@@ -91,11 +91,12 @@ class RoleName:
     SUPER_ADMIN = "super_admin"
     ADMIN = "admin"
     MANAGER = "manager"
+    BUYER = "buyer"
     OPERATOR = "operator"
 
-    ALL: frozenset[str] = frozenset({SUPER_ADMIN, ADMIN, MANAGER, OPERATOR})
-    STAFF: frozenset[str] = frozenset({ADMIN, MANAGER, OPERATOR})
-    ADMIN_MANAGED: frozenset[str] = frozenset({MANAGER, OPERATOR})
+    ALL: frozenset[str] = frozenset({SUPER_ADMIN, ADMIN, MANAGER, BUYER, OPERATOR})
+    STAFF: frozenset[str] = frozenset({ADMIN, MANAGER, BUYER, OPERATOR})
+    ADMIN_MANAGED: frozenset[str] = frozenset({MANAGER, BUYER, OPERATOR})
 
 
 class AuditAction:

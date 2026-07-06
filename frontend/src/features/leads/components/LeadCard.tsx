@@ -1,10 +1,12 @@
 import {
   CalendarDays,
   Check,
+  CheckCircle2,
   Clock3,
   Copy,
   Globe2,
   MessageSquareText,
+  Pencil,
   Phone,
   Tag,
   Trash2,
@@ -27,7 +29,48 @@ type LeadCardProps = {
   onRestore?: (lead: Lead) => void
   onOpenChat?: (lead: Lead) => void
   onSubmitToPartner?: (lead: Lead) => void
+  onEdit?: (lead: Lead) => void
+  visibleFields?: readonly string[]
 }
+
+export const DEFAULT_LEAD_CARD_FIELDS = [
+  'phone',
+  'call_time',
+  'created_at',
+  'manager',
+  'country',
+  'expected_start_amount',
+  'tracking',
+  'submission_partner',
+  'submitted_at',
+  'score',
+  'chat_id',
+  'telegram_id',
+  'tags',
+  'attribution',
+  'custom_fields',
+] as const
+
+export const LEAD_CARD_FIELD_OPTIONS = [
+  ['phone', 'Телефон'],
+  ['username', 'Username'],
+  ['age', 'Возраст'],
+  ['has_card', 'Банковская карта'],
+  ['call_time', 'Время созвона'],
+  ['created_at', 'Дата создания'],
+  ['manager', 'Менеджер'],
+  ['country', 'Страна'],
+  ['expected_start_amount', 'Сумма для старта'],
+  ['tracking', 'Трекинг'],
+  ['submission_partner', 'Партнёр подачи'],
+  ['submitted_at', 'Дата подачи'],
+  ['score', 'Качество лида'],
+  ['chat_id', 'Chat ID'],
+  ['telegram_id', 'Telegram ID'],
+  ['tags', 'Теги'],
+  ['attribution', 'Атрибуция'],
+  ['custom_fields', 'Все данные из воронки'],
+] as const
 
 function formatDate(value: string | null | undefined) {
   if (!value) {
@@ -81,7 +124,7 @@ function attributionEntries(customFields: Record<string, unknown> | null | undef
     .map(([key, value]) => [key, String(value)] as const)
 }
 
-function customFieldEntries(customFields: Record<string, unknown> | null | undefined) {
+export function leadCustomFieldEntries(customFields: Record<string, unknown> | null | undefined) {
   if (!customFields) {
     return []
   }
@@ -90,16 +133,19 @@ function customFieldEntries(customFields: Record<string, unknown> | null | undef
       key !== 'fb_data'
       && key !== 'expected_start_amount'
       && key !== 'budget'
+      && key !== 'first_name'
+      && key !== 'last_name'
       && !key.startsWith('__')
       && value !== null
       && value !== undefined
       && ['string', 'number', 'boolean'].includes(typeof value)
       && String(value).trim() !== ''
     ))
-    .map(([key, value]) => [
-      key.replace(/_/g, ' ').replace(/^\p{L}/u, (letter) => letter.toUpperCase()),
-      typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value),
-    ] as const)
+    .map(([key, value]) => ({
+      key,
+      label: key.replace(/_/g, ' ').replace(/^\p{L}/u, (letter) => letter.toUpperCase()),
+      value: typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value),
+    }))
 }
 
 function expectedStartAmount(customFields: Record<string, unknown> | null | undefined) {
@@ -118,6 +164,8 @@ export default function LeadCard({
   onRestore,
   onOpenChat,
   onSubmitToPartner,
+  onEdit,
+  visibleFields = DEFAULT_LEAD_CARD_FIELDS,
 }: LeadCardProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const title =
@@ -126,7 +174,12 @@ export default function LeadCard({
     (lead.username ? `@${lead.username}` : null) ||
     `Telegram ${lead.external_chat_id ?? lead.id.slice(0, 8)}`
   const attribution = attributionEntries(lead.custom_fields)
-  const customFields = customFieldEntries(lead.custom_fields)
+  const customFields = leadCustomFieldEntries(lead.custom_fields)
+  const visibleFieldSet = new Set(visibleFields)
+  const isVisible = (field: string) => visibleFieldSet.has(field)
+  const visibleCustomFields = customFields.filter(
+    (field) => isVisible('custom_fields') || isVisible(`custom:${field.key}`),
+  )
 
   const handleCopy = async (key: string, value: string | null | undefined) => {
     if (!value) {
@@ -154,55 +207,73 @@ export default function LeadCard({
           </div>
         </div>
 
-        <span className="w-fit rounded-full bg-primary-500/12 px-3 py-1 text-xs font-medium text-primary-100">
-          {lead.status_name ?? lead.status_code ?? 'Статус не указан'}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="w-fit rounded-full bg-primary-500/12 px-3 py-1 text-xs font-medium text-primary-100">
+            {lead.status_name ?? lead.status_code ?? 'Статус не указан'}
+          </span>
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={() => onEdit(lead)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
+              title="Редактировать лида"
+              aria-label="Редактировать лида"
+            >
+              <Pencil size={14} />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <DuplicateWarning leadId={lead.id} projectId={projectId} className="mt-4" />
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <Info icon={<Phone size={15} />} label="Телефон" value={empty(lead.phone)} />
-        <Info
+        {isVisible('phone') ? <Info icon={<Phone size={15} />} label="Телефон" value={empty(lead.phone)} /> : null}
+        {isVisible('username') ? <Info icon={<UserRound size={15} />} label="Username" value={empty(lead.username ? `@${lead.username.replace(/^@/, '')}` : null)} /> : null}
+        {isVisible('age') ? <Info icon={<UserRound size={15} />} label="Возраст" value={lead.age === null ? 'Не указано' : String(lead.age)} /> : null}
+        {isVisible('has_card') ? <Info icon={<WalletCards size={15} />} label="Банковская карта" value={lead.has_card === null ? 'Не указано' : lead.has_card ? 'Есть' : 'Нет'} /> : null}
+        {isVisible('call_time') ? <Info
           icon={<Clock3 size={15} />}
           label="Время созвона"
           value={empty(lead.preferred_call_time ?? lead.call_time_text)}
-        />
-        <Info icon={<CalendarDays size={15} />} label="Создан" value={formatDate(lead.created_at)} />
-        <Info icon={<UserRound size={15} />} label="Менеджер" value={empty(lead.manager_name)} />
-        <Info icon={<Globe2 size={15} />} label="Страна" value={empty(lead.country)} />
-        <Info
+        /> : null}
+        {isVisible('created_at') ? <Info icon={<CalendarDays size={15} />} label="Создан" value={formatDate(lead.created_at)} /> : null}
+        {isVisible('manager') ? <Info icon={<UserRound size={15} />} label="Менеджер" value={empty(lead.manager_name)} /> : null}
+        {isVisible('country') ? <Info icon={<Globe2 size={15} />} label="Страна" value={empty(lead.country)} /> : null}
+        {isVisible('expected_start_amount') ? <Info
           icon={<WalletCards size={15} />}
           label="Сумма для старта"
           value={expectedStartAmount(lead.custom_fields)}
-        />
-        <Info
+        /> : null}
+        {isVisible('tracking') ? <Info
           icon={<Tag size={15} />}
           label="Трекинг"
           value={empty(lead.tracking_code ?? lead.tracking_ref_code)}
-        />
-        {lead.score_percent !== null && lead.score_percent !== undefined && (
+        /> : null}
+        {isVisible('submission_partner') && lead.submission_partner_name ? <Info icon={<TrendingUp size={15} />} label="Партнёр подачи" value={lead.submission_partner_name} /> : null}
+        {isVisible('submitted_at') && lead.submitted_at ? <Info icon={<CheckCircle2 size={15} />} label="Подан" value={formatDate(lead.submitted_at)} /> : null}
+        {isVisible('score') && lead.score_percent !== null && lead.score_percent !== undefined && (
           <Info
             icon={<TrendingUp size={15} />}
             label="Качество лида"
             value={`${lead.score_percent}%`}
           />
         )}
-        <CopyInfo
+        {isVisible('chat_id') ? <CopyInfo
           label="Chat ID"
           value={lead.chat_id}
           isCopied={copiedField === 'chat_id'}
           onCopy={() => void handleCopy('chat_id', lead.chat_id)}
-        />
-        <CopyInfo
+        /> : null}
+        {isVisible('telegram_id') ? <CopyInfo
           label="Telegram ID"
           value={lead.external_user_id ?? lead.external_chat_id ?? null}
           isCopied={copiedField === 'telegram_id'}
           onCopy={() => void handleCopy('telegram_id', lead.external_user_id ?? lead.external_chat_id)}
-        />
+        /> : null}
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      {isVisible('tags') ? <div className="mt-4 flex flex-wrap gap-2">
         {lead.tags.length > 0 ? (
           lead.tags.map((tag) => (
             <span
@@ -219,9 +290,9 @@ export default function LeadCard({
         ) : (
           <span className="text-sm text-gray-500">Тегов пока нет</span>
         )}
-      </div>
+      </div> : null}
 
-      {attribution.length > 0 ? (
+      {isVisible('attribution') && attribution.length > 0 ? (
         <div className="mt-4 rounded-xl border border-cyan-300/15 bg-cyan-400/[0.05] p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-cyan-100/80">Атрибуция</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -234,17 +305,17 @@ export default function LeadCard({
         </div>
       ) : null}
 
-      {customFields.length > 0 ? (
+      {visibleCustomFields.length > 0 ? (
         <div className="mt-4 rounded-xl border border-white/8 bg-white/[0.025] p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
             Данные из воронки
           </p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            {customFields.map(([key, value]) => (
-              <div key={key} className="flex items-start justify-between gap-3 text-sm">
-                <span className="text-gray-500">{key}</span>
+            {visibleCustomFields.map((field) => (
+              <div key={field.key} className="flex items-start justify-between gap-3 text-sm">
+                <span className="text-gray-500">{field.label}</span>
                 <span className="max-w-[60%] break-words text-right text-gray-100">
-                  {value}
+                  {field.value}
                 </span>
               </div>
             ))}

@@ -210,10 +210,15 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
         lead_status_codes: Sequence[str] | None = None,
+        buyer_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
         daily = self._empty_daily_map()
-        await self._merge_daily_clicks(daily, project_id, bot_id, None, date_from, date_to)
-        await self._merge_daily_starts(daily, project_id, bot_id, None, date_from, date_to)
+        await self._merge_daily_clicks(
+            daily, project_id, bot_id, None, date_from, date_to, buyer_id=buyer_id
+        )
+        await self._merge_daily_starts(
+            daily, project_id, bot_id, None, date_from, date_to, buyer_id=buyer_id
+        )
         await self._merge_daily_leads(
             daily,
             project_id,
@@ -223,9 +228,17 @@ class TrackingMetricsRepository:
             date_to,
             submitted_only=False,
             lead_status_codes=lead_status_codes,
+            buyer_id=buyer_id,
         )
         await self._merge_daily_leads(
-            daily, project_id, bot_id, None, date_from, date_to, submitted_only=True
+            daily,
+            project_id,
+            bot_id,
+            None,
+            date_from,
+            date_to,
+            submitted_only=True,
+            buyer_id=buyer_id,
         )
         await self._merge_daily_modeled_spend(
             daily,
@@ -233,6 +246,7 @@ class TrackingMetricsRepository:
             bot_id=bot_id,
             date_from=date_from,
             date_to=date_to,
+            buyer_id=buyer_id,
         )
         return self._daily_rows(daily)
 
@@ -317,8 +331,9 @@ class TrackingMetricsRepository:
         date_from: date,
         date_to: date,
         lead_status_codes: Sequence[str] | None = None,
+        buyer_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
-        link_rows = await self._get_base_link_rows(project_id, bot_id)
+        link_rows = await self._get_base_link_rows(project_id, bot_id, buyer_id)
         if not link_rows:
             return []
 
@@ -616,6 +631,7 @@ class TrackingMetricsRepository:
         self,
         project_id: UUID,
         bot_id: UUID | None,
+        buyer_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
         stmt = select(
             TrackingLink.id.label("link_id"),
@@ -633,6 +649,8 @@ class TrackingMetricsRepository:
         ).where(TrackingLink.project_id == project_id)
         if bot_id is not None:
             stmt = stmt.where(TrackingLink.bot_id == bot_id)
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id)
 
         result = await self.db.execute(stmt.order_by(TrackingLink.created_at.desc()))
         return [dict(row._mapping) for row in result.all()]
@@ -784,6 +802,8 @@ class TrackingMetricsRepository:
         link_id: UUID | None,
         date_from: date,
         date_to: date,
+        *,
+        buyer_id: UUID | None = None,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         metric_date = func.date(TrackingEvent.created_at)
@@ -797,6 +817,8 @@ class TrackingMetricsRepository:
             .group_by(metric_date)
         )
         stmt = self._apply_link_scope(stmt, project_id, bot_id, link_id)
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id)
 
         result = await self.db.execute(stmt)
         for row in result.all():
@@ -812,6 +834,7 @@ class TrackingMetricsRepository:
         date_to: date,
         *,
         unattributed_only: bool = False,
+        buyer_id: UUID | None = None,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         metric_date = func.date(Message.created_at)
@@ -840,6 +863,10 @@ class TrackingMetricsRepository:
             stmt = stmt.where(Chat.tracking_link_id == link_id)
         if unattributed_only:
             stmt = stmt.where(Chat.tracking_link_id.is_(None))
+        if buyer_id is not None:
+            stmt = stmt.join(TrackingLink, TrackingLink.id == Chat.tracking_link_id).where(
+                TrackingLink.buyer_id == buyer_id
+            )
 
         result = await self.db.execute(stmt)
         for row in result.all():
@@ -857,6 +884,7 @@ class TrackingMetricsRepository:
         submitted_only: bool,
         lead_status_codes: Sequence[str] | None = None,
         unattributed_only: bool = False,
+        buyer_id: UUID | None = None,
     ) -> None:
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
@@ -884,6 +912,10 @@ class TrackingMetricsRepository:
             stmt = stmt.where(Chat.tracking_link_id == link_id)
         if unattributed_only:
             stmt = stmt.where(Chat.tracking_link_id.is_(None))
+        if buyer_id is not None:
+            stmt = stmt.join(TrackingLink, TrackingLink.id == Chat.tracking_link_id).where(
+                TrackingLink.buyer_id == buyer_id
+            )
         stmt = self._apply_lead_status_filter(
             stmt,
             submitted_only=submitted_only,
@@ -956,6 +988,7 @@ class TrackingMetricsRepository:
         bot_id: UUID | None,
         date_from: date,
         date_to: date,
+        buyer_id: UUID | None = None,
     ) -> None:
         manual_stmt = (
             select(
@@ -973,6 +1006,8 @@ class TrackingMetricsRepository:
         )
         if bot_id is not None:
             manual_stmt = manual_stmt.where(TrackingLink.bot_id == bot_id)
+        if buyer_id is not None:
+            manual_stmt = manual_stmt.where(TrackingLink.buyer_id == buyer_id)
         manual_result = await self.db.execute(manual_stmt)
         for row in manual_result.all():
             self._ensure_daily(daily, row.metric_date)["spend"] += Decimal(row.spend or 0)
@@ -1004,6 +1039,8 @@ class TrackingMetricsRepository:
         )
         if bot_id is not None:
             fixed_stmt = fixed_stmt.where(TrackingLink.bot_id == bot_id)
+        if buyer_id is not None:
+            fixed_stmt = fixed_stmt.where(TrackingLink.buyer_id == buyer_id)
         fixed_result = await self.db.execute(fixed_stmt)
         for row in fixed_result.all():
             amount = Decimal(row.units or 0) * Decimal(row.price_per_unit or 0)
@@ -1036,6 +1073,8 @@ class TrackingMetricsRepository:
         )
         if bot_id is not None:
             submitted_stmt = submitted_stmt.where(TrackingLink.bot_id == bot_id)
+        if buyer_id is not None:
+            submitted_stmt = submitted_stmt.where(TrackingLink.buyer_id == buyer_id)
         submitted_result = await self.db.execute(submitted_stmt)
         for row in submitted_result.all():
             amount = Decimal(row.units or 0) * Decimal(row.price_per_unit or 0)

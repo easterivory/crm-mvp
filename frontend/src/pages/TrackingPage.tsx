@@ -32,6 +32,7 @@ import { fetchBots } from '../features/bots/api'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
 import type { BuyerUser } from '../features/buyers'
+import { useAuthStore } from '../store/authStore'
 import {
   archiveTrackingLink,
   createTrackingLink,
@@ -337,6 +338,7 @@ function funnelList(items: FunnelStepMetric[]) {
 
 export default function TrackingPage() {
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
+  const isBuyer = useAuthStore((state) => state.user?.role_name === 'buyer')
   const [bots, setBots] = useState<Bot[]>([])
   const [links, setLinks] = useState<TrackingLink[]>([])
   const [metrics, setMetrics] = useState<TrackingProjectMetricsResponse | null>(null)
@@ -495,7 +497,7 @@ export default function TrackingPage() {
           offset: 0,
         }),
         fetchProjectTrackingMetrics(params),
-        fetchBuyers(selectedProjectId),
+        isBuyer ? Promise.resolve([]) : fetchBuyers(selectedProjectId),
       ])
 
       setBots(botItems)
@@ -513,6 +515,7 @@ export default function TrackingPage() {
     dateTo,
     selectedBotIdForQuery,
     selectedProjectId,
+    isBuyer,
   ])
 
   const loadDetail = useCallback(
@@ -641,11 +644,11 @@ export default function TrackingPage() {
         bot_id: createBotId,
         title: createTitle.trim(),
         code: createCode.trim() || undefined,
-        buyer_id:
+        buyer_id: isBuyer ? undefined :
           createBuyerSelection && createBuyerSelection !== 'custom'
             ? createBuyerSelection
             : null,
-        buyer_name:
+        buyer_name: isBuyer ? undefined :
           createBuyerSelection === 'custom' ? createBuyerName.trim() || null : null,
         ad_type: createAdType.trim() || null,
         payment_type: createCostModel,
@@ -727,11 +730,11 @@ export default function TrackingPage() {
     try {
       const payload = {
         title: editTitle.trim(),
-        buyer_id:
+        buyer_id: isBuyer ? undefined :
           editBuyerSelection && editBuyerSelection !== 'custom'
             ? editBuyerSelection
             : null,
-        buyer_name:
+        buyer_name: isBuyer ? undefined :
           editBuyerSelection === 'custom' ? editBuyerName.trim() || null : null,
         ad_type: editAdType.trim() || null,
         payment_type: editCostModel,
@@ -1411,7 +1414,7 @@ export default function TrackingPage() {
                   placeholder="optional-code"
                 />
               </label>
-              <label className="block">
+              {!isBuyer ? <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Баер
                 </span>
@@ -1433,9 +1436,9 @@ export default function TrackingPage() {
                   ))}
                   <option value="custom">Тестовый баер / свободный ввод</option>
                 </select>
-              </label>
+              </label> : null}
             </div>
-            {createBuyerSelection === 'custom' ? (
+            {!isBuyer && createBuyerSelection === 'custom' ? (
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Имя тестового баера
@@ -1642,7 +1645,7 @@ export default function TrackingPage() {
               />
             </label>
             <div className="grid gap-3 md:grid-cols-2">
-              <label className="block">
+              {!isBuyer ? <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Баер
                 </span>
@@ -1664,7 +1667,7 @@ export default function TrackingPage() {
                   ))}
                   <option value="custom">Тестовый баер / свободный ввод</option>
                 </select>
-              </label>
+              </label> : null}
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Тип рекламы
@@ -1678,7 +1681,7 @@ export default function TrackingPage() {
                 />
               </label>
             </div>
-            {editBuyerSelection === 'custom' ? (
+            {!isBuyer && editBuyerSelection === 'custom' ? (
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Имя тестового баера

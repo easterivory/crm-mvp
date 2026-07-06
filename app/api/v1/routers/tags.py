@@ -83,8 +83,10 @@ async def add_tag_to_lead(
     lead_id: UUID,
     tag_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_lead_tag_access(current_user)
     await TagService(db).add_tag_to_lead(
         lead_id=lead_id,
         tag_id=tag_id,
@@ -97,8 +99,10 @@ async def remove_tag_from_lead(
     lead_id: UUID,
     tag_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _ensure_lead_tag_access(current_user)
     await TagService(db).remove_tag_from_lead(
         lead_id=lead_id,
         tag_id=tag_id,
@@ -123,9 +127,17 @@ def _ensure_settings_admin(current_user) -> None:
 
 
 def _ensure_project_member(current_user, project_id: UUID) -> None:
-    if current_user.role_name not in RoleName.ALL:
+    if current_user.role_name not in RoleName.ALL or current_user.role_name == RoleName.BUYER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only CRM staff can manage project tags",
         )
     require_project_access(current_user, project_id)
+
+
+def _ensure_lead_tag_access(current_user) -> None:
+    if current_user.role_name == RoleName.BUYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Buyers have read-only access to leads",
+        )

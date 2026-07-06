@@ -370,6 +370,7 @@ class LeadService:
         age_from: Optional[int] = None,
         age_to: Optional[int] = None,
         country: Optional[str] = None,
+        submission_state: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[LeadOut], int]:
@@ -389,6 +390,7 @@ class LeadService:
             age_from=age_from,
             age_to=age_to,
             country=country,
+            submission_state=submission_state,
             limit=limit,
             offset=offset,
         )
@@ -408,6 +410,7 @@ class LeadService:
             age_from=age_from,
             age_to=age_to,
             country=country,
+            submission_state=submission_state,
         )
         return [await self._lead_out(lead) for lead in leads], total
 

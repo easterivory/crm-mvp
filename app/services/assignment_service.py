@@ -82,6 +82,11 @@ class AssignmentService:
         actor = await self.user_repo.get_by_id(actor_id)
         if actor is None or actor.is_deleted:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Actor is not active")
+        if actor.role_name == RoleName.BUYER:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Buyers have read-only access to leads.",
+            )
         if actor.role_name == RoleName.MANAGER and manager_id != actor_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

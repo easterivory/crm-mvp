@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import LeadStatusCode
+from app.core.constants import LeadStatusCode, RoleName
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.project_repository import ProjectRepository
@@ -55,6 +55,7 @@ class TrackingMetricsService:
         lead_status_codes = self._tracking_lead_status_codes(project)
         if bot_id is not None:
             await self._ensure_bot_in_project(bot_id, project_id)
+        buyer_id = current_user.id if current_user.role_name == RoleName.BUYER else None
 
         link_rows = await self.metrics_repo.get_link_metrics_rows(
             project_id=project_id,
@@ -62,6 +63,7 @@ class TrackingMetricsService:
             date_from=date_from,
             date_to=date_to,
             lead_status_codes=lead_status_codes,
+            buyer_id=buyer_id,
         )
         links: list[TrackingLinkMetric] = []
         for row in link_rows:
@@ -94,6 +96,7 @@ class TrackingMetricsService:
                 date_from=date_from,
                 date_to=date_to,
                 lead_status_codes=lead_status_codes,
+                buyer_id=buyer_id,
             ),
             date_from,
             date_to,
@@ -108,17 +111,16 @@ class TrackingMetricsService:
                 "spend": sum((item.spend for item in daily), Decimal("0")),
             }
         )
-        unattributed_daily = self._fill_daily_range(
+        unattributed_rows = [] if buyer_id is not None else (
             await self.metrics_repo.aggregate_daily_unattributed_by_project(
                 project_id=project_id,
                 bot_id=bot_id,
                 date_from=date_from,
                 date_to=date_to,
                 lead_status_codes=lead_status_codes,
-            ),
-            date_from,
-            date_to,
+            )
         )
+        unattributed_daily = self._fill_daily_range(unattributed_rows, date_from, date_to)
         unattributed_summary = self._summary_from_values(
             {
                 "clicks": 0,
@@ -158,6 +160,11 @@ class TrackingMetricsService:
                 detail="Tracking link not found",
             )
         await self._ensure_project_access(current_user, link.project_id)
+        if current_user.role_name == RoleName.BUYER and link.buyer_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tracking link not found",
+            )
         project = await self._get_active_project_or_404(link.project_id)
         lead_status_codes = self._tracking_lead_status_codes(project)
 

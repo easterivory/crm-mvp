@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import MainLayout from './components/MainLayout'
+import BuyerRestrictedRoute from './components/BuyerRestrictedRoute'
 import ManagerRestrictedRoute from './components/ManagerRestrictedRoute'
 import ProtectedRoute from './components/ProtectedRoute'
 import SuperAdminRoute from './components/SuperAdminRoute'
@@ -45,17 +46,17 @@ export default function App() {
           }
         >
           <Route path="/" element={<Navigate to="/chats" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/analytics" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<BuyerRestrictedRoute><DashboardPage /></BuyerRestrictedRoute>} />
+          <Route path="/analytics" element={<BuyerRestrictedRoute><DashboardPage /></BuyerRestrictedRoute>} />
           <Route path="/chats" element={<ChatsPage />} />
           <Route path="/funnels" element={<FunnelsPage />} />
           <Route path="/funnels/:funnelId/builder" element={<FunnelsPage />} />
-          <Route path="/broadcasts" element={<BroadcastsPage />} />
-          <Route path="/bots" element={<ManagerRestrictedRoute><BotsPage /></ManagerRestrictedRoute>} />
-          <Route path="/leads" element={<LeadsPage />} />
+          <Route path="/broadcasts" element={<BuyerRestrictedRoute><BroadcastsPage /></BuyerRestrictedRoute>} />
+          <Route path="/bots" element={<BuyerRestrictedRoute><ManagerRestrictedRoute><BotsPage /></ManagerRestrictedRoute></BuyerRestrictedRoute>} />
+          <Route path="/leads" element={<BuyerRestrictedRoute><LeadsPage /></BuyerRestrictedRoute>} />
           <Route path="/tracking" element={<ManagerRestrictedRoute><TrackingPage /></ManagerRestrictedRoute>} />
           <Route path="/docs" element={<SuperAdminRoute><DocsPage /></SuperAdminRoute>} />
-          <Route path="/settings" element={<ManagerRestrictedRoute><SettingsPage /></ManagerRestrictedRoute>} />
+          <Route path="/settings" element={<BuyerRestrictedRoute><ManagerRestrictedRoute><SettingsPage /></ManagerRestrictedRoute></BuyerRestrictedRoute>} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

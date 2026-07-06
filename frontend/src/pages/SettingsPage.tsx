@@ -74,7 +74,7 @@ type User = {
 
 type Role = {
   id: string
-  name: 'super_admin' | 'admin' | 'manager' | 'operator'
+  name: 'super_admin' | 'admin' | 'manager' | 'buyer' | 'operator'
 }
 
 type LeadStatus = {
@@ -160,6 +160,7 @@ function roleLabel(roleName: string) {
     super_admin: 'Суперадмин',
     admin: 'Админ',
     manager: 'Менеджер',
+    buyer: 'Баер',
     operator: 'Оператор',
   }
   return labels[roleName] ?? roleName
@@ -389,7 +390,7 @@ export default function SettingsPage() {
           return true
         }
         if (currentRoleName === 'admin') {
-          return role.name === 'manager' || role.name === 'operator'
+          return role.name === 'manager' || role.name === 'buyer' || role.name === 'operator'
         }
         return false
       }),
@@ -431,7 +432,7 @@ export default function SettingsPage() {
 
       return (
         currentRoleName === 'admin' &&
-        (targetRoleName === 'manager' || targetRoleName === 'operator') &&
+        (targetRoleName === 'manager' || targetRoleName === 'buyer' || targetRoleName === 'operator') &&
         Boolean(activeProjectId && getUserProjectIds(user).includes(activeProjectId))
       )
     },
@@ -455,7 +456,9 @@ export default function SettingsPage() {
         return roles
       }
       if (currentRoleName === 'admin') {
-        return roles.filter((role) => role.name === 'manager' || role.name === 'operator')
+        return roles.filter((role) =>
+          role.name === 'manager' || role.name === 'buyer' || role.name === 'operator'
+        )
       }
       return []
     },

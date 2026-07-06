@@ -37,8 +37,10 @@ async def list_tracking_links(
     offset: int = Query(default=0, ge=0),
     bot_id: Optional[UUID] = Query(default=None),
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[TrackingLinkOut]:
+    _ensure_legacy_tracking_access(current_user)
     items, total = await TrackingService(db).list_links(
         project_id=project_id,
         limit=limit,
@@ -55,7 +57,7 @@ async def create_tracking_link(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkOut:
-    _ensure_tracking_management_access(current_user)
+    _ensure_legacy_tracking_access(current_user)
     return await TrackingService(db).create_link(project_id=project_id, data=data)
 
 
@@ -63,8 +65,10 @@ async def create_tracking_link(
 async def get_tracking_link(
     link_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkOut:
+    _ensure_legacy_tracking_access(current_user)
     return await TrackingService(db).get_link(link_id=link_id, project_id=project_id)
 
 
@@ -76,7 +80,7 @@ async def update_tracking_link(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TrackingLinkOut:
-    _ensure_tracking_management_access(current_user)
+    _ensure_legacy_tracking_access(current_user)
     return await TrackingService(db).update_link(
         link_id=link_id,
         project_id=project_id,
@@ -91,7 +95,7 @@ async def delete_tracking_link(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    _ensure_tracking_management_access(current_user)
+    _ensure_legacy_tracking_access(current_user)
     await TrackingService(db).delete_link(link_id=link_id, project_id=project_id)
 
 
@@ -319,8 +323,25 @@ async def get_link_tracking_metrics_v1(
 
 
 def _ensure_tracking_management_access(current_user: User) -> None:
-    if current_user.role_name == RoleName.MANAGER:
+    if current_user.role_name not in {
+        RoleName.SUPER_ADMIN,
+        RoleName.ADMIN,
+        RoleName.OPERATOR,
+        RoleName.BUYER,
+    }:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managers cannot manage tracking links or spend",
+            detail="Current user cannot manage tracking links or spend",
+        )
+
+
+def _ensure_legacy_tracking_access(current_user: User) -> None:
+    if current_user.role_name not in {
+        RoleName.SUPER_ADMIN,
+        RoleName.ADMIN,
+        RoleName.OPERATOR,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Use the scoped tracking API for this role",
         )

@@ -38,6 +38,7 @@ CHAT_TRACE_ROLES = {
     RoleName.SUPER_ADMIN,
     RoleName.ADMIN,
     RoleName.MANAGER,
+    RoleName.BUYER,
     RoleName.OPERATOR,
 }
 
@@ -51,7 +52,7 @@ def _ensure_chat_trace_access(current_user: User) -> None:
 
 
 def _ensure_chat_language_access(current_user: User) -> None:
-    if current_user.role_name not in RoleName.ALL:
+    if current_user.role_name not in RoleName.ALL or current_user.role_name == RoleName.BUYER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only operator, manager, admin or super_admin can update chat language",
@@ -64,7 +65,7 @@ def _ensure_chat_destructive_access(current_user: User) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Current user cannot manage dialog lifecycle",
         )
-    if current_user.role_name == RoleName.MANAGER:
+    if current_user.role_name in {RoleName.MANAGER, RoleName.BUYER}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Managers cannot reset or block dialogs",
@@ -365,6 +366,8 @@ async def resume_chat_funnel(
     db: AsyncSession = Depends(get_db),
 ) -> ChatFunnelControlOut:
     _ensure_chat_trace_access(current_user)
+    if current_user.role_name == RoleName.BUYER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Buyers have read-only chat access")
     try:
         resumed = await FunnelRuntimeService(db).resume_from_manager_step(
             chat_id=chat_id,
@@ -390,8 +393,11 @@ async def resume_chat_funnel(
 async def create_chat(
     data: ChatCreate,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatOut:
+    if current_user.role_name == RoleName.BUYER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Buyers have read-only chat access")
     return await ChatService(db).create_chat(project_id=project_id, data=data)
 
 

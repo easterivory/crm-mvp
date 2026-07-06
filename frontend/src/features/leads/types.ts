@@ -40,6 +40,9 @@ export type Lead = {
   manager_name?: string | null
   status_code?: string | null
   status_name?: string | null
+  submitted_at?: string | null
+  submission_status?: string | null
+  submission_partner_name?: string | null
 }
 
 export type LeadStatus = {
@@ -88,6 +91,18 @@ export type LeadListParams = {
   age_from?: number
   age_to?: number
   country?: string
+  submission_state?: 'active' | 'submitted'
   limit?: number
   offset?: number
+}
+
+export type LeadUpdate = {
+  first_name?: string | null
+  last_name?: string | null
+  phone?: string | null
+  username?: string | null
+  age?: number | null
+  country?: string | null
+  preferred_call_time?: string | null
+  has_card?: boolean | null
 }

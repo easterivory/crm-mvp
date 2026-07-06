@@ -71,7 +71,7 @@ async def create_buyer(
             detail="User with this email already exists",
         )
 
-    role = await _get_manager_role(db)
+    role = await _get_buyer_role(db)
     username = await _buyer_bot_username_or_error(db)
 
     user: User | None = None
@@ -193,13 +193,13 @@ async def _ensure_project_active(db: AsyncSession, project_id: UUID) -> None:
         )
 
 
-async def _get_manager_role(db: AsyncSession) -> Role:
-    result = await db.execute(select(Role).where(Role.name == RoleName.MANAGER))
+async def _get_buyer_role(db: AsyncSession) -> Role:
+    result = await db.execute(select(Role).where(Role.name == RoleName.BUYER))
     role = result.scalar_one_or_none()
     if role is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Manager role is not configured",
+            detail="Buyer role is not configured",
         )
     return role
 

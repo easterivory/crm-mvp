@@ -84,6 +84,7 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
         offset: int = 0,
         bot_id: UUID | None = None,
         is_active: bool | None = None,
+        buyer_id: UUID | None = None,
     ) -> list[TrackingLink]:
         stmt = (
             select(TrackingLink)
@@ -94,6 +95,8 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
             stmt = stmt.where(TrackingLink.bot_id == bot_id)
         if is_active is not None:
             stmt = stmt.where(TrackingLink.is_active.is_(is_active))
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id)
 
         result = await self.db.execute(
             stmt.order_by(TrackingLink.created_at.desc()).limit(limit).offset(offset)
@@ -105,6 +108,7 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
         project_id: UUID,
         bot_id: UUID | None = None,
         is_active: bool | None = None,
+        buyer_id: UUID | None = None,
     ) -> int:
         stmt = select(func.count(TrackingLink.id)).where(
             TrackingLink.project_id == project_id
@@ -113,6 +117,8 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
             stmt = stmt.where(TrackingLink.bot_id == bot_id)
         if is_active is not None:
             stmt = stmt.where(TrackingLink.is_active.is_(is_active))
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id)
 
         result = await self.db.execute(stmt)
         return result.scalar_one()

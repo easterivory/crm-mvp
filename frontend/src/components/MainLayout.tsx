@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { BotSelector } from '../features/bots'
 import { ProjectSelector } from '../features/projects'
-import { isManagerRole, isSuperAdminRole, t } from '../shared/lib'
+import { isBuyerRole, isManagerRole, isSuperAdminRole, t } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 import DashboardHeaderMetrics from './DashboardHeaderMetrics'
 
@@ -104,6 +104,9 @@ export default function MainLayout() {
   const visibleNavItems = useMemo(
     () =>
       navItems.filter((item) => {
+        if (isBuyerRole(user?.role_name)) {
+          return ['/chats', '/funnels', '/tracking'].includes(item.path)
+        }
         if (item.path === '/docs') {
           return isSuperAdminRole(user?.role_name)
         }
@@ -114,6 +117,9 @@ export default function MainLayout() {
   )
   const roleLabel = useMemo(() => {
     const role = user?.role_name ?? 'user'
+    if (role === 'buyer') {
+      return 'Баер'
+    }
     return role.replace('_', ' ')
   }, [user?.role_name])
 
@@ -243,9 +249,11 @@ export default function MainLayout() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="hidden md:block">
-          <DashboardHeaderMetrics />
-        </div>
+        {!isBuyerRole(user?.role_name) ? (
+          <div className="hidden md:block">
+            <DashboardHeaderMetrics />
+          </div>
+        ) : null}
         {isMobileScopeOpen ? (
           <button
             type="button"
