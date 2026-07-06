@@ -204,6 +204,7 @@ export default function LeadsPage() {
           q: search,
           is_trash: isTrashTab,
           submission_state: isTrashTab ? undefined : isSubmittedTab ? 'submitted' : 'active',
+          funnel_completed: activeTab === 'active',
           partner_id: partnerFilter || undefined,
           age_from: parseOptionalNumber(ageFrom),
           age_to: parseOptionalNumber(ageTo),
@@ -407,7 +408,7 @@ export default function LeadsPage() {
                   ? `${total} успешно подано`
                   : statusFilter
                     ? `${total} найдено`
-                    : `${total} активных`}
+                    : `${total} завершили воронку`}
             </p>
           </div>
 
@@ -592,7 +593,7 @@ export default function LeadsPage() {
               ? 'Здесь появятся лиды, перемещённые в корзину.'
               : isSubmittedTab
                 ? 'Здесь появятся лиды после успешной подачи партнёру.'
-                : 'Попробуйте изменить фильтры или дождаться новых обращений из Telegram.'}
+                : 'Здесь появятся лиды, которые дошли до завершения воронки.'}
           />
         ) : null}
 

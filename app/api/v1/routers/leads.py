@@ -101,6 +101,7 @@ async def list_leads(
         default=None,
         pattern="^(active|submitted)$",
     ),
+    funnel_completed: bool = Query(default=False),
     q: Optional[str] = Query(default=None, max_length=255),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
@@ -128,6 +129,7 @@ async def list_leads(
         age_to=age_to,
         country=country,
         submission_state=submission_state,
+        funnel_completed=funnel_completed,
         limit=limit,
         offset=offset,
     )
@@ -225,6 +227,7 @@ async def get_lead(
 
 
 @router.patch("/{lead_id}", response_model=LeadOut)
+@router.post("/{lead_id}/contact", response_model=LeadOut)
 async def update_lead(
     lead_id: UUID,
     data: LeadUpdate,

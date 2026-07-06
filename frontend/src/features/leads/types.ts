@@ -92,6 +92,7 @@ export type LeadListParams = {
   age_to?: number
   country?: string
   submission_state?: 'active' | 'submitted'
+  funnel_completed?: boolean
   limit?: number
   offset?: number
 }

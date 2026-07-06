@@ -480,7 +480,7 @@ export default function LeadSidebar({
       const firstName = firstNameDraft.trim()
       const lastName = lastNameDraft.trim()
       const preferredCallTime = preferredCallTimeDraft.trim()
-      const { data } = await api.patch<Lead>(`/leads/${lead.id}`, {
+      const { data } = await api.post<Lead>(`/leads/${lead.id}/contact`, {
         first_name: firstName || null,
         last_name: lastName || null,
         username: username || null,

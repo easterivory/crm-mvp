@@ -110,3 +110,35 @@ def test_manual_lead_profile_update_persists_first_and_last_name():
     assert result.name == "Виктор Смирнов"
     assert result.custom_fields["first_name"] == "Виктор"
     assert result.custom_fields["last_name"] == "Смирнов"
+    assert result.custom_fields["__crm_name_override"] is True
+
+
+def test_telegram_profile_does_not_overwrite_manual_crm_name():
+    lead = SimpleNamespace(
+        custom_fields={
+            "first_name": "Анна",
+            "last_name": "Петрова",
+            "__crm_name_override": True,
+        }
+    )
+    message = TelegramMessage.model_validate(
+        {
+            "message_id": 1,
+            "chat": {"id": 100},
+            "from": {
+                "id": 100,
+                "first_name": "Telegram",
+                "last_name": "Name",
+            },
+            "text": "Привет",
+        }
+    )
+    service = TelegramService.__new__(TelegramService)
+    service.lead_repo = SimpleNamespace(update_contact=lambda *args, **kwargs: None)
+
+    result = asyncio.run(
+        service._sync_lead_telegram_profile(lead, message, uuid4())
+    )
+
+    assert result is lead
+    assert resolve_lead_names(result) == ("Анна", "Петрова")

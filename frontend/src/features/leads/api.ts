@@ -19,6 +19,7 @@ export async function fetchLeads(params: LeadListParams) {
       age_to: params.age_to ?? undefined,
       country: params.country?.trim() || undefined,
       submission_state: params.submission_state,
+      funnel_completed: params.funnel_completed || undefined,
       limit: params.limit ?? 50,
       offset: params.offset ?? 0,
     },
@@ -28,7 +29,7 @@ export async function fetchLeads(params: LeadListParams) {
 }
 
 export async function updateLead(leadId: string, projectId: string, payload: LeadUpdate) {
-  const { data } = await api.patch<Lead>(`/leads/${leadId}`, payload, {
+  const { data } = await api.post<Lead>(`/leads/${leadId}/contact`, payload, {
     params: { project_id: projectId },
   })
   return data

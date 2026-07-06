@@ -31,6 +31,7 @@ from sqlalchemy.orm import aliased
 from app.core.constants import LeadStatusCode
 from app.models.bot import Bot
 from app.models.chat import Chat
+from app.models.funnel import ChatFunnelState
 from app.models.lead import Lead
 from app.models.lead import LeadTag
 from app.models.lead_status import LeadStatus
@@ -114,6 +115,7 @@ class LeadRepository(BaseRepository[Lead]):
         age_to: Optional[int] = None,
         country: Optional[str] = None,
         submission_state: Optional[str] = None,
+        funnel_completed: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Lead]:
@@ -172,6 +174,7 @@ class LeadRepository(BaseRepository[Lead]):
             submission_state,
             partner_id=partner_id if submission_state == "submitted" else None,
         )
+        stmt = self._apply_funnel_completed(stmt, funnel_completed)
         if age_from is not None:
             stmt = stmt.where(Lead.age >= age_from)
         if age_to is not None:
@@ -221,6 +224,7 @@ class LeadRepository(BaseRepository[Lead]):
         age_to: Optional[int] = None,
         country: Optional[str] = None,
         submission_state: Optional[str] = None,
+        funnel_completed: bool = False,
     ) -> int:
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -277,6 +281,7 @@ class LeadRepository(BaseRepository[Lead]):
             submission_state,
             partner_id=partner_id if submission_state == "submitted" else None,
         )
+        stmt = self._apply_funnel_completed(stmt, funnel_completed)
         if age_from is not None:
             stmt = stmt.where(Lead.age >= age_from)
         if age_to is not None:
@@ -326,6 +331,19 @@ class LeadRepository(BaseRepository[Lead]):
         successful_submission = successful_submission.exists()
         return stmt.where(
             successful_submission if submission_state == "submitted" else ~successful_submission
+        )
+
+    @staticmethod
+    def _apply_funnel_completed(stmt, funnel_completed: bool):
+        if not funnel_completed:
+            return stmt
+        return stmt.where(
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_not(None),
+            )
+            .exists()
         )
 
     async def get_lead_context(self, lead_id: UUID) -> dict:

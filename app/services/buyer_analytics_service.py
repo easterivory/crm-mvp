@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import case, distinct, func, or_, select
+from sqlalchemy import and_, case, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode, RoleName
@@ -175,12 +175,7 @@ class BuyerAnalyticsService:
                     ),
                 ),
                 User.is_deleted.is_(False),
-                User.role.has(name=RoleName.MANAGER),
-                or_(
-                    User.buyer_telegram_id.is_not(None),
-                    User.buyer_invite_token.is_not(None),
-                    link_counts.c.buyer_id.is_not(None),
-                ),
+                self._buyer_account_filter(link_counts.c.buyer_id),
             )
             .order_by(User.name.asc(), User.created_at.desc())
         )
@@ -208,6 +203,20 @@ class BuyerAnalyticsService:
                 )
             )
         return items
+
+    @staticmethod
+    def _buyer_account_filter(link_buyer_id):
+        return or_(
+            User.role.has(name=RoleName.BUYER),
+            and_(
+                User.role.has(name=RoleName.MANAGER),
+                or_(
+                    User.buyer_telegram_id.is_not(None),
+                    User.buyer_invite_token.is_not(None),
+                    link_buyer_id.is_not(None),
+                ),
+            ),
+        )
 
     async def _get_tracking_lead_status_codes(self, project_id: UUID) -> tuple[str, ...]:
         result = await self.db.execute(

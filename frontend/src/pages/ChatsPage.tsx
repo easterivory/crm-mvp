@@ -681,6 +681,7 @@ export default function ChatsPage() {
   const chatsAbortRef = useRef<AbortController | null>(null)
   const messagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
+  const shouldAutoScrollMessagesRef = useRef(true)
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     window.requestAnimationFrame(() => {
@@ -696,9 +697,20 @@ export default function ChatsPage() {
   }, [])
 
   const handleComposerFocus = useCallback(() => {
+    shouldAutoScrollMessagesRef.current = true
     scrollMessagesToBottom()
     window.setTimeout(() => scrollMessagesToBottom(), 250)
   }, [scrollMessagesToBottom])
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesScrollRef.current
+    if (!container) {
+      return
+    }
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight
+    shouldAutoScrollMessagesRef.current = distanceFromBottom <= 96
+  }, [])
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
@@ -1303,6 +1315,7 @@ export default function ChatsPage() {
   useEffect(() => {
     if (!selectedChatId) {
       setIsLeadOpen(false)
+      shouldAutoScrollMessagesRef.current = true
       messagesAbortRef.current?.abort()
       setMessages([])
       setAuditLogs([])
@@ -1314,6 +1327,7 @@ export default function ChatsPage() {
       return undefined
     }
 
+    shouldAutoScrollMessagesRef.current = true
     setMessages([])
     setAuditLogs([])
     setScheduledMessages([])
@@ -1355,7 +1369,9 @@ export default function ChatsPage() {
   }, [selectedChatId])
 
   useEffect(() => {
-    scrollMessagesToBottom()
+    if (shouldAutoScrollMessagesRef.current) {
+      scrollMessagesToBottom()
+    }
   }, [scrollMessagesToBottom, timelineItems])
 
   useEffect(() => {
@@ -2138,6 +2154,7 @@ export default function ChatsPage() {
 
         <div
           ref={messagesScrollRef}
+          onScroll={handleMessagesScroll}
           className="touch-scroll min-h-0 flex-1 overflow-y-auto bg-background/45 px-3 py-4 md:px-5"
         >
           {isMessagesLoading ? (

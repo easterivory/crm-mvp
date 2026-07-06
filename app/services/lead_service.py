@@ -371,6 +371,7 @@ class LeadService:
         age_to: Optional[int] = None,
         country: Optional[str] = None,
         submission_state: Optional[str] = None,
+        funnel_completed: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[LeadOut], int]:
@@ -391,6 +392,7 @@ class LeadService:
             age_to=age_to,
             country=country,
             submission_state=submission_state,
+            funnel_completed=funnel_completed,
             limit=limit,
             offset=offset,
         )
@@ -411,6 +413,7 @@ class LeadService:
             age_to=age_to,
             country=country,
             submission_state=submission_state,
+            funnel_completed=funnel_completed,
         )
         return [await self._lead_out(lead) for lead in leads], total
 
@@ -548,6 +551,7 @@ class LeadService:
                     custom_fields[key] = value
                 else:
                     custom_fields.pop(key, None)
+            custom_fields["__crm_name_override"] = True
             values["custom_fields"] = custom_fields
             values["name"] = compose_lead_name(first_name, last_name)
             requested_fields.add("name")

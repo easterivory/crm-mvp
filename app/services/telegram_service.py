@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
-from app.core.lead_names import compose_lead_name, normalize_name_part
+from app.core.lead_names import compose_lead_name, normalize_name_part, resolve_lead_names
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.repositories.bot_repository import BotRepository
@@ -1207,19 +1207,33 @@ class TelegramService:
                     else None
                 )
                 first_name, last_name = self._telegram_profile_fields(message)
+                profile_custom_fields = {
+                    key: value
+                    for key, value in {
+                        "first_name": first_name,
+                        "last_name": last_name,
+                    }.items()
+                    if value
+                }
+                if (existing.custom_fields or {}).get("__crm_name_override") is True:
+                    first_name, last_name = resolve_lead_names(existing)
+                    profile_custom_fields = {
+                        "__crm_name_override": True,
+                        **{
+                            key: value
+                            for key, value in {
+                                "first_name": first_name,
+                                "last_name": last_name,
+                            }.items()
+                            if value
+                        },
+                    }
                 reset_lead = await self.lead_repo.reset_existing_for_new_cycle(
                     existing.id,
                     project_id,
                     username=username,
                     name=compose_lead_name(first_name, last_name),
-                    custom_fields={
-                        key: value
-                        for key, value in {
-                            "first_name": first_name,
-                            "last_name": last_name,
-                        }.items()
-                        if value
-                    },
+                    custom_fields=profile_custom_fields,
                 )
                 if reset_lead is None:
                     logger.error(
@@ -1304,6 +1318,8 @@ class TelegramService:
             return lead
 
         custom_fields = dict(lead.custom_fields or {})
+        if custom_fields.get("__crm_name_override") is True:
+            return lead
         changed = False
         if first_name and not normalize_name_part(custom_fields.get("first_name")):
             custom_fields["first_name"] = first_name
