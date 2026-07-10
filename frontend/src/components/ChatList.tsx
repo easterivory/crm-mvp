@@ -1,4 +1,4 @@
-import { ArrowDownWideNarrow, LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
+import { ArrowDownWideNarrow, Ban, LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
 import { useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
@@ -24,6 +24,7 @@ export type Chat = {
   last_operator_message_at: string | null
   is_read: boolean
   is_blocked: boolean
+  is_blocked_by_user: boolean
   unanswered_minutes: number
   last_incoming_at: string | null
   last_outgoing_at: string | null
@@ -425,9 +426,18 @@ export default function ChatList({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
-                  <p className={`min-w-0 truncate text-sm text-white ${isUnread ? 'font-bold' : 'font-semibold'}`}>
-                    {title}
-                  </p>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {chat.is_blocked_by_user ? (
+                      <Ban
+                        size={14}
+                        className="shrink-0 text-red-300"
+                        aria-label="Пользователь заблокировал бота"
+                      />
+                    ) : null}
+                    <p className={`min-w-0 truncate text-sm text-white ${isUnread ? 'font-bold' : 'font-semibold'}`}>
+                      {title}
+                    </p>
+                  </div>
                   <span className="shrink-0 text-xs text-gray-500">
                     {formatDateTime(chat.last_message_at)}
                   </span>
@@ -468,6 +478,12 @@ export default function ChatList({
                   {chat.is_red ? (
                     <span className="rounded-full bg-red-400/10 px-2 py-0.5 text-xs font-medium text-red-300">
                       SLA
+                    </span>
+                  ) : null}
+                  {chat.is_blocked_by_user ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-200">
+                      <Ban size={11} />
+                      Бот заблокирован
                     </span>
                   ) : null}
                   <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">

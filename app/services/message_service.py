@@ -122,6 +122,7 @@ class MessageService:
         chat = await self.chat_repo.get_active(chat_id, project_id)
         if chat is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found in this project")
+        self._raise_if_bot_blocked_by_user(chat)
         if chat.bot_id is None:
             raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
 
@@ -149,6 +150,9 @@ class MessageService:
                 text=sent_text,
             )
             if result is None:
+                refreshed = await self.chat_repo.get_active(chat.id, project_id)
+                if refreshed is not None:
+                    self._raise_if_bot_blocked_by_user(refreshed)
                 raise HTTPException(status_code=502, detail="Telegram не принял текстовое сообщение.")
             data = MessageCreate(
                 external_message_id=self._telegram_message_id(result),
@@ -196,6 +200,9 @@ class MessageService:
             mime_type=mime_type,
         )
         if result is None:
+            refreshed = await self.chat_repo.get_active(chat.id, project_id)
+            if refreshed is not None:
+                self._raise_if_bot_blocked_by_user(refreshed)
             raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
 
         actual_media_type = self._actual_telegram_media_type(normalized_type, result)
@@ -315,6 +322,8 @@ class MessageService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Chat not found in this project",
             )
+        if send_to_telegram and data.sender_type in {SenderType.MANAGER, SenderType.BOT}:
+            self._raise_if_bot_blocked_by_user(chat)
 
         # ── Pre-check idempotency ─────────────────────────────────────────────
         if data.external_message_id is not None:
@@ -636,6 +645,9 @@ class MessageService:
             reply_markup=data.reply_markup,
         )
         if result is None:
+            refreshed = await self.chat_repo.get_active(chat.id, project_id)
+            if refreshed is not None:
+                self._raise_if_bot_blocked_by_user(refreshed)
             raise HTTPException(status_code=502, detail="Telegram не принял текстовое сообщение.")
 
         message_id = result.get("message_id")
@@ -686,6 +698,9 @@ class MessageService:
         )
         if result is None:
             await self.message_repo.mark_upload_failed(upload.id, project_id)
+            refreshed = await self.chat_repo.get_active(chat.id, project_id)
+            if refreshed is not None:
+                self._raise_if_bot_blocked_by_user(refreshed)
             raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
 
         actual_media_type = self._actual_telegram_media_type(upload.media_type, result)
@@ -737,6 +752,9 @@ class MessageService:
             mime_type=data.mime_type,
         )
         if result is None:
+            refreshed = await self.chat_repo.get_active(chat.id, project_id)
+            if refreshed is not None:
+                self._raise_if_bot_blocked_by_user(refreshed)
             raise HTTPException(status_code=502, detail="Telegram не принял медиа-сообщение.")
 
         actual_media_type = self._actual_telegram_media_type(message_type, result)
@@ -853,6 +871,14 @@ class MessageService:
             file_name=file_name,
             mime_type=mime_type,
         )
+
+    @staticmethod
+    def _raise_if_bot_blocked_by_user(chat) -> None:
+        if getattr(chat, "is_blocked_by_user", False):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Пользователь заблокировал бота. Отправка сообщений невозможна.",
+            )
 
     @staticmethod
     def _is_outgoing_media_upload(data: MessageCreate) -> bool:

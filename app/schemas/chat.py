@@ -51,6 +51,7 @@ class ChatOut(OrmBase):
     last_operator_message_at: Optional[datetime]
     is_read: bool = True
     is_blocked: bool = False
+    is_blocked_by_user: bool = False
     unanswered_minutes: int = 0
     last_read_at: Optional[datetime]
     reset_at: Optional[datetime]

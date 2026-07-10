@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -59,6 +59,7 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     call_time_text: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     preferred_call_time: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    manager_comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_trash: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

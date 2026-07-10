@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import String, cast, case, distinct, func, or_, select
+from sqlalchemy import String, cast, case, distinct, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, RoleName
 from app.models.audit_log import AuditLog
+from app.models.funnel import ChatFunnelState, FunnelRuntimeLog, FunnelStep
 from app.models.lead import Lead
 from app.models.partner import LeadSubmission
 from app.models.role import Role
@@ -90,6 +91,75 @@ class ManagerAnalyticsService:
             .subquery()
         )
 
+        assigned_to_manager = (
+            select(
+                AuditLog.meta["to_manager_id"].astext.label("manager_id"),
+                AuditLog.entity_id.label("lead_id"),
+                func.max(AuditLog.created_at).label("assigned_at"),
+            )
+            .where(
+                AuditLog.project_id == project_id,
+                AuditLog.action == AuditAction.LEAD_MANAGER_ASSIGNED,
+                AuditLog.entity_type == EntityType.LEAD,
+                AuditLog.meta["to_manager_id"].astext.is_not(None),
+            )
+            .group_by(AuditLog.meta["to_manager_id"].astext, AuditLog.entity_id)
+            .subquery()
+        )
+
+        finish_log_filters = [
+            FunnelRuntimeLog.chat_id == Lead.chat_id,
+            FunnelRuntimeLog.status == "success",
+            FunnelRuntimeLog.created_at >= assigned_to_manager.c.assigned_at,
+            FunnelStep.step_type == "finish",
+        ]
+        self._append_period(finish_log_filters, FunnelRuntimeLog.created_at, start_at, end_at)
+        finish_log_exists = (
+            select(FunnelRuntimeLog.id)
+            .join(FunnelStep, FunnelStep.id == FunnelRuntimeLog.step_id)
+            .where(*finish_log_filters)
+            .exists()
+        )
+
+        completed_state_filters = [
+            ChatFunnelState.chat_id == Lead.chat_id,
+            ChatFunnelState.completed_at.is_not(None),
+            ChatFunnelState.completed_at >= assigned_to_manager.c.assigned_at,
+        ]
+        self._append_period(completed_state_filters, ChatFunnelState.completed_at, start_at, end_at)
+        completed_state_exists = select(ChatFunnelState.id).where(*completed_state_filters).exists()
+
+        pushed_source = union_all(
+            select(
+                assigned_to_manager.c.manager_id.label("manager_id"),
+                Lead.id.label("lead_id"),
+            )
+            .join(Lead, Lead.id == assigned_to_manager.c.lead_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                finish_log_exists,
+            ),
+            select(
+                assigned_to_manager.c.manager_id.label("manager_id"),
+                Lead.id.label("lead_id"),
+            )
+            .join(Lead, Lead.id == assigned_to_manager.c.lead_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                completed_state_exists,
+            ),
+        ).subquery()
+        funnels_pushed_totals = (
+            select(
+                pushed_source.c.manager_id,
+                func.count(distinct(pushed_source.c.lead_id)).label("funnels_pushed"),
+            )
+            .group_by(pushed_source.c.manager_id)
+            .subquery()
+        )
+
         result = await self.db.execute(
             select(
                 User.id.label("manager_id"),
@@ -99,12 +169,14 @@ class ManagerAnalyticsService:
                 func.coalesce(taken_totals.c.chats_taken, 0).label("chats_taken"),
                 func.coalesce(submission_totals.c.submitted_leads, 0).label("submitted_leads"),
                 func.coalesce(submission_totals.c.valid_leads, 0).label("valid_leads"),
+                func.coalesce(funnels_pushed_totals.c.funnels_pushed, 0).label("funnels_pushed"),
                 func.coalesce(resumed_totals.c.returned_to_funnel, 0).label("returned_to_funnel"),
             )
             .join(Role, Role.id == User.role_id)
             .outerjoin(taken_totals, taken_totals.c.manager_id == User.id)
             .outerjoin(submission_totals, submission_totals.c.manager_id == User.id)
             .outerjoin(resumed_totals, resumed_totals.c.manager_id == User.id)
+            .outerjoin(funnels_pushed_totals, funnels_pushed_totals.c.manager_id == cast(User.id, String))
             .where(
                 Role.name == RoleName.MANAGER,
                 User.is_deleted.is_(False),
@@ -134,6 +206,7 @@ class ManagerAnalyticsService:
                     chats_taken=chats_taken,
                     submitted_leads=submitted_leads,
                     valid_leads=valid_leads,
+                    funnels_pushed=int(row["funnels_pushed"] or 0),
                     returned_to_funnel=int(row["returned_to_funnel"] or 0),
                     taken_to_submitted_percent=self._ratio(submitted_leads, chats_taken),
                     submitted_to_valid_percent=self._ratio(valid_leads, submitted_leads),

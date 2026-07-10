@@ -33,7 +33,7 @@ DEFAULT_PROJECT_SLUG = "default-project"
 
 logger = logging.getLogger(__name__)
 
-TELEGRAM_WEBHOOK_ALLOWED_UPDATES = ("message", "callback_query")
+TELEGRAM_WEBHOOK_ALLOWED_UPDATES = ("message", "callback_query", "my_chat_member")
 
 
 class BotService:

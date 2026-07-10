@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   ArrowLeft,
+  Ban,
   Bot,
   CheckCheck,
   Clock3,
@@ -716,6 +717,7 @@ export default function ChatsPage() {
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId],
   )
+  const isTelegramBlockedByUser = Boolean(selectedChat?.is_blocked_by_user)
   const effectiveClientLang = normalizeLanguageCode(
     selectedChat?.client_lang ?? projectTranslation?.default_client_lang ?? 'en',
   ) ?? 'en'
@@ -1460,7 +1462,13 @@ export default function ChatsPage() {
     textOverride?: string
   } = {}) => {
     const text = (options.textOverride ?? draft).trim()
-    if (!selectedChatId || (!text && !attachment && !snippetMedia) || isSending || isPreparingTranslation) {
+    if (
+      !selectedChatId ||
+      isTelegramBlockedByUser ||
+      (!text && !attachment && !snippetMedia) ||
+      isSending ||
+      isPreparingTranslation
+    ) {
       return false
     }
 
@@ -1534,7 +1542,7 @@ export default function ChatsPage() {
   }
 
   const insertSnippetIntoComposer = (snippet: ProjectSnippet) => {
-    if (!selectedChatId || isSending || isPreparingTranslation) {
+    if (!selectedChatId || isTelegramBlockedByUser || isSending || isPreparingTranslation) {
       return
     }
     clearAttachment()
@@ -1851,7 +1859,7 @@ export default function ChatsPage() {
   }
 
   const openScheduleMessage = () => {
-    if (!selectedChatId || (!draft.trim() && !attachment && !snippetMedia)) {
+    if (!selectedChatId || isTelegramBlockedByUser || (!draft.trim() && !attachment && !snippetMedia)) {
       return
     }
     const date = new Date(Date.now() + 5 * 60 * 1000)
@@ -1862,7 +1870,7 @@ export default function ChatsPage() {
 
   const handleScheduleMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!selectedChatId || !scheduledAtLocal || isScheduling) {
+    if (!selectedChatId || isTelegramBlockedByUser || !scheduledAtLocal || isScheduling) {
       return
     }
     const scheduledAt = new Date(scheduledAtLocal)
@@ -2089,6 +2097,12 @@ export default function ChatsPage() {
                       </span>
                     ) : null}
                     {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
+                    {selectedChat.is_blocked_by_user ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-red-300/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-100">
+                        <Ban size={12} />
+                        Бот заблокирован
+                      </span>
+                    ) : null}
                     {selectedChat.is_blocked ? (
                       <span className="rounded-full border border-red-300/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-100">
                         Заблокирован
@@ -2367,6 +2381,18 @@ export default function ChatsPage() {
           className={`${isBuyer ? 'hidden' : 'relative z-10'} shrink-0 border-t border-white/5 bg-surface/95 p-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4`}
           onSubmit={handleSend}
         >
+          {isTelegramBlockedByUser ? (
+            <div className="flex items-start gap-3 rounded-xl border border-red-300/25 bg-red-500/10 px-4 py-3 text-red-100">
+              <Ban size={18} className="mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">Пользователь заблокировал бота.</p>
+                <p className="mt-1 text-xs leading-5 text-red-100/75">
+                  Отправка сообщений невозможна, пока клиент снова не разблокирует бота в Telegram.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div>
           {attachment ? (
             <div className="mb-3 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
               {attachment.media_type === 'photo' && attachmentPreviewUrl ? (
@@ -2592,12 +2618,14 @@ export default function ChatsPage() {
             <button
               type="submit"
               title="Отправить сообщение"
-              disabled={!selectedChat || (!draft.trim() && !attachment && !snippetMedia) || isSending || isPreparingTranslation}
+              disabled={!selectedChat || isTelegramBlockedByUser || (!draft.trim() && !attachment && !snippetMedia) || isSending || isPreparingTranslation}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSending || isPreparingTranslation ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           </div>
+            </div>
+          )}
         </form>
         {isDraggingAttachment ? (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/75 backdrop-blur-sm">

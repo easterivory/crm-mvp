@@ -22,6 +22,7 @@ class LeadUpdate(BaseModel):
     country: Optional[str] = Field(default=None, max_length=100)
     call_time_text: Optional[str] = Field(default=None, max_length=255)
     preferred_call_time: Optional[str] = Field(default=None, max_length=255)
+    manager_comment: Optional[str] = Field(default=None, max_length=5000)
     has_card: Optional[bool] = None
 
 
@@ -74,6 +75,7 @@ class LeadOut(OrmBase):
     country: Optional[str]
     call_time_text: Optional[str]
     preferred_call_time: Optional[str]
+    manager_comment: Optional[str]
     has_card: Optional[bool]
     score_percent: Optional[int]
     custom_fields: dict = Field(default_factory=dict)

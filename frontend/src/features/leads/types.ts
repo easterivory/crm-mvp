@@ -19,6 +19,7 @@ export type Lead = {
   country: string | null
   call_time_text: string | null
   preferred_call_time: string | null
+  manager_comment: string | null
   has_card: boolean | null
   score_percent: number | null
   custom_fields?: Record<string, unknown> | null
@@ -105,5 +106,6 @@ export type LeadUpdate = {
   age?: number | null
   country?: string | null
   preferred_call_time?: string | null
+  manager_comment?: string | null
   has_card?: boolean | null
 }

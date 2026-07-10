@@ -19,7 +19,7 @@ import {
   WalletCards,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
@@ -42,6 +42,7 @@ type Lead = {
   country: string | null
   call_time_text: string | null
   preferred_call_time: string | null
+  manager_comment: string | null
   has_card: boolean | null
   custom_fields?: Record<string, unknown>
   updated_at: string
@@ -254,11 +255,14 @@ export default function LeadSidebar({
   const [usernameDraft, setUsernameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
   const [preferredCallTimeDraft, setPreferredCallTimeDraft] = useState('')
+  const [managerCommentDraft, setManagerCommentDraft] = useState('')
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [editingTagColorId, setEditingTagColorId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [managerCommentError, setManagerCommentError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isSavingContact, setIsSavingContact] = useState(false)
+  const [isSavingManagerComment, setIsSavingManagerComment] = useState(false)
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
   const [isAssigning, setIsAssigning] = useState(false)
   const [isTagsLoading, setIsTagsLoading] = useState(false)
@@ -267,6 +271,7 @@ export default function LeadSidebar({
   const [selectedReturnStepId, setSelectedReturnStepId] = useState('')
   const [isFunnelControlLoading, setIsFunnelControlLoading] = useState(false)
   const [isResumingFunnel, setIsResumingFunnel] = useState(false)
+  const managerCommentSaveSeqRef = useRef(0)
 
   const currentStatus = useMemo(
     () => statuses.find((status) => status.id === lead?.status_id) ?? null,
@@ -372,6 +377,8 @@ export default function LeadSidebar({
       setUsernameDraft('')
       setPhoneDraft('')
       setPreferredCallTimeDraft('')
+      setManagerCommentDraft('')
+      setManagerCommentError('')
       setError('')
       return
     }
@@ -389,6 +396,8 @@ export default function LeadSidebar({
       setUsernameDraft(data.username ?? '')
       setPhoneDraft(data.phone ?? '')
       setPreferredCallTimeDraft(data.preferred_call_time ?? data.call_time_text ?? '')
+      setManagerCommentDraft(data.manager_comment ?? '')
+      setManagerCommentError('')
     } catch (err) {
       setLead(null)
       setFirstNameDraft('')
@@ -396,6 +405,8 @@ export default function LeadSidebar({
       setUsernameDraft('')
       setPhoneDraft('')
       setPreferredCallTimeDraft('')
+      setManagerCommentDraft('')
+      setManagerCommentError('')
       setError(getErrorMessage(err))
     } finally {
       setIsLoading(false)
@@ -411,6 +422,43 @@ export default function LeadSidebar({
   useEffect(() => {
     void loadLead()
   }, [loadLead])
+
+  useEffect(() => {
+    if (!lead || !selectedProjectId || managerCommentDraft === (lead.manager_comment ?? '')) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const saveSeq = managerCommentSaveSeqRef.current + 1
+      managerCommentSaveSeqRef.current = saveSeq
+      setIsSavingManagerComment(true)
+      setManagerCommentError('')
+
+      void api.patch<Lead>(
+        `/leads/${lead.id}`,
+        { manager_comment: managerCommentDraft.trim() || null },
+        { params: { project_id: selectedProjectId } },
+      )
+        .then(({ data }) => {
+          if (managerCommentSaveSeqRef.current === saveSeq) {
+            setLead(data)
+            setManagerCommentDraft(data.manager_comment ?? '')
+          }
+        })
+        .catch((err) => {
+          if (managerCommentSaveSeqRef.current === saveSeq) {
+            setManagerCommentError(getErrorMessage(err, 'Не удалось сохранить комментарий.'))
+          }
+        })
+        .finally(() => {
+          if (managerCommentSaveSeqRef.current === saveSeq) {
+            setIsSavingManagerComment(false)
+          }
+        })
+    }, 650)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [lead, managerCommentDraft, selectedProjectId])
 
   const loadFunnelControl = useCallback(async () => {
     if (!activeChatId || !selectedProjectId) {
@@ -957,6 +1005,36 @@ export default function LeadSidebar({
                     />
                   ) : null}
                 </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <label className="text-sm font-medium text-white" htmlFor="lead-manager-comment">
+                  Комментарий для партнера
+                </label>
+                {isSavingManagerComment ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-cyan-100">
+                    <LoaderCircle size={12} className="animate-spin" />
+                    Сохраняю
+                  </span>
+                ) : null}
+              </div>
+              <textarea
+                id="lead-manager-comment"
+                value={managerCommentDraft}
+                onChange={(event) => setManagerCommentDraft(event.target.value)}
+                maxLength={5000}
+                rows={4}
+                className="touch-scroll min-h-28 w-full resize-y rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                placeholder="Например: что уточнить партнеру, важные детали по лиду"
+              />
+              {managerCommentError ? (
+                <p className="mt-2 text-xs leading-5 text-red-200">{managerCommentError}</p>
+              ) : (
+                <p className="mt-2 text-xs leading-5 text-gray-500">
+                  Автосохраняется и доступен в маппинге партнерских payload.
+                </p>
               )}
             </div>
 

@@ -345,6 +345,10 @@ export default function LeadsPage() {
     setEditError('')
   }
 
+  const handleLeadUpdated = useCallback((updated: Lead) => {
+    setLeads((items) => items.map((item) => (item.id === updated.id ? updated : item)))
+  }, [])
+
   const saveLeadEdit = async () => {
     if (!editingLead || !editDraft || !selectedProjectId || isSavingLead) {
       return
@@ -607,6 +611,7 @@ export default function LeadsPage() {
                 isMutating={mutatingLeadId === lead.id}
                 isTrashView={isTrashTab}
                 visibleFields={cardFields}
+                onLeadUpdated={handleLeadUpdated}
                 onEdit={isTrashTab ? undefined : openLeadEdit}
                 onTrash={(item) => setPendingAction({ type: 'trash', lead: item })}
                 onRestore={(item) => void handleRestore(item)}

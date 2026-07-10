@@ -5,6 +5,7 @@ import {
   Clock3,
   Copy,
   Globe2,
+  LoaderCircle,
   MessageSquareText,
   Pencil,
   Phone,
@@ -15,8 +16,9 @@ import {
   UserRound,
   WalletCards,
 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
+import api from '../../../api/client'
 import DuplicateWarning from './DuplicateWarning'
 import type { Lead } from '../types'
 
@@ -30,6 +32,7 @@ type LeadCardProps = {
   onOpenChat?: (lead: Lead) => void
   onSubmitToPartner?: (lead: Lead) => void
   onEdit?: (lead: Lead) => void
+  onLeadUpdated?: (lead: Lead) => void
   visibleFields?: readonly string[]
 }
 
@@ -165,9 +168,14 @@ export default function LeadCard({
   onOpenChat,
   onSubmitToPartner,
   onEdit,
+  onLeadUpdated,
   visibleFields = DEFAULT_LEAD_CARD_FIELDS,
 }: LeadCardProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [commentDraft, setCommentDraft] = useState(lead.manager_comment ?? '')
+  const [commentError, setCommentError] = useState('')
+  const [isCommentSaving, setIsCommentSaving] = useState(false)
+  const commentSaveSeqRef = useRef(0)
   const title =
     lead.name ||
     lead.contact_name ||
@@ -180,6 +188,48 @@ export default function LeadCard({
   const visibleCustomFields = customFields.filter(
     (field) => isVisible('custom_fields') || isVisible(`custom:${field.key}`),
   )
+
+  useEffect(() => {
+    setCommentDraft(lead.manager_comment ?? '')
+    setCommentError('')
+    setIsCommentSaving(false)
+  }, [lead.id, lead.manager_comment])
+
+  useEffect(() => {
+    if (commentDraft === (lead.manager_comment ?? '')) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const saveSeq = commentSaveSeqRef.current + 1
+      commentSaveSeqRef.current = saveSeq
+      setIsCommentSaving(true)
+      setCommentError('')
+
+      void api.patch<Lead>(
+        `/leads/${lead.id}`,
+        { manager_comment: commentDraft.trim() || null },
+        { params: { project_id: projectId } },
+      )
+        .then(({ data }) => {
+          if (commentSaveSeqRef.current === saveSeq) {
+            onLeadUpdated?.(data)
+          }
+        })
+        .catch(() => {
+          if (commentSaveSeqRef.current === saveSeq) {
+            setCommentError('Не удалось сохранить комментарий.')
+          }
+        })
+        .finally(() => {
+          if (commentSaveSeqRef.current === saveSeq) {
+            setIsCommentSaving(false)
+          }
+        })
+    }, 650)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [commentDraft, lead.id, lead.manager_comment, onLeadUpdated, projectId])
 
   const handleCopy = async (key: string, value: string | null | undefined) => {
     if (!value) {
@@ -226,6 +276,30 @@ export default function LeadCard({
       </div>
 
       <DuplicateWarning leadId={lead.id} projectId={projectId} className="mt-4" />
+
+      <div className="mt-4 rounded-xl border border-white/8 bg-white/[0.025] p-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label className="text-xs font-semibold uppercase tracking-wide text-gray-400" htmlFor={`lead-comment-${lead.id}`}>
+            Комментарий для партнера
+          </label>
+          {isCommentSaving ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-cyan-100">
+              <LoaderCircle size={12} className="animate-spin" />
+              Сохраняю
+            </span>
+          ) : null}
+        </div>
+        <textarea
+          id={`lead-comment-${lead.id}`}
+          value={commentDraft}
+          onChange={(event) => setCommentDraft(event.target.value)}
+          maxLength={5000}
+          rows={3}
+          className="touch-scroll min-h-24 w-full resize-y rounded-lg border border-white/10 bg-background/60 px-3 py-2 text-base leading-6 text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/50 sm:text-sm"
+          placeholder="Информация, которую нужно передать партнеру при подаче"
+        />
+        {commentError ? <p className="mt-2 text-xs text-red-200">{commentError}</p> : null}
+      </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {isVisible('phone') ? <Info icon={<Phone size={15} />} label="Телефон" value={empty(lead.phone)} /> : null}

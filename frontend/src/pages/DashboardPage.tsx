@@ -141,9 +141,10 @@ export default function DashboardPage() {
           taken: acc.taken + manager.chats_taken,
           submitted: acc.submitted + manager.submitted_leads,
           valid: acc.valid + manager.valid_leads,
+          pushed: acc.pushed + manager.funnels_pushed,
           returned: acc.returned + manager.returned_to_funnel,
         }),
-        { taken: 0, submitted: 0, valid: 0, returned: 0 },
+        { taken: 0, submitted: 0, valid: 0, pushed: 0, returned: 0 },
       ),
     [managers],
   )
@@ -446,7 +447,7 @@ export default function DashboardPage() {
             <MetricCard label="Взято чатов" value={String(managerTotals.taken)} tone="zinc" />
             <MetricCard label="Подано" value={String(managerTotals.submitted)} tone="violet" />
             <MetricCard label="Валидных" value={String(managerTotals.valid)} tone="emerald" />
-            <MetricCard label="Возвращено" value={String(managerTotals.returned)} tone="cyan" />
+            <MetricCard label="Доведено воронкой" value={String(managerTotals.pushed)} tone="cyan" />
           </div>
 
           <div className="mt-4 hidden overflow-x-auto rounded-xl border border-white/10 lg:block">
@@ -460,20 +461,21 @@ export default function DashboardPage() {
                   <th className="px-4 py-3 text-right">Взял → подал</th>
                   <th className="px-4 py-3 text-right">Подал → валид</th>
                   <th className="px-4 py-3 text-right">Взял → валид</th>
+                  <th className="px-4 py-3 text-right">Довёл воронкой</th>
                   <th className="px-4 py-3 text-right">Вернул</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={9} className="px-4 py-10 text-center text-gray-500">
                       <LoaderCircle size={18} className="mr-2 inline animate-spin" />
                       Загрузка аналитики
                     </td>
                   </tr>
                 ) : managers.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={9} className="px-4 py-10 text-center text-gray-500">
                       За выбранный период нет действий менеджеров.
                     </td>
                   </tr>
@@ -492,6 +494,7 @@ export default function DashboardPage() {
                       <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.taken_to_submitted_percent)}</td>
                       <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.submitted_to_valid_percent)}</td>
                       <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.taken_to_valid_percent)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-cyan-100">{manager.funnels_pushed}</td>
                       <td className="px-4 py-3 text-right font-mono text-gray-300">{manager.returned_to_funnel}</td>
                     </tr>
                   ))
@@ -517,10 +520,11 @@ export default function DashboardPage() {
                   </div>
                   <span className="shrink-0 text-xs text-gray-500">Вернул: {manager.returned_to_funnel}</span>
                 </div>
-                <div className="mt-4 grid grid-cols-3 gap-3">
+                <div className="mt-4 grid grid-cols-2 gap-3 min-[420px]:grid-cols-4">
                   <CompactMetric label="Взял" value={String(manager.chats_taken)} />
                   <CompactMetric label="Подал" value={String(manager.submitted_leads)} />
                   <CompactMetric label="Валид" value={String(manager.valid_leads)} />
+                  <CompactMetric label="Довёл" value={String(manager.funnels_pushed)} />
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/10 pt-3">
                   <CompactMetric label="Взял → подал" value={percent(manager.taken_to_submitted_percent)} />

@@ -953,6 +953,7 @@ class PostbackService:
                     getattr(lead, "preferred_call_time", None)
                     or getattr(lead, "call_time_text", None)
                 ),
+                "manager_comment": getattr(lead, "manager_comment", None),
                 "has_card": getattr(lead, "has_card", None),
                 "score_percent": getattr(lead, "score_percent", None),
                 "created_at": self._json_safe(getattr(lead, "created_at", None)),
@@ -1109,6 +1110,7 @@ class PostbackService:
             "age": lead.age,
             "country": lead.country,
             "call_time": lead.preferred_call_time or lead.call_time_text,
+            "manager_comment": lead.manager_comment,
             "has_card": lead.has_card,
             "score_percent": lead.score_percent,
             "custom_fields": lead.custom_fields,
@@ -1129,6 +1131,7 @@ class PostbackService:
             age=30,
             country="US",
             call_time_text="test",
+            manager_comment="Test manager comment",
             has_card=True,
             score_percent=100,
             custom_fields={

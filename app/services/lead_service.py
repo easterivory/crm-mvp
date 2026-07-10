@@ -570,7 +570,13 @@ class LeadService:
             values["name"] = compose_lead_name(first_name, last_name)
             values["custom_fields"] = custom_fields
 
-        for field_name in ("name", "country", "call_time_text", "preferred_call_time"):
+        for field_name in (
+            "name",
+            "country",
+            "call_time_text",
+            "preferred_call_time",
+            "manager_comment",
+        ):
             if field_name in values:
                 values[field_name] = self._normalize_optional(values[field_name])
         if "preferred_call_time" in values and "call_time_text" not in values:

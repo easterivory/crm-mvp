@@ -4,7 +4,16 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +57,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_last_operator_message_at", "last_operator_message_at"),
         Index("ix_chats_is_read", "is_read"),
         Index("ix_chats_is_blocked", "is_blocked"),
+        Index("ix_chats_is_blocked_by_user", "is_blocked_by_user"),
         Index("ix_chats_updated_at", "updated_at"),
         Index("ix_chats_project_last_user_msg", "project_id", "last_user_message_at"),
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
@@ -84,6 +94,12 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     last_operator_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     is_blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    is_blocked_by_user: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,

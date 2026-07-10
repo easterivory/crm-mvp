@@ -52,7 +52,12 @@ from app.repositories.lead_repository import LeadRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.message import MessageCreate, MessageOut
-from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
+from app.schemas.telegram import (
+    TelegramCallbackQuery,
+    TelegramChatMemberUpdated,
+    TelegramMessage,
+    TelegramUpdate,
+)
 from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
@@ -164,6 +169,14 @@ class TelegramService:
         All writes happen in the caller's transaction; the caller (router)
         owns the commit.
         """
+        if update.my_chat_member is not None:
+            await self._handle_my_chat_member(
+                update.my_chat_member,
+                project_id=project_id,
+                bot_id=bot_id,
+            )
+            return
+
         message = self.extract_message(update)
         if message is None:
             if update.callback_query is not None:
@@ -321,6 +334,60 @@ class TelegramService:
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
+
+    async def _handle_my_chat_member(
+        self,
+        event: TelegramChatMemberUpdated,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+    ) -> None:
+        status = str(event.new_chat_member.status or "").strip().lower()
+        if status not in {"kicked", "member"}:
+            logger.debug(
+                "Telegram my_chat_member ignored project_id=%s bot_id=%s chat_id=%s status=%s",
+                project_id,
+                bot_id,
+                event.chat.id,
+                status,
+            )
+            return
+
+        is_blocked = status == "kicked"
+        chat = await self.chat_repo.set_blocked_by_user(
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=str(event.chat.id),
+            is_blocked_by_user=is_blocked,
+        )
+        if chat is None:
+            logger.info(
+                "Telegram my_chat_member received for unknown chat project_id=%s "
+                "bot_id=%s external_chat_id=%s status=%s",
+                project_id,
+                bot_id,
+                event.chat.id,
+                status,
+            )
+            return
+
+        if is_blocked:
+            await self.funnel_runtime.pause_for_user_block(chat.id)
+            logger.info(
+                "Telegram user blocked bot project_id=%s bot_id=%s chat_id=%s external_chat_id=%s",
+                project_id,
+                bot_id,
+                chat.id,
+                chat.external_chat_id,
+            )
+        else:
+            logger.info(
+                "Telegram user unblocked bot project_id=%s bot_id=%s chat_id=%s external_chat_id=%s",
+                project_id,
+                bot_id,
+                chat.id,
+                chat.external_chat_id,
+            )
 
     async def _save_shared_contact(
         self,

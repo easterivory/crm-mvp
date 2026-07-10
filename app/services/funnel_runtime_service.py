@@ -49,7 +49,10 @@ DIRECT_LEAD_FIELDS = {
 }
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+EMAIL_SEARCH_RE = re.compile(r"(?<![\w.+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w.-])")
 PHONE_RE = re.compile(r"^\+?[0-9][0-9\s().-]{8,24}$")
+PHONE_SEARCH_RE = re.compile(r"(?<!\w)(\+?\d[\d\s().-]{8,}\d)(?!\w)")
+NUMBER_SEARCH_RE = re.compile(r"(?<![\w.,-])(-?\d+(?:[.,]\d+)?)(?![\w.,-])")
 TEMPLATE_VARIABLE_RE = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_.]{0,99})\s*}}")
 MANUAL_STATUS_CODE_CANDIDATES = (
     "manual_processing",
@@ -213,6 +216,22 @@ class FunnelRuntimeService:
         )
         return True
 
+    async def pause_for_user_block(self, chat_id: UUID) -> bool:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is None or state.completed_at is not None:
+            return False
+        if state.is_paused:
+            return True
+
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.repo.set_chat_funnel_paused(
+            chat_id=chat_id,
+            is_paused=True,
+            paused_at=datetime.now(timezone.utc),
+            paused_by_user_id=None,
+        )
+        return True
+
     async def get_manager_funnel_control(
         self,
         *,
@@ -316,6 +335,7 @@ class FunnelRuntimeService:
                     reply_markup=self._reply_markup_for_step(step),
                 )
                 return step
+            answer = validation.get("normalized", answer)
             await self._save_input_answer(chat_id=chat_id, step=step, answer=answer)
         await self.apply_field_mappings(
             chat_id=chat_id,
@@ -519,13 +539,14 @@ class FunnelRuntimeService:
                     await self._execute_from_step(chat_id=chat_id, step=next_step, answer=text)
                 return True
 
-            await self._save_input_answer(chat_id=chat_id, step=step, answer=text)
-            await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
+            normalized_text = validation.get("normalized", text)
+            await self._save_input_answer(chat_id=chat_id, step=step, answer=normalized_text)
+            await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=normalized_text)
             await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
             runtime_json = self._runtime_with_answer(
                 state.runtime_json,
                 step_id=step.id,
-                answer=text,
+                answer=normalized_text,
             )
             await self.repo.upsert_chat_funnel_state(
                 chat_id=chat_id,
@@ -536,7 +557,7 @@ class FunnelRuntimeService:
                 waiting_for_answer=False,
                 runtime_json=runtime_json,
             )
-            choice = contact_choice or self._choice_for_answer(step, text)
+            choice = contact_choice or self._choice_for_answer(step, str(normalized_text or ""))
             if choice and choice.get("target_step_id"):
                 next_step = await self._move_to_step_id(
                     chat_id=chat_id,
@@ -547,10 +568,10 @@ class FunnelRuntimeService:
                 next_step = await self._move_from_step(
                     chat_id=chat_id,
                     step=step,
-                    answer=text,
+                    answer=normalized_text,
                 )
             if next_step is not None:
-                await self._execute_from_step(chat_id=chat_id, step=next_step, answer=text)
+                await self._execute_from_step(chat_id=chat_id, step=next_step, answer=normalized_text)
             return True
 
         if self._is_no_reply_delay_step(step):
@@ -661,6 +682,7 @@ class FunnelRuntimeService:
                     reply_markup=self._reply_markup_for_step(step),
                 )
                 return True
+            answer = validation.get("normalized", answer)
             await self._save_input_answer(chat_id=chat_id, step=step, answer=answer)
             await self.apply_field_mappings(
                 chat_id=chat_id,
@@ -917,7 +939,7 @@ class FunnelRuntimeService:
         *,
         chat_id: UUID,
         step: FunnelStep,
-        answer: Optional[str] = None,
+        answer: Any | None = None,
     ) -> Optional[FunnelStep]:
         current = step
         guard = 0
@@ -1104,7 +1126,7 @@ class FunnelRuntimeService:
         chat_id: UUID,
         step: FunnelStep,
         start_index: int = 0,
-        answer: Optional[str] = None,
+        answer: Any | None = None,
         skip_delay_at_start: bool = False,
     ) -> Optional[FunnelStep]:
         messages = self._message_sequence(step)
@@ -1472,7 +1494,7 @@ class FunnelRuntimeService:
         *,
         chat_id: UUID,
         step: FunnelStep,
-        answer: Optional[str],
+        answer: Any | None,
     ) -> Optional[FunnelStep]:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None:
@@ -1494,7 +1516,7 @@ class FunnelRuntimeService:
         chat_id: UUID,
         step: FunnelStep,
         target_key: str,
-        answer: Optional[str],
+        answer: Any | None,
     ) -> Optional[FunnelStep]:
         config = step.config_json or {}
         target_step_id = config.get(target_key)
@@ -2204,7 +2226,7 @@ class FunnelRuntimeService:
         *,
         chat_id: UUID,
         step: FunnelStep,
-        answer: Optional[str],
+        answer: Any | None,
     ) -> str:
         config = step.config_json or {}
         if step.block_type == "generic_ab_test":
@@ -2264,7 +2286,7 @@ class FunnelRuntimeService:
         *,
         chat_id: UUID,
         step: FunnelStep,
-        answer: Optional[str],
+        answer: Any | None,
     ) -> Optional[str]:
         config = step.config_json or {}
         block_type = step.block_type
@@ -2563,7 +2585,7 @@ class FunnelRuntimeService:
         )
 
     @staticmethod
-    def _select_edge(edges, answer: Optional[str]):
+    def _select_edge(edges, answer: Any | None):
         if not edges:
             return None
         if answer is None:
@@ -3067,7 +3089,7 @@ class FunnelRuntimeService:
             return None, None, None
 
     @staticmethod
-    def _evaluate_condition(step: FunnelStep, answer: Optional[str]) -> bool:
+    def _evaluate_condition(step: FunnelStep, answer: Any | None) -> bool:
         config = step.config_json or {}
         conditions = config.get("conditions")
         if not isinstance(conditions, list) or not conditions:
@@ -3161,35 +3183,64 @@ class FunnelRuntimeService:
         delay_type = str((step.config_json or {}).get("delay_type") or "").strip()
         return delay_type in {"no_reply_timeout", "reply_timeout"}
 
-    def _validate_input_answer(self, step: FunnelStep, answer: Optional[str]) -> dict[str, Any]:
+    def _validate_input_answer(self, step: FunnelStep, answer: Any) -> dict[str, Any]:
         config = step.config_json or {}
         validation_type = self._input_answer_type(step)
         text = str(answer or "").strip()
 
         if validation_type == "phone":
-            digits = re.sub(r"\D+", "", text)
+            candidate = self._extract_phone(text)
+            digits = re.sub(r"\D+", "", candidate or "")
             return {
-                "valid": bool(PHONE_RE.match(text)) and 10 <= len(digits) <= 15,
-                "normalized": self._normalize_phone(text),
+                "valid": candidate is not None and 10 <= len(digits) <= 15,
+                "normalized": self._normalize_phone(candidate or text),
             }
         if validation_type == "email":
-            return {"valid": bool(EMAIL_RE.match(text)), "normalized": text}
+            candidate = self._extract_email(text)
+            return {"valid": candidate is not None, "normalized": candidate or text}
         if validation_type == "name":
             return {
                 "valid": len(text) >= 2 and not text.isdigit(),
                 "normalized": text,
             }
         if validation_type == "number":
-            try:
-                float(text.replace(",", "."))
-            except ValueError:
+            number = self._extract_number(text)
+            if number is None:
                 return {"valid": False}
-            return {"valid": True}
+            return {"valid": True, "normalized": number}
         if validation_type == "choice":
             return {"valid": self._choice_for_answer(step, text) is not None}
         if validation_type in {"date", "time"}:
             return {"valid": bool(text)}
         return {"valid": bool(text) or not config.get("wait_for_answer", True)}
+
+    @staticmethod
+    def _extract_phone(text: str) -> str | None:
+        candidate = text.strip()
+        if PHONE_RE.match(candidate):
+            return candidate
+        match = PHONE_SEARCH_RE.search(text)
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _extract_email(text: str) -> str | None:
+        candidate = text.strip()
+        if EMAIL_RE.match(candidate):
+            return candidate
+        match = EMAIL_SEARCH_RE.search(text)
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _extract_number(text: str) -> str | None:
+        matches = NUMBER_SEARCH_RE.findall(text)
+        if not matches:
+            return None
+        value = matches[-1].replace(",", ".")
+        try:
+            parsed = float(value)
+        except ValueError:
+            return None
+        return str(int(parsed)) if parsed.is_integer() else str(parsed)
 
     @staticmethod
     def _input_answer_type(step: FunnelStep) -> str:
@@ -3254,7 +3305,7 @@ class FunnelRuntimeService:
         digits = re.sub(r"\D+", "", value)
         return f"+{digits}" if digits else value.strip()
 
-    def _choice_for_answer(self, step: FunnelStep, answer: Optional[str]) -> Optional[dict[str, Any]]:
+    def _choice_for_answer(self, step: FunnelStep, answer: Any | None) -> Optional[dict[str, Any]]:
         return self._choice_for_buttons(self._buttons_from_step(step), answer)
 
     @staticmethod

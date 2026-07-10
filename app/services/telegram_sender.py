@@ -61,6 +61,13 @@ class TelegramSenderService:
                 response.raise_for_status()
                 data = response.json()
                 if data.get("ok") is not True or not isinstance(data.get("result"), dict):
+                    if self._is_bot_blocked_payload(data):
+                        logger.info(
+                            "Telegram sendMessage blocked by user: project_id=%s chat_id=%s",
+                            project_id,
+                            external_chat_id,
+                        )
+                        return None
                     logger.error(
                         "Telegram sendMessage failed: project_id=%s chat_id=%s response=%s",
                         project_id,
@@ -70,6 +77,13 @@ class TelegramSenderService:
                     return None
                 return data["result"]
         except httpx.HTTPStatusError as exc:
+            if self._is_bot_blocked_response(exc.response):
+                logger.info(
+                    "Telegram sendMessage blocked by user: project_id=%s chat_id=%s",
+                    project_id,
+                    external_chat_id,
+                )
+                return None
             logger.error(
                 "Telegram sendMessage failed: project_id=%s chat_id=%s "
                 "status_code=%s response=%s",
@@ -369,6 +383,14 @@ class TelegramSenderService:
                 response.raise_for_status()
                 payload = response.json()
                 if payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
+                    if self._is_bot_blocked_payload(payload):
+                        logger.info(
+                            "Telegram %s blocked by user: project_id=%s chat_id=%s",
+                            method,
+                            project_id,
+                            external_chat_id,
+                        )
+                        return None
                     logger.error(
                         "Telegram %s failed: project_id=%s chat_id=%s response=%s",
                         method,
@@ -379,6 +401,14 @@ class TelegramSenderService:
                     return None
                 return payload["result"]
         except httpx.HTTPStatusError as exc:
+            if self._is_bot_blocked_response(exc.response):
+                logger.info(
+                    "Telegram %s blocked by user: project_id=%s chat_id=%s",
+                    method,
+                    project_id,
+                    external_chat_id,
+                )
+                return None
             logger.error(
                 "Telegram %s failed: project_id=%s chat_id=%s status_code=%s response=%s",
                 method,
@@ -414,6 +444,31 @@ class TelegramSenderService:
                 external_chat_id,
             )
             return None
+
+    @staticmethod
+    def _is_bot_blocked_payload(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        description = str(payload.get("description") or payload.get("error") or "")
+        return TelegramSenderService._is_bot_blocked_text(description)
+
+    @staticmethod
+    def _is_bot_blocked_response(response: httpx.Response) -> bool:
+        if response.status_code != 403:
+            return False
+        try:
+            payload = response.json()
+        except ValueError:
+            return TelegramSenderService._is_bot_blocked_text(response.text)
+        return TelegramSenderService._is_bot_blocked_payload(payload)
+
+    @staticmethod
+    def _is_bot_blocked_text(text: str) -> bool:
+        normalized = text.lower()
+        return (
+            "bot was blocked by the user" in normalized
+            or "forbidden: bot was blocked" in normalized
+        )
 
     async def set_webhook(
         self,

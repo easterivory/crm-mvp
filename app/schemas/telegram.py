@@ -101,6 +101,23 @@ class TelegramCallbackQuery(BaseModel):
     from_user: Optional[TelegramUser] = Field(None, alias="from")
 
 
+class TelegramChatMember(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status: str
+    user: TelegramUser
+
+
+class TelegramChatMemberUpdated(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    chat: TelegramChat
+    from_user: Optional[TelegramUser] = Field(None, alias="from")
+    date: Optional[int] = None
+    old_chat_member: TelegramChatMember
+    new_chat_member: TelegramChatMember
+
+
 class TelegramUpdate(BaseModel):
     """
     Top-level Telegram Update object.
@@ -114,3 +131,4 @@ class TelegramUpdate(BaseModel):
     update_id: int
     message: Optional[TelegramMessage] = None
     callback_query: Optional[TelegramCallbackQuery] = None
+    my_chat_member: Optional[TelegramChatMemberUpdated] = None

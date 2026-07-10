@@ -6,6 +6,7 @@ export type ManagerPerformance = {
   chats_taken: number
   submitted_leads: number
   valid_leads: number
+  funnels_pushed: number
   returned_to_funnel: number
   taken_to_submitted_percent: number
   submitted_to_valid_percent: number
