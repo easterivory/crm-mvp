@@ -11,7 +11,7 @@ import httpx
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import RoleName
+from app.core.constants import RoleName, TELEGRAM_WEBHOOK_ALLOWED_UPDATES
 from app.core.config import settings
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
@@ -32,9 +32,6 @@ DEFAULT_PROJECT_NAME = "Default Project"
 DEFAULT_PROJECT_SLUG = "default-project"
 
 logger = logging.getLogger(__name__)
-
-TELEGRAM_WEBHOOK_ALLOWED_UPDATES = ("message", "callback_query", "my_chat_member")
-
 
 class BotService:
     def __init__(self, db: AsyncSession) -> None:

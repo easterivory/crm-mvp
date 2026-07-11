@@ -1110,7 +1110,6 @@ class PostbackService:
             "age": lead.age,
             "country": lead.country,
             "call_time": lead.preferred_call_time or lead.call_time_text,
-            "manager_comment": lead.manager_comment,
             "has_card": lead.has_card,
             "score_percent": lead.score_percent,
             "custom_fields": lead.custom_fields,

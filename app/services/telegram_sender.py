@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.bot_repository import BotRepository
+from app.services.chat_user_block_service import ChatUserBlockService
 from app.utils.video_processor import (
     VideoProcessingError,
     crop_video_file_to_square,
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 class TelegramSenderService:
     def __init__(self, db: AsyncSession) -> None:
+        self.db = db
         self.bot_repo = BotRepository(db)
 
     async def _get_token(self, project_id: UUID, bot_id: UUID | None) -> str | None:
@@ -62,6 +64,11 @@ class TelegramSenderService:
                 data = response.json()
                 if data.get("ok") is not True or not isinstance(data.get("result"), dict):
                     if self._is_bot_blocked_payload(data):
+                        await self._record_bot_blocked(
+                            project_id=project_id,
+                            bot_id=bot_id,
+                            external_chat_id=external_chat_id,
+                        )
                         logger.info(
                             "Telegram sendMessage blocked by user: project_id=%s chat_id=%s",
                             project_id,
@@ -78,6 +85,11 @@ class TelegramSenderService:
                 return data["result"]
         except httpx.HTTPStatusError as exc:
             if self._is_bot_blocked_response(exc.response):
+                await self._record_bot_blocked(
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                )
                 logger.info(
                     "Telegram sendMessage blocked by user: project_id=%s chat_id=%s",
                     project_id,
@@ -384,6 +396,11 @@ class TelegramSenderService:
                 payload = response.json()
                 if payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
                     if self._is_bot_blocked_payload(payload):
+                        await self._record_bot_blocked(
+                            project_id=project_id,
+                            bot_id=bot_id,
+                            external_chat_id=external_chat_id,
+                        )
                         logger.info(
                             "Telegram %s blocked by user: project_id=%s chat_id=%s",
                             method,
@@ -402,6 +419,11 @@ class TelegramSenderService:
                 return payload["result"]
         except httpx.HTTPStatusError as exc:
             if self._is_bot_blocked_response(exc.response):
+                await self._record_bot_blocked(
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                )
                 logger.info(
                     "Telegram %s blocked by user: project_id=%s chat_id=%s",
                     method,
@@ -469,6 +491,27 @@ class TelegramSenderService:
             "bot was blocked by the user" in normalized
             or "forbidden: bot was blocked" in normalized
         )
+
+    @staticmethod
+    async def _record_bot_blocked(
+        *,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+    ) -> None:
+        try:
+            await ChatUserBlockService.persist_blocked_from_telegram_error(
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
+        except Exception:
+            logger.exception(
+                "Could not persist Telegram user block project_id=%s bot_id=%s chat_id=%s",
+                project_id,
+                bot_id,
+                external_chat_id,
+            )
 
     async def set_webhook(
         self,

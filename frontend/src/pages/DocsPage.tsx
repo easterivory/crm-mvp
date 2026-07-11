@@ -1051,7 +1051,9 @@ export default function DocsPage() {
               <p className="mt-3 text-sm leading-6 text-gray-400">
                 В шаблоне доступны lead, custom, tracking, buyer, project и bot. Секреты вызываются
                 через secret.KEY, пароль и IP из настроенного CIDR-пула - через random.password и random.ipv4.
-                Секретные значения не возвращаются в браузер и скрываются в preview.
+                Комментарий менеджера доступен как lead.manager_comment и отправляется только если он
+                явно добавлен в mapping или JSON-шаблон. Секретные значения не возвращаются в браузер
+                и скрываются в preview.
               </p>
             </article>
             <article className="rounded-xl border border-white/10 bg-white/[0.03] p-4">

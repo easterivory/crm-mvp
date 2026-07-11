@@ -255,7 +255,10 @@ class BuyerAnalyticsService:
             select(User).where(
                 User.buyer_telegram_id == buyer_telegram_id,
                 User.is_deleted.is_(False),
-                User.role.has(name=RoleName.MANAGER),
+                or_(
+                    User.role.has(name=RoleName.MANAGER),
+                    User.role.has(name=RoleName.BUYER),
+                ),
             )
         )
         buyer = result.scalar_one_or_none()

@@ -951,6 +951,9 @@ class FunnelRuntimeService:
                 return None
             if state.is_paused:
                 return await self.repo.get_step(state.current_step_id)
+            if await self.chat_repo.is_blocked_by_user(chat_id):
+                await self.pause_for_user_block(chat_id)
+                return await self.repo.get_step(state.current_step_id)
 
             await self.repo.upsert_chat_funnel_state(
                 chat_id=chat_id,

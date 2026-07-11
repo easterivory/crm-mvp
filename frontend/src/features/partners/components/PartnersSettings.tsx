@@ -85,6 +85,7 @@ const leadFieldOptions = [
   { value: 'age', label: 'Возраст' },
   { value: 'country', label: 'Страна' },
   { value: 'call_time_text', label: 'Удобное время' },
+  { value: 'manager_comment', label: 'Комментарий менеджера' },
   { value: 'has_card', label: 'Карта' },
   { value: 'score_percent', label: 'Скоринг' },
   { value: 'created_at', label: 'Дата создания' },
@@ -93,6 +94,62 @@ const leadFieldOptions = [
   { value: 'custom_fields.deposit', label: 'custom_fields.deposit' },
   { value: 'custom_fields.source', label: 'custom_fields.source' },
   { value: '__custom__', label: 'Другой путь...' },
+] as const
+
+const templateVariableGroups = [
+  {
+    label: 'Лид',
+    variables: [
+      'lead.id',
+      'lead.project_id',
+      'lead.chat_id',
+      'lead.name',
+      'lead.first_name',
+      'lead.last_name',
+      'lead.phone',
+      'lead.phone_digits',
+      'lead.username',
+      'lead.telegram_id',
+      'lead.telegram_email',
+      'lead.age',
+      'lead.country',
+      'lead.call_time',
+      'lead.manager_comment',
+      'lead.has_card',
+      'lead.score_percent',
+      'lead.created_at',
+      'lead.custom.field',
+      'custom.field',
+    ],
+  },
+  {
+    label: 'Трекинг и баер',
+    variables: [
+      'tracking.id',
+      'tracking.code',
+      'tracking.ref_code',
+      'tracking.title',
+      'tracking.buyer_name',
+      'buyer.id',
+      'buyer.name',
+      'buyer.email',
+      'buyer.telegram_id',
+    ],
+  },
+  {
+    label: 'Проект и бот',
+    variables: [
+      'project.id',
+      'project.name',
+      'bot.id',
+      'bot.name',
+      'bot.username',
+    ],
+  },
+  {
+    label: 'Секреты и генераторы',
+    variables: ['secret.KEY', 'random.password', 'random.ipv4'],
+  },
 ] as const
 
 const emptyMappingRow = (): MappingRow => ({
@@ -776,13 +833,24 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
                     className="w-full resize-y rounded-lg border border-white/10 bg-[#050914] p-3 font-mono text-base text-zinc-100 outline-none focus:border-emerald-400/60 md:text-sm"
                   />
                 </label>
-                <div className="rounded-lg border border-white/5 bg-[#090E18] p-3 font-mono text-xs leading-6 text-zinc-400">
-                  <div>{'{{lead.first_name}} · {{lead.last_name}}'}</div>
-                  <div>{'{{lead.phone_digits}} · {{lead.telegram_id}}'}</div>
-                  <div>{'{{lead.telegram_email}} · {{lead.custom.field}}'}</div>
-                  <div>{'{{tracking.code}} · {{buyer.name}}'}</div>
-                  <div>{'{{project.name}} · {{bot.name}}'}</div>
-                  <div>{'{{secret.KEY}} · {{random.password}} · {{random.ipv4}}'}</div>
+                <div className="max-h-72 space-y-3 overflow-y-auto rounded-lg border border-white/5 bg-[#090E18] p-3">
+                  {templateVariableGroups.map((group) => (
+                    <div key={group.label}>
+                      <div className="mb-1.5 text-[11px] font-semibold uppercase text-zinc-500">
+                        {group.label}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.variables.map((variable) => (
+                          <code
+                            key={variable}
+                            className="rounded-md border border-white/5 bg-white/[0.03] px-1.5 py-0.5 text-xs text-zinc-300"
+                          >
+                            {`{{${variable}}}`}
+                          </code>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

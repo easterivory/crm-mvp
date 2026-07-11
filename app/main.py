@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +33,7 @@ from app.api.v1.routers import (
 from app.core.config import settings
 from app.core.logging_config import configure_file_logging
 from app.core.redis import close_redis
+from app.services.telegram_webhook_sync_service import sync_telegram_webhook_subscriptions
 
 
 configure_file_logging()
@@ -39,9 +41,12 @@ configure_file_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    webhook_sync_task = asyncio.create_task(sync_telegram_webhook_subscriptions())
     yield
-    # Shutdown
+    if not webhook_sync_task.done():
+        webhook_sync_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await webhook_sync_task
     await close_redis()
 
 

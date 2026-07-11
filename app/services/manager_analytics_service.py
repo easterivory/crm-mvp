@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import String, cast, case, distinct, func, or_, select, union_all
+from fastapi import HTTPException, status
+from sqlalchemy import String, and_, cast, case, distinct, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, RoleName
@@ -29,6 +30,11 @@ class ManagerAnalyticsService:
         date_from: date | None = None,
         date_to: date | None = None,
     ) -> list[ManagerPerformanceOut]:
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date_from must be before or equal to date_to",
+            )
         start_at, end_at = self._date_bounds(date_from=date_from, date_to=date_to)
 
         taken_filters = [
@@ -107,56 +113,57 @@ class ManagerAnalyticsService:
             .subquery()
         )
 
-        finish_log_filters = [
-            FunnelRuntimeLog.chat_id == Lead.chat_id,
-            FunnelRuntimeLog.status == "success",
-            FunnelRuntimeLog.created_at >= assigned_to_manager.c.assigned_at,
-            FunnelStep.step_type == "finish",
-        ]
-        self._append_period(finish_log_filters, FunnelRuntimeLog.created_at, start_at, end_at)
-        finish_log_exists = (
-            select(FunnelRuntimeLog.id)
-            .join(FunnelStep, FunnelStep.id == FunnelRuntimeLog.step_id)
-            .where(*finish_log_filters)
-            .exists()
-        )
-
-        completed_state_filters = [
-            ChatFunnelState.chat_id == Lead.chat_id,
-            ChatFunnelState.completed_at.is_not(None),
-            ChatFunnelState.completed_at >= assigned_to_manager.c.assigned_at,
-        ]
-        self._append_period(completed_state_filters, ChatFunnelState.completed_at, start_at, end_at)
-        completed_state_exists = select(ChatFunnelState.id).where(*completed_state_filters).exists()
-
-        pushed_source = union_all(
+        completion_events = union_all(
             select(
-                assigned_to_manager.c.manager_id.label("manager_id"),
                 Lead.id.label("lead_id"),
+                FunnelRuntimeLog.created_at.label("completed_at"),
             )
-            .join(Lead, Lead.id == assigned_to_manager.c.lead_id)
+            .join(FunnelRuntimeLog, FunnelRuntimeLog.chat_id == Lead.chat_id)
+            .join(FunnelStep, FunnelStep.id == FunnelRuntimeLog.step_id)
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
-                finish_log_exists,
+                FunnelRuntimeLog.status == "success",
+                FunnelStep.step_type == "finish",
             ),
             select(
-                assigned_to_manager.c.manager_id.label("manager_id"),
                 Lead.id.label("lead_id"),
+                ChatFunnelState.completed_at.label("completed_at"),
             )
-            .join(Lead, Lead.id == assigned_to_manager.c.lead_id)
+            .join(ChatFunnelState, ChatFunnelState.chat_id == Lead.chat_id)
             .where(
                 Lead.project_id == project_id,
                 Lead.is_deleted.is_(False),
-                completed_state_exists,
+                ChatFunnelState.completed_at.is_not(None),
             ),
         ).subquery()
+
+        pushed_filters = [
+            Lead.project_id == project_id,
+            Lead.is_deleted.is_(False),
+            completion_events.c.completed_at >= assigned_to_manager.c.assigned_at,
+        ]
+        self._append_period(
+            pushed_filters,
+            completion_events.c.completed_at,
+            start_at,
+            end_at,
+        )
         funnels_pushed_totals = (
             select(
-                pushed_source.c.manager_id,
-                func.count(distinct(pushed_source.c.lead_id)).label("funnels_pushed"),
+                assigned_to_manager.c.manager_id,
+                func.count(distinct(assigned_to_manager.c.lead_id)).label("funnels_pushed"),
             )
-            .group_by(pushed_source.c.manager_id)
+            .join(Lead, Lead.id == assigned_to_manager.c.lead_id)
+            .join(
+                completion_events,
+                and_(
+                    completion_events.c.lead_id == assigned_to_manager.c.lead_id,
+                    completion_events.c.completed_at >= assigned_to_manager.c.assigned_at,
+                ),
+            )
+            .where(*pushed_filters)
+            .group_by(assigned_to_manager.c.manager_id)
             .subquery()
         )
 

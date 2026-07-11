@@ -1,5 +1,5 @@
 import { ArrowDownWideNarrow, Ban, LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
 import ChatFilterChips from '../features/chats/components/ChatFilterChips'
@@ -71,6 +71,8 @@ type ChatListProps = {
   getBotLabel?: (chat: Chat) => string
   isSelectedPresetDirty: boolean
   isLoading: boolean
+  isLoadingMore: boolean
+  hasMore: boolean
   scopeLabel: string
   selectedChatId: string | null
   statusOptions: FilterOption[]
@@ -81,6 +83,7 @@ type ChatListProps = {
   onApplyPreset: (preset: ChatFilterPreset) => void
   onDeletePreset: (presetId: string) => void
   onFiltersChange: (filters: ChatFiltersState) => void
+  onLoadMore: () => void
   onRefresh: () => void
   onResetFilters: () => void
   onSavePreset: (name: string, isShared: boolean, filters: ChatFiltersState) => void
@@ -238,6 +241,8 @@ export default function ChatList({
   getBotLabel,
   isSelectedPresetDirty,
   isLoading,
+  isLoadingMore,
+  hasMore,
   scopeLabel,
   selectedChatId,
   statusOptions,
@@ -248,6 +253,7 @@ export default function ChatList({
   onApplyPreset,
   onDeletePreset,
   onFiltersChange,
+  onLoadMore,
   onRefresh,
   onResetFilters,
   onSavePreset,
@@ -257,7 +263,28 @@ export default function ChatList({
 }: ChatListProps) {
   const [isFiltersOpen, setIsFiltersOpen] = useState(false)
   const [isMobileControlsOpen, setIsMobileControlsOpen] = useState(false)
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
   const activeFilterCount = countActiveChatFilters(filters)
+
+  useEffect(() => {
+    const root = scrollContainerRef.current
+    const target = loadMoreRef.current
+    if (!root || !target || !hasMore || isLoading || isLoadingMore) {
+      return undefined
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMore()
+        }
+      },
+      { root, rootMargin: '240px 0px' },
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [hasMore, isLoading, isLoadingMore, onLoadMore])
 
   return (
     <aside className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/90 shadow-card md:rounded-xl md:border md:border-white/5">
@@ -373,7 +400,7 @@ export default function ChatList({
         />
       </div>
 
-      <div className="touch-scroll min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} className="touch-scroll min-h-0 flex-1 overflow-y-auto">
         {chats.length === 0 && !isLoading ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
             <p className="text-sm text-gray-400">
@@ -524,6 +551,21 @@ export default function ChatList({
             </button>
           )
         })}
+        <div ref={loadMoreRef} className="flex min-h-16 items-center justify-center px-4 py-3">
+          {hasMore ? (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={isLoading || isLoadingMore}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-medium text-gray-300 transition hover:border-accent-300/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isLoadingMore ? <LoaderCircle size={15} className="animate-spin" /> : null}
+              {isLoadingMore ? 'Загружаем чаты' : `Показать ещё · ${chats.length} из ${total}`}
+            </button>
+          ) : chats.length > 0 ? (
+            <span className="text-xs text-gray-600">Показаны все чаты: {total}</span>
+          ) : null}
+        </div>
       </div>
     </aside>
   )

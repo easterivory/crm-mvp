@@ -423,6 +423,7 @@ class ChatService:
 
         unanswered: bool = bool(
             not chat.is_blocked
+            and not chat.is_blocked_by_user
             and
             chat.last_user_message_at
             and (
@@ -550,14 +551,25 @@ class ChatService:
     def date_range_to_datetimes(
         date_from: date | None,
         date_to: date | None,
+        *,
+        timezone_offset_minutes: int = 0,
     ) -> tuple[datetime | None, datetime | None]:
+        # JavaScript Date#getTimezoneOffset returns UTC - local time. Adding
+        # that offset to local midnight converts the browser date boundary to
+        # UTC without assuming a server-side timezone.
+        utc_shift = timedelta(minutes=timezone_offset_minutes)
         start = (
-            datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            datetime.combine(date_from, time.min, tzinfo=timezone.utc) + utc_shift
             if date_from is not None
             else None
         )
         end = (
-            datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            datetime.combine(
+                date_to + timedelta(days=1),
+                time.min,
+                tzinfo=timezone.utc,
+            )
+            + utc_shift
             if date_to is not None
             else None
         )

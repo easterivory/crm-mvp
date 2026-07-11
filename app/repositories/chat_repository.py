@@ -208,11 +208,15 @@ class ChatRepository(BaseRepository[Chat]):
         if search_query:
             stmt = stmt.where(self._search_expr(search_query))
         if date_from is not None or date_to is not None:
-            added_at = func.coalesce(Chat.current_cycle_started_at, Chat.created_at)
+            activity_at = func.coalesce(
+                Chat.last_message_at,
+                Chat.current_cycle_started_at,
+                Chat.created_at,
+            )
             if date_from is not None:
-                stmt = stmt.where(added_at >= date_from)
+                stmt = stmt.where(activity_at >= date_from)
             if date_to is not None:
-                stmt = stmt.where(added_at < date_to)
+                stmt = stmt.where(activity_at < date_to)
         if lead_statuses:
             stmt = stmt.where(
                 select(Lead.id)
@@ -459,6 +463,21 @@ class ChatRepository(BaseRepository[Chat]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def is_blocked_by_user(
+        self,
+        chat_id: UUID,
+        project_id: UUID | None = None,
+    ) -> bool:
+        stmt = select(Chat.is_blocked_by_user).where(
+            Chat.id == chat_id,
+            Chat.is_deleted.is_(False),
+            Chat.reset_at.is_(None),
+        )
+        if project_id is not None:
+            stmt = stmt.where(Chat.project_id == project_id)
+        result = await self.db.execute(stmt)
+        return bool(result.scalar_one_or_none())
 
     async def get_any_in_project(self, chat_id: UUID, project_id: UUID) -> Optional[Chat]:
         """Fetch a non-deleted chat scoped to a project, including reset cycles."""

@@ -51,6 +51,7 @@ import {
 } from '../features/chats/api'
 import {
   type ChatFilterPreset,
+  countActiveChatFilters,
   EMPTY_CHAT_FILTERS,
   type ChatDatePreset,
   type ChatFiltersState,
@@ -324,6 +325,16 @@ function getErrorMessage(err: unknown) {
 
 function isRequestCanceled(err: unknown) {
   return axios.isCancel(err) || (axios.isAxiosError(err) && err.code === 'ERR_CANCELED')
+}
+
+function isTelegramUserBlockError(err: unknown) {
+  if (!axios.isAxiosError(err)) {
+    return false
+  }
+  const detail = err.response?.data?.detail
+  return err.response?.status === 409
+    && typeof detail === 'string'
+    && detail.toLowerCase().includes('заблокировал бота')
 }
 
 function externalMessageOrder(value: string | null) {
@@ -624,6 +635,7 @@ export default function ChatsPage() {
   const [filterPresets, setFilterPresets] = useState<ChatFilterPreset[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState('')
   const [total, setTotal] = useState(0)
+  const [loadedChatCount, setLoadedChatCount] = useState(0)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(() =>
     searchParams.get('chat_id'),
   )
@@ -633,6 +645,7 @@ export default function ChatsPage() {
   const debouncedChatFilters = useDebouncedValue(chatFilters, 350)
   const [draft, setDraft] = useState('')
   const [isChatsLoading, setIsChatsLoading] = useState(true)
+  const [isChatsLoadingMore, setIsChatsLoadingMore] = useState(false)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
   const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -679,6 +692,9 @@ export default function ChatsPage() {
   const searchParamsRef = useRef(searchParams)
   const setSearchParamsRef = useRef(setSearchParams)
   const chatsRef = useRef<Chat[]>([])
+  const loadedChatCountRef = useRef(0)
+  const totalChatsRef = useRef(0)
+  const chatQueryKeyRef = useRef('')
   const chatsAbortRef = useRef<AbortController | null>(null)
   const messagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
@@ -871,73 +887,105 @@ export default function ChatsPage() {
     syncChatSearchParams(chatFilters, selectedChatId)
   }, [chatFilters, selectedChatId, syncChatSearchParams])
 
-  const loadChats = useCallback(async () => {
+  const loadChats = useCallback(async (options: { append?: boolean } = {}) => {
+    const append = options.append === true
     if (!selectedProjectId) {
       setChats([])
       setTotal(0)
+      totalChatsRef.current = 0
+      loadedChatCountRef.current = 0
+      setLoadedChatCount(0)
+      chatQueryKeyRef.current = ''
       selectedChatIdRef.current = null
       setSelectedChatId(null)
       setIsChatsLoading(false)
+      setIsChatsLoadingMore(false)
       return
     }
 
-    chatsAbortRef.current?.abort()
+    if (chatsAbortRef.current) {
+      return
+    }
+
+    const params: Record<string, boolean | number | string> = {
+      limit: CHAT_LIMIT,
+      offset: append ? loadedChatCountRef.current : 0,
+      project_id: selectedProjectId,
+      sort_by: debouncedChatFilters.sortBy,
+      timezone_offset_minutes: new Date().getTimezoneOffset(),
+    }
+
+    if (selectedBotIds.length === 1) {
+      params.bot_id = selectedBotIds[0]
+    } else if (selectedBotIds.length > 1) {
+      params.bot_ids = selectedBotIds.join(',')
+    }
+
+    if (debouncedChatFilters.q.trim()) {
+      params.q = debouncedChatFilters.q.trim()
+    }
+    if (debouncedChatFilters.hasUnansweredIncoming) {
+      params.has_unanswered_incoming = true
+    }
+    if (debouncedChatFilters.isRed) {
+      params.is_red = true
+    }
+    if (debouncedChatFilters.isHotLead) {
+      params.is_hot_lead = true
+    }
+    if (debouncedChatFilters.assignedUserId) {
+      params.assigned_user_id = debouncedChatFilters.assignedUserId
+    }
+    if (debouncedChatFilters.unassigned) {
+      params.unassigned = true
+    }
+    if (debouncedChatFilters.trackingLinkId) {
+      params.tracking_link_id = debouncedChatFilters.trackingLinkId
+    }
+    if (debouncedChatFilters.dateFrom) {
+      params.date_from = debouncedChatFilters.dateFrom
+    }
+    if (debouncedChatFilters.dateTo) {
+      params.date_to = debouncedChatFilters.dateTo
+    }
+    if (debouncedChatFilters.tagIds.length > 0) {
+      params.tag_ids = debouncedChatFilters.tagIds.join(',')
+      params.tag_mode = debouncedChatFilters.tagMode
+    }
+    if (debouncedChatFilters.leadStatuses.length > 0) {
+      params.lead_statuses = debouncedChatFilters.leadStatuses.join(',')
+    }
+    if (debouncedChatFilters.funnelState) {
+      params.funnel_state = debouncedChatFilters.funnelState
+    }
+
+    const queryParams = { ...params }
+    delete queryParams.limit
+    delete queryParams.offset
+    const requestKey = JSON.stringify(queryParams)
+    const isNewQuery = requestKey !== chatQueryKeyRef.current
+
+    if (append && (isNewQuery || loadedChatCountRef.current >= totalChatsRef.current)) {
+      return
+    }
+
+    if (isNewQuery) {
+      chatQueryKeyRef.current = requestKey
+      loadedChatCountRef.current = 0
+      setLoadedChatCount(0)
+      setChats([])
+      params.offset = 0
+    }
+
     const controller = new AbortController()
     chatsAbortRef.current = controller
-    setIsChatsLoading(true)
+    if (append) {
+      setIsChatsLoadingMore(true)
+    } else {
+      setIsChatsLoading(true)
+    }
 
     try {
-      const params: Record<string, boolean | number | string> = {
-        limit: CHAT_LIMIT,
-        offset: 0,
-        project_id: selectedProjectId,
-        sort_by: debouncedChatFilters.sortBy,
-      }
-
-      if (selectedBotIds.length === 1) {
-        params.bot_id = selectedBotIds[0]
-      } else if (selectedBotIds.length > 1) {
-        params.bot_ids = selectedBotIds.join(',')
-      }
-
-      if (debouncedChatFilters.q.trim()) {
-        params.q = debouncedChatFilters.q.trim()
-      }
-      if (debouncedChatFilters.hasUnansweredIncoming) {
-        params.has_unanswered_incoming = true
-      }
-      if (debouncedChatFilters.isRed) {
-        params.is_red = true
-      }
-      if (debouncedChatFilters.isHotLead) {
-        params.is_hot_lead = true
-      }
-      if (debouncedChatFilters.assignedUserId) {
-        params.assigned_user_id = debouncedChatFilters.assignedUserId
-      }
-      if (debouncedChatFilters.unassigned) {
-        params.unassigned = true
-      }
-      if (debouncedChatFilters.trackingLinkId) {
-        params.tracking_link_id = debouncedChatFilters.trackingLinkId
-      }
-      if (debouncedChatFilters.dateFrom) {
-        params.date_from = debouncedChatFilters.dateFrom
-      }
-      if (debouncedChatFilters.dateTo) {
-        params.date_to = debouncedChatFilters.dateTo
-      }
-      if (debouncedChatFilters.tagIds.length > 0) {
-        params.tag_ids = debouncedChatFilters.tagIds.join(',')
-        params.tag_mode = debouncedChatFilters.tagMode
-      }
-      if (debouncedChatFilters.leadStatuses.length > 0) {
-        params.lead_statuses = debouncedChatFilters.leadStatuses.join(',')
-      }
-      if (debouncedChatFilters.funnelState) {
-        params.funnel_state = debouncedChatFilters.funnelState
-      }
-
       const { data } = await api.get<PaginatedResponse<Chat>>('/chats', {
         params,
         signal: controller.signal,
@@ -945,30 +993,36 @@ export default function ChatsPage() {
       if (controller.signal.aborted) {
         return
       }
-      const hasActiveSearch = Boolean(debouncedChatFilters.q.trim())
-      const hasAssignmentFilter = Boolean(
-        debouncedChatFilters.assignedUserId || debouncedChatFilters.unassigned,
-      )
+      const hasRestrictiveFilter =
+        countActiveChatFilters(debouncedChatFilters) > 0 || selectedBotIds.length > 0
       const selectedChatIsOutsideFilter = Boolean(
-        (hasActiveSearch || hasAssignmentFilter)
+        isNewQuery
+        && hasRestrictiveFilter
         && selectedChatIdRef.current
         && !data.items.some((chat) => chat.id === selectedChatIdRef.current),
       )
-      setChats((current) => {
-        const currentSelectedChatId = selectedChatIdRef.current
-        const selected = currentSelectedChatId
-          ? current.find((chat) => chat.id === currentSelectedChatId)
-          : null
-        if (
-          selected
-          && !hasActiveSearch
-          && !hasAssignmentFilter
-          && !data.items.some((chat) => chat.id === selected.id)
-        ) {
-          return [selected, ...data.items]
-        }
-        return data.items
-      })
+      if (append) {
+        setChats((current) => {
+          const knownIds = new Set(current.map((chat) => chat.id))
+          return [...current, ...data.items.filter((chat) => !knownIds.has(chat.id))]
+        })
+        loadedChatCountRef.current = Number(params.offset) + data.items.length
+      } else if (isNewQuery) {
+        setChats(data.items)
+        loadedChatCountRef.current = data.items.length
+      } else {
+        setChats((current) => {
+          const freshIds = new Set(data.items.map((chat) => chat.id))
+          const remainingLoadedChats = current.filter((chat) => !freshIds.has(chat.id))
+          return [...data.items, ...remainingLoadedChats].slice(0, data.total)
+        })
+        loadedChatCountRef.current = Math.max(
+          loadedChatCountRef.current,
+          data.items.length,
+        )
+      }
+      setLoadedChatCount(loadedChatCountRef.current)
+      totalChatsRef.current = data.total
       setTotal(data.total)
       if (selectedChatIsOutsideFilter) {
         selectedChatIdRef.current = null
@@ -984,25 +1038,25 @@ export default function ChatsPage() {
           setSelectedChatId(nextChatId)
           syncChatSearchParams(debouncedChatFilters, nextChatId)
         }
-      } else if (!data.items.some((chat) => chat.id === selectedChatIdRef.current)) {
-        const selected = chatsRef.current.find((chat) => chat.id === selectedChatIdRef.current)
-        if (!selected) {
-          selectedChatIdRef.current = null
-          setSelectedChatId(null)
-          setMessages([])
-          setAuditLogs([])
-          syncChatSearchParams(debouncedChatFilters, null)
-        }
       }
     } catch (err) {
       if (isRequestCanceled(err)) {
         return
       }
+      if (isNewQuery) {
+        chatQueryKeyRef.current = ''
+        totalChatsRef.current = 0
+        setTotal(0)
+      }
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
       if (chatsAbortRef.current === controller) {
         chatsAbortRef.current = null
-        setIsChatsLoading(false)
+        if (append) {
+          setIsChatsLoadingMore(false)
+        } else {
+          setIsChatsLoading(false)
+        }
       }
     }
   }, [
@@ -1183,9 +1237,13 @@ export default function ChatsPage() {
       if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
         return
       }
-      setChats((current) =>
-        current.some((chat) => chat.id === data.id) ? current : [data, ...current],
-      )
+      setChats((current) => {
+        const existingIndex = current.findIndex((chat) => chat.id === data.id)
+        if (existingIndex < 0) {
+          return [data, ...current]
+        }
+        return current.map((chat, index) => (index === existingIndex ? data : chat))
+      })
     } catch (err) {
       if (isRequestCanceled(err)) {
         return
@@ -1281,6 +1339,7 @@ export default function ChatsPage() {
     return () => {
       window.clearInterval(timer)
       chatsAbortRef.current?.abort()
+      chatsAbortRef.current = null
     }
   }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadProjectTranslation, loadSnippets])
 
@@ -1334,22 +1393,18 @@ export default function ChatsPage() {
     setAuditLogs([])
     setScheduledMessages([])
     void loadMessages(selectedChatId, true)
+    void loadSelectedChat(selectedChatId)
     void loadScheduledMessages(selectedChatId)
     const timer = window.setInterval(() => {
       void loadMessages(selectedChatId)
+      void loadSelectedChat(selectedChatId)
     }, 7000)
 
     return () => {
       window.clearInterval(timer)
       messagesAbortRef.current?.abort()
     }
-  }, [loadMessages, loadScheduledMessages, selectedChat?.project_id, selectedChatId, selectedProjectId])
-
-  useEffect(() => {
-    if (selectedChatId && !selectedChat && selectedProjectId) {
-      void loadSelectedChat(selectedChatId)
-    }
-  }, [loadSelectedChat, selectedChat, selectedChatId, selectedProjectId])
+  }, [loadMessages, loadScheduledMessages, loadSelectedChat, selectedChat?.project_id, selectedChatId, selectedProjectId])
 
   useEffect(() => {
     setAttachment(null)
@@ -1448,6 +1503,11 @@ export default function ChatsPage() {
       })
       return true
     } catch (err) {
+      if (isTelegramUserBlockError(err) && selectedChatId) {
+        setChats((current) => current.map((chat) => (
+          chat.id === selectedChatId ? { ...chat, is_blocked_by_user: true } : chat
+        )))
+      }
       notify({ tone: 'error', message: getErrorMessage(err) })
       return false
     } finally {
@@ -2032,15 +2092,18 @@ export default function ChatsPage() {
           filterPresets={filterPresets}
           getBotLabel={getBotLabel}
           isSelectedPresetDirty={isSelectedPresetDirty}
+          hasMore={loadedChatCount < total}
           trackingOptions={trackingOptions}
           tagOptions={tagOptions}
           statusOptions={statusOptions}
           userOptions={userOptions}
           isLoading={isChatsLoading}
+          isLoadingMore={isChatsLoadingMore}
           scopeLabel={botScopeLabel}
           selectedChatId={selectedChatId}
           total={total}
           onFiltersChange={setChatFilters}
+          onLoadMore={() => void loadChats({ append: true })}
           onApplyPreset={handleApplyPreset}
           onDeletePreset={(presetId) => void handleDeletePreset(presetId)}
           onResetFilters={() => setChatFilters(EMPTY_CHAT_FILTERS)}

@@ -260,6 +260,20 @@ def test_optional_null_template_fields_are_omitted_by_default():
     assert payload == {"required": "value", "profile": {"phone": "123"}}
 
 
+def test_manager_comment_is_sent_only_when_explicitly_mapped() -> None:
+    lead = make_lead()
+    lead.manager_comment = "Позвонить после 18:00"
+
+    default_payload = service().build_payload(lead, make_integration())
+    integration = make_integration(
+        payload_template={"comment": "{{lead.manager_comment}}"},
+    )
+    configured_payload = service().build_payload(lead, integration)
+
+    assert "manager_comment" not in default_payload
+    assert configured_payload == {"comment": "Позвонить после 18:00"}
+
+
 def test_active_partner_configuration_rejects_missing_runtime_values():
     config = {
         "payload_template": {

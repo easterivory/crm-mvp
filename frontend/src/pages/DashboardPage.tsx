@@ -79,7 +79,7 @@ export default function DashboardPage() {
     setError('')
     try {
       const selectedBotId = selectedBotIds.length === 1 ? selectedBotIds[0] : undefined
-      const [buyerItems, managerItems] = await Promise.all([
+      const [buyerResult, managerResult] = await Promise.allSettled([
         fetchBuyerPerformance(activeProjectId, {
           date_from: dateFrom,
           date_to: dateTo,
@@ -91,10 +91,25 @@ export default function DashboardPage() {
           date_to: dateTo,
         }),
       ])
-      setItems(buyerItems)
-      setManagers(managerItems)
+      setItems(buyerResult.status === 'fulfilled' ? buyerResult.value : [])
+      setManagers(managerResult.status === 'fulfilled' ? managerResult.value : [])
+
+      const errors: string[] = []
+      if (buyerResult.status === 'rejected') {
+        errors.push(
+          `Баеры: ${getErrorMessage(buyerResult.reason, 'не удалось загрузить данные.')}`,
+        )
+      }
+      if (managerResult.status === 'rejected') {
+        errors.push(
+          `Менеджеры: ${getErrorMessage(managerResult.reason, 'не удалось загрузить данные.')}`,
+        )
+      }
+      setError(errors.join(' '))
     } catch (err) {
-      setError(getErrorMessage(err, 'Не удалось загрузить аналитику баеров.'))
+      setItems([])
+      setManagers([])
+      setError(getErrorMessage(err, 'Не удалось загрузить аналитику команды.'))
     } finally {
       setIsLoading(false)
     }

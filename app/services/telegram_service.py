@@ -61,6 +61,7 @@ from app.schemas.telegram import (
 from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
+from app.services.chat_user_block_service import ChatUserBlockService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.funnel_start_queue import enqueue_funnel_start
 from app.services.message_service import MessageService
@@ -354,7 +355,7 @@ class TelegramService:
             return
 
         is_blocked = status == "kicked"
-        chat = await self.chat_repo.set_blocked_by_user(
+        chat = await ChatUserBlockService(self.db).set_blocked_by_user(
             project_id=project_id,
             bot_id=bot_id,
             external_chat_id=str(event.chat.id),
@@ -372,7 +373,6 @@ class TelegramService:
             return
 
         if is_blocked:
-            await self.funnel_runtime.pause_for_user_block(chat.id)
             logger.info(
                 "Telegram user blocked bot project_id=%s bot_id=%s chat_id=%s external_chat_id=%s",
                 project_id,
