@@ -1,5 +1,12 @@
 export type TrackingCostModel = 'fix_pdp' | 'cpa' | 'cpm'
 
+export type TrackingFacebookEventMapping = {
+  source_event: string
+  event_name: string
+  enabled: boolean
+  parameters: Record<string, string>
+}
+
 export type TrackingLink = {
   id: string
   project_id: string
@@ -25,6 +32,10 @@ export type TrackingLink = {
   target_funnel_step_title: string | null
   fb_pixel_id: string | null
   has_fb_capi_token: boolean
+  fb_campaign_enabled: boolean
+  fb_event_mappings_json: TrackingFacebookEventMapping[]
+  has_fb_proxy: boolean
+  fb_test_event_code: string | null
   total_spend?: string | number | null
 }
 
@@ -43,6 +54,10 @@ export type TrackingLinkCreatePayload = {
   target_funnel_step_key?: string | null
   fb_pixel_id?: string | null
   fb_capi_token?: string | null
+  fb_campaign_enabled?: boolean
+  fb_event_mappings?: TrackingFacebookEventMapping[]
+  fb_proxy_url?: string | null
+  fb_test_event_code?: string | null
   cost_model?: TrackingCostModel
   price_per_unit?: number
   spend?: number
@@ -62,6 +77,10 @@ export type TrackingLinkUpdatePayload = Partial<{
   target_funnel_step_key: string | null
   fb_pixel_id: string | null
   fb_capi_token: string | null
+  fb_campaign_enabled: boolean
+  fb_event_mappings: TrackingFacebookEventMapping[]
+  fb_proxy_url: string | null
+  fb_test_event_code: string | null
   cost_model: TrackingCostModel
   price_per_unit: number
   spend: number

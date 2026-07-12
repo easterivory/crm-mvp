@@ -9,7 +9,26 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.core.constants import TrackingConversionStatus
 from app.core.constants import TrackingCostModel
 from app.core.constants import TrackingSpendSource
+from app.core.facebook_events import normalize_facebook_event_mappings
 from app.schemas.common import OrmBase
+
+
+class FacebookEventMapping(BaseModel):
+    source_event: str = Field(..., min_length=1, max_length=50)
+    event_name: str = Field(..., min_length=1, max_length=40)
+    enabled: bool = True
+    parameters: dict[str, str] = Field(default_factory=dict)
+
+
+def normalize_event_mapping_models(
+    value: Optional[list[FacebookEventMapping]],
+) -> list[FacebookEventMapping]:
+    if value is None:
+        return []
+    normalized = normalize_facebook_event_mappings(
+        [item.model_dump() if isinstance(item, BaseModel) else item for item in value]
+    )
+    return [FacebookEventMapping.model_validate(item) for item in normalized]
 
 
 class TrackingLinkCreate(BaseModel):
@@ -26,6 +45,10 @@ class TrackingLinkCreate(BaseModel):
     invite_link: Optional[str] = None
     fb_pixel_id: Optional[str] = Field(None, max_length=50)
     fb_capi_token: Optional[str] = Field(None, max_length=4096)
+    fb_campaign_enabled: bool = False
+    fb_event_mappings: list[FacebookEventMapping] = Field(default_factory=list, max_length=20)
+    fb_proxy_url: Optional[str] = Field(None, max_length=2048)
+    fb_test_event_code: Optional[str] = Field(None, max_length=100)
     cost_model: TrackingCostModel = TrackingCostModel.CPM
     price_per_unit: Decimal = Field(default=Decimal("0"), ge=0)
     spend: Decimal = Field(default=Decimal("0"), ge=0)
@@ -50,6 +73,24 @@ class TrackingLinkCreate(BaseModel):
     def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
         return normalize_fb_capi_token(value)
 
+    @field_validator("fb_event_mappings")
+    @classmethod
+    def normalize_fb_event_mappings(
+        cls,
+        value: list[FacebookEventMapping],
+    ) -> list[FacebookEventMapping]:
+        return normalize_event_mapping_models(value)
+
+    @field_validator("fb_proxy_url")
+    @classmethod
+    def normalize_fb_proxy_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_proxy_url(value)
+
+    @field_validator("fb_test_event_code")
+    @classmethod
+    def normalize_fb_test_event_code(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_test_event_code(value)
+
 
 class TrackingLinkCostUpdate(BaseModel):
     cost_model: Optional[TrackingCostModel] = None
@@ -69,6 +110,10 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     invite_link: Optional[str] = None
     fb_pixel_id: Optional[str] = Field(None, max_length=50)
     fb_capi_token: Optional[str] = Field(None, max_length=4096)
+    fb_campaign_enabled: Optional[bool] = None
+    fb_event_mappings: Optional[list[FacebookEventMapping]] = Field(default=None, max_length=20)
+    fb_proxy_url: Optional[str] = Field(None, max_length=2048)
+    fb_test_event_code: Optional[str] = Field(None, max_length=100)
     is_active: Optional[bool] = None
     base_conversion_rate: Optional[float] = Field(None, ge=0, le=100)
     min_sample_size: Optional[int] = Field(None, ge=1)
@@ -85,6 +130,24 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
         return normalize_fb_capi_token(value)
 
+    @field_validator("fb_event_mappings")
+    @classmethod
+    def normalize_fb_event_mappings(
+        cls,
+        value: Optional[list[FacebookEventMapping]],
+    ) -> Optional[list[FacebookEventMapping]]:
+        return None if value is None else normalize_event_mapping_models(value)
+
+    @field_validator("fb_proxy_url")
+    @classmethod
+    def normalize_fb_proxy_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_proxy_url(value)
+
+    @field_validator("fb_test_event_code")
+    @classmethod
+    def normalize_fb_test_event_code(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_test_event_code(value)
+
 
 class TrackingLinkOut(OrmBase):
     id: uuid.UUID
@@ -100,6 +163,10 @@ class TrackingLinkOut(OrmBase):
     target_step_id: Optional[uuid.UUID]
     fb_pixel_id: Optional[str] = None
     has_fb_capi_token: bool = False
+    fb_campaign_enabled: bool = False
+    fb_event_mappings_json: list[dict] = Field(default_factory=list)
+    has_fb_proxy: bool = False
+    fb_test_event_code: Optional[str] = None
     tracking_url: str = ""
     created_at: datetime
 
@@ -129,6 +196,10 @@ class TrackingLinkRead(OrmBase):
     target_funnel_step_title: Optional[str] = None
     fb_pixel_id: Optional[str] = None
     has_fb_capi_token: bool = False
+    fb_campaign_enabled: bool = False
+    fb_event_mappings_json: list[dict] = Field(default_factory=list)
+    has_fb_proxy: bool = False
+    fb_test_event_code: Optional[str] = None
     total_spend: Optional[Decimal] = None
 
 
@@ -144,6 +215,31 @@ def normalize_fb_pixel_id(value: Optional[str]) -> Optional[str]:
 def normalize_fb_capi_token(value: Optional[str]) -> Optional[str]:
     normalized = (value or "").strip()
     return normalized or None
+
+
+def normalize_fb_proxy_url(value: Optional[str]) -> Optional[str]:
+    from urllib.parse import urlsplit
+
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if any(character in normalized for character in ("\r", "\n", "\t")):
+        raise ValueError("fb_proxy_url contains unsupported whitespace")
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("fb_proxy_url must be an http(s) proxy URL")
+    if parsed.query or parsed.fragment:
+        raise ValueError("fb_proxy_url must not contain query parameters or fragments")
+    return normalized
+
+
+def normalize_fb_test_event_code(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", normalized):
+        raise ValueError("fb_test_event_code contains unsupported characters")
+    return normalized
 
 
 class TrackingFunnelStepOption(BaseModel):

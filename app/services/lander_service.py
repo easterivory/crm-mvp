@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from collections.abc import Mapping
-from uuid import UUID
+from uuid import UUID, uuid4
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.facebook_events import normalize_facebook_event_mappings
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.services.utm_bridge_service import QueryParamInput, UtmBridgeService
@@ -90,20 +91,27 @@ class LanderService:
     async def resolve_lander_request(self, host: str, slug: str) -> ProjectLander:
         normalized_host = self.normalize_host(host)
         normalized_slug = self._safe_slug(slug)
-        result = await self.db.execute(
-            select(ProjectLander)
-            .join(ProjectDomain, ProjectDomain.id == ProjectLander.domain_id)
-            .options(
-                selectinload(ProjectLander.domain),
-                selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
+        stmt = select(ProjectLander).options(
+            selectinload(ProjectLander.domain),
+            selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
+        )
+        technical_domain = self.normalize_host(settings.LANDER_TECH_DOMAIN)
+        if technical_domain and normalized_host == technical_domain:
+            stmt = stmt.where(
+                ProjectLander.slug == normalized_slug,
+                ProjectLander.is_active.is_(True),
             )
-            .where(
+        else:
+            stmt = stmt.join(
+                ProjectDomain,
+                ProjectDomain.id == ProjectLander.domain_id,
+            ).where(
                 ProjectDomain.domain_name == normalized_host,
                 ProjectDomain.is_active.is_(True),
                 ProjectLander.slug == normalized_slug,
                 ProjectLander.is_active.is_(True),
             )
-        )
+        result = await self.db.execute(stmt)
         lander = result.scalar_one_or_none()
         if lander is None:
             raise LanderNotFoundError("Лендинг не найден")
@@ -118,14 +126,20 @@ class LanderService:
         browser_context: Mapping[str, object] | None = None,
     ) -> str:
         lander = await self.resolve_lander_request(host=host, slug=slug)
-        telegram_url = await self.build_telegram_url(
+        browser_event_seed = uuid4().hex
+        enriched_browser_context = dict(browser_context or {})
+        enriched_browser_context["lander_event_seed"] = browser_event_seed
+        telegram_url, start_key = await self.build_telegram_bridge(
             lander,
             query_params,
-            browser_context=browser_context,
+            browser_context=enriched_browser_context,
         )
         pixel_markup = self._render_pixel_markup(
             lander.pixels_json,
             lander.meta_events_json,
+            tracking_link=lander.tracking_link,
+            browser_event_seed=browser_event_seed,
+            bridge_url=f"/l/{lander.slug}/bridge/{start_key}",
         )
 
         if lander.type == self.DEFAULT_TG_REDIRECT:
@@ -168,6 +182,20 @@ class LanderService:
         *,
         browser_context: Mapping[str, object] | None = None,
     ) -> str:
+        telegram_url, _ = await self.build_telegram_bridge(
+            lander,
+            query_params,
+            browser_context=browser_context,
+        )
+        return telegram_url
+
+    async def build_telegram_bridge(
+        self,
+        lander: ProjectLander,
+        query_params: QueryParamInput | None = None,
+        *,
+        browser_context: Mapping[str, object] | None = None,
+    ) -> tuple[str, str]:
         tracking_link = lander.tracking_link
         if tracking_link is None:
             raise ValueError("Лендинг должен быть привязан к tracking link")
@@ -191,7 +219,7 @@ class LanderService:
             self.utm_bridge.build_lander_start_payload(tracking_link.id, start_key),
             safe="",
         )
-        return f"https://t.me/{username}?start={start_payload}"
+        return f"https://t.me/{username}?start={start_payload}", start_key
 
     def replace_bot_links(
         self,
@@ -405,21 +433,42 @@ class LanderService:
         return (bot_username or settings.CLIENT_BOT_USERNAME or "").removeprefix("@").strip()
 
     @classmethod
-    def _render_pixel_markup(cls, pixels: object, meta_events: object = None) -> str:
-        if not isinstance(pixels, list):
-            return ""
-
+    def _render_pixel_markup(
+        cls,
+        pixels: object,
+        meta_events: object = None,
+        *,
+        tracking_link: TrackingLink | None = None,
+        browser_event_seed: str | None = None,
+        bridge_url: str | None = None,
+    ) -> str:
         meta_pixel_id: str | None = None
-        for raw_pixel in pixels:
-            if not isinstance(raw_pixel, dict):
-                continue
-            provider = str(raw_pixel.get("provider") or "").strip()
-            pixel_id = str(raw_pixel.get("pixel_id") or "").strip()
-            if not cls._is_safe_pixel_id(pixel_id):
-                logger.warning("Skipped invalid landing pixel provider=%s", provider)
-                continue
-            if provider == "meta" and meta_pixel_id is None:
-                meta_pixel_id = pixel_id
+        campaign_mappings: list[dict] = []
+        if tracking_link is not None and tracking_link.fb_campaign_enabled:
+            candidate = str(tracking_link.fb_pixel_id or "").strip()
+            if cls._is_safe_pixel_id(candidate):
+                meta_pixel_id = candidate
+            try:
+                campaign_mappings = normalize_facebook_event_mappings(
+                    tracking_link.fb_event_mappings_json
+                )
+            except ValueError:
+                logger.warning(
+                    "Invalid Facebook event mapping on tracking_link_id=%s; using legacy lander events",
+                    tracking_link.id,
+                )
+
+        if meta_pixel_id is None and isinstance(pixels, list):
+            for raw_pixel in pixels:
+                if not isinstance(raw_pixel, dict):
+                    continue
+                provider = str(raw_pixel.get("provider") or "").strip()
+                pixel_id = str(raw_pixel.get("pixel_id") or "").strip()
+                if not cls._is_safe_pixel_id(pixel_id):
+                    logger.warning("Skipped invalid landing pixel provider=%s", provider)
+                    continue
+                if provider == "meta" and meta_pixel_id is None:
+                    meta_pixel_id = pixel_id
 
         if meta_pixel_id is None:
             return ""
@@ -431,13 +480,18 @@ class LanderService:
             "n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;"
             "n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];"
             "s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');"
-            f"fbq('init',{pixel_json});fbq('track','PageView');</script>"
+            f"fbq('init',{pixel_json});</script>"
             f"<noscript><img height=\"1\" width=\"1\" style=\"display:none\" src=\"https://www.facebook.com/tr?id={pixel_attr}&ev=PageView&noscript=1\" alt=\"\"></noscript>"
-            f"{cls._render_meta_event_bridge(meta_events)}"
+            f"{cls._render_meta_event_bridge(meta_events, campaign_mappings, browser_event_seed, bridge_url)}"
         )
 
     @staticmethod
-    def _render_meta_event_bridge(meta_events: object) -> str:
+    def _render_meta_event_bridge(
+        meta_events: object,
+        event_mappings: list[dict] | None = None,
+        browser_event_seed: str | None = None,
+        bridge_url: str | None = None,
+    ) -> str:
         event_names: list[str] = []
         if isinstance(meta_events, list):
             for raw_event in meta_events:
@@ -450,8 +504,25 @@ class LanderService:
                 ):
                     event_names.append(name)
         event_names_json = json.dumps(event_names).replace("<", "\\u003c")
+        mappings_by_source = {
+            str(mapping["source_event"]): mapping
+            for mapping in (event_mappings or [])
+            if mapping.get("enabled")
+        }
+        mappings_json = json.dumps(
+            mappings_by_source,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).replace("<", "\\u003c")
+        event_seed_json = json.dumps(browser_event_seed or uuid4().hex).replace(
+            "<", "\\u003c"
+        )
+        bridge_url_json = json.dumps(bridge_url or "").replace("<", "\\u003c")
         return (
             "<script>"
+            f"var crmFacebookMappings={mappings_json};var crmFacebookSeed={event_seed_json};"
+            f"var crmFacebookBridgeUrl={bridge_url_json};"
+            "var crmFacebookEventSequence=0;"
             "var crmMetaStandardEvents={pageview:'PageView',viewcontent:'ViewContent',search:'Search',"
             "addtocart:'AddToCart',addtowishlist:'AddToWishlist',initiatecheckout:'InitiateCheckout',"
             "addpaymentinfo:'AddPaymentInfo',purchase:'Purchase',lead:'Lead',"
@@ -461,28 +532,62 @@ class LanderService:
             "subscribe:'Subscribe'};"
             "var crmMetaAliases={registration:'CompleteRegistration',reg:'CompleteRegistration',"
             "complete_registration:'CompleteRegistration',application:'SubmitApplication'};"
-            "window.__crmTrackMetaEvent=window.__crmTrackMetaEvent||function(rawName){"
+            "function crmFacebookEventId(source){crmFacebookEventSequence+=1;"
+            "return 'crm_'+crmFacebookSeed+'_'+String(source||'event')+'_'+crmFacebookEventSequence;}"
+            "function crmFacebookParams(raw){var result={};if(!raw||typeof raw!=='object'){return result;}"
+            "Object.keys(raw).forEach(function(key){var value=raw[key];"
+            "if(value===null||value===undefined||/\\{\\{[^}]+\\}\\}/.test(String(value))){return;}"
+            "result[key]=value;});return result;}"
+            "function crmFacebookDispatch(rawName,params,eventId){"
             "var raw=String(rawName||'').trim();"
             "if(!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(raw)){return;}"
             "var normalized=crmMetaAliases[raw.toLowerCase()]||crmMetaStandardEvents[raw.toLowerCase()]||raw;"
             "if(!window.fbq){return;}"
-            "if(crmMetaStandardEvents[normalized.toLowerCase()]){window.fbq('track',normalized);"
-            "}else{window.fbq('trackCustom',normalized);}};"
+            "var method=crmMetaStandardEvents[normalized.toLowerCase()]?'track':'trackCustom';"
+            "window.fbq(method,normalized,crmFacebookParams(params),{eventID:eventId||crmFacebookEventId(normalized)});};"
+            "window.__crmTrackMetaEvent=window.__crmTrackMetaEvent||function(rawName,params){"
+            "crmFacebookDispatch(rawName,params,crmFacebookEventId(rawName));};"
+            "window.__crmTrackFacebookSource=window.__crmTrackFacebookSource||function(source,overrides){"
+            "var key=String(source||'').trim().toLowerCase();var mapping=crmFacebookMappings[key];"
+            "if(!mapping||mapping.enabled===false){return;}var params=Object.assign({},mapping.parameters||{},overrides||{});"
+            "crmFacebookDispatch(mapping.event_name,params,crmFacebookEventId(key));};"
+            "window.__crmSyncFacebookContext=window.__crmSyncFacebookContext||(function(){"
+            "var pending=null;return function(){"
+            "if(!crmFacebookBridgeUrl||!window.fetch){return Promise.resolve();}"
+            "if(pending){return pending;}"
+            "var cookies={};String(document.cookie||'').split(';').forEach(function(item){"
+            "var parts=item.split('=');var key=String(parts.shift()||'').trim();"
+            "if(key==='_fbp'||key==='_fbc'){cookies[key]=decodeURIComponent(parts.join('=')||'');}});"
+            "cookies.event_source_url=window.location.href;"
+            "pending=fetch(crmFacebookBridgeUrl,{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify(cookies),credentials:'same-origin',keepalive:true})"
+            ".catch(function(){}).finally(function(){pending=null;});return pending;};}());"
+            "if(crmFacebookMappings.page_view&&crmFacebookMappings.page_view.enabled!==false){"
+            "if(String(crmFacebookMappings.page_view.event_name).toLowerCase()!=='pageview'){"
+            "crmFacebookDispatch('PageView',{},crmFacebookEventId('base_page_view'));}"
+            "window.__crmTrackFacebookSource('page_view');"
+            "}else{crmFacebookDispatch('PageView',{},crmFacebookEventId('page_view'));}"
             "window.__crmTrackTelegramOpen=window.__crmTrackTelegramOpen||(function(){"
             "var tracked=false;return function(){if(tracked){return;}tracked=true;"
-            "if(window.fbq){window.fbq('track','Lead',{content_name:'Telegram',content_category:'landing'});"
-            "window.fbq('trackCustom','TelegramOpen');}"
+            "if(crmFacebookMappings.telegram_click&&crmFacebookMappings.telegram_click.enabled!==false){"
+            "window.__crmTrackFacebookSource('telegram_click',{content_name:'Telegram',content_category:'landing'});"
+            "}else if(window.fbq){crmFacebookDispatch('Lead',{content_name:'Telegram',content_category:'landing'},crmFacebookEventId('telegram_click'));"
+            "crmFacebookDispatch('TelegramOpen',{},crmFacebookEventId('telegram_open'));}"
             f"var extraEvents={event_names_json};for(var index=0;index<extraEvents.length;index+=1){{window.__crmTrackMetaEvent(extraEvents[index]);}}"
             "};}());"
             "document.addEventListener('click',function(event){var target=event.target;"
+            "var sourceTarget=target&&target.closest?target.closest('[data-crm-fb-source]'):null;"
+            "if(sourceTarget){window.__crmTrackFacebookSource(sourceTarget.getAttribute('data-crm-fb-source'));}"
             "var eventTarget=target&&target.closest?target.closest('[data-crm-meta-event]'):null;"
             "if(eventTarget){window.__crmTrackMetaEvent(eventTarget.getAttribute('data-crm-meta-event'));}"
             "var link=target&&target.closest?target.closest('a[data-crm-telegram-link]'):null;"
-            "if(!link){return;}window.__crmTrackTelegramOpen();"
+            "if(!link){return;}window.__crmTrackTelegramOpen();window.__crmSyncFacebookContext();"
             "if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.target){return;}"
             "event.preventDefault();window.setTimeout(function(){window.location.assign(link.href);},80);});"
             "document.addEventListener('submit',function(event){var form=event.target;"
-            "if(form&&form.getAttribute){window.__crmTrackMetaEvent(form.getAttribute('data-crm-meta-event'));}});"
+            "if(form&&form.getAttribute){var source=form.getAttribute('data-crm-fb-source');"
+            "if(source){window.__crmTrackFacebookSource(source);}"
+            "window.__crmTrackMetaEvent(form.getAttribute('data-crm-meta-event'));}});"
             "</script>"
         )
 
@@ -590,7 +695,9 @@ class LanderService:
         if (opened) return;
         opened = true;
         if (window.__crmTrackTelegramOpen) window.__crmTrackTelegramOpen();
-        window.location.href = target;
+        var sync = window.__crmSyncFacebookContext ? window.__crmSyncFacebookContext() : Promise.resolve();
+        Promise.race([sync, new Promise(function (resolve) {{ window.setTimeout(resolve, 180); }})])
+          .finally(function () {{ window.location.href = target; }});
       }}
       document.getElementById('open-telegram').addEventListener('click', function (event) {{
         event.preventDefault();

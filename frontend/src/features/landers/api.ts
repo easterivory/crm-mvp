@@ -8,6 +8,7 @@ import type {
   ProjectLanderUpdatePayload,
   ProjectLanderUploadResult,
   LanderTargetStep,
+  LanderRuntimeConfig,
   TrackingLinkOption,
 } from './types'
 
@@ -36,6 +37,13 @@ export async function deleteProjectDomain(
 
 export async function fetchProjectLanders(projectId: string): Promise<ProjectLander[]> {
   const { data } = await api.get<ProjectLander[]>(`/projects/${projectId}/landers`)
+  return data
+}
+
+export async function fetchLanderRuntimeConfig(
+  projectId: string,
+): Promise<LanderRuntimeConfig> {
+  const { data } = await api.get<LanderRuntimeConfig>(`/projects/${projectId}/landers/config`)
   return data
 }
 

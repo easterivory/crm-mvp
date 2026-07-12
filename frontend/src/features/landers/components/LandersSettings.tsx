@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   Upload,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ import {
   deleteProjectLander,
   fetchActiveTrackingLinks,
   fetchLanderTargetSteps,
+  fetchLanderRuntimeConfig,
   fetchProjectDomains,
   fetchProjectLanders,
   updateProjectLander,
@@ -33,6 +35,9 @@ import type {
   LanderType,
   LanderPixel,
   LanderMetaEvent,
+  FacebookEventMapping,
+  FacebookSourceEvent,
+  LanderRuntimeConfig,
   LanderTargetStep,
   ProjectDomain,
   ProjectLander,
@@ -62,6 +67,9 @@ type LanderForm = {
   campaignPaymentType: string
   campaignFbPixelId: string
   campaignFbCapiToken: string
+  campaignFbProxyUrl: string
+  campaignFbTestEventCode: string
+  campaignEventMappings: FacebookEventMapping[]
   campaignTargetStepKey: string
   metaPixelId: string
   metaEvents: string
@@ -89,6 +97,9 @@ const emptyLanderForm: LanderForm = {
   campaignPaymentType: '',
   campaignFbPixelId: '',
   campaignFbCapiToken: '',
+  campaignFbProxyUrl: '',
+  campaignFbTestEventCode: '',
+  campaignEventMappings: [],
   campaignTargetStepKey: '',
   metaPixelId: '',
   metaEvents: '',
@@ -147,13 +158,141 @@ function normalizeDomainInput(value: string) {
     .replace(/\.$/, '')
 }
 
-function buildLanderUrl(domainName: string, slug: string) {
-  return `https://${domainName}/l/${slug}`
+function buildPixels(form: LanderForm): LanderPixel[] {
+  const pixelId = (
+    form.trackingMode === 'campaign' ? form.campaignFbPixelId : form.metaPixelId
+  ).trim()
+  return pixelId ? [{ provider: 'meta', pixel_id: pixelId }] : []
 }
 
-function buildPixels(form: LanderForm): LanderPixel[] {
-  const pixelId = form.metaPixelId.trim()
-  return pixelId ? [{ provider: 'meta', pixel_id: pixelId }] : []
+function cloneEventMappings(mappings: FacebookEventMapping[]): FacebookEventMapping[] {
+  return mappings.map((mapping) => ({
+    ...mapping,
+    parameters: { ...mapping.parameters },
+  }))
+}
+
+type FacebookEventMappingsEditorProps = {
+  mappings: FacebookEventMapping[]
+  sourceEvents: FacebookSourceEvent[]
+  onChange: (mappings: FacebookEventMapping[]) => void
+}
+
+function FacebookEventMappingsEditor({
+  mappings,
+  sourceEvents,
+  onChange,
+}: FacebookEventMappingsEditorProps) {
+  const sourceByKey = useMemo(
+    () => new Map(sourceEvents.map((source) => [source.key, source])),
+    [sourceEvents],
+  )
+
+  const patchMapping = (index: number, patch: Partial<FacebookEventMapping>) => {
+    onChange(
+      mappings.map((mapping, mappingIndex) =>
+        mappingIndex === index
+          ? {
+              ...mapping,
+              ...patch,
+              parameters: patch.parameters ?? mapping.parameters,
+            }
+          : mapping,
+      ),
+    )
+  }
+
+  return (
+    <div className="divide-y divide-white/10 rounded-lg border border-white/10 bg-zinc-950/40">
+      {mappings.map((mapping, index) => {
+        const source = sourceByKey.get(mapping.source_event)
+        const hasValueParameters =
+          mapping.event_name.toLowerCase() === 'purchase' ||
+          Boolean(mapping.parameters.value || mapping.parameters.currency)
+        return (
+          <div
+            key={mapping.source_event}
+            className={`grid gap-3 px-3 py-3 lg:items-center ${
+              hasValueParameters
+                ? 'lg:grid-cols-[minmax(170px,0.9fr)_minmax(180px,1fr)_minmax(220px,1.2fr)]'
+                : 'lg:grid-cols-[minmax(170px,0.9fr)_minmax(180px,2.2fr)]'
+            }`}
+          >
+            <label className="flex min-w-0 items-center gap-3">
+              <input
+                type="checkbox"
+                checked={mapping.enabled}
+                onChange={(event) => patchMapping(index, { enabled: event.target.checked })}
+                className="h-5 w-5 shrink-0 accent-emerald-400"
+              />
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-zinc-100">
+                  {source?.label ?? mapping.source_event}
+                </span>
+                <span className="mt-0.5 block text-xs text-zinc-500">
+                  {source?.delivery === 'browser' ? 'Pixel · браузер' : 'CAPI · сервер'}
+                  {source?.trigger === 'funnel' ? ' · из CRM-действия' : ' · автоматически'}
+                </span>
+              </span>
+            </label>
+            <label className="block min-w-0">
+              <span className="mb-1 block text-xs text-zinc-500">Meta event</span>
+              <input
+                list="facebook-standard-events"
+                value={mapping.event_name}
+                disabled={!mapping.enabled}
+                onChange={(event) => patchMapping(index, { event_name: event.target.value })}
+                maxLength={40}
+                pattern="[A-Za-z][A-Za-z0-9_]*"
+                className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 disabled:opacity-45 md:text-sm"
+              />
+            </label>
+            {hasValueParameters ? (
+              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_110px]">
+                <label className="block min-w-0">
+                  <span className="mb-1 block text-xs text-zinc-500">value</span>
+                  <input
+                    value={mapping.parameters.value ?? ''}
+                    disabled={!mapping.enabled}
+                    onChange={(event) => patchMapping(index, {
+                      parameters: { ...mapping.parameters, value: event.target.value },
+                    })}
+                    placeholder="{{lead.expected_start_amount}}"
+                    className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 focus:ring-2 disabled:opacity-45 md:text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-zinc-500">currency</span>
+                  <input
+                    value={mapping.parameters.currency ?? ''}
+                    disabled={!mapping.enabled}
+                    onChange={(event) => patchMapping(index, {
+                      parameters: { ...mapping.parameters, currency: event.target.value.toUpperCase() },
+                    })}
+                    placeholder="USD"
+                    maxLength={3}
+                    className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base uppercase text-zinc-100 outline-none ring-emerald-500 focus:ring-2 disabled:opacity-45 md:text-sm"
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+      <datalist id="facebook-standard-events">
+        <option value="ViewContent" />
+        <option value="Lead" />
+        <option value="CompleteRegistration" />
+        <option value="Subscribe" />
+        <option value="Search" />
+        <option value="Purchase" />
+        <option value="Schedule" />
+        <option value="Contact" />
+        <option value="AddToWishlist" />
+        <option value="SubmitApplication" />
+      </datalist>
+    </div>
+  )
 }
 
 function buildMetaEvents(value: string): LanderMetaEvent[] {
@@ -183,6 +322,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const [domains, setDomains] = useState<ProjectDomain[]>([])
   const [landers, setLanders] = useState<ProjectLander[]>([])
   const [trackingLinks, setTrackingLinks] = useState<TrackingLinkOption[]>([])
+  const [runtimeConfig, setRuntimeConfig] = useState<LanderRuntimeConfig | null>(null)
   const [bots, setBots] = useState<Bot[]>([])
   const [targetSteps, setTargetSteps] = useState<LanderTargetStep[]>([])
   const [isTargetStepsLoading, setIsTargetStepsLoading] = useState(false)
@@ -196,16 +336,18 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const [editingLander, setEditingLander] = useState<ProjectLander | null>(null)
   const [editingMetaPixelId, setEditingMetaPixelId] = useState('')
   const [editingMetaEvents, setEditingMetaEvents] = useState('')
+  const [editingCapiToken, setEditingCapiToken] = useState('')
+  const [editingProxyUrl, setEditingProxyUrl] = useState('')
+  const [editingTestEventCode, setEditingTestEventCode] = useState('')
+  const [editingEventMappings, setEditingEventMappings] = useState<FacebookEventMapping[]>([])
+  const [clearEditingCapiToken, setClearEditingCapiToken] = useState(false)
+  const [clearEditingProxyUrl, setClearEditingProxyUrl] = useState(false)
   const [editingAutoRedirectEnabled, setEditingAutoRedirectEnabled] = useState(true)
   const [isUpdatingLander, setIsUpdatingLander] = useState(false)
   const [banner, setBanner] = useState<Banner | null>(null)
   const [copiedValue, setCopiedValue] = useState('')
   const [form, setForm] = useState<LanderForm>(emptyLanderForm)
 
-  const domainById = useMemo(
-    () => new Map(domains.map((domain) => [domain.id, domain])),
-    [domains],
-  )
   const trackingLinkById = useMemo(
     () => new Map(trackingLinks.map((link) => [link.id, link])),
     [trackingLinks],
@@ -217,22 +359,25 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       setLanders([])
       setTrackingLinks([])
       setBots([])
+      setRuntimeConfig(null)
       return
     }
 
     setIsLoading(true)
     setBanner(null)
     try {
-      const [domainItems, landerItems, linkItems, botItems] = await Promise.all([
+      const [domainItems, landerItems, linkItems, botItems, config] = await Promise.all([
         fetchProjectDomains(projectId),
         fetchProjectLanders(projectId),
         fetchActiveTrackingLinks(projectId),
         fetchBots(projectId),
+        fetchLanderRuntimeConfig(projectId),
       ])
       setDomains(domainItems)
       setLanders(landerItems)
       setTrackingLinks(linkItems)
       setBots(botItems)
+      setRuntimeConfig(config)
     } catch (err) {
       setBanner({
         tone: 'error',
@@ -250,12 +395,13 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const resetForm = useCallback(() => {
     setForm({
       ...emptyLanderForm,
-      domainId: domains[0]?.id ?? '',
+      domainId: '',
       trackingLinkId: trackingLinks[0]?.id ?? '',
       campaignBotId: bots[0]?.id ?? '',
       slug: generateSlug(),
+      campaignEventMappings: cloneEventMappings(runtimeConfig?.default_event_mappings ?? []),
     })
-  }, [bots, domains, trackingLinks])
+  }, [bots, domains, runtimeConfig, trackingLinks])
 
   useEffect(() => {
     if (!isModalOpen || !projectId || form.trackingMode !== 'campaign' || !form.campaignBotId) {
@@ -303,9 +449,19 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const openEditLander = (lander: ProjectLander) => {
     const metaPixel = lander.pixels_json.find((pixel) => pixel.provider === 'meta')
     setEditingLander(lander)
-    setEditingMetaPixelId(metaPixel?.pixel_id ?? '')
+    setEditingMetaPixelId(lander.fb_pixel_id ?? metaPixel?.pixel_id ?? '')
     setEditingMetaEvents((lander.meta_events_json ?? []).map((event) => event.name).join(', '))
     setEditingAutoRedirectEnabled(lander.auto_redirect_enabled)
+    setEditingCapiToken('')
+    setEditingProxyUrl('')
+    setEditingTestEventCode(lander.fb_test_event_code ?? '')
+    setEditingEventMappings(cloneEventMappings(
+      lander.fb_event_mappings_json.length > 0
+        ? lander.fb_event_mappings_json
+        : runtimeConfig?.default_event_mappings ?? [],
+    ))
+    setClearEditingCapiToken(false)
+    setClearEditingProxyUrl(false)
     setBanner(null)
   }
 
@@ -323,10 +479,20 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
           : [],
         meta_events: buildMetaEvents(editingMetaEvents),
         auto_redirect_enabled: editingAutoRedirectEnabled,
+        facebook_campaign: {
+          enabled: true,
+          fb_pixel_id: editingMetaPixelId.trim() || null,
+          ...(editingCapiToken.trim() ? { fb_capi_token: editingCapiToken.trim() } : {}),
+          clear_fb_capi_token: clearEditingCapiToken,
+          ...(editingProxyUrl.trim() ? { fb_proxy_url: editingProxyUrl.trim() } : {}),
+          clear_fb_proxy_url: clearEditingProxyUrl,
+          fb_test_event_code: editingTestEventCode.trim() || null,
+          fb_event_mappings: editingEventMappings,
+        },
       })
       setEditingLander(null)
       await loadData()
-      setBanner({ tone: 'success', message: 'Настройки Meta и перехода сохранены.' })
+      setBanner({ tone: 'success', message: 'Facebook-кампания и переход сохранены.' })
     } catch (err) {
       setBanner({ tone: 'error', message: getErrorMessage(err, 'Не удалось обновить лендинг.') })
     } finally {
@@ -421,8 +587,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     if (!projectId || isSavingLander) {
       return
     }
-    if (!form.domainId || !form.slug.trim()) {
-      setBanner({ tone: 'error', message: 'Заполните домен и slug.' })
+    if (!form.slug.trim()) {
+      setBanner({ tone: 'error', message: 'Заполните slug.' })
       return
     }
     if (form.trackingMode === 'existing' && !form.trackingLinkId) {
@@ -450,7 +616,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     setBanner(null)
     try {
       const created = await createProjectLander(projectId, {
-        domain_id: form.domainId,
+        domain_id: form.domainId || null,
         name: form.name.trim() || slug,
         type: form.type,
         slug,
@@ -465,6 +631,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               payment_type: form.campaignPaymentType.trim() || null,
               fb_pixel_id: form.campaignFbPixelId.trim() || form.metaPixelId.trim() || null,
               fb_capi_token: form.campaignFbCapiToken.trim() || null,
+              fb_proxy_url: form.campaignFbProxyUrl.trim() || null,
+              fb_test_event_code: form.campaignFbTestEventCode.trim() || null,
+              fb_event_mappings: form.campaignEventMappings,
               target_funnel_step_key: form.campaignTargetStepKey || null,
             }
           : null,
@@ -515,8 +684,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
         <button
           type="button"
           onClick={openCreateModal}
-          disabled={domains.length === 0 || bots.length === 0}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={bots.length === 0}
+          className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus size={16} />
           Создать лендинг
@@ -643,9 +812,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               <h3 className="text-sm font-semibold text-cyan-100">DNS-настройка</h3>
               <p className="mt-2 text-sm leading-6 text-cyan-100/75">
                 CRM сохраняет домен и лендинг, но DNS меняется у регистратора. Направьте
-                A-запись домена на IP API-сервера или настройте CNAME на технический домен
-                проекта. После этого ссылка вида /l/slug откроет прокладку и сохранит UTM
-                перед переходом в Telegram.
+                CNAME поддомена на <span className="font-mono text-cyan-50">{runtimeConfig?.technical_domain ?? 'технический домен'}</span>.
+                Техдомен можно выбрать сразу, без парковки отдельного домена. Динамический HTML
+                не кэшируется, поэтому UTM, fbp/fbc и start-key остаются индивидуальными.
               </p>
             </div>
           </div>
@@ -663,8 +832,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
           <button
             type="button"
             onClick={openCreateModal}
-            disabled={domains.length === 0 || bots.length === 0}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-100 transition hover:border-emerald-500/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={bots.length === 0}
+            className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-100 transition hover:border-emerald-500/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus size={16} />
             Создать лендинг
@@ -690,11 +859,10 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                 </tr>
               ) : (
                 landers.map((lander) => {
-                  const domain = domainById.get(lander.domain_id)
                   const link = lander.tracking_link_id
                     ? trackingLinkById.get(lander.tracking_link_id)
                     : null
-                  const url = domain ? buildLanderUrl(domain.domain_name, lander.slug) : ''
+                  const url = lander.public_url
 
                   return (
                     <tr key={lander.id} className="bg-white/[0.01]">
@@ -730,7 +898,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                             ) : null}
                           </div>
                         ) : (
-                          <span className="text-zinc-500">Домен удалён</span>
+                          <span className="text-zinc-500">URL недоступен</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
@@ -744,6 +912,21 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                             <span className="text-zinc-500">Не найдена</span>
                           )}
                           <div className="flex flex-wrap gap-1.5 text-xs">
+                            {lander.facebook_campaign_enabled ? (
+                              <span className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">
+                                Facebook campaign
+                              </span>
+                            ) : null}
+                            {lander.has_fb_capi_token ? (
+                              <span className="rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-emerald-100">
+                                CAPI готов
+                              </span>
+                            ) : null}
+                            {lander.has_fb_proxy ? (
+                              <span className="rounded-md border border-sky-400/20 bg-sky-400/10 px-2 py-0.5 text-sky-100">
+                                Proxy
+                              </span>
+                            ) : null}
                             {lander.pixels_json.length > 0 ? (
                               lander.pixels_json.map((pixel) => (
                                 <span
@@ -781,7 +964,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         <div className="flex justify-end gap-2">
                           <button
                             type="button"
-                            title="Настройки Meta и перехода"
+                            title="Настройки Facebook-кампании"
                             onClick={() => openEditLander(lander)}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/5 text-zinc-400 transition hover:border-emerald-500/50 hover:text-emerald-200"
                           >
@@ -820,7 +1003,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               setIsModalOpen(false)
             }
           }}
-          maxWidthClassName="max-w-2xl"
+          maxWidthClassName="max-w-4xl"
         >
           <form className="space-y-4" onSubmit={handleSaveLander}>
             <label className="block">
@@ -840,10 +1023,11 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                 <select
                   value={form.domainId}
                   onChange={(event) => setForm((current) => ({ ...current, domainId: event.target.value }))}
-                  required
                   className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
                 >
-                  <option value="">Выберите домен</option>
+                  <option value="">
+                    Техдомен · {runtimeConfig?.technical_domain ?? 'не настроен'}
+                  </option>
                   {domains.map((domain) => (
                     <option key={domain.id} value={domain.id}>
                       {domain.domain_name}
@@ -998,25 +1182,27 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                       />
                     </label>
                   </div>
-                  <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/5 p-3">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
-                      Facebook Conversion API
+                  <div className="border-t border-white/10 pt-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-cyan-100">
+                      <ShieldCheck size={17} className="shrink-0 text-cyan-300" />
+                      Facebook Pixel и Conversion API
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="block">
-                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Pixel ID</span>
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Pixel / Dataset ID</span>
                         <input
                           value={form.campaignFbPixelId}
                           onChange={(event) => setForm((current) => ({ ...current, campaignFbPixelId: event.target.value }))}
                           inputMode="numeric"
                           maxLength={50}
-                          placeholder={form.metaPixelId.trim() || '123456789012345'}
+                          placeholder="123456789012345"
                           className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                         />
                       </label>
                       <label className="block">
-                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">CAPI token</span>
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Pixel access token</span>
                         <input
+                          type="password"
                           value={form.campaignFbCapiToken}
                           onChange={(event) => setForm((current) => ({ ...current, campaignFbCapiToken: event.target.value }))}
                           placeholder="Access token"
@@ -1024,10 +1210,42 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                           className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                         />
                       </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">CAPI proxy · необязательно</span>
+                        <input
+                          type="password"
+                          value={form.campaignFbProxyUrl}
+                          onChange={(event) => setForm((current) => ({ ...current, campaignFbProxyUrl: event.target.value }))}
+                          placeholder="http://user:pass@proxy:8080"
+                          autoComplete="off"
+                          className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Test event code · необязательно</span>
+                        <input
+                          value={form.campaignFbTestEventCode}
+                          onChange={(event) => setForm((current) => ({ ...current, campaignFbTestEventCode: event.target.value }))}
+                          placeholder="TEST12345"
+                          maxLength={100}
+                          className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+                        />
+                      </label>
                     </div>
                     <p className="mt-2 text-xs leading-5 text-zinc-500">
-                      Эти поля сохраняются в созданной tracking-ссылке и используются server-side CRM-действием.
+                      Токен и proxy никогда не возвращаются из API. Test event code отправляет CAPI-события в режим проверки Meta Events Manager.
                     </p>
+                  </div>
+                  <div className="border-t border-white/10 pt-4">
+                    <div className="mb-1 text-sm font-semibold text-zinc-100">Карта событий</div>
+                    <p className="mb-3 text-xs leading-5 text-zinc-500">
+                      Просмотр и переход фиксируются Pixel в лендинге. Старт бота и контакт отправляются CAPI автоматически. Остальные источники вызываются CRM-действием воронки.
+                    </p>
+                    <FacebookEventMappingsEditor
+                      mappings={form.campaignEventMappings}
+                      sourceEvents={runtimeConfig?.source_events ?? []}
+                      onChange={(campaignEventMappings) => setForm((current) => ({ ...current, campaignEventMappings }))}
+                    />
                   </div>
                   <label className="block">
                     <span className="mb-1 block text-sm font-medium text-zinc-300">Точка входа в активную воронку</span>
@@ -1070,21 +1288,22 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             </fieldset>
 
             <fieldset className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
-              <legend className="px-1 text-sm font-semibold text-zinc-100">Пиксели и UTM</legend>
+              <legend className="px-1 text-sm font-semibold text-zinc-100">Переход и UTM</legend>
               <p className="mt-1 text-xs leading-5 text-zinc-500">
-                Meta Pixel получает PageView на открытии и стандартный Lead при переходе в Telegram. UTM из URL сохраняются у лида автоматически; значения ниже подставляются, только если в URL их нет.
+                UTM из рекламного URL сохраняются у лида автоматически; значения ниже заполняют только отсутствующие параметры.
               </p>
-              <div className="mt-3">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Meta Pixel ID</span>
-                  <input value={form.metaPixelId} onChange={(event) => setForm((current) => ({ ...current, metaPixelId: event.target.value }))} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
-                </label>
-              </div>
-              <label className="mt-3 block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">События Meta на переходе в Telegram</span>
-                <input value={form.metaEvents} onChange={(event) => setForm((current) => ({ ...current, metaEvents: event.target.value }))} placeholder="CompleteRegistration, QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
-                <span className="mt-1 block text-xs text-zinc-500">Через запятую. Lead и TelegramOpen добавляются автоматически.</span>
-              </label>
+              {form.trackingMode === 'existing' ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Legacy Meta Pixel ID</span>
+                    <input value={form.metaPixelId} onChange={(event) => setForm((current) => ({ ...current, metaPixelId: event.target.value }))} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Legacy события на переходе</span>
+                    <input value={form.metaEvents} onChange={(event) => setForm((current) => ({ ...current, metaEvents: event.target.value }))} placeholder="CompleteRegistration, QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                  </label>
+                </div>
+              ) : null}
               <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2.5 text-sm text-zinc-200">
                 <span>
                   <span className="block font-medium text-zinc-100">Автопереход в Telegram</span>
@@ -1120,7 +1339,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                 />
                 <span className="mt-2 block text-xs text-zinc-500">
                   В корне архива должны быть index.html и кнопка Telegram: <code>&lt;a data-crm-telegram-link href=&quot;#&quot;&gt;...&lt;/a&gt;</code>.
-                  Для Meta-события на элементе добавьте <code>data-crm-meta-event=&quot;CompleteRegistration&quot;</code>.
+                  Для события из карты добавьте <code>data-crm-fb-source=&quot;registration&quot;</code>.
+                  Старый <code>data-crm-meta-event</code> также поддерживается.
                 </span>
                 {form.zipFile ? (
                   <span className="mt-2 block text-sm text-emerald-200">
@@ -1154,9 +1374,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
 
       {editingLander ? (
         <Modal
-          title="Meta и переход"
-          description={`Настройки кампании для лендинга «${editingLander.name}».`}
-          maxWidthClassName="max-w-lg"
+          title="Facebook-кампания"
+          description={`Pixel, CAPI и карта событий для «${editingLander.name}».`}
+          maxWidthClassName="max-w-4xl"
           onClose={() => {
             if (!isUpdatingLander) {
               setEditingLander(null)
@@ -1164,14 +1384,48 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
           }}
         >
           <form className="space-y-4" onSubmit={(event) => void handleUpdateLander(event)}>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-zinc-200">Pixel / Dataset ID</span>
+                <input value={editingMetaPixelId} onChange={(event) => setEditingMetaPixelId(event.target.value)} inputMode="numeric" placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-zinc-200">Новый CAPI token</span>
+                <input type="password" value={editingCapiToken} disabled={clearEditingCapiToken} onChange={(event) => setEditingCapiToken(event.target.value)} placeholder={editingLander.has_fb_capi_token ? 'Уже задан · оставить пустым' : 'Access token'} autoComplete="off" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-45 md:text-sm" />
+                {editingLander.has_fb_capi_token ? (
+                  <label className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
+                    <input type="checkbox" checked={clearEditingCapiToken} onChange={(event) => setClearEditingCapiToken(event.target.checked)} className="h-4 w-4 accent-red-400" />
+                    Удалить сохранённый token
+                  </label>
+                ) : null}
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-zinc-200">Новый CAPI proxy</span>
+                <input type="password" value={editingProxyUrl} disabled={clearEditingProxyUrl} onChange={(event) => setEditingProxyUrl(event.target.value)} placeholder={editingLander.has_fb_proxy ? 'Уже задан · оставить пустым' : 'http://user:pass@proxy:8080'} autoComplete="off" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-45 md:text-sm" />
+                {editingLander.has_fb_proxy ? (
+                  <label className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
+                    <input type="checkbox" checked={clearEditingProxyUrl} onChange={(event) => setClearEditingProxyUrl(event.target.checked)} className="h-4 w-4 accent-red-400" />
+                    Удалить сохранённый proxy
+                  </label>
+                ) : null}
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-zinc-200">Test event code</span>
+                <input value={editingTestEventCode} onChange={(event) => setEditingTestEventCode(event.target.value)} placeholder="TEST12345" maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+              </label>
+            </div>
+            <div>
+              <div className="mb-1.5 text-sm font-medium text-zinc-200">Карта событий</div>
+              <FacebookEventMappingsEditor
+                mappings={editingEventMappings}
+                sourceEvents={runtimeConfig?.source_events ?? []}
+                onChange={setEditingEventMappings}
+              />
+            </div>
             <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-zinc-200">Meta Pixel ID</span>
-              <input value={editingMetaPixelId} onChange={(event) => setEditingMetaPixelId(event.target.value)} placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-zinc-200">События на переходе в Telegram</span>
-              <input value={editingMetaEvents} onChange={(event) => setEditingMetaEvents(event.target.value)} placeholder="CompleteRegistration, QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
-              <span className="mt-1.5 block text-xs leading-5 text-zinc-500">События разделяются запятыми. Lead и TelegramOpen CRM отправляет всегда.</span>
+              <span className="mb-1.5 block text-sm font-medium text-zinc-200">Legacy события лендинга</span>
+              <input value={editingMetaEvents} onChange={(event) => setEditingMetaEvents(event.target.value)} placeholder="QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+              <span className="mt-1.5 block text-xs leading-5 text-zinc-500">Только для старых ZIP с data-crm-meta-event. Новые лендинги используют карту выше.</span>
             </label>
             <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2.5 text-sm text-zinc-200">
               <span>

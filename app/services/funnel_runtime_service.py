@@ -29,6 +29,7 @@ from app.services.chat_audit_service import ChatAuditService
 from app.services.audit_service import AuditService
 from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
+from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.funnel_block_registry import is_supported_lead_field_key
 from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
@@ -1824,6 +1825,38 @@ class FunnelRuntimeService:
                         status="pending",
                     )
                 elif action_type in {"send_fb_event", "send_facebook_capi_event"}:
+                    source_event = str(raw.get("source_event") or "").strip()
+                    if source_event:
+                        chat = await self.chat_repo.get_by_id(chat_id)
+                        lifecycle_reference = (
+                            chat.current_cycle_started_at.isoformat()
+                            if chat is not None and chat.current_cycle_started_at is not None
+                            else str(chat.id if chat is not None else chat_id)
+                        )
+                        queued_job_id = await FacebookCampaignService(
+                            self.db
+                        ).enqueue_mapped_event(
+                            lead_id=lead.id,
+                            source_event=source_event,
+                            event_reference=(
+                                f"funnel:{step.id}:{lifecycle_reference}"
+                            ),
+                            extra_custom_data={
+                                "funnel_step_id": str(step.id),
+                                "funnel_step_key": step.key,
+                            },
+                        )
+                        if queued_job_id is None:
+                            logger.warning(
+                                "Mapped Facebook event skipped chat_id=%s lead_id=%s "
+                                "step_id=%s source_event=%s",
+                                chat_id,
+                                lead.id,
+                                step.id,
+                                source_event,
+                            )
+                        continue
+
                     event_name = str(
                         raw.get("event_name")
                         or raw.get("fb_event_name")

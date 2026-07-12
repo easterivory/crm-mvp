@@ -316,7 +316,15 @@ export default function StepSettingsPanel({
                     onChange={(event) =>
                       patchConfig({
                         actions: actions.map((item, idx) =>
-                          idx === index ? { ...item, type: event.target.value } : item,
+                          idx === index
+                            ? {
+                                ...item,
+                                type: event.target.value,
+                                ...(event.target.value === 'send_fb_event'
+                                  ? { source_event: 'registration' }
+                                  : {}),
+                              }
+                            : item,
                         ),
                       })
                     }
@@ -477,25 +485,53 @@ export default function StepSettingsPanel({
                     </select>
                   ) : null}
                   {action.type === 'send_fb_event' ? (
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                        Facebook event
-                      </span>
-                      <input
-                        list="facebook-capi-event-names"
-                        value={action.event_name || 'Lead'}
-                        onChange={(event) =>
-                          patchConfig({
-                            actions: actions.map((item, idx) =>
-                              idx === index ? { ...item, event_name: event.target.value } : item,
-                            ),
-                          })
-                        }
-                        maxLength={40}
-                        pattern="[A-Za-z][A-Za-z0-9_]*"
-                        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-                        placeholder="Lead"
-                      />
+                    <div className="space-y-2">
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                          Событие кампании
+                        </span>
+                        <select
+                          value={action.source_event || '__legacy__'}
+                          onChange={(event) =>
+                            patchConfig({
+                              actions: actions.map((item, idx) =>
+                                idx === index
+                                  ? {
+                                      ...item,
+                                      source_event: event.target.value === '__legacy__' ? '' : event.target.value,
+                                    }
+                                  : item,
+                              ),
+                            })
+                          }
+                          className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                        >
+                          <option value="registration">Регистрация</option>
+                          <option value="channel_subscribe">Подписка на канал</option>
+                          <option value="channel_unsubscribe">Отписка от канала</option>
+                          <option value="sale">Продажа</option>
+                          <option value="resale">Повторная продажа</option>
+                          <option value="contact_invite_bot">Приглашение контакта в бота</option>
+                          <option value="__legacy__">Прямое имя события · legacy</option>
+                        </select>
+                      </label>
+                      {!action.source_event ? (
+                        <input
+                          list="facebook-capi-event-names"
+                          value={action.event_name || 'Lead'}
+                          onChange={(event) =>
+                            patchConfig({
+                              actions: actions.map((item, idx) =>
+                                idx === index ? { ...item, event_name: event.target.value } : item,
+                              ),
+                            })
+                          }
+                          maxLength={40}
+                          pattern="[A-Za-z][A-Za-z0-9_]*"
+                          className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                          placeholder="Lead"
+                        />
+                      ) : null}
                       <datalist id="facebook-capi-event-names">
                         <option value="Lead" />
                         <option value="CompleteRegistration" />
@@ -503,10 +539,10 @@ export default function StepSettingsPanel({
                         <option value="Purchase" />
                         <option value="SubmitApplication" />
                       </datalist>
-                      <span className="mt-1 block text-xs leading-5 text-gray-500">
-                        Событие уйдет через CAPI, если у tracking link чата заполнены Pixel ID и token.
+                      <span className="block text-xs leading-5 text-gray-500">
+                        Источник берёт имя и параметры из Facebook-кампании tracking link. Старые блоки с прямым event name продолжают работать.
                       </span>
-                    </label>
+                    </div>
                   ) : null}
                   <button
                     type="button"

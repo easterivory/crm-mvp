@@ -128,6 +128,12 @@ class TrackingService:
                     invite_link=invite_link,
                     fb_pixel_id=data.fb_pixel_id,
                     fb_capi_token=data.fb_capi_token,
+                    fb_campaign_enabled=data.fb_campaign_enabled,
+                    fb_event_mappings_json=[
+                        item.model_dump() for item in data.fb_event_mappings
+                    ],
+                    fb_proxy_url=data.fb_proxy_url,
+                    fb_test_event_code=data.fb_test_event_code,
                     cost_model=data.cost_model,
                     price_per_unit=data.price_per_unit,
                     spend=data.spend,
@@ -159,6 +165,12 @@ class TrackingService:
                     invite_link=self._build_invite_link(bot.bot_username, code),
                     fb_pixel_id=data.fb_pixel_id,
                     fb_capi_token=data.fb_capi_token,
+                    fb_campaign_enabled=data.fb_campaign_enabled,
+                    fb_event_mappings_json=[
+                        item.model_dump() for item in data.fb_event_mappings
+                    ],
+                    fb_proxy_url=data.fb_proxy_url,
+                    fb_test_event_code=data.fb_test_event_code,
                     cost_model=data.cost_model,
                     price_per_unit=data.price_per_unit,
                     spend=data.spend,
@@ -378,6 +390,12 @@ class TrackingService:
                 invite_link=invite_link,
                 fb_pixel_id=data.fb_pixel_id,
                 fb_capi_token=data.fb_capi_token,
+                fb_campaign_enabled=data.fb_campaign_enabled,
+                fb_event_mappings_json=[
+                    item.model_dump() for item in data.fb_event_mappings
+                ],
+                fb_proxy_url=data.fb_proxy_url,
+                fb_test_event_code=data.fb_test_event_code,
                 cost_model=data.cost_model,
                 price_per_unit=data.price_per_unit,
                 spend=data.spend,
@@ -728,7 +746,23 @@ class TrackingService:
                 values["code"] = code
                 values["ref_code"] = code
 
-        for field in ("buyer_name", "ad_type", "payment_type", "invite_link", "fb_pixel_id", "fb_capi_token"):
+        if "fb_event_mappings" in values:
+            raw_mappings = values.pop("fb_event_mappings")
+            values["fb_event_mappings_json"] = [
+                item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                for item in (raw_mappings or [])
+            ]
+
+        for field in (
+            "buyer_name",
+            "ad_type",
+            "payment_type",
+            "invite_link",
+            "fb_pixel_id",
+            "fb_capi_token",
+            "fb_proxy_url",
+            "fb_test_event_code",
+        ):
             if field in values:
                 values[field] = self._normalize_optional(values[field])
 
@@ -893,6 +927,7 @@ class TrackingService:
             update={
                 "tracking_url": f"https://t.me/{username}?start={ref_code}",
                 "has_fb_capi_token": bool((link.fb_capi_token or "").strip()),
+                "has_fb_proxy": bool((link.fb_proxy_url or "").strip()),
             }
         )
 
@@ -943,5 +978,9 @@ class TrackingService:
             target_funnel_step_title=await self._target_funnel_step_title(link),
             fb_pixel_id=link.fb_pixel_id,
             has_fb_capi_token=bool((link.fb_capi_token or "").strip()),
+            fb_campaign_enabled=link.fb_campaign_enabled,
+            fb_event_mappings_json=list(link.fb_event_mappings_json or []),
+            has_fb_proxy=bool((link.fb_proxy_url or "").strip()),
+            fb_test_event_code=link.fb_test_event_code,
             total_spend=total_spend,
         )

@@ -106,6 +106,43 @@ class UtmBridgeService:
             return None
         return ref_code.strip(), params
 
+    async def update_lander_start_context(
+        self,
+        key: str,
+        *,
+        browser_context: Mapping[str, Any],
+    ) -> bool:
+        normalized_key = self.normalize_start_key(key)
+        if normalized_key is None:
+            return False
+        redis = await get_redis()
+        redis_key = self._redis_key(normalized_key)
+        raw = await redis.get(redis_key)
+        if not raw:
+            return False
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict) or not isinstance(payload.get("params"), dict):
+            return False
+
+        payload["params"].update(
+            self.normalize_facebook_context(
+                browser_context,
+                payload["params"],
+            )
+        )
+        ttl = await redis.ttl(redis_key)
+        if ttl <= 0:
+            return False
+        await redis.setex(
+            redis_key,
+            ttl,
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+        return True
+
     @classmethod
     def normalize_utm_key(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
@@ -240,6 +277,20 @@ class UtmBridgeService:
         )
         if client_ip is not None:
             context["client_ip_address"] = client_ip
+
+        event_source_url = cls._clean_context_value(
+            browser_context.get("event_source_url"),
+            2048,
+        )
+        if event_source_url is not None:
+            context["event_source_url"] = event_source_url
+
+        lander_event_seed = cls._clean_context_value(
+            browser_context.get("lander_event_seed"),
+            100,
+        )
+        if lander_event_seed is not None:
+            context["lander_event_seed"] = lander_event_seed
 
         return context
 

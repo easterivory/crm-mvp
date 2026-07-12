@@ -9,6 +9,7 @@ from app.api.v1.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.lander import (
     ProjectLanderCreate,
+    LanderRuntimeConfigOut,
     ProjectLanderOut,
     ProjectLanderUpdate,
     ProjectLanderUploadOut,
@@ -17,6 +18,18 @@ from app.services.lander_admin_service import LanderAdminService
 from app.services.lander_service import LanderService
 
 router = APIRouter(prefix="/projects/{project_id}/landers", tags=["landers"])
+
+
+@router.get("/config", response_model=LanderRuntimeConfigOut)
+async def get_lander_runtime_config(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LanderRuntimeConfigOut:
+    return await LanderAdminService(db).get_runtime_config(
+        project_id=project_id,
+        actor=current_user,
+    )
 
 
 @router.get("", response_model=list[ProjectLanderOut])

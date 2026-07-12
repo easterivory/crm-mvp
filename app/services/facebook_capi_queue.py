@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -38,6 +39,8 @@ async def enqueue_facebook_capi_event(
     event_name: str,
     custom_data: dict[str, Any] | None = None,
     event_time: int | None = None,
+    event_id: str | None = None,
+    event_source_url: str | None = None,
 ) -> str | None:
     if create_pool is None:
         logger.warning(
@@ -49,6 +52,11 @@ async def enqueue_facebook_capi_event(
     redis = None
     try:
         redis = await create_pool(_redis_settings_from_url())
+        job_suffix = (
+            hashlib.sha256(event_id.encode("utf-8")).hexdigest()[:40]
+            if event_id
+            else uuid4().hex
+        )
         job = await redis.enqueue_job(
             "send_fb_capi_event_task",
             str(lead_id),
@@ -56,7 +64,9 @@ async def enqueue_facebook_capi_event(
             event_name,
             custom_data or {},
             event_time,
-            _job_id=f"facebook-capi:{lead_id}:{event_name}:{uuid4().hex}",
+            event_id,
+            event_source_url,
+            _job_id=f"facebook-capi:{job_suffix}",
             _queue_name=JOBS_QUEUE_NAME,
             _defer_by=1,
         )

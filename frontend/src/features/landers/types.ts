@@ -24,6 +24,26 @@ export type LanderMetaEvent = {
   name: string
 }
 
+export type FacebookEventMapping = {
+  source_event: string
+  event_name: string
+  enabled: boolean
+  parameters: Record<string, string>
+}
+
+export type FacebookSourceEvent = {
+  key: string
+  label: string
+  delivery: 'browser' | 'server'
+  trigger: 'automatic' | 'funnel'
+}
+
+export type LanderRuntimeConfig = {
+  technical_domain: string
+  source_events: FacebookSourceEvent[]
+  default_event_mappings: FacebookEventMapping[]
+}
+
 export type LanderTrackingCampaign = {
   bot_id: string
   title: string
@@ -33,6 +53,9 @@ export type LanderTrackingCampaign = {
   payment_type?: string | null
   fb_pixel_id?: string | null
   fb_capi_token?: string | null
+  fb_proxy_url?: string | null
+  fb_test_event_code?: string | null
+  fb_event_mappings?: FacebookEventMapping[]
   base_conversion_rate?: number
   min_sample_size?: number
   target_funnel_step_key?: string | null
@@ -48,7 +71,9 @@ export type LanderTargetStep = {
 export type ProjectLander = {
   id: string
   project_id: string
-  domain_id: string
+  domain_id: string | null
+  domain_name: string | null
+  public_url: string
   name: string
   type: LanderType
   slug: string
@@ -59,12 +84,18 @@ export type ProjectLander = {
   custom_html_path: string | null
   auto_redirect_enabled: boolean
   is_active: boolean
+  facebook_campaign_enabled: boolean
+  fb_pixel_id: string | null
+  has_fb_capi_token: boolean
+  has_fb_proxy: boolean
+  fb_test_event_code: string | null
+  fb_event_mappings_json: FacebookEventMapping[]
   created_at: string
   updated_at: string
 }
 
 export type ProjectLanderCreatePayload = {
-  domain_id: string
+  domain_id: string | null
   name: string
   type: LanderType
   slug: string
@@ -80,6 +111,16 @@ export type ProjectLanderUpdatePayload = {
   pixels?: LanderPixel[]
   meta_events?: LanderMetaEvent[]
   auto_redirect_enabled?: boolean
+  facebook_campaign?: {
+    enabled: boolean
+    fb_pixel_id: string | null
+    fb_capi_token?: string | null
+    clear_fb_capi_token?: boolean
+    fb_proxy_url?: string | null
+    clear_fb_proxy_url?: boolean
+    fb_test_event_code: string | null
+    fb_event_mappings: FacebookEventMapping[]
+  }
 }
 
 export type ProjectLanderUploadResult = {

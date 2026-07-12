@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import Boolean, CheckConstraint, Date, Float, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import TrackingCostModel
@@ -32,6 +32,7 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_tracking_links_target_funnel_id", "target_funnel_id"),
         Index("ix_tracking_links_target_funnel_step_key", "target_funnel_step_key"),
         Index("ix_tracking_links_buyer_id", "buyer_id"),
+        Index("ix_tracking_links_fb_campaign_enabled", "fb_campaign_enabled"),
         CheckConstraint(
             "base_conversion_rate >= 0 AND base_conversion_rate <= 100",
             name="ck_tracking_links_base_conversion_rate_percent",
@@ -61,6 +62,20 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     invite_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fb_pixel_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     fb_capi_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fb_campaign_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    fb_event_mappings_json: Mapped[list[dict]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="'[]'::jsonb",
+    )
+    fb_proxy_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fb_test_event_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

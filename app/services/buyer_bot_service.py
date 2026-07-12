@@ -27,11 +27,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.constants import LeadStatusCode, RoleName, TrackingSpendSource
+from app.core.facebook_events import default_facebook_event_mappings
 from app.models.bot import Bot
 from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
+from app.models.lander import ProjectDomain, ProjectLander
 from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.models.user import User
@@ -47,6 +49,7 @@ MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
             {"text": "Мои ссылки", "callback_data": "menu:links"},
             {"text": "Создать ссылку", "callback_data": "menu:create_link"},
         ],
+        [{"text": "FB-кампания", "callback_data": "menu:fb_campaign"}],
         [
             {"text": "Ввести расход", "callback_data": "menu:spend"},
             {"text": "Статистика", "callback_data": "menu:stats"},
@@ -84,6 +87,10 @@ STATE_SPEND_AMOUNT = "spend_amount"
 STATE_SELECT_PROJECT = "select_project"
 STATE_PIXEL_ID = "pixel_id"
 STATE_PIXEL_TOKEN = "pixel_token"
+STATE_FB_CAMPAIGN_BOT = "fb_campaign_bot"
+STATE_FB_CAMPAIGN_NAME = "fb_campaign_name"
+STATE_FB_CAMPAIGN_DOMAIN = "fb_campaign_domain"
+STATE_FB_CAMPAIGN_REDIRECT = "fb_campaign_redirect"
 MAX_LINKS_IN_KEYBOARD = 30
 REF_CODE_LENGTH = 6
 
@@ -249,6 +256,7 @@ class BuyerTelegramClient:
                 "commands": [
                     {"command": "links", "description": "Мои ссылки"},
                     {"command": "create_link", "description": "Создать ссылку"},
+                    {"command": "fb_campaign", "description": "Создать Facebook-кампанию"},
                     {"command": "spend", "description": "Ввести расход"},
                     {"command": "stats", "description": "Статистика"},
                     {"command": "chart", "description": "График за 7 или 30 дней"},
@@ -344,6 +352,9 @@ class BuyerBotService:
         if command in {"/links", "Мои ссылки"}:
             await self._send_links(chat_id, buyer)
             return
+        if command in {"/fb_campaign", "FB-кампания"}:
+            await self._run_project_action(chat_id, buyer, "fb_campaign")
+            return
         if command in {"/spend", "Ввести расход"}:
             await self._run_project_action(chat_id, buyer, "spend")
             return
@@ -376,6 +387,9 @@ class BuyerBotService:
             return
         if state and state.get("state") == STATE_PIXEL_TOKEN:
             await self._finish_pixel_setup(chat_id, buyer, state, text)
+            return
+        if state and state.get("state") == STATE_FB_CAMPAIGN_NAME:
+            await self._accept_facebook_campaign_name(chat_id, buyer, state, text)
             return
 
         await self.telegram.send_message(
@@ -414,6 +428,30 @@ class BuyerBotService:
             )
             return
 
+        if data.startswith("fb_campaign_bot:"):
+            await self._select_facebook_campaign_bot(
+                chat_id,
+                buyer,
+                data.removeprefix("fb_campaign_bot:"),
+            )
+            return
+
+        if data.startswith("fb_campaign_domain:"):
+            await self._select_facebook_campaign_domain(
+                chat_id,
+                buyer,
+                data.removeprefix("fb_campaign_domain:"),
+            )
+            return
+
+        if data.startswith("fb_campaign_redirect:"):
+            await self._finish_facebook_campaign(
+                chat_id,
+                buyer,
+                data.removeprefix("fb_campaign_redirect:") == "on",
+            )
+            return
+
         if data.startswith("stats_chart:"):
             days = 30 if data.removeprefix("stats_chart:") == "30" else 7
             await self._run_project_action(chat_id, buyer, f"chart_{days}")
@@ -430,6 +468,9 @@ class BuyerBotService:
     async def _handle_menu_callback(self, chat_id: int, buyer: User, action: str) -> None:
         if action == "create_link":
             await self._run_project_action(chat_id, buyer, "create_link")
+            return
+        if action == "fb_campaign":
+            await self._run_project_action(chat_id, buyer, "fb_campaign")
             return
         if action == "links":
             await self._send_links(chat_id, buyer)
@@ -701,6 +742,358 @@ class BuyerBotService:
             reply_markup=CANCEL_INLINE_MARKUP,
         )
 
+    async def _start_facebook_campaign(
+        self,
+        chat_id: int,
+        buyer: User,
+        project_id: UUID,
+    ) -> None:
+        if not buyer.buyer_fb_pixel_id or not buyer.buyer_fb_capi_token:
+            await self.telegram.send_message(
+                chat_id,
+                "Сначала подключи Pixel ID и CAPI token. После этого кампания будет "
+                "использовать их и в браузере, и для серверных событий.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "Настроить Pixel", "callback_data": "menu:pixel"}],
+                        [{"text": "Отмена", "callback_data": "menu:cancel"}],
+                    ]
+                },
+            )
+            return
+
+        bots = await self._list_client_bots(project_id)
+        if not bots:
+            await self.telegram.send_message(
+                chat_id,
+                "В проекте нет Telegram-ботов с username.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
+            return
+        if len(bots) == 1:
+            await self._prompt_facebook_campaign_name(chat_id, project_id, bots[0])
+            return
+
+        await self._set_flow_state(
+            chat_id,
+            {"state": STATE_FB_CAMPAIGN_BOT, "project_id": str(project_id)},
+        )
+        await self.telegram.send_message(
+            chat_id,
+            "Выбери бота для Facebook-кампании:",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": f"{bot.name} (@{(bot.bot_username or '').removeprefix('@')})",
+                            "callback_data": f"fb_campaign_bot:{bot.id}",
+                        }
+                    ]
+                    for bot in bots
+                ]
+                + [[{"text": "Отмена", "callback_data": "menu:cancel"}]]
+            },
+        )
+
+    async def _select_facebook_campaign_bot(
+        self,
+        chat_id: int,
+        buyer: User,
+        raw_bot_id: str,
+    ) -> None:
+        state = await self.state_store.get(chat_id) or {}
+        project_id = self._parse_uuid(state.get("project_id"))
+        bot_id = self._parse_uuid(raw_bot_id)
+        if (
+            state.get("state") != STATE_FB_CAMPAIGN_BOT
+            or project_id is None
+            or bot_id is None
+            or not await self._buyer_has_project(buyer, project_id)
+        ):
+            await self._expired_facebook_campaign_flow(chat_id)
+            return
+        bot = next(
+            (item for item in await self._list_client_bots(project_id) if item.id == bot_id),
+            None,
+        )
+        if bot is None:
+            await self._expired_facebook_campaign_flow(chat_id)
+            return
+        await self._prompt_facebook_campaign_name(chat_id, project_id, bot)
+
+    async def _prompt_facebook_campaign_name(
+        self,
+        chat_id: int,
+        project_id: UUID,
+        bot: Bot,
+    ) -> None:
+        await self._set_flow_state(
+            chat_id,
+            {
+                "state": STATE_FB_CAMPAIGN_NAME,
+                "project_id": str(project_id),
+                "bot_id": str(bot.id),
+            },
+        )
+        await self.telegram.send_message(
+            chat_id,
+            f"Бот: @{(bot.bot_username or '').removeprefix('@')}\n"
+            "Пришли название Facebook-кампании.",
+            reply_markup=CANCEL_INLINE_MARKUP,
+        )
+
+    async def _accept_facebook_campaign_name(
+        self,
+        chat_id: int,
+        buyer: User,
+        state: dict[str, Any],
+        raw_name: str,
+    ) -> None:
+        title = self._normalize_link_title(raw_name)
+        project_id = self._parse_uuid(state.get("project_id"))
+        bot_id = self._parse_uuid(state.get("bot_id"))
+        if title is None:
+            await self.telegram.send_message(
+                chat_id,
+                "Название должно содержать хотя бы 2 символа.",
+                reply_markup=CANCEL_INLINE_MARKUP,
+            )
+            return
+        if (
+            project_id is None
+            or bot_id is None
+            or not await self._buyer_has_project(buyer, project_id)
+        ):
+            await self._expired_facebook_campaign_flow(chat_id)
+            return
+
+        domains_result = await self.db.execute(
+            select(ProjectDomain)
+            .where(
+                ProjectDomain.project_id == project_id,
+                ProjectDomain.is_active.is_(True),
+            )
+            .order_by(ProjectDomain.domain_name.asc())
+        )
+        domains = list(domains_result.scalars().all())
+        await self._set_flow_state(
+            chat_id,
+            {
+                "state": STATE_FB_CAMPAIGN_DOMAIN,
+                "project_id": str(project_id),
+                "bot_id": str(bot_id),
+                "title": title,
+            },
+        )
+        rows = [
+            [
+                {
+                    "text": f"Техдомен: {settings.LANDER_TECH_DOMAIN}",
+                    "callback_data": "fb_campaign_domain:tech",
+                }
+            ]
+        ]
+        rows.extend(
+            [[{"text": domain.domain_name, "callback_data": f"fb_campaign_domain:{domain.id}"}]]
+            for domain in domains
+        )
+        rows.append([{"text": "Отмена", "callback_data": "menu:cancel"}])
+        await self.telegram.send_message(
+            chat_id,
+            "Где открыть лендинг? Техдомен готов сразу; рекламный домен должен быть "
+            "заранее подключён в CRM и DNS.",
+            reply_markup={"inline_keyboard": rows},
+        )
+
+    async def _select_facebook_campaign_domain(
+        self,
+        chat_id: int,
+        buyer: User,
+        raw_domain_id: str,
+    ) -> None:
+        state = await self.state_store.get(chat_id) or {}
+        project_id = self._parse_uuid(state.get("project_id"))
+        if (
+            state.get("state") != STATE_FB_CAMPAIGN_DOMAIN
+            or project_id is None
+            or not await self._buyer_has_project(buyer, project_id)
+        ):
+            await self._expired_facebook_campaign_flow(chat_id)
+            return
+        domain_id: UUID | None = None
+        if raw_domain_id != "tech":
+            domain_id = self._parse_uuid(raw_domain_id)
+            if domain_id is None:
+                await self._expired_facebook_campaign_flow(chat_id)
+                return
+            domain_result = await self.db.execute(
+                select(ProjectDomain.id).where(
+                    ProjectDomain.id == domain_id,
+                    ProjectDomain.project_id == project_id,
+                    ProjectDomain.is_active.is_(True),
+                )
+            )
+            if domain_result.scalar_one_or_none() is None:
+                await self._expired_facebook_campaign_flow(chat_id)
+                return
+
+        await self._set_flow_state(
+            chat_id,
+            {
+                **{
+                    key: state[key]
+                    for key in ("project_id", "bot_id", "title")
+                    if key in state
+                },
+                "state": STATE_FB_CAMPAIGN_REDIRECT,
+                "domain_id": str(domain_id) if domain_id is not None else "tech",
+            },
+        )
+        await self.telegram.send_message(
+            chat_id,
+            "Включить автоматический переход в Telegram после открытия лендинга?",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {"text": "Да", "callback_data": "fb_campaign_redirect:on"},
+                        {"text": "Нет", "callback_data": "fb_campaign_redirect:off"},
+                    ],
+                    [{"text": "Отмена", "callback_data": "menu:cancel"}],
+                ]
+            },
+        )
+
+    async def _finish_facebook_campaign(
+        self,
+        chat_id: int,
+        buyer: User,
+        auto_redirect_enabled: bool,
+    ) -> None:
+        state = await self.state_store.get(chat_id) or {}
+        project_id = self._parse_uuid(state.get("project_id"))
+        bot_id = self._parse_uuid(state.get("bot_id"))
+        title = self._normalize_link_title(str(state.get("title") or ""))
+        raw_domain_id = str(state.get("domain_id") or "")
+        domain_id = None if raw_domain_id == "tech" else self._parse_uuid(raw_domain_id)
+        if (
+            state.get("state") != STATE_FB_CAMPAIGN_REDIRECT
+            or project_id is None
+            or bot_id is None
+            or title is None
+            or (raw_domain_id != "tech" and domain_id is None)
+            or not await self._buyer_has_project(buyer, project_id)
+        ):
+            await self._expired_facebook_campaign_flow(chat_id)
+            return
+
+        bot = next(
+            (item for item in await self._list_client_bots(project_id) if item.id == bot_id),
+            None,
+        )
+        if bot is None or not bot.bot_username:
+            await self._expired_facebook_campaign_flow(chat_id)
+            return
+
+        technical_domain = (settings.LANDER_TECH_DOMAIN or "").strip().lower().rstrip(".")
+        selected_domain_name: str | None = None
+        if domain_id is None:
+            if not technical_domain:
+                await self.telegram.send_message(
+                    chat_id,
+                    "Техдомен не настроен на сервере. Обратись к администратору CRM.",
+                    reply_markup=MAIN_MENU_INLINE_MARKUP,
+                )
+                await self._clear_flow_state(chat_id)
+                return
+        else:
+            domain_result = await self.db.execute(
+                select(ProjectDomain.domain_name).where(
+                    ProjectDomain.id == domain_id,
+                    ProjectDomain.project_id == project_id,
+                    ProjectDomain.is_active.is_(True),
+                )
+            )
+            selected_domain_name = domain_result.scalar_one_or_none()
+            if selected_domain_name is None:
+                await self._expired_facebook_campaign_flow(chat_id)
+                return
+
+        public_url: str | None = None
+        for _ in range(5):
+            code = await self._generate_unique_ref_code()
+            slug = f"fb-{code}"
+            slug_result = await self.db.execute(
+                select(ProjectLander.id).where(ProjectLander.slug == slug)
+            )
+            if slug_result.scalar_one_or_none() is not None:
+                continue
+            link = TrackingLink(
+                project_id=project_id,
+                bot_id=bot.id,
+                name=title,
+                title=title,
+                ref_code=code,
+                code=code,
+                buyer_id=buyer.id,
+                buyer_name=buyer.name,
+                ad_type="facebook",
+                invite_link=self._build_client_start_link(bot.bot_username, code),
+                created_by_user_id=buyer.id,
+                fb_pixel_id=buyer.buyer_fb_pixel_id,
+                fb_capi_token=buyer.buyer_fb_capi_token,
+                fb_campaign_enabled=True,
+                fb_event_mappings_json=default_facebook_event_mappings(),
+            )
+            try:
+                self.db.add(link)
+                await self.db.flush()
+                lander = ProjectLander(
+                    project_id=project_id,
+                    domain_id=domain_id,
+                    name=title,
+                    type="default_tg_redirect",
+                    slug=slug,
+                    tracking_link_id=link.id,
+                    pixels_json=[
+                        {"provider": "meta", "pixel_id": buyer.buyer_fb_pixel_id}
+                    ],
+                    meta_events_json=[],
+                    utm_defaults_json={"utm_source": "facebook"},
+                    auto_redirect_enabled=auto_redirect_enabled,
+                )
+                self.db.add(lander)
+                await self.db.commit()
+                host = selected_domain_name or technical_domain
+                public_url = f"https://{host}/l/{slug}"
+                break
+            except IntegrityError:
+                await self.db.rollback()
+
+        if public_url is None:
+            await self.telegram.send_message(
+                chat_id,
+                "Не удалось создать уникальную кампанию. Попробуй ещё раз.",
+                reply_markup=MAIN_MENU_INLINE_MARKUP,
+            )
+            await self._clear_flow_state(chat_id)
+            return
+
+        await self._clear_flow_state(chat_id)
+        await self.telegram.send_message(
+            chat_id,
+            f"Facebook-кампания создана:\n{title}\n\n{public_url}\n\n"
+            "В рекламе используй именно эту ссылку: внутри неё уже зашита tracking link бота.",
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
+        )
+
+    async def _expired_facebook_campaign_flow(self, chat_id: int) -> None:
+        await self._clear_flow_state(chat_id)
+        await self.telegram.send_message(
+            chat_id,
+            "Настройка кампании устарела. Запусти создание заново.",
+            reply_markup=MAIN_MENU_INLINE_MARKUP,
+        )
+
     async def _accept_pixel_id(self, chat_id: int, raw_pixel_id: str) -> None:
         try:
             pixel_id = normalize_fb_pixel_id(raw_pixel_id)
@@ -744,14 +1137,17 @@ class BuyerBotService:
         buyer.buyer_fb_capi_token = capi_token
         await self.db.execute(
             update(TrackingLink)
-            .where(TrackingLink.buyer_id == buyer.id)
+            .where(
+                TrackingLink.buyer_id == buyer.id,
+                TrackingLink.fb_campaign_enabled.is_(True),
+            )
             .values(fb_pixel_id=pixel_id, fb_capi_token=capi_token, updated_at=func.now())
         )
         await self.db.commit()
         await self._clear_flow_state(chat_id)
         await self.telegram.send_message(
             chat_id,
-            f"Facebook Pixel {pixel_id} сохранён. Все существующие ссылки обновлены; новые будут создаваться с этими данными.",
+            f"Facebook Pixel {pixel_id} сохранён. Существующие FB-кампании обновлены; новые будут создаваться с этими данными.",
             reply_markup=MAIN_MENU_INLINE_MARKUP,
         )
 
@@ -772,7 +1168,22 @@ class BuyerBotService:
                 link.bot.bot_username if link.bot else None,
                 link.code or link.ref_code,
             )
-            lines.append(f"{index}. {link.title or link.name}\n{invite_link}")
+            active_lander = next(
+                (lander for lander in link.landers if lander.is_active),
+                None,
+            )
+            if link.fb_campaign_enabled and active_lander is not None:
+                host = (
+                    active_lander.domain.domain_name
+                    if active_lander.domain is not None
+                    else settings.LANDER_TECH_DOMAIN
+                )
+                display_link = f"https://{host}/l/{active_lander.slug}"
+                kind = "FB"
+            else:
+                display_link = invite_link
+                kind = "Tracking"
+            lines.append(f"{index}. [{kind}] {link.title or link.name}\n{display_link}")
 
         await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=MAIN_MENU_INLINE_MARKUP)
 
@@ -1082,6 +1493,8 @@ class BuyerBotService:
     ) -> None:
         if action == "create_link":
             await self._start_create_link(chat_id, project_id)
+        elif action == "fb_campaign":
+            await self._start_facebook_campaign(chat_id, buyer, project_id)
         elif action == "spend":
             await self._start_spend(chat_id, buyer, project_id)
         elif action == "stats":
@@ -1262,7 +1675,10 @@ class BuyerBotService:
             filters.append(TrackingLink.project_id == project_id)
         result = await self.db.execute(
             select(TrackingLink)
-            .options(selectinload(TrackingLink.bot))
+            .options(
+                selectinload(TrackingLink.bot),
+                selectinload(TrackingLink.landers).selectinload(ProjectLander.domain),
+            )
             .where(*filters)
             .order_by(TrackingLink.created_at.desc())
             .limit(limit)

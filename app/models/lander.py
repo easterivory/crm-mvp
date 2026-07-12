@@ -37,7 +37,7 @@ class ProjectDomain(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     landers: Mapped[list[ProjectLander]] = relationship(
         "ProjectLander",
         back_populates="domain",
-        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 
@@ -62,10 +62,10 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
     )
-    domain_id: Mapped[uuid.UUID] = mapped_column(
+    domain_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("project_domains.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("project_domains.id", ondelete="SET NULL"),
+        nullable=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -108,7 +108,10 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     )
 
     project: Mapped[Project] = relationship("Project", back_populates="landers")
-    domain: Mapped[ProjectDomain] = relationship("ProjectDomain", back_populates="landers")
+    domain: Mapped[Optional[ProjectDomain]] = relationship(
+        "ProjectDomain",
+        back_populates="landers",
+    )
     tracking_link: Mapped[Optional[TrackingLink]] = relationship(
         "TrackingLink",
         back_populates="landers",

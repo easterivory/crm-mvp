@@ -7,7 +7,18 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import OrmBase
-from app.schemas.tracking import normalize_fb_capi_token, normalize_fb_pixel_id
+from app.core.facebook_events import (
+    FACEBOOK_SOURCE_EVENT_DEFINITIONS,
+    default_facebook_event_mappings,
+)
+from app.schemas.tracking import (
+    FacebookEventMapping,
+    normalize_event_mapping_models,
+    normalize_fb_capi_token,
+    normalize_fb_pixel_id,
+    normalize_fb_proxy_url,
+    normalize_fb_test_event_code,
+)
 
 
 class ProjectDomainBase(BaseModel):
@@ -74,6 +85,15 @@ class LanderTrackingCampaignCreate(BaseModel):
     payment_type: Optional[str] = Field(default=None, max_length=100)
     fb_pixel_id: Optional[str] = Field(default=None, max_length=50)
     fb_capi_token: Optional[str] = Field(default=None, max_length=4096)
+    fb_proxy_url: Optional[str] = Field(default=None, max_length=2048)
+    fb_test_event_code: Optional[str] = Field(default=None, max_length=100)
+    fb_event_mappings: list[FacebookEventMapping] = Field(
+        default_factory=lambda: [
+            FacebookEventMapping.model_validate(item)
+            for item in default_facebook_event_mappings()
+        ],
+        max_length=20,
+    )
     base_conversion_rate: float = Field(default=10.0, ge=0, le=100)
     min_sample_size: int = Field(default=500, ge=1)
     target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
@@ -88,9 +108,27 @@ class LanderTrackingCampaignCreate(BaseModel):
     def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
         return normalize_fb_capi_token(value)
 
+    @field_validator("fb_proxy_url")
+    @classmethod
+    def normalize_fb_proxy_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_proxy_url(value)
+
+    @field_validator("fb_test_event_code")
+    @classmethod
+    def normalize_fb_test_event_code(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_test_event_code(value)
+
+    @field_validator("fb_event_mappings")
+    @classmethod
+    def normalize_fb_event_mappings(
+        cls,
+        value: list[FacebookEventMapping],
+    ) -> list[FacebookEventMapping]:
+        return normalize_event_mapping_models(value)
+
 
 class ProjectLanderBase(BaseModel):
-    domain_id: UUID
+    domain_id: Optional[UUID] = None
     name: str = Field(..., min_length=1, max_length=255)
     type: str = Field(..., min_length=1, max_length=32)
     slug: str = Field(..., min_length=1, max_length=100)
@@ -143,12 +181,57 @@ class ProjectLanderUpdate(BaseModel):
     pixels: Optional[list[LanderPixel]] = Field(default=None, max_length=1)
     meta_events: Optional[list[LanderMetaEvent]] = Field(default=None, max_length=10)
     auto_redirect_enabled: Optional[bool] = None
+    facebook_campaign: Optional["LanderFacebookCampaignUpdate"] = None
+
+
+class LanderFacebookCampaignUpdate(BaseModel):
+    enabled: bool = True
+    fb_pixel_id: Optional[str] = Field(default=None, max_length=50)
+    fb_capi_token: Optional[str] = Field(default=None, max_length=4096)
+    clear_fb_capi_token: bool = False
+    fb_proxy_url: Optional[str] = Field(default=None, max_length=2048)
+    clear_fb_proxy_url: bool = False
+    fb_test_event_code: Optional[str] = Field(default=None, max_length=100)
+    fb_event_mappings: list[FacebookEventMapping] = Field(default_factory=list, max_length=20)
+
+    @field_validator("fb_pixel_id")
+    @classmethod
+    def normalize_fb_pixel_id(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_pixel_id(value)
+
+    @field_validator("fb_capi_token")
+    @classmethod
+    def normalize_fb_capi_token(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_capi_token(value)
+
+    @field_validator("fb_proxy_url")
+    @classmethod
+    def normalize_fb_proxy_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_proxy_url(value)
+
+    @field_validator("fb_test_event_code")
+    @classmethod
+    def normalize_fb_test_event_code(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_fb_test_event_code(value)
+
+    @field_validator("fb_event_mappings")
+    @classmethod
+    def normalize_fb_event_mappings(
+        cls,
+        value: list[FacebookEventMapping],
+    ) -> list[FacebookEventMapping]:
+        return normalize_event_mapping_models(value)
+
+
+ProjectLanderUpdate.model_rebuild()
 
 
 class ProjectLanderOut(OrmBase):
     id: UUID
     project_id: UUID
-    domain_id: UUID
+    domain_id: Optional[UUID]
+    domain_name: Optional[str] = None
+    public_url: str = ""
     name: str
     type: str
     slug: str
@@ -159,6 +242,12 @@ class ProjectLanderOut(OrmBase):
     custom_html_path: Optional[str] = None
     auto_redirect_enabled: bool
     is_active: bool
+    facebook_campaign_enabled: bool = False
+    fb_pixel_id: Optional[str] = None
+    has_fb_capi_token: bool = False
+    has_fb_proxy: bool = False
+    fb_test_event_code: Optional[str] = None
+    fb_event_mappings_json: list[dict] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -166,3 +255,26 @@ class ProjectLanderOut(OrmBase):
 class ProjectLanderUploadOut(BaseModel):
     success: bool
     custom_html_path: str
+
+
+class FacebookSourceEventOut(BaseModel):
+    key: str
+    label: str
+    delivery: Literal["browser", "server"]
+    trigger: Literal["automatic", "funnel"]
+
+
+class LanderRuntimeConfigOut(BaseModel):
+    technical_domain: str
+    source_events: list[FacebookSourceEventOut] = Field(
+        default_factory=lambda: [
+            FacebookSourceEventOut.model_validate(item)
+            for item in FACEBOOK_SOURCE_EVENT_DEFINITIONS
+        ]
+    )
+    default_event_mappings: list[FacebookEventMapping] = Field(
+        default_factory=lambda: [
+            FacebookEventMapping.model_validate(item)
+            for item in default_facebook_event_mappings()
+        ]
+    )

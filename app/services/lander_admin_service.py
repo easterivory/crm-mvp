@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.constants import RoleName
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
@@ -17,6 +18,7 @@ from app.schemas.lander import (
     ProjectDomainCreate,
     ProjectDomainOut,
     ProjectLanderCreate,
+    LanderRuntimeConfigOut,
     ProjectLanderOut,
     ProjectLanderUpdate,
 )
@@ -101,7 +103,16 @@ class LanderAdminService:
             .where(ProjectLander.project_id == project_id)
             .order_by(ProjectLander.created_at.desc())
         )
-        return [ProjectLanderOut.model_validate(item) for item in result.scalars().all()]
+        return [self._to_lander_out(item) for item in result.scalars().all()]
+
+    async def get_runtime_config(
+        self,
+        *,
+        project_id: UUID,
+        actor: User,
+    ) -> LanderRuntimeConfigOut:
+        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        return LanderRuntimeConfigOut(technical_domain=self._technical_domain())
 
     async def create_lander(
         self,
@@ -118,7 +129,10 @@ class LanderAdminService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Lander slug already exists",
             )
-        await self._ensure_domain_belongs_to_project(data.domain_id, project_id)
+        if data.domain_id is not None:
+            await self._ensure_domain_belongs_to_project(data.domain_id, project_id)
+        else:
+            self._technical_domain()
         tracking_link_id = data.tracking_link_id
         if tracking_link_id is not None:
             await self._ensure_tracking_link_belongs_to_project(tracking_link_id, project_id)
@@ -135,6 +149,10 @@ class LanderAdminService:
                     payment_type=campaign.payment_type,
                     fb_pixel_id=campaign.fb_pixel_id,
                     fb_capi_token=campaign.fb_capi_token,
+                    fb_campaign_enabled=True,
+                    fb_event_mappings=campaign.fb_event_mappings,
+                    fb_proxy_url=campaign.fb_proxy_url,
+                    fb_test_event_code=campaign.fb_test_event_code,
                     base_conversion_rate=campaign.base_conversion_rate,
                     min_sample_size=campaign.min_sample_size,
                     target_funnel_step_key=campaign.target_funnel_step_key,
@@ -143,6 +161,11 @@ class LanderAdminService:
             )
             tracking_link_id = tracking_link.id
 
+        campaign_pixel_id = data.campaign.fb_pixel_id if data.campaign is not None else None
+        pixels_json = [pixel.model_dump() for pixel in data.pixels]
+        if campaign_pixel_id and not pixels_json:
+            pixels_json = [{"provider": "meta", "pixel_id": campaign_pixel_id}]
+
         lander = ProjectLander(
             project_id=project_id,
             domain_id=data.domain_id,
@@ -150,15 +173,16 @@ class LanderAdminService:
             type=lander_type,
             slug=slug,
             tracking_link_id=tracking_link_id,
-            pixels_json=[pixel.model_dump() for pixel in data.pixels],
+            pixels_json=pixels_json,
             meta_events_json=[event.model_dump() for event in data.meta_events],
             utm_defaults_json=data.utm_defaults,
             auto_redirect_enabled=data.auto_redirect_enabled,
         )
         self.db.add(lander)
         await self.db.flush()
-        await self.db.refresh(lander)
-        return ProjectLanderOut.model_validate(lander)
+        return self._to_lander_out(
+            await self._get_lander(lander_id=lander.id, project_id=project_id)
+        )
 
     async def update_lander(
         self,
@@ -170,16 +194,46 @@ class LanderAdminService:
     ) -> ProjectLanderOut:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
-        values = data.model_dump(exclude_unset=True)
-        if "pixels" in values:
-            lander.pixels_json = [pixel.model_dump() for pixel in values["pixels"]]
-        if "meta_events" in values:
-            lander.meta_events_json = [event.model_dump() for event in values["meta_events"]]
-        if "auto_redirect_enabled" in values:
-            lander.auto_redirect_enabled = values["auto_redirect_enabled"]
+        if "pixels" in data.model_fields_set and data.pixels is not None:
+            lander.pixels_json = [pixel.model_dump() for pixel in data.pixels]
+        if "meta_events" in data.model_fields_set and data.meta_events is not None:
+            lander.meta_events_json = [event.model_dump() for event in data.meta_events]
+        if (
+            "auto_redirect_enabled" in data.model_fields_set
+            and data.auto_redirect_enabled is not None
+        ):
+            lander.auto_redirect_enabled = data.auto_redirect_enabled
+        if data.facebook_campaign is not None:
+            if lander.tracking_link is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Lander is not attached to a tracking link",
+                )
+            campaign = data.facebook_campaign
+            link = lander.tracking_link
+            link.fb_campaign_enabled = campaign.enabled
+            link.fb_pixel_id = campaign.fb_pixel_id
+            link.fb_event_mappings_json = [
+                mapping.model_dump() for mapping in campaign.fb_event_mappings
+            ]
+            link.fb_test_event_code = campaign.fb_test_event_code
+            if campaign.fb_capi_token is not None:
+                link.fb_capi_token = campaign.fb_capi_token
+            elif campaign.clear_fb_capi_token:
+                link.fb_capi_token = None
+            if campaign.fb_proxy_url is not None:
+                link.fb_proxy_url = campaign.fb_proxy_url
+            elif campaign.clear_fb_proxy_url:
+                link.fb_proxy_url = None
+            lander.pixels_json = (
+                [{"provider": "meta", "pixel_id": campaign.fb_pixel_id}]
+                if campaign.fb_pixel_id
+                else []
+            )
         await self.db.flush()
-        await self.db.refresh(lander)
-        return ProjectLanderOut.model_validate(lander)
+        return self._to_lander_out(
+            await self._get_lander(lander_id=lander.id, project_id=project_id)
+        )
 
     async def delete_lander(
         self,
@@ -283,7 +337,12 @@ class LanderAdminService:
 
     async def _get_lander(self, *, lander_id: UUID, project_id: UUID) -> ProjectLander:
         result = await self.db.execute(
-            select(ProjectLander).where(
+            select(ProjectLander)
+            .options(
+                selectinload(ProjectLander.domain),
+                selectinload(ProjectLander.tracking_link),
+            )
+            .where(
                 ProjectLander.id == lander_id,
                 ProjectLander.project_id == project_id,
             )
@@ -295,6 +354,43 @@ class LanderAdminService:
                 detail="Lander not found",
             )
         return lander
+
+    @staticmethod
+    def _technical_domain() -> str:
+        domain = (settings.LANDER_TECH_DOMAIN or "").strip().lower().rstrip(".")
+        if not domain:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="LANDER_TECH_DOMAIN is not configured",
+            )
+        return domain
+
+    def _to_lander_out(self, lander: ProjectLander) -> ProjectLanderOut:
+        domain_name = lander.domain.domain_name if lander.domain is not None else None
+        public_host = domain_name or self._technical_domain()
+        link = lander.tracking_link
+        return ProjectLanderOut.model_validate(lander).model_copy(
+            update={
+                "domain_name": domain_name,
+                "public_url": f"https://{public_host}/l/{lander.slug}",
+                "facebook_campaign_enabled": bool(
+                    link is not None and link.fb_campaign_enabled
+                ),
+                "fb_pixel_id": link.fb_pixel_id if link is not None else None,
+                "has_fb_capi_token": bool(
+                    link is not None and (link.fb_capi_token or "").strip()
+                ),
+                "has_fb_proxy": bool(
+                    link is not None and (link.fb_proxy_url or "").strip()
+                ),
+                "fb_test_event_code": (
+                    link.fb_test_event_code if link is not None else None
+                ),
+                "fb_event_mappings_json": list(
+                    link.fb_event_mappings_json if link is not None else []
+                ),
+            }
+        )
 
     @classmethod
     def _validate_lander_type(cls, value: str) -> str:

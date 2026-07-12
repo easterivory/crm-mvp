@@ -68,6 +68,7 @@ export type ActionConfig = {
   operator_id?: string
   partner_integration_id?: string
   event_name?: string
+  source_event?: string
   note?: string
 }
 
@@ -406,6 +407,7 @@ export function normalizeActions(raw: unknown): ActionConfig[] {
         : typeof action.fb_event_name === 'string'
           ? action.fb_event_name
           : 'Lead',
+      source_event: typeof action.source_event === 'string' ? action.source_event : '',
       note: typeof action.note === 'string' ? action.note : '',
     }
   })

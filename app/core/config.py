@@ -79,9 +79,11 @@ class Settings(BaseSettings):
 
     # Landings/domains
     LANDER_STORAGE_PATH: str = "storage/landers"
+    LANDER_TECH_DOMAIN: str = "lp.sfera.cyou"
 
     # Facebook Conversion API
     FACEBOOK_CAPI_TIMEOUT_SECONDS: float = 10.0
+    FACEBOOK_GRAPH_API_VERSION: str = "v25.0"
 
     # Database backups
     BACKUP_ENABLED: bool = False

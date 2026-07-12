@@ -63,6 +63,7 @@ from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
 from app.services.chat_user_block_service import ChatUserBlockService
 from app.services.funnel_runtime_service import FunnelRuntimeService
+from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.funnel_start_queue import enqueue_funnel_start
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
@@ -246,6 +247,15 @@ class TelegramService:
                 project_id=project_id,
                 bot_id=bot_id,
             )
+            await FacebookCampaignService(self.db).enqueue_mapped_event(
+                lead_id=lead.id,
+                source_event="contact",
+                event_reference=(
+                    f"telegram_contact:{bot_id}:"
+                    f"{(chat.current_cycle_started_at or chat.created_at).isoformat()}"
+                ),
+                extra_custom_data={"content_name": "Telegram contact"},
+            )
         await self._attach_utm_bridge_data(
             lead,
             start_payload.utm_key,
@@ -255,6 +265,16 @@ class TelegramService:
         if start_requested:
             # Make the chat and lead visible before Telegram network calls made by the funnel.
             await self.db.commit()
+            if lead is not None and should_start_runtime:
+                await FacebookCampaignService(self.db).enqueue_mapped_event(
+                    lead_id=lead.id,
+                    source_event="bot_start",
+                    event_reference=(
+                        f"telegram_start:{bot_id}:"
+                        f"{(chat.current_cycle_started_at or chat.created_at).isoformat()}"
+                    ),
+                    extra_custom_data={"content_name": "Telegram bot start"},
+                )
             queued = await enqueue_funnel_start(
                 chat.id,
                 msg.id,

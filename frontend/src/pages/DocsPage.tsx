@@ -1082,45 +1082,65 @@ export default function DocsPage() {
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <h3 className="font-semibold text-white">Как работает домен</h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                В рекламе используется ваш домен или поддомен. При создании лендинга CRM по умолчанию
-                создает отдельную campaign tracking link: у нее свой код, бот, баер и точка входа.
-                Пользователь открывает рекламный домен, а сервер CRM отдает лендинг или редирект в
-                Telegram. Техдомен нужен как DNS-цель, но пользователю обычно показывается именно
-                рекламный домен.
+                Простая tracking link продолжает вести прямо в Telegram. Facebook-кампания создаёт
+                такую же отдельную tracking link, но встраивает её start-ссылку в лендинг. Поэтому код,
+                бот, баер, UTM и выбранный шаг воронки учитываются одинаково в обоих сценариях.
+                Техдомен можно использовать напрямую: <code>https://lp.sfera.cyou/l/slug</code>.
               </p>
             </div>
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <h3 className="font-semibold text-white">DNS-подключение</h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                Для поддомена чаще всего ставится CNAME на техдомен проекта. Для корневого домена
-                нужен A/ALIAS/CNAME flattening, зависит от регистратора или Cloudflare. После DNS
-                добавьте домен в CRM и создайте лендинг со slug.
+                Для рекламного поддомена поставьте CNAME на <code>lp.sfera.cyou</code>, затем добавьте
+                этот поддомен в CRM и выберите его в кампании. Для корневого домена нужен ALIAS или
+                CNAME flattening у DNS-провайдера. CDN и reverse proxy должны сохранять исходный Host
+                и не кэшировать HTML путей <code>/l/*</code>, иначе посетители могут получить чужой
+                start-key или UTM.
               </p>
             </div>
           </div>
-          <InfoCallout title="Кампания, UTM и пиксели" tone="cyan">
-            При создании лендинга в режиме кампании CRM сама создает отдельную tracking link: заранее
-            создавать ссылку не нужно. Meta Pixel получает PageView при открытии, а при клике в Telegram
-            отправляются стандартный Lead и дополнительный TelegramOpen. UTM из рекламного URL
-            сохраняются у лида; UTM defaults применяются только к отсутствующим параметрам. Для входа не
-            со старта выберите шаг активной опубликованной воронки: ссылка хранит ключ шага, поэтому
-            сохраняет назначение при новой версии воронки с тем же ключом.
+          <InfoCallout title="Создание Facebook-кампании" tone="cyan">
+            Откройте Настройки → Лендинги и Домены → Создать лендинг → Новая кампания. Выберите бота,
+            домен, название, баера и точку входа, затем укажите Pixel / Dataset ID и CAPI access token.
+            Proxy и Test event code необязательны. Токен и proxy хранятся на сервере и не возвращаются
+            в API или интерфейс. Автопереход можно отключить, если человек должен нажать кнопку сам.
+            UTM из рекламного URL имеют приоритет, а значения UTM в форме заполняют только пропуски.
+          </InfoCallout>
+          <InfoCallout title="Карта событий Pixel и CAPI" tone="emerald">
+            <code>page_view</code> и <code>telegram_click</code> отправляются браузерным Pixel.
+            <code>bot_start</code> и <code>contact</code> отправляются серверным CAPI автоматически.
+            <code>registration</code>, подписка, отписка, sale, resale и приглашение контакта вызываются
+            CRM-действием воронки. Для каждого источника можно включить событие и заменить его на
+            стандартное или custom Meta event. У Purchase доступны value и currency; по умолчанию value
+            берётся из <code>{'{{lead.expected_start_amount}}'}</code>. CAPI выполняется через ARQ и не
+            задерживает Telegram-воронку.
+          </InfoCallout>
+          <InfoCallout title="Атрибуция и дедупликация" tone="slate">
+            Перед переходом в Telegram лендинг синхронизирует fbp, fbc, IP, User-Agent и URL источника
+            с временным start-key в Redis. После /start данные сохраняются у лида и используются CAPI.
+            Телефон, email, имя и external_id перед отправкой нормализуются и SHA256-хэшируются.
+            CRM формирует стабильный event_id, поэтому повтор задачи воркера не создаёт второй ивент.
           </InfoCallout>
           <InfoCallout title="Контракт кастомного лендинга" tone="amber">
             В ZIP обязателен index.html в корне и хотя бы одна кнопка <code>&lt;a data-crm-telegram-link href=&quot;#&quot;&gt;...&lt;/a&gt;</code>.
             CRM на лету заменяет ее href на deep-link конкретной кампании с кодом и UTM. Не вставляйте
-            вручную адрес бота и не делайте самостоятельный redirect в Telegram: тогда сохраняется
-            источник, целевой шаг и Meta-событие Lead. Ссылки на t.me текущего бота в старых ZIP пока
-            поддерживаются для обратной совместимости, но новый контракт должен использовать data-атрибут.
+            вручную адрес бота и не делайте самостоятельный redirect в Telegram. Ссылки на t.me
+            текущего бота в старых ZIP поддерживаются для обратной совместимости, но новый контракт
+            должен использовать data-атрибут.
           </InfoCallout>
           <InfoCallout title="Meta-события кастомного лендинга" tone="emerald">
-            CRM автоматически отправляет PageView при открытии, Lead и TelegramOpen при клике по Telegram-кнопке.
-            На любой кнопке или форме можно добавить <code>data-crm-meta-event=&quot;CompleteRegistration&quot;</code>:
-            событие registration/reg преобразуется в стандартный CompleteRegistration, а другое имя из латинских
-            букв, цифр и подчёркиваний отправляется как Meta custom event. Для сложной клиентской логики после
-            успешного действия вызовите <code>window.__crmTrackMetaEvent(&quot;CompleteRegistration&quot;)</code>.
-            Не отмечайте переход в Telegram как регистрацию: реальная регистрация после /start происходит уже
-            внутри Telegram и для серверного CAPI потребует отдельный Meta access token.
+            Для новой карты используйте <code>data-crm-fb-source=&quot;telegram_click&quot;</code> или вызов
+            <code>window.__crmTrackFacebookSource(&quot;registration&quot;)</code>. Старые ZIP с
+            <code>data-crm-meta-event</code> и <code>window.__crmTrackMetaEvent(...)</code> продолжают
+            работать. Не отправляйте регистрацию на обычный клик, если регистрация подтверждается уже
+            внутри Telegram.
+          </InfoCallout>
+          <InfoCallout title="Кампания из баер-бота" tone="cyan">
+            Баер сначала задаёт Pixel ID и CAPI token командой /pixel, затем запускает /fb_campaign.
+            Бот предлагает проект, конкретного Telegram-бота, название, техдомен или рекламный домен и
+            автопереход. В ответ баер получает URL лендинга, а CRM создаёт связанную tracking link с
+            базовой картой событий. Замена Pixel в баер-боте обновляет уже созданные FB-ссылки этого
+            баера и применяется к новым.
           </InfoCallout>
           <InfoCallout title="Нагрузка от 5000 открытий в час" tone="amber">
             5000 открытий в час - это примерно 1.4 запроса в секунду до учета статики и пиков.

@@ -22,8 +22,10 @@ from app.workers.broadcast_worker import process_broadcast, process_due_broadcas
 from app.workers.funnel_scheduled_worker import process_funnel_scheduled_job_task
 
 try:
+    from arq import Retry
     from arq.connections import RedisSettings
 except ImportError:  # pragma: no cover - production installs arq from requirements.txt
+    Retry = None
     RedisSettings = None
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,8 @@ async def send_fb_capi_event_task(
     event_name: str,
     custom_data: dict | None = None,
     event_time: int | None = None,
+    event_id: str | None = None,
+    event_source_url: str | None = None,
 ) -> dict:
     try:
         lead_uuid = UUID(lead_id)
@@ -150,6 +154,10 @@ async def send_fb_capi_event_task(
                 lead=lead,
                 event_time=event_time,
                 custom_data=custom_data or {},
+                event_id=event_id,
+                event_source_url=event_source_url,
+                proxy_url=link.fb_proxy_url,
+                test_event_code=link.fb_test_event_code,
             )
             return {
                 "status": "completed",
@@ -165,6 +173,9 @@ async def send_fb_capi_event_task(
             event_name,
             exc,
         )
+        job_try = int(ctx.get("job_try") or 1)
+        if exc.retryable and job_try < 3 and Retry is not None:
+            raise Retry(defer=min(30 * job_try, 90)) from exc
         return {"status": "failed", "error": str(exc)[:1000]}
     except Exception as exc:
         logger.exception(

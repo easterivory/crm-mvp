@@ -80,6 +80,57 @@ async def render_prefixed_lander(
     return await _render_lander(slug=slug, request=request, db=db)
 
 
+@router.post("/l/{slug}/bridge/{start_key}", include_in_schema=False)
+async def update_lander_bridge(
+    slug: str,
+    start_key: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        content_length = 4097
+    if content_length > 4096:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Payload is too large",
+        )
+    host = request.headers.get("host", "")
+    try:
+        lander = await LanderService(db).resolve_lander_request(host=host, slug=slug)
+    except (LanderNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lander not found",
+        ) from exc
+
+    bridge = await LanderService(db).utm_bridge.load_lander_start(start_key)
+    if bridge is None or lander.tracking_link is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bridge not found")
+    ref_code, _ = bridge
+    expected_code = (lander.tracking_link.code or lander.tracking_link.ref_code or "").strip()
+    if ref_code != expected_code:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bridge not found")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    context = _browser_context_from_request(request)
+    context.pop("event_source_url", None)
+    context["fbp"] = payload.get("_fbp") or payload.get("fbp")
+    context["fbc"] = payload.get("_fbc") or payload.get("fbc")
+    context["event_source_url"] = payload.get("event_source_url")
+    updated = await LanderService(db).utm_bridge.update_lander_start_context(
+        start_key,
+        browser_context=context,
+    )
+    return {"updated": updated}
+
+
 @router.get("/{slug}", response_class=HTMLResponse, include_in_schema=False)
 async def render_short_lander(
     slug: str,
@@ -116,7 +167,17 @@ async def _render_lander(
             detail=str(exc),
         ) from exc
 
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(
+        content=html_content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "CDN-Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Surrogate-Control": "no-store",
+            "Vary": "Host, Cookie, User-Agent",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+        },
+    )
 
 
 def _browser_context_from_request(request: Request) -> dict[str, str]:
@@ -137,4 +198,5 @@ def _browser_context_from_request(request: Request) -> dict[str, str]:
         context["client_user_agent"] = user_agent
     if client_ip:
         context["client_ip_address"] = client_ip
+    context["event_source_url"] = str(request.url)
     return context
