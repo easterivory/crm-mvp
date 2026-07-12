@@ -50,7 +50,7 @@ async def render_prefixed_lander_asset(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    host = request.headers.get("host", "")
+    host = _request_host(request)
     try:
         file_path, media_type = await LanderService(db).resolve_custom_asset(
             host=host,
@@ -96,7 +96,7 @@ async def update_lander_bridge(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Payload is too large",
         )
-    host = request.headers.get("host", "")
+    host = _request_host(request)
     try:
         lander = await LanderService(db).resolve_lander_request(host=host, slug=slug)
     except (LanderNotFoundError, ValueError) as exc:
@@ -148,7 +148,7 @@ async def _render_lander(
     request: Request,
     db: AsyncSession,
 ) -> HTMLResponse:
-    host = request.headers.get("host", "")
+    host = _request_host(request)
     try:
         html_content = await LanderService(db).render_lander_html(
             host=host,
@@ -174,7 +174,7 @@ async def _render_lander(
             "CDN-Cache-Control": "no-store",
             "Pragma": "no-cache",
             "Surrogate-Control": "no-store",
-            "Vary": "Host, Cookie, User-Agent",
+            "Vary": "Host, X-Forwarded-Host, Cookie, User-Agent",
             "X-Robots-Tag": "noindex, nofollow, noarchive",
         },
     )
@@ -198,5 +198,18 @@ def _browser_context_from_request(request: Request) -> dict[str, str]:
         context["client_user_agent"] = user_agent
     if client_ip:
         context["client_ip_address"] = client_ip
-    context["event_source_url"] = str(request.url)
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", maxsplit=1)[0].strip()
+    scheme = forwarded_proto or request.url.scheme
+    host = _request_host(request)
+    path_and_query = request.url.path
+    if request.url.query:
+        path_and_query = f"{path_and_query}?{request.url.query}"
+    context["event_source_url"] = f"{scheme}://{host}{path_and_query}"
     return context
+
+
+def _request_host(request: Request) -> str:
+    forwarded_host = request.headers.get("x-forwarded-host", "")
+    if forwarded_host:
+        return forwarded_host.split(",", maxsplit=1)[0].strip()
+    return request.headers.get("host", "")

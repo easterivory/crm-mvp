@@ -90,6 +90,17 @@ export type ProjectLander = {
   has_fb_proxy: boolean
   fb_test_event_code: string | null
   fb_event_mappings_json: FacebookEventMapping[]
+  facebook_campaign: {
+    bot_id: string
+    title: string
+    code: string
+    buyer_name: string | null
+    ad_type: string | null
+    payment_type: string | null
+    base_conversion_rate: number
+    min_sample_size: number
+    target_funnel_step_key: string | null
+  } | null
   created_at: string
   updated_at: string
 }
@@ -108,11 +119,25 @@ export type ProjectLanderCreatePayload = {
 }
 
 export type ProjectLanderUpdatePayload = {
+  domain_id?: string | null
+  name?: string
+  type?: LanderType
+  slug?: string
   pixels?: LanderPixel[]
   meta_events?: LanderMetaEvent[]
+  utm_defaults?: Record<string, string>
   auto_redirect_enabled?: boolean
   facebook_campaign?: {
     enabled: boolean
+    bot_id?: string
+    title?: string
+    code?: string
+    buyer_name?: string | null
+    ad_type?: string | null
+    payment_type?: string | null
+    base_conversion_rate?: number
+    min_sample_size?: number
+    target_funnel_step_key?: string | null
     fb_pixel_id: string | null
     fb_capi_token?: string | null
     clear_fb_capi_token?: boolean

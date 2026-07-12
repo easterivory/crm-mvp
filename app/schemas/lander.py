@@ -178,14 +178,48 @@ class ProjectLanderCreate(ProjectLanderBase):
 
 
 class ProjectLanderUpdate(BaseModel):
+    domain_id: Optional[UUID] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    type: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    slug: Optional[str] = Field(default=None, min_length=1, max_length=100)
     pixels: Optional[list[LanderPixel]] = Field(default=None, max_length=1)
     meta_events: Optional[list[LanderMetaEvent]] = Field(default=None, max_length=10)
+    utm_defaults: Optional[dict[str, str]] = None
     auto_redirect_enabled: Optional[bool] = None
     facebook_campaign: Optional["LanderFacebookCampaignUpdate"] = None
+
+    @field_validator("name", "type", "slug")
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be empty")
+        return normalized
+
+    @field_validator("utm_defaults")
+    @classmethod
+    def normalize_utm_defaults(
+        cls,
+        value: Optional[dict[str, str]],
+    ) -> Optional[dict[str, str]]:
+        if value is None:
+            return None
+        return ProjectLanderBase.normalize_utm_defaults(value)
 
 
 class LanderFacebookCampaignUpdate(BaseModel):
     enabled: bool = True
+    bot_id: Optional[UUID] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    code: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    buyer_name: Optional[str] = Field(default=None, max_length=255)
+    ad_type: Optional[str] = Field(default=None, max_length=100)
+    payment_type: Optional[str] = Field(default=None, max_length=100)
+    base_conversion_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    min_sample_size: Optional[int] = Field(default=None, ge=1)
+    target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
     fb_pixel_id: Optional[str] = Field(default=None, max_length=50)
     fb_capi_token: Optional[str] = Field(default=None, max_length=4096)
     clear_fb_capi_token: bool = False
@@ -222,8 +256,42 @@ class LanderFacebookCampaignUpdate(BaseModel):
     ) -> list[FacebookEventMapping]:
         return normalize_event_mapping_models(value)
 
+    @field_validator(
+        "buyer_name",
+        "ad_type",
+        "payment_type",
+        "target_funnel_step_key",
+    )
+    @classmethod
+    def normalize_campaign_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @field_validator("title", "code")
+    @classmethod
+    def normalize_required_campaign_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be empty")
+        return normalized
+
 
 ProjectLanderUpdate.model_rebuild()
+
+
+class LanderFacebookCampaignOut(BaseModel):
+    bot_id: UUID
+    title: str
+    code: str
+    buyer_name: Optional[str] = None
+    ad_type: Optional[str] = None
+    payment_type: Optional[str] = None
+    base_conversion_rate: float
+    min_sample_size: int
+    target_funnel_step_key: Optional[str] = None
 
 
 class ProjectLanderOut(OrmBase):
@@ -248,6 +316,7 @@ class ProjectLanderOut(OrmBase):
     has_fb_proxy: bool = False
     fb_test_event_code: Optional[str] = None
     fb_event_mappings_json: list[dict] = Field(default_factory=list)
+    facebook_campaign: Optional[LanderFacebookCampaignOut] = None
     created_at: datetime
     updated_at: datetime
 

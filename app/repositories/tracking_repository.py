@@ -5,12 +5,13 @@ Tracking links are project-scoped attribution sources for Telegram /start
 payloads. ref_code is kept for backward compatibility with the existing
 webhook path; code is the v1 canonical field and is synchronized by service.
 """
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import delete, distinct, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
 from app.core.constants import LeadStatusCode, MessageType, SenderType
@@ -286,6 +287,40 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
             .order_by(TrackingLink.created_at.desc())
         )
         return result.all()
+
+
+class TrackingEventRepository(BaseRepository[TrackingEvent]):
+    model = TrackingEvent
+
+    async def increment_lander_click(
+        self,
+        *,
+        project_id: UUID,
+        tracking_link_id: UUID,
+        occurred_at: datetime | None = None,
+    ) -> None:
+        timestamp = occurred_at or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        bucket_start = timestamp.astimezone(timezone.utc).replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        statement = pg_insert(TrackingEvent).values(
+            project_id=project_id,
+            tracking_link_id=tracking_link_id,
+            bucket_start=bucket_start,
+            created_at=bucket_start,
+            clicks=1,
+            impressions=0,
+        )
+        await self.db.execute(
+            statement.on_conflict_do_update(
+                constraint="uq_tracking_events_link_bucket",
+                set_={"clicks": TrackingEvent.clicks + statement.excluded.clicks},
+            )
+        )
 
 
 class TrackingSpendRepository(BaseRepository[TrackingSpend]):

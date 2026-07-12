@@ -4,7 +4,7 @@ import re
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,6 +15,7 @@ from app.models.tracking import TrackingLink
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.lander import (
+    LanderFacebookCampaignOut,
     ProjectDomainCreate,
     ProjectDomainOut,
     ProjectLanderCreate,
@@ -44,7 +45,10 @@ class LanderAdminService:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         result = await self.db.execute(
             select(ProjectDomain)
-            .where(ProjectDomain.project_id == project_id)
+            .where(
+                ProjectDomain.project_id == project_id,
+                ProjectDomain.is_active.is_(True),
+            )
             .order_by(ProjectDomain.created_at.desc())
         )
         return [ProjectDomainOut.model_validate(item) for item in result.scalars().all()]
@@ -58,11 +62,20 @@ class LanderAdminService:
     ) -> ProjectDomainOut:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         domain_name = data.domain_name
-        if await self._domain_exists(domain_name):
+        existing_result = await self.db.execute(
+            select(ProjectDomain).where(ProjectDomain.domain_name == domain_name)
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing is not None and existing.project_id != project_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Domain already exists",
             )
+        if existing is not None:
+            existing.is_active = True
+            await self.db.flush()
+            await self.db.refresh(existing)
+            return ProjectDomainOut.model_validate(existing)
 
         domain = ProjectDomain(project_id=project_id, domain_name=domain_name)
         self.db.add(domain)
@@ -79,16 +92,28 @@ class LanderAdminService:
     ) -> None:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         result = await self.db.execute(
-            delete(ProjectDomain).where(
+            select(ProjectDomain).where(
                 ProjectDomain.id == domain_id,
                 ProjectDomain.project_id == project_id,
+                ProjectDomain.is_active.is_(True),
             )
         )
-        if result.rowcount == 0:
+        domain = result.scalar_one_or_none()
+        if domain is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Domain not found",
             )
+        await self.db.execute(
+            update(ProjectLander)
+            .where(
+                ProjectLander.project_id == project_id,
+                ProjectLander.domain_id == domain.id,
+            )
+            .values(domain_id=None, updated_at=func.now())
+        )
+        domain.is_active = False
+        await self.db.flush()
 
     async def list_landers(
         self,
@@ -99,7 +124,10 @@ class LanderAdminService:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         result = await self.db.execute(
             select(ProjectLander)
-            .options(selectinload(ProjectLander.domain), selectinload(ProjectLander.tracking_link))
+            .options(
+                selectinload(ProjectLander.domain),
+                selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
+            )
             .where(ProjectLander.project_id == project_id)
             .order_by(ProjectLander.created_at.desc())
         )
@@ -194,10 +222,36 @@ class LanderAdminService:
     ) -> ProjectLanderOut:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
+        if "domain_id" in data.model_fields_set:
+            if data.domain_id is not None:
+                await self._ensure_domain_belongs_to_project(data.domain_id, project_id)
+            else:
+                self._technical_domain()
+            lander.domain_id = data.domain_id
+        if "name" in data.model_fields_set and data.name is not None:
+            lander.name = data.name
+        if "slug" in data.model_fields_set and data.slug is not None:
+            slug = self._validate_slug(data.slug)
+            if await self._slug_exists(slug, exclude_id=lander.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Lander slug already exists",
+                )
+            lander.slug = slug
+        if "type" in data.model_fields_set and data.type is not None:
+            lander_type = self._validate_lander_type(data.type)
+            if lander_type == "custom_upload" and not lander.custom_html_path:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Upload a ZIP archive before enabling custom_upload",
+                )
+            lander.type = lander_type
         if "pixels" in data.model_fields_set and data.pixels is not None:
             lander.pixels_json = [pixel.model_dump() for pixel in data.pixels]
         if "meta_events" in data.model_fields_set and data.meta_events is not None:
             lander.meta_events_json = [event.model_dump() for event in data.meta_events]
+        if "utm_defaults" in data.model_fields_set and data.utm_defaults is not None:
+            lander.utm_defaults_json = data.utm_defaults
         if (
             "auto_redirect_enabled" in data.model_fields_set
             and data.auto_redirect_enabled is not None
@@ -211,6 +265,63 @@ class LanderAdminService:
                 )
             campaign = data.facebook_campaign
             link = lander.tracking_link
+            tracking_service = TrackingService(self.db)
+            bot = link.bot
+            bot_changed = False
+            if "bot_id" in campaign.model_fields_set and campaign.bot_id is not None:
+                bot = await tracking_service.bot_service.ensure_bot_username(
+                    bot_id=campaign.bot_id,
+                    project_id=project_id,
+                )
+                bot_changed = bot.id != link.bot_id
+                link.bot_id = bot.id
+                link.bot = bot
+                link.target_step_id = None
+            if "title" in campaign.model_fields_set and campaign.title is not None:
+                link.title = campaign.title
+                link.name = campaign.title
+            code_changed = False
+            if "code" in campaign.model_fields_set and campaign.code is not None:
+                code = tracking_service._normalize_code(campaign.code, required=True)
+                if code != link.code:
+                    await tracking_service._ensure_code_available(code, exclude_id=link.id)
+                    link.code = code
+                    link.ref_code = code
+                    code_changed = True
+            if "buyer_name" in campaign.model_fields_set:
+                link.buyer_name = tracking_service._normalize_optional(campaign.buyer_name)
+            if "ad_type" in campaign.model_fields_set:
+                link.ad_type = tracking_service._normalize_optional(campaign.ad_type)
+            if "payment_type" in campaign.model_fields_set:
+                link.payment_type = tracking_service._normalize_optional(campaign.payment_type)
+            if (
+                "base_conversion_rate" in campaign.model_fields_set
+                and campaign.base_conversion_rate is not None
+            ):
+                link.base_conversion_rate = campaign.base_conversion_rate
+            if (
+                "min_sample_size" in campaign.model_fields_set
+                and campaign.min_sample_size is not None
+            ):
+                link.min_sample_size = campaign.min_sample_size
+            if "target_funnel_step_key" in campaign.model_fields_set:
+                target_funnel_id, target_step_key = (
+                    await tracking_service._resolve_target_funnel_step(
+                        bot_id=link.bot_id,
+                        project_id=project_id,
+                        target_funnel_step_key=campaign.target_funnel_step_key,
+                    )
+                )
+                link.target_funnel_id = target_funnel_id
+                link.target_funnel_step_key = target_step_key
+            elif bot_changed:
+                link.target_funnel_id = None
+                link.target_funnel_step_key = None
+            if bot is not None and (bot_changed or code_changed):
+                link.invite_link = tracking_service._build_invite_link(
+                    bot.bot_username,
+                    link.code,
+                )
             link.fb_campaign_enabled = campaign.enabled
             link.fb_pixel_id = campaign.fb_pixel_id
             link.fb_event_mappings_json = [
@@ -263,12 +374,7 @@ class LanderAdminService:
         actor: User,
     ) -> None:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
-        lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
-        if lander.type != "custom_upload":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="ZIP upload is available only for custom_upload landers",
-            )
+        await self._get_lander(lander_id=lander_id, project_id=project_id)
 
     async def _ensure_admin_project_access(
         self,
@@ -289,16 +395,11 @@ class LanderAdminService:
                 detail="Project not found",
             )
 
-    async def _domain_exists(self, domain_name: str) -> bool:
-        result = await self.db.execute(
-            select(func.count(ProjectDomain.id)).where(ProjectDomain.domain_name == domain_name)
-        )
-        return result.scalar_one() > 0
-
-    async def _slug_exists(self, slug: str) -> bool:
-        result = await self.db.execute(
-            select(func.count(ProjectLander.id)).where(ProjectLander.slug == slug)
-        )
+    async def _slug_exists(self, slug: str, exclude_id: UUID | None = None) -> bool:
+        statement = select(func.count(ProjectLander.id)).where(ProjectLander.slug == slug)
+        if exclude_id is not None:
+            statement = statement.where(ProjectLander.id != exclude_id)
+        result = await self.db.execute(statement)
         return result.scalar_one() > 0
 
     async def _ensure_domain_belongs_to_project(
@@ -310,6 +411,7 @@ class LanderAdminService:
             select(ProjectDomain.id).where(
                 ProjectDomain.id == domain_id,
                 ProjectDomain.project_id == project_id,
+                ProjectDomain.is_active.is_(True),
             )
         )
         if result.scalar_one_or_none() is None:
@@ -340,8 +442,9 @@ class LanderAdminService:
             select(ProjectLander)
             .options(
                 selectinload(ProjectLander.domain),
-                selectinload(ProjectLander.tracking_link),
+                selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
             )
+            .execution_options(populate_existing=True)
             .where(
                 ProjectLander.id == lander_id,
                 ProjectLander.project_id == project_id,
@@ -388,6 +491,21 @@ class LanderAdminService:
                 ),
                 "fb_event_mappings_json": list(
                     link.fb_event_mappings_json if link is not None else []
+                ),
+                "facebook_campaign": (
+                    LanderFacebookCampaignOut(
+                        bot_id=link.bot_id,
+                        title=link.title,
+                        code=link.code,
+                        buyer_name=link.buyer_name,
+                        ad_type=link.ad_type,
+                        payment_type=link.payment_type,
+                        base_conversion_rate=link.base_conversion_rate,
+                        min_sample_size=link.min_sample_size,
+                        target_funnel_step_key=link.target_funnel_step_key,
+                    )
+                    if link is not None
+                    else None
                 ),
             }
         )

@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.facebook_events import normalize_facebook_event_mappings
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
+from app.repositories.tracking_repository import TrackingEventRepository
 from app.services.utm_bridge_service import QueryParamInput, UtmBridgeService
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class LanderService:
         self.db = db
         self.storage_root = Path(storage_root or settings.LANDER_STORAGE_PATH)
         self.utm_bridge = utm_bridge or UtmBridgeService()
+        self.tracking_event_repo = TrackingEventRepository(db)
 
     async def save_custom_lander_zip(
         self,
@@ -63,8 +65,6 @@ class LanderService:
         project_id: UUID,
     ) -> str:
         lander = await self._get_lander_for_project(lander_id, project_id)
-        if lander.type != self.CUSTOM_UPLOAD:
-            raise ValueError("ZIP-архив можно загрузить только для custom_upload лендинга")
 
         slug = self._safe_slug(lander.slug)
         self.storage_root.mkdir(parents=True, exist_ok=True)
@@ -143,14 +143,38 @@ class LanderService:
         )
 
         if lander.type == self.DEFAULT_TG_REDIRECT:
-            return self._render_default_redirect_html(lander, telegram_url, pixel_markup)
-        if lander.type == self.CUSTOM_UPLOAD:
+            rendered_html = self._render_default_redirect_html(
+                lander,
+                telegram_url,
+                pixel_markup,
+            )
+        elif lander.type == self.CUSTOM_UPLOAD:
             html_body = await self._read_custom_index_html(lander)
             html_body = self._inject_base_href(html_body, f"/l/{lander.slug}/")
             html_body = self._inject_head_markup(html_body, pixel_markup)
-            return self.replace_bot_links(html_body, telegram_url, lander)
+            rendered_html = self.replace_bot_links(html_body, telegram_url, lander)
+        else:
+            raise ValueError("Недопустимый тип лендинга")
 
-        raise ValueError("Недопустимый тип лендинга")
+        await self._record_lander_click(lander)
+        return rendered_html
+
+    async def _record_lander_click(self, lander: ProjectLander) -> None:
+        tracking_link = lander.tracking_link
+        if tracking_link is None:
+            return
+        try:
+            async with self.db.begin_nested():
+                await self.tracking_event_repo.increment_lander_click(
+                    project_id=lander.project_id,
+                    tracking_link_id=tracking_link.id,
+                )
+        except Exception:
+            logger.exception(
+                "Could not record lander click lander_id=%s tracking_link_id=%s",
+                lander.id,
+                tracking_link.id,
+            )
 
     async def resolve_custom_asset(
         self,

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Date, Float, Text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -227,9 +227,15 @@ class TrackingEvent(Base, UUIDPrimaryKey, TimestampMixin):
 
     __tablename__ = "tracking_events"
     __table_args__ = (
+        UniqueConstraint(
+            "tracking_link_id",
+            "bucket_start",
+            name="uq_tracking_events_link_bucket",
+        ),
         Index("ix_tracking_events_project_id", "project_id"),
         Index("ix_tracking_events_tracking_link_id", "tracking_link_id"),
         Index("ix_tracking_events_link_created_at", "tracking_link_id", "created_at"),
+        Index("ix_tracking_events_bucket_start", "bucket_start"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -237,6 +243,10 @@ class TrackingEvent(Base, UUIDPrimaryKey, TimestampMixin):
     )
     tracking_link_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tracking_links.id"), nullable=False
+    )
+    bucket_start: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     impressions: Mapped[int] = mapped_column(

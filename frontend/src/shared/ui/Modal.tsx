@@ -15,6 +15,7 @@ const responsiveMaxWidthClassNames: Record<string, string> = {
   'max-w-lg': 'md:max-w-lg',
   'max-w-xl': 'md:max-w-xl',
   'max-w-2xl': 'md:max-w-2xl',
+  'max-w-4xl': 'md:max-w-4xl',
   'max-w-6xl': 'md:max-w-6xl',
 }
 

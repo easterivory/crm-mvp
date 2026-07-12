@@ -31,7 +31,11 @@ The technical domain can be used directly:
 https://lp.sfera.cyou/l/<slug>
 ```
 
-A custom advertising subdomain should use a CNAME to `lp.sfera.cyou`. Add that exact hostname under CRM domain parking and select it when creating the campaign.
+For BunnyCDN, keep `lp.sfera.cyou` as the Pull Zone origin, add each advertising
+subdomain under Pull Zone `Hostnames`, point its DNS CNAME to the Bunny-provided
+`*.b-cdn.net` hostname, and enable SSL. Without a CDN, a subdomain may point its
+CNAME directly to `lp.sfera.cyou`. In both cases, add the advertising hostname
+under CRM domain parking and select it in the campaign editor.
 
 The CDN or reverse proxy must:
 

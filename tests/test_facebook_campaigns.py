@@ -1,8 +1,13 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
+from sqlalchemy.dialects import postgresql
+
 from app.api.spa import _is_technical_domain
+from app.api.v1.routers.public_landers import _request_host
 from app.core.facebook_events import (
     default_facebook_event_mappings,
     facebook_mapping_for_source,
@@ -10,8 +15,12 @@ from app.core.facebook_events import (
     normalize_facebook_source_event,
 )
 from app.models.lander import ProjectDomain
+from app.models.tracking import TrackingEvent
+from app.repositories.tracking_repository import TrackingEventRepository
+from app.schemas.lander import ProjectDomainCreate, ProjectLanderUpdate
 from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.facebook_capi_service import FacebookCAPIService
+from app.services.lander_admin_service import LanderAdminService
 from app.services.lander_service import LanderService
 
 
@@ -64,6 +73,81 @@ class FacebookEventMappingTests(unittest.TestCase):
         request = SimpleNamespace(headers={"host": "lp.sfera.cyou:443"})
 
         self.assertIs(_is_technical_domain(request), True)
+
+    def test_forwarded_host_is_used_for_parked_domain_resolution(self) -> None:
+        request = SimpleNamespace(
+            headers={
+                "host": "lp.sfera.cyou",
+                "x-forwarded-host": "promo.example.com, lp.sfera.cyou",
+            }
+        )
+
+        self.assertEqual(_request_host(request), "promo.example.com")
+
+    def test_explicit_null_domain_is_preserved_by_update_schema(self) -> None:
+        update = ProjectLanderUpdate(domain_id=None)
+
+        self.assertIn("domain_id", update.model_fields_set)
+        self.assertIsNone(update.domain_id)
+
+    def test_tracking_event_has_unique_hour_bucket(self) -> None:
+        constraint_names = {
+            constraint.name for constraint in TrackingEvent.__table__.constraints
+        }
+
+        self.assertIn("uq_tracking_events_link_bucket", constraint_names)
+
+
+class LanderPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_readding_soft_deleted_domain_reactivates_same_record(self) -> None:
+        project_id = uuid4()
+        now = datetime.now(timezone.utc)
+        domain = ProjectDomain(
+            id=uuid4(),
+            project_id=project_id,
+            domain_name="promo.example.com",
+            is_active=False,
+            created_at=now,
+            updated_at=now,
+        )
+        result = SimpleNamespace(scalar_one_or_none=lambda: domain)
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=result),
+            flush=AsyncMock(),
+            refresh=AsyncMock(),
+        )
+        service = LanderAdminService(db)
+        service._ensure_admin_project_access = AsyncMock()
+
+        created = await service.create_domain(
+            project_id=project_id,
+            data=ProjectDomainCreate(domain_name="promo.example.com"),
+            actor=SimpleNamespace(),
+        )
+
+        self.assertEqual(created.id, domain.id)
+        self.assertIs(domain.is_active, True)
+        db.flush.assert_awaited_once()
+
+    async def test_click_increment_is_atomic_and_uses_utc_hour(self) -> None:
+        db = SimpleNamespace(execute=AsyncMock())
+        repository = TrackingEventRepository(db)
+
+        await repository.increment_lander_click(
+            project_id=uuid4(),
+            tracking_link_id=uuid4(),
+            occurred_at=datetime(2026, 7, 12, 14, 37, 18, tzinfo=timezone.utc),
+        )
+
+        statement = db.execute.await_args.args[0]
+        compiled = statement.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        self.assertIn("ON CONFLICT ON CONSTRAINT uq_tracking_events_link_bucket", sql)
+        self.assertIn("tracking_events.clicks + excluded.clicks", sql)
+        self.assertIn(
+            datetime(2026, 7, 12, 14, 0, tzinfo=timezone.utc),
+            compiled.params.values(),
+        )
 
 
 class FacebookCampaignParameterTests(unittest.TestCase):

@@ -83,6 +83,38 @@ type LanderForm = {
   zipFile: File | null
 }
 
+type LanderEditForm = {
+  name: string
+  domainId: string
+  slug: string
+  type: LanderType
+  botId: string
+  campaignTitle: string
+  campaignCode: string
+  buyerName: string
+  adType: string
+  paymentType: string
+  baseConversionRate: string
+  minSampleSize: string
+  targetStepKey: string
+  fbCampaignEnabled: boolean
+  metaPixelId: string
+  metaEvents: string
+  capiToken: string
+  proxyUrl: string
+  testEventCode: string
+  eventMappings: FacebookEventMapping[]
+  clearCapiToken: boolean
+  clearProxyUrl: boolean
+  autoRedirectEnabled: boolean
+  utmSource: string
+  utmMedium: string
+  utmCampaign: string
+  utmTerm: string
+  utmContent: string
+  zipFile: File | null
+}
+
 const emptyLanderForm: LanderForm = {
   name: '',
   domainId: '',
@@ -326,6 +358,8 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const [bots, setBots] = useState<Bot[]>([])
   const [targetSteps, setTargetSteps] = useState<LanderTargetStep[]>([])
   const [isTargetStepsLoading, setIsTargetStepsLoading] = useState(false)
+  const [editingTargetSteps, setEditingTargetSteps] = useState<LanderTargetStep[]>([])
+  const [isEditingTargetStepsLoading, setIsEditingTargetStepsLoading] = useState(false)
   const [newDomainName, setNewDomainName] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isAddingDomain, setIsAddingDomain] = useState(false)
@@ -334,15 +368,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isSavingLander, setIsSavingLander] = useState(false)
   const [editingLander, setEditingLander] = useState<ProjectLander | null>(null)
-  const [editingMetaPixelId, setEditingMetaPixelId] = useState('')
-  const [editingMetaEvents, setEditingMetaEvents] = useState('')
-  const [editingCapiToken, setEditingCapiToken] = useState('')
-  const [editingProxyUrl, setEditingProxyUrl] = useState('')
-  const [editingTestEventCode, setEditingTestEventCode] = useState('')
-  const [editingEventMappings, setEditingEventMappings] = useState<FacebookEventMapping[]>([])
-  const [clearEditingCapiToken, setClearEditingCapiToken] = useState(false)
-  const [clearEditingProxyUrl, setClearEditingProxyUrl] = useState(false)
-  const [editingAutoRedirectEnabled, setEditingAutoRedirectEnabled] = useState(true)
+  const [editForm, setEditForm] = useState<LanderEditForm | null>(null)
   const [isUpdatingLander, setIsUpdatingLander] = useState(false)
   const [banner, setBanner] = useState<Banner | null>(null)
   const [copiedValue, setCopiedValue] = useState('')
@@ -440,6 +466,45 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     }
   }, [form.campaignBotId, form.trackingMode, isModalOpen, projectId])
 
+  useEffect(() => {
+    const botId = editForm?.botId
+    if (!editingLander || !projectId || !botId) {
+      setEditingTargetSteps([])
+      setIsEditingTargetStepsLoading(false)
+      return
+    }
+
+    let isMounted = true
+    setIsEditingTargetStepsLoading(true)
+    void fetchLanderTargetSteps(projectId, botId)
+      .then((items) => {
+        if (!isMounted) {
+          return
+        }
+        setEditingTargetSteps(items)
+        setEditForm((current) => {
+          if (!current?.targetStepKey || items.some((item) => item.key === current.targetStepKey)) {
+            return current
+          }
+          return { ...current, targetStepKey: '' }
+        })
+      })
+      .catch(() => {
+        if (isMounted) {
+          setEditingTargetSteps([])
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsEditingTargetStepsLoading(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [editForm?.botId, editingLander, projectId])
+
   const openCreateModal = () => {
     resetForm()
     setBanner(null)
@@ -448,51 +513,125 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
 
   const openEditLander = (lander: ProjectLander) => {
     const metaPixel = lander.pixels_json.find((pixel) => pixel.provider === 'meta')
+    const campaign = lander.facebook_campaign
+    const link = lander.tracking_link_id ? trackingLinkById.get(lander.tracking_link_id) : null
     setEditingLander(lander)
-    setEditingMetaPixelId(lander.fb_pixel_id ?? metaPixel?.pixel_id ?? '')
-    setEditingMetaEvents((lander.meta_events_json ?? []).map((event) => event.name).join(', '))
-    setEditingAutoRedirectEnabled(lander.auto_redirect_enabled)
-    setEditingCapiToken('')
-    setEditingProxyUrl('')
-    setEditingTestEventCode(lander.fb_test_event_code ?? '')
-    setEditingEventMappings(cloneEventMappings(
-      lander.fb_event_mappings_json.length > 0
-        ? lander.fb_event_mappings_json
-        : runtimeConfig?.default_event_mappings ?? [],
-    ))
-    setClearEditingCapiToken(false)
-    setClearEditingProxyUrl(false)
+    setEditForm({
+      name: lander.name,
+      domainId: lander.domain_id ?? '',
+      slug: lander.slug,
+      type: lander.type,
+      botId: campaign?.bot_id ?? bots[0]?.id ?? '',
+      campaignTitle: campaign?.title ?? link?.title ?? lander.name,
+      campaignCode: campaign?.code ?? link?.code ?? '',
+      buyerName: campaign?.buyer_name ?? '',
+      adType: campaign?.ad_type ?? '',
+      paymentType: campaign?.payment_type ?? '',
+      baseConversionRate: String(campaign?.base_conversion_rate ?? 10),
+      minSampleSize: String(campaign?.min_sample_size ?? 500),
+      targetStepKey: campaign?.target_funnel_step_key ?? '',
+      fbCampaignEnabled: lander.facebook_campaign_enabled,
+      metaPixelId: lander.fb_pixel_id ?? metaPixel?.pixel_id ?? '',
+      metaEvents: (lander.meta_events_json ?? []).map((event) => event.name).join(', '),
+      capiToken: '',
+      proxyUrl: '',
+      testEventCode: lander.fb_test_event_code ?? '',
+      eventMappings: cloneEventMappings(
+        lander.fb_event_mappings_json.length > 0
+          ? lander.fb_event_mappings_json
+          : runtimeConfig?.default_event_mappings ?? [],
+      ),
+      clearCapiToken: false,
+      clearProxyUrl: false,
+      autoRedirectEnabled: lander.auto_redirect_enabled,
+      utmSource: lander.utm_defaults_json.utm_source ?? '',
+      utmMedium: lander.utm_defaults_json.utm_medium ?? '',
+      utmCampaign: lander.utm_defaults_json.utm_campaign ?? '',
+      utmTerm: lander.utm_defaults_json.utm_term ?? '',
+      utmContent: lander.utm_defaults_json.utm_content ?? '',
+      zipFile: null,
+    })
     setBanner(null)
   }
 
   const handleUpdateLander = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!projectId || !editingLander || isUpdatingLander) {
+    if (!projectId || !editingLander || !editForm || isUpdatingLander) {
+      return
+    }
+    const name = editForm.name.trim()
+    const title = editForm.campaignTitle.trim()
+    const code = editForm.campaignCode.trim()
+    const slug = editForm.slug.trim()
+    const baseConversionRate = Number(editForm.baseConversionRate)
+    const minSampleSize = Number(editForm.minSampleSize)
+    if (!name || !title || !code || !editForm.botId || !isValidLanderSlug(slug)) {
+      setBanner({ tone: 'error', message: 'Заполните название, бота, код и корректный slug.' })
+      return
+    }
+    if (!Number.isFinite(baseConversionRate) || baseConversionRate < 0 || baseConversionRate > 100) {
+      setBanner({ tone: 'error', message: 'Базовая конверсия должна быть от 0 до 100%.' })
+      return
+    }
+    if (!Number.isInteger(minSampleSize) || minSampleSize < 1) {
+      setBanner({ tone: 'error', message: 'Минимальная выборка должна быть целым числом от 1.' })
+      return
+    }
+    if (
+      editForm.type === 'custom_upload' &&
+      !editForm.zipFile &&
+      !editingLander.custom_html_path
+    ) {
+      setBanner({ tone: 'error', message: 'Для кастомного лендинга загрузите ZIP-архив.' })
       return
     }
     setIsUpdatingLander(true)
     setBanner(null)
     try {
+      if (editForm.zipFile) {
+        await uploadProjectLanderZip(projectId, editingLander.id, editForm.zipFile)
+      }
       await updateProjectLander(projectId, editingLander.id, {
-        pixels: editingMetaPixelId.trim()
-          ? [{ provider: 'meta', pixel_id: editingMetaPixelId.trim() }]
+        domain_id: editForm.domainId || null,
+        name,
+        type: editForm.type,
+        slug,
+        pixels: editForm.metaPixelId.trim()
+          ? [{ provider: 'meta', pixel_id: editForm.metaPixelId.trim() }]
           : [],
-        meta_events: buildMetaEvents(editingMetaEvents),
-        auto_redirect_enabled: editingAutoRedirectEnabled,
+        meta_events: buildMetaEvents(editForm.metaEvents),
+        utm_defaults: {
+          ...(editForm.utmSource.trim() ? { utm_source: editForm.utmSource.trim() } : {}),
+          ...(editForm.utmMedium.trim() ? { utm_medium: editForm.utmMedium.trim() } : {}),
+          ...(editForm.utmCampaign.trim() ? { utm_campaign: editForm.utmCampaign.trim() } : {}),
+          ...(editForm.utmTerm.trim() ? { utm_term: editForm.utmTerm.trim() } : {}),
+          ...(editForm.utmContent.trim() ? { utm_content: editForm.utmContent.trim() } : {}),
+        },
+        auto_redirect_enabled: editForm.autoRedirectEnabled,
         facebook_campaign: {
-          enabled: true,
-          fb_pixel_id: editingMetaPixelId.trim() || null,
-          ...(editingCapiToken.trim() ? { fb_capi_token: editingCapiToken.trim() } : {}),
-          clear_fb_capi_token: clearEditingCapiToken,
-          ...(editingProxyUrl.trim() ? { fb_proxy_url: editingProxyUrl.trim() } : {}),
-          clear_fb_proxy_url: clearEditingProxyUrl,
-          fb_test_event_code: editingTestEventCode.trim() || null,
-          fb_event_mappings: editingEventMappings,
+          enabled: editForm.fbCampaignEnabled,
+          bot_id: editForm.botId,
+          title,
+          code,
+          buyer_name: editForm.buyerName.trim() || null,
+          ad_type: editForm.adType.trim() || null,
+          payment_type: editForm.paymentType.trim() || null,
+          base_conversion_rate: baseConversionRate,
+          min_sample_size: minSampleSize,
+          target_funnel_step_key: editForm.targetStepKey || null,
+          fb_pixel_id: editForm.metaPixelId.trim() || null,
+          ...(editForm.capiToken.trim() ? { fb_capi_token: editForm.capiToken.trim() } : {}),
+          clear_fb_capi_token: editForm.clearCapiToken,
+          ...(editForm.proxyUrl.trim() ? { fb_proxy_url: editForm.proxyUrl.trim() } : {}),
+          clear_fb_proxy_url: editForm.clearProxyUrl,
+          fb_test_event_code: editForm.testEventCode.trim() || null,
+          fb_event_mappings: editForm.eventMappings,
         },
       })
       setEditingLander(null)
+      setEditForm(null)
       await loadData()
-      setBanner({ tone: 'success', message: 'Facebook-кампания и переход сохранены.' })
+      setBanner({ tone: 'success', message: 'Лендинг, домен и параметры кампании сохранены.' })
     } catch (err) {
       setBanner({ tone: 'error', message: getErrorMessage(err, 'Не удалось обновить лендинг.') })
     } finally {
@@ -811,10 +950,10 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             <div>
               <h3 className="text-sm font-semibold text-cyan-100">DNS-настройка</h3>
               <p className="mt-2 text-sm leading-6 text-cyan-100/75">
-                CRM сохраняет домен и лендинг, но DNS меняется у регистратора. Направьте
-                CNAME поддомена на <span className="font-mono text-cyan-50">{runtimeConfig?.technical_domain ?? 'технический домен'}</span>.
-                Техдомен можно выбрать сразу, без парковки отдельного домена. Динамический HTML
-                не кэшируется, поэтому UTM, fbp/fbc и start-key остаются индивидуальными.
+                Для BunnyCDN используйте <span className="font-mono text-cyan-50">{runtimeConfig?.technical_domain ?? 'технический домен'}</span> как origin,
+                добавьте рекламный поддомен в Hostnames нужной Pull Zone, направьте его CNAME на
+                выданный Bunny адрес <span className="font-mono text-cyan-50">*.b-cdn.net</span> и включите SSL.
+                Без CDN поддомен можно направить CNAME прямо на техдомен.
               </p>
             </div>
           </div>
@@ -964,7 +1103,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         <div className="flex justify-end gap-2">
                           <button
                             type="button"
-                            title="Настройки Facebook-кампании"
+                            title="Редактировать лендинг и кампанию"
                             onClick={() => openEditLander(lander)}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/5 text-zinc-400 transition hover:border-emerald-500/50 hover:text-emerald-200"
                           >
@@ -1372,70 +1511,187 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
         </Modal>
       ) : null}
 
-      {editingLander ? (
+      {editingLander && editForm ? (
         <Modal
-          title="Facebook-кампания"
-          description={`Pixel, CAPI и карта событий для «${editingLander.name}».`}
+          title="Редактировать лендинг"
+          description={`Домен, Telegram-переход и Facebook-кампания «${editingLander.name}».`}
           maxWidthClassName="max-w-4xl"
           onClose={() => {
             if (!isUpdatingLander) {
               setEditingLander(null)
+              setEditForm(null)
             }
           }}
         >
           <form className="space-y-4" onSubmit={(event) => void handleUpdateLander(event)}>
-            <div className="grid gap-3 md:grid-cols-2">
+            <fieldset className="space-y-3">
+              <legend className="text-sm font-semibold text-zinc-100">Лендинг</legend>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block md:col-span-2">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Название</span>
+                  <input value={editForm.name} onChange={(event) => setEditForm((current) => current ? { ...current, name: event.target.value } : current)} maxLength={255} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Домен</span>
+                  <select value={editForm.domainId} onChange={(event) => setEditForm((current) => current ? { ...current, domainId: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm">
+                    <option value="">Техдомен · {runtimeConfig?.technical_domain ?? 'не настроен'}</option>
+                    {domains.map((domain) => <option key={domain.id} value={domain.id}>{domain.domain_name}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Тип лендинга</span>
+                  <select value={editForm.type} onChange={(event) => setEditForm((current) => current ? { ...current, type: event.target.value as LanderType } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm">
+                    <option value="default_tg_redirect">Telegram redirect</option>
+                    <option value="custom_upload">Кастомный ZIP</option>
+                  </select>
+                </label>
+                <label className="block md:col-span-2">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Slug</span>
+                  <div className="flex gap-2">
+                    <input value={editForm.slug} onChange={(event) => setEditForm((current) => current ? { ...current, slug: normalizeSlugInput(event.target.value) } : current)} maxLength={100} className="min-w-0 flex-1 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                    <button type="button" title="Сгенерировать slug" onClick={() => setEditForm((current) => current ? { ...current, slug: generateSlug() } : current)} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 text-zinc-300 transition hover:border-emerald-500/50 hover:text-emerald-200">
+                      <RefreshCw size={16} />
+                    </button>
+                  </div>
+                </label>
+              </div>
+              {editForm.type === 'custom_upload' ? (
+                <label className="block rounded-lg border border-dashed border-white/10 px-3 py-3">
+                  <span className="flex items-center gap-2 text-sm font-medium text-zinc-200"><Upload size={16} /> ZIP-архив</span>
+                  <input type="file" accept=".zip,application/zip,application/x-zip-compressed" onChange={(event) => setEditForm((current) => current ? { ...current, zipFile: event.target.files?.[0] ?? null } : current)} className="mt-2 block w-full text-sm text-zinc-400 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-950" />
+                  <span className="mt-1.5 block text-xs text-zinc-500">
+                    {editForm.zipFile?.name ?? (editingLander.custom_html_path ? 'Текущий ZIP сохранён' : 'ZIP не загружен')}
+                  </span>
+                </label>
+              ) : null}
+            </fieldset>
+
+            <fieldset className="space-y-3 border-t border-white/10 pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <legend className="text-sm font-semibold text-zinc-100">Tracking campaign</legend>
+                <label className="flex items-center gap-2 text-sm text-zinc-300">
+                  <input type="checkbox" checked={editForm.fbCampaignEnabled} onChange={(event) => setEditForm((current) => current ? { ...current, fbCampaignEnabled: event.target.checked } : current)} className="h-5 w-5 accent-emerald-400" />
+                  Facebook активен
+                </label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Бот</span>
+                  <select value={editForm.botId} onChange={(event) => setEditForm((current) => current ? { ...current, botId: event.target.value, targetStepKey: '' } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm">
+                    <option value="">Выберите бота</option>
+                    {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}{bot.bot_username ? ` · @${bot.bot_username.replace(/^@/, '')}` : ''}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Стартовый шаг</span>
+                  <select value={editForm.targetStepKey} disabled={!editForm.botId || isEditingTargetStepsLoading} onChange={(event) => setEditForm((current) => current ? { ...current, targetStepKey: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:opacity-50 md:text-sm">
+                    <option value="">Старт активной воронки</option>
+                    {editingTargetSteps.map((step) => <option key={step.key} value={step.key}>{step.title} · {step.key}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Название кампании</span>
+                  <input value={editForm.campaignTitle} onChange={(event) => setEditForm((current) => current ? { ...current, campaignTitle: event.target.value } : current)} maxLength={255} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Код ссылки</span>
+                  <input value={editForm.campaignCode} onChange={(event) => setEditForm((current) => current ? { ...current, campaignCode: event.target.value } : current)} maxLength={64} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Баер</span>
+                  <input value={editForm.buyerName} onChange={(event) => setEditForm((current) => current ? { ...current, buyerName: event.target.value } : current)} maxLength={255} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Тип рекламы</span>
+                  <input value={editForm.adType} onChange={(event) => setEditForm((current) => current ? { ...current, adType: event.target.value } : current)} maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Модель оплаты</span>
+                  <input value={editForm.paymentType} onChange={(event) => setEditForm((current) => current ? { ...current, paymentType: event.target.value } : current)} maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Базовая конверсия, %</span>
+                  <input type="number" min="0" max="100" step="0.1" value={editForm.baseConversionRate} onChange={(event) => setEditForm((current) => current ? { ...current, baseConversionRate: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Минимальная выборка</span>
+                  <input type="number" min="1" step="1" value={editForm.minSampleSize} onChange={(event) => setEditForm((current) => current ? { ...current, minSampleSize: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-3 border-t border-white/10 pt-4">
+              <legend className="text-sm font-semibold text-zinc-100">Facebook Pixel и CAPI</legend>
+              <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium text-zinc-200">Pixel / Dataset ID</span>
-                <input value={editingMetaPixelId} onChange={(event) => setEditingMetaPixelId(event.target.value)} inputMode="numeric" placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                <input value={editForm.metaPixelId} onChange={(event) => setEditForm((current) => current ? { ...current, metaPixelId: event.target.value } : current)} inputMode="numeric" placeholder="1234567890" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium text-zinc-200">Новый CAPI token</span>
-                <input type="password" value={editingCapiToken} disabled={clearEditingCapiToken} onChange={(event) => setEditingCapiToken(event.target.value)} placeholder={editingLander.has_fb_capi_token ? 'Уже задан · оставить пустым' : 'Access token'} autoComplete="off" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-45 md:text-sm" />
+                <input type="password" value={editForm.capiToken} disabled={editForm.clearCapiToken} onChange={(event) => setEditForm((current) => current ? { ...current, capiToken: event.target.value } : current)} placeholder={editingLander.has_fb_capi_token ? 'Уже задан · оставить пустым' : 'Access token'} autoComplete="off" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-45 md:text-sm" />
                 {editingLander.has_fb_capi_token ? (
                   <label className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
-                    <input type="checkbox" checked={clearEditingCapiToken} onChange={(event) => setClearEditingCapiToken(event.target.checked)} className="h-4 w-4 accent-red-400" />
+                    <input type="checkbox" checked={editForm.clearCapiToken} onChange={(event) => setEditForm((current) => current ? { ...current, clearCapiToken: event.target.checked } : current)} className="h-4 w-4 accent-red-400" />
                     Удалить сохранённый token
                   </label>
                 ) : null}
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium text-zinc-200">Новый CAPI proxy</span>
-                <input type="password" value={editingProxyUrl} disabled={clearEditingProxyUrl} onChange={(event) => setEditingProxyUrl(event.target.value)} placeholder={editingLander.has_fb_proxy ? 'Уже задан · оставить пустым' : 'http://user:pass@proxy:8080'} autoComplete="off" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-45 md:text-sm" />
+                <input type="password" value={editForm.proxyUrl} disabled={editForm.clearProxyUrl} onChange={(event) => setEditForm((current) => current ? { ...current, proxyUrl: event.target.value } : current)} placeholder={editingLander.has_fb_proxy ? 'Уже задан · оставить пустым' : 'http://user:pass@proxy:8080'} autoComplete="off" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 disabled:opacity-45 md:text-sm" />
                 {editingLander.has_fb_proxy ? (
                   <label className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
-                    <input type="checkbox" checked={clearEditingProxyUrl} onChange={(event) => setClearEditingProxyUrl(event.target.checked)} className="h-4 w-4 accent-red-400" />
+                    <input type="checkbox" checked={editForm.clearProxyUrl} onChange={(event) => setEditForm((current) => current ? { ...current, clearProxyUrl: event.target.checked } : current)} className="h-4 w-4 accent-red-400" />
                     Удалить сохранённый proxy
                   </label>
                 ) : null}
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium text-zinc-200">Test event code</span>
-                <input value={editingTestEventCode} onChange={(event) => setEditingTestEventCode(event.target.value)} placeholder="TEST12345" maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                <input value={editForm.testEventCode} onChange={(event) => setEditForm((current) => current ? { ...current, testEventCode: event.target.value } : current)} placeholder="TEST12345" maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
               </label>
-            </div>
+              </div>
+            </fieldset>
             <div>
               <div className="mb-1.5 text-sm font-medium text-zinc-200">Карта событий</div>
               <FacebookEventMappingsEditor
-                mappings={editingEventMappings}
+                mappings={editForm.eventMappings}
                 sourceEvents={runtimeConfig?.source_events ?? []}
-                onChange={setEditingEventMappings}
+                onChange={(eventMappings) => setEditForm((current) => current ? { ...current, eventMappings } : current)}
               />
             </div>
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-zinc-200">Legacy события лендинга</span>
-              <input value={editingMetaEvents} onChange={(event) => setEditingMetaEvents(event.target.value)} placeholder="QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+              <input value={editForm.metaEvents} onChange={(event) => setEditForm((current) => current ? { ...current, metaEvents: event.target.value } : current)} placeholder="QuizCompleted" className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
               <span className="mt-1.5 block text-xs leading-5 text-zinc-500">Только для старых ZIP с data-crm-meta-event. Новые лендинги используют карту выше.</span>
             </label>
+            <fieldset className="space-y-3 border-t border-white/10 pt-4">
+              <legend className="text-sm font-semibold text-zinc-100">UTM по умолчанию</legend>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {([
+                  ['utmSource', 'utm_source'],
+                  ['utmMedium', 'utm_medium'],
+                  ['utmCampaign', 'utm_campaign'],
+                  ['utmTerm', 'utm_term'],
+                  ['utmContent', 'utm_content'],
+                ] as const).map(([field, label]) => (
+                  <label key={field} className="block">
+                    <span className="mb-1.5 block text-sm font-medium text-zinc-200">{label}</span>
+                    <input value={editForm[field]} onChange={(event) => setEditForm((current) => current ? { ...current, [field]: event.target.value } : current)} maxLength={255} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950/50 px-3 py-2.5 text-sm text-zinc-200">
               <span>
                 <span className="block font-medium text-zinc-100">Автопереход в Telegram</span>
                 <span className="mt-0.5 block text-xs text-zinc-500">Для custom ZIP настройте переход в коде лендинга.</span>
               </span>
-              <input type="checkbox" checked={editingAutoRedirectEnabled} disabled={editingLander.type === 'custom_upload'} onChange={(event) => setEditingAutoRedirectEnabled(event.target.checked)} className="h-5 w-5 shrink-0 accent-emerald-400 disabled:opacity-40" />
+              <input type="checkbox" checked={editForm.autoRedirectEnabled} disabled={editForm.type === 'custom_upload'} onChange={(event) => setEditForm((current) => current ? { ...current, autoRedirectEnabled: event.target.checked } : current)} className="h-5 w-5 shrink-0 accent-emerald-400 disabled:opacity-40" />
             </label>
             <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setEditingLander(null)} disabled={isUpdatingLander} className="inline-flex h-10 items-center justify-center rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50">Отмена</button>
+              <button type="button" onClick={() => { setEditingLander(null); setEditForm(null) }} disabled={isUpdatingLander} className="inline-flex h-10 items-center justify-center rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50">Отмена</button>
               <button type="submit" disabled={isUpdatingLander} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50">
                 {isUpdatingLander ? <LoaderCircle size={16} className="animate-spin" /> : <Pencil size={16} />}
                 Сохранить
