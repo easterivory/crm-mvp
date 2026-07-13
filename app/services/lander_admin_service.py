@@ -536,14 +536,21 @@ class LanderAdminService:
         )
 
     async def _to_domain_out(self, domain: ProjectDomain) -> ProjectDomainOut:
-        check = await DomainDnsService(
+        checker = DomainDnsService(
             technical_domain=self._technical_domain()
-        ).check_cname(domain.domain_name)
+        )
+        cname_check, routing_check = await asyncio.gather(
+            checker.check_cname(domain.domain_name),
+            checker.check_routing(domain.domain_name),
+        )
         return ProjectDomainOut.model_validate(domain).model_copy(
             update={
-                "cname_verified": check.verified,
-                "cname_target": check.target,
-                "cname_error": check.error,
+                "cname_verified": cname_check.verified,
+                "cname_target": cname_check.target,
+                "cname_error": cname_check.error,
+                "routing_verified": routing_check.verified,
+                "routing_status_code": routing_check.status_code,
+                "routing_error": routing_check.error,
             }
         )
 

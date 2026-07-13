@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "CRM MVP"
     DEBUG: bool = False
     BASE_URL: str = "http://localhost:8000"
+    CRM_PUBLIC_HOSTS: str = ""
     APP_SERVICE_NAME: str = "api"
     LOG_STORAGE_PATH: str = "storage/logs"
     LOG_FILE_MAX_MB: int = 10

@@ -917,22 +917,29 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                       <td className="px-4 py-3">
                         <div className="space-y-1">
                           <span
-                            title={domain.cname_error ?? domain.cname_target ?? undefined}
+                            title={domain.routing_error ?? domain.cname_error ?? undefined}
                             className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${
-                              domain.cname_verified
+                              domain.routing_verified
                                 ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
                                 : 'border-red-500/25 bg-red-500/10 text-red-200'
                             }`}
                           >
-                            {domain.cname_verified ? (
+                            {domain.routing_verified ? (
                               <CheckCircle2 size={13} className="shrink-0" />
                             ) : (
                               <AlertTriangle size={13} className="shrink-0" />
                             )}
-                            {domain.cname_verified ? 'CNAME настроен' : 'CNAME не настроен'}
+                            {domain.routing_verified ? 'Домен доступен' : 'Ошибка маршрута'}
                           </span>
-                          <div className="max-w-[240px] truncate font-mono text-xs text-zinc-500">
-                            {domain.cname_target ?? domain.cname_error ?? 'Нет данных DNS'}
+                          {domain.routing_error ? (
+                            <div className="max-w-[360px] text-xs leading-5 text-red-200/80">
+                              {domain.routing_error}
+                            </div>
+                          ) : null}
+                          <div className="max-w-[360px] break-all font-mono text-xs leading-5 text-zinc-500">
+                            DNS: {domain.cname_target
+                              ?? (domain.routing_verified ? 'маршрут через CDN работает' : domain.cname_error)
+                              ?? 'нет данных'}
                           </div>
                         </div>
                       </td>
@@ -967,10 +974,14 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             <div>
               <h3 className="text-sm font-semibold text-cyan-100">DNS-настройка</h3>
               <p className="mt-2 text-sm leading-6 text-cyan-100/75">
-                В BunnyCDN добавьте рекламный поддомен в Hostnames той же Pull Zone, которая уже
-                обслуживает <span className="font-mono text-cyan-50">{runtimeConfig?.technical_domain ?? 'технический домен'}</span>.
-                Направьте CNAME на выданный Bunny адрес <span className="font-mono text-cyan-50">*.b-cdn.net</span> и включите SSL.
-                Не используйте техдомен как Origin URL и не создавайте redirect rules между этими доменами.
+                В Bunny DNS используйте один из двух вариантов: A-запись на IP origin-сервера с
+                CDN Acceleration либо CNAME на hostname уже созданной Pull Zone
+                <span className="font-mono text-cyan-50"> *.b-cdn.net</span> с выключенным CDN Acceleration
+                у самой DNS-записи. Во втором варианте добавьте рекламный домен в Hostnames Pull Zone
+                и включите SSL. Origin должен вести напрямую на сервер и сохранять исходный Host.
+                Не направляйте ускоренный CNAME на
+                <span className="font-mono text-cyan-50"> {runtimeConfig?.technical_domain ?? 'технический домен'}</span>
+                или на другую Bunny-зону: это создаёт HTTP 508/цикл редиректов.
               </p>
             </div>
           </div>

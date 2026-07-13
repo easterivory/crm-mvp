@@ -1091,11 +1091,14 @@ export default function DocsPage() {
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <h3 className="font-semibold text-white">DNS-подключение</h3>
               <p className="mt-2 text-sm leading-6 text-gray-400">
-                Для рекламного поддомена поставьте CNAME на <code>lp.sfera.cyou</code>, затем добавьте
-                этот поддомен в CRM и выберите его в кампании. Для корневого домена нужен ALIAS или
-                CNAME flattening у DNS-провайдера. CDN и reverse proxy должны сохранять исходный Host
-                и не кэшировать HTML путей <code>/l/*</code>, иначе посетители могут получить чужой
-                start-key или UTM.
+                В Bunny DNS можно поставить A-запись на IP origin-сервера и включить CDN Acceleration.
+                Альтернатива: добавить рекламный домен в Hostnames общей Pull Zone, включить для него
+                SSL и направить CNAME на hostname этой зоны <code>*.b-cdn.net</code>. В таком варианте
+                CDN Acceleration у DNS-записи должен быть выключен, поскольку CNAME уже ведёт в CDN.
+                Origin Pull Zone должен вести напрямую на сервер по HTTP, сохранять исходный Host и
+                не указывать на <code>lp.sfera.cyou</code>, рекламный домен или другую Bunny-зону.
+                Для корневого домена используйте CNAME flattening. HTML путей <code>/l/*</code> нельзя
+                кэшировать, иначе посетители могут получить чужой start-key или UTM.
               </p>
             </div>
           </div>

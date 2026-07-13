@@ -46,6 +46,9 @@ class ProjectDomainOut(OrmBase):
     cname_verified: bool = False
     cname_target: Optional[str] = None
     cname_error: Optional[str] = None
+    routing_verified: bool = False
+    routing_status_code: Optional[int] = None
+    routing_error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

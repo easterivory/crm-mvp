@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import httpx
 from sqlalchemy.dialects import postgresql
 
-from app.api.spa import _is_technical_domain
+from app.api.spa import _is_crm_application_domain, _is_technical_domain
+from app.core.config import settings
 from app.api.v1.routers.public_landers import _request_host
 from app.core.facebook_events import (
     default_facebook_event_mappings,
@@ -79,6 +81,49 @@ class FacebookEventMappingTests(unittest.TestCase):
 
         self.assertIs(_is_technical_domain(request), True)
 
+    def test_crm_ui_is_limited_to_configured_hosts(self) -> None:
+        with (
+            patch.object(settings, "BASE_URL", "https://sfera.cyou"),
+            patch.object(settings, "CRM_PUBLIC_HOSTS", "crm-alt.example.com"),
+        ):
+            self.assertIs(
+                _is_crm_application_domain(
+                    SimpleNamespace(headers={"host": "sfera.cyou:443"})
+                ),
+                True,
+            )
+            self.assertIs(
+                _is_crm_application_domain(
+                    SimpleNamespace(headers={"host": "crm-alt.example.com"})
+                ),
+                True,
+            )
+            self.assertIs(
+                _is_crm_application_domain(
+                    SimpleNamespace(headers={"host": "promo.example.com"})
+                ),
+                False,
+            )
+
+    def test_crm_ui_host_falls_back_to_technical_domain_parent(self) -> None:
+        with (
+            patch.object(settings, "BASE_URL", "http://localhost:8000"),
+            patch.object(settings, "CRM_PUBLIC_HOSTS", ""),
+            patch.object(settings, "LANDER_TECH_DOMAIN", "lp.sfera.cyou"),
+        ):
+            self.assertIs(
+                _is_crm_application_domain(
+                    SimpleNamespace(headers={"host": "sfera.cyou"})
+                ),
+                True,
+            )
+            self.assertIs(
+                _is_crm_application_domain(
+                    SimpleNamespace(headers={"host": "lp.sfera.cyou"})
+                ),
+                False,
+            )
+
     def test_forwarded_host_is_used_for_parked_domain_resolution(self) -> None:
         request = SimpleNamespace(
             headers={
@@ -142,6 +187,55 @@ class FacebookEventMappingTests(unittest.TestCase):
         self.assertIs(service._is_expected_target("lp.sfera.cyou."), True)
         self.assertIs(service._is_expected_target("campaign-zone.b-cdn.net."), True)
         self.assertIs(service._is_expected_target("unrelated.example.com."), False)
+
+    def test_domain_routing_accepts_crm_health_response(self) -> None:
+        response = httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "components": {"api": "ok", "database": "ok", "redis": "ok"},
+            },
+        )
+
+        result = DomainDnsService._routing_result_from_response(
+            "promo.example.com",
+            response,
+        )
+
+        self.assertTrue(result.verified)
+        self.assertEqual(result.status_code, 200)
+
+    def test_domain_routing_reports_bunny_loop_with_pull_zone(self) -> None:
+        response = httpx.Response(
+            508,
+            headers={"cdn-pullzone": "6137671", "errorcode": "108"},
+        )
+
+        result = DomainDnsService._routing_result_from_response(
+            "promo.example.com",
+            response,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertIn("CDN-цикл", result.error or "")
+        self.assertIn("6137671", result.error or "")
+
+    def test_domain_routing_reports_self_redirect(self) -> None:
+        response = httpx.Response(
+            301,
+            headers={
+                "location": "https://promo.example.com/health",
+                "cdn-pullzone": "6046144",
+            },
+        )
+
+        result = DomainDnsService._routing_result_from_response(
+            "promo.example.com",
+            response,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertIn("сам на себя", result.error or "")
 
 
 class LanderPersistenceTests(unittest.IsolatedAsyncioTestCase):

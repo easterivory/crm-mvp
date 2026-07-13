@@ -6,6 +6,9 @@ export type ProjectDomain = {
   cname_verified: boolean
   cname_target: string | null
   cname_error: string | null
+  routing_verified: boolean
+  routing_status_code: number | null
+  routing_error: string | null
   created_at: string
   updated_at: string
 }

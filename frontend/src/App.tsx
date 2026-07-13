@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import MainLayout from './components/MainLayout'
@@ -21,7 +21,30 @@ import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
 import { NotificationViewport } from './shared/ui'
 import { useAuthStore } from './store/authStore'
 
-export default function App() {
+type UiHostContext = {
+  crm_ui_allowed: boolean
+}
+
+type HostAccessState = 'checking' | 'allowed' | 'denied'
+
+function PublicHostNotFound() {
+  useEffect(() => {
+    const previousTitle = document.title
+    document.title = '404'
+    return () => {
+      document.title = previousTitle
+    }
+  }, [])
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-neutral-950 p-6 text-center">
+      <h1 className="text-4xl font-semibold text-zinc-100">404</h1>
+      <p className="text-sm text-zinc-500">Страница не найдена</p>
+    </div>
+  )
+}
+
+function CrmApplication() {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
   const fetchMe = useAuthStore((state) => state.fetchMe)
@@ -63,4 +86,44 @@ export default function App() {
       <NotificationViewport />
     </BrowserRouter>
   )
+}
+
+export default function App() {
+  const [hostAccess, setHostAccess] = useState<HostAccessState>('checking')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    const checkHostAccess = async () => {
+      try {
+        const response = await fetch('/api/ui-host-context', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        })
+        if (!response.ok) {
+          throw new Error(`Host context returned HTTP ${response.status}`)
+        }
+        const context = await response.json() as Partial<UiHostContext>
+        setHostAccess(context.crm_ui_allowed === true ? 'allowed' : 'denied')
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return
+        }
+        setHostAccess('denied')
+      }
+    }
+
+    void checkHostAccess()
+    return () => controller.abort()
+  }, [])
+
+  if (hostAccess === 'checking') {
+    return <div className="min-h-screen bg-neutral-950" aria-hidden="true" />
+  }
+  if (hostAccess === 'denied') {
+    return <PublicHostNotFound />
+  }
+  return <CrmApplication />
 }
