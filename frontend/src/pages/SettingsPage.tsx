@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
+  RotateCcw,
   Save,
   Settings,
   Tag,
@@ -106,6 +107,19 @@ type SystemGlobalSettings = {
   tg_backup_channel_id: string | null
   is_tg_backup_enabled: boolean
   admin_bot_token: string | null
+}
+
+type FunnelStartRecoveryResult = {
+  lookback_hours: number
+  scanned: number
+  eligible: number
+  enqueued: number
+  already_enqueued: number
+  queue_failed: number
+  already_running: number
+  completed_current_cycle: number
+  fresh_lifecycles: number
+  scheduled: number
 }
 
 const tabs: Array<{ key: TabKey; label: string }> = [
@@ -283,6 +297,7 @@ export default function SettingsPage() {
   const [isSavingGlobalSettings, setIsSavingGlobalSettings] = useState(false)
   const [isRunningBackup, setIsRunningBackup] = useState(false)
   const [isExportingLogs, setIsExportingLogs] = useState(false)
+  const [isRecoveringStarts, setIsRecoveringStarts] = useState(false)
   const [isAddingUser, setIsAddingUser] = useState(false)
   const [isAddingStatus, setIsAddingStatus] = useState(false)
   const [isAddingTag, setIsAddingTag] = useState(false)
@@ -318,6 +333,7 @@ export default function SettingsPage() {
   const [tgBackupChannelId, setTgBackupChannelId] = useState('')
   const [isTgBackupEnabled, setIsTgBackupEnabled] = useState(false)
   const [adminBotToken, setAdminBotToken] = useState('')
+  const [funnelRecoveryHours, setFunnelRecoveryHours] = useState('24')
   const [newUserEmail, setNewUserEmail] = useState('')
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
@@ -786,6 +802,36 @@ export default function SettingsPage() {
       setError(getErrorMessage(err, 'Не удалось отправить серверные логи.'))
     } finally {
       setIsExportingLogs(false)
+    }
+  }
+
+  const handleRecoverFunnelStarts = async () => {
+    if (currentRoleName !== 'super_admin' || isRecoveringStarts) {
+      return
+    }
+    setIsRecoveringStarts(true)
+    setError('')
+    setNotice('')
+    try {
+      const { data } = await api.post<FunnelStartRecoveryResult>(
+        '/settings/global/funnels/recover-starts',
+        {
+          lookback_hours: Number(funnelRecoveryHours),
+          limit: 1000,
+        },
+      )
+      const queueSuffix = data.queue_failed > 0
+        ? ` Ошибок очереди: ${data.queue_failed}.`
+        : ''
+      setNotice(
+        `Проверено команд /start: ${data.scanned}. В запуск поставлено: ${data.scheduled}. `
+        + `Уже активны: ${data.already_running}; завершены в текущем цикле: ${data.completed_current_cycle}.`
+        + queueSuffix,
+      )
+    } catch (err) {
+      setError(getErrorMessage(err, 'Не удалось восстановить пропущенные запуски.'))
+    } finally {
+      setIsRecoveringStarts(false)
     }
   }
 
@@ -1341,6 +1387,45 @@ export default function SettingsPage() {
                   className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
                 />
               </label>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-100">Восстановление запусков воронки</h3>
+                <p className="mt-1 text-sm leading-6 text-zinc-500">
+                  Находит сохранённые команды /start, которые не дошли до рантайма. Уже активные и
+                  завершённые воронки повторно не запускаются. Фоновая проверка также выполняется автоматически.
+                </p>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className="min-w-0 flex-1">
+                  <span className="mb-1 block text-sm font-medium text-zinc-300">Период проверки</span>
+                  <select
+                    value={funnelRecoveryHours}
+                    onChange={(event) => setFunnelRecoveryHours(event.target.value)}
+                    disabled={isRecoveringStarts}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                  >
+                    <option value="1">Последний час</option>
+                    <option value="6">Последние 6 часов</option>
+                    <option value="24">Последние 24 часа</option>
+                    <option value="72">Последние 3 дня</option>
+                    <option value="168">Последние 7 дней</option>
+                    <option value="720">Последние 30 дней</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleRecoverFunnelStarts()}
+                  disabled={isRecoveringStarts}
+                  className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/35 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isRecoveringStarts
+                    ? <LoaderCircle size={16} className="animate-spin" />
+                    : <RotateCcw size={16} />}
+                  Запустить восстановление
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-3">

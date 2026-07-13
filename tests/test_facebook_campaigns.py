@@ -14,6 +14,10 @@ from app.core.facebook_events import (
     normalize_facebook_event_mappings,
     normalize_facebook_source_event,
 )
+from app.core.lander_urls import (
+    build_lander_public_url,
+    effective_campaign_utm_defaults,
+)
 from app.models.lander import ProjectDomain
 from app.models.tracking import TrackingEvent
 from app.repositories.tracking_repository import TrackingEventRepository
@@ -22,6 +26,7 @@ from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.facebook_capi_service import FacebookCAPIService
 from app.services.lander_admin_service import LanderAdminService
 from app.services.lander_service import LanderService
+from app.services.domain_dns_service import DomainDnsService
 
 
 class FacebookEventMappingTests(unittest.TestCase):
@@ -96,6 +101,47 @@ class FacebookEventMappingTests(unittest.TestCase):
         }
 
         self.assertIn("uq_tracking_events_link_bucket", constraint_names)
+
+    def test_facebook_lander_url_contains_visible_default_utm(self) -> None:
+        defaults = effective_campaign_utm_defaults(
+            {},
+            tracking_code="fb-campaign-42",
+            is_facebook_campaign=True,
+        )
+
+        url = build_lander_public_url(
+            host="promo.example.com",
+            slug="landing-1",
+            utm_defaults=defaults,
+        )
+
+        self.assertEqual(
+            url,
+            "https://promo.example.com/l/landing-1?"
+            "utm_source=facebook&utm_medium=paid_social&utm_campaign=fb-campaign-42",
+        )
+
+    def test_custom_utm_values_have_priority(self) -> None:
+        defaults = effective_campaign_utm_defaults(
+            {
+                "utm_source": "fb_ads",
+                "utm_medium": "cpc",
+                "utm_campaign": "{{campaign.name}}",
+            },
+            tracking_code="fallback-code",
+            is_facebook_campaign=True,
+        )
+
+        self.assertEqual(defaults["utm_source"], "fb_ads")
+        self.assertEqual(defaults["utm_medium"], "cpc")
+        self.assertEqual(defaults["utm_campaign"], "{{campaign.name}}")
+
+    def test_cname_check_accepts_technical_and_bunny_targets(self) -> None:
+        service = DomainDnsService(technical_domain="lp.sfera.cyou")
+
+        self.assertIs(service._is_expected_target("lp.sfera.cyou."), True)
+        self.assertIs(service._is_expected_target("campaign-zone.b-cdn.net."), True)
+        self.assertIs(service._is_expected_target("unrelated.example.com."), False)
 
 
 class LanderPersistenceTests(unittest.IsolatedAsyncioTestCase):

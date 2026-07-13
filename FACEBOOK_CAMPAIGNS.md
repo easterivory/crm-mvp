@@ -31,11 +31,13 @@ The technical domain can be used directly:
 https://lp.sfera.cyou/l/<slug>
 ```
 
-For BunnyCDN, keep `lp.sfera.cyou` as the Pull Zone origin, add each advertising
-subdomain under Pull Zone `Hostnames`, point its DNS CNAME to the Bunny-provided
-`*.b-cdn.net` hostname, and enable SSL. Without a CDN, a subdomain may point its
-CNAME directly to `lp.sfera.cyou`. In both cases, add the advertising hostname
-under CRM domain parking and select it in the campaign editor.
+For BunnyCDN, add each advertising subdomain under `Hostnames` of the same Pull
+Zone that already serves `lp.sfera.cyou`, point its DNS CNAME to the
+Bunny-provided `*.b-cdn.net` hostname, and enable SSL. Do not use
+`lp.sfera.cyou` as the Origin URL of another Pull Zone and do not add redirect
+rules between the technical and advertising hostnames. The Pull Zone must keep
+the real application origin. Add the advertising hostname under CRM domain
+parking and select it in the campaign editor.
 
 The CDN or reverse proxy must:
 
@@ -72,5 +74,9 @@ After deploy, purge the CDN cache for `/` and `/l/*`. The technical root must re
 6. Use Test event code during Events Manager verification, then clear it for normal traffic.
 7. Review the event map. `Purchase` supports `value` and `currency`.
 8. Open the public URL with test UTM values and confirm the resulting lead contains attribution and Facebook context.
+
+Generated Facebook campaign URLs always include visible defaults for
+`utm_source`, `utm_medium`, and `utm_campaign`. Values configured in CRM replace
+those defaults.
 
 Secrets are write-only: the API only returns `has_fb_capi_token` and `has_fb_proxy` flags.

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from app.core.constants import MessageType
@@ -19,6 +19,11 @@ from app.schemas.telegram import (
     TelegramUser,
 )
 from app.services.funnel_runtime_service import FunnelRuntimeService
+from app.services.funnel_start_recovery_service import (
+    FunnelStartRecoveryService,
+    START_COMMAND_RE,
+)
+from app.services.funnel_start_queue import FunnelStartEnqueueResult
 from app.services.telegram_service import TelegramService
 
 
@@ -353,7 +358,8 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         bot_id = uuid4()
 
         await telegram_service._clear_latest_contact_button(
-            chat=chat,
+            chat_id=chat.id,
+            external_chat_id=chat.external_chat_id,
             project_id=project_id,
             bot_id=bot_id,
         )
@@ -410,6 +416,322 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         first_id = TelegramService._callback_message_external_id(first)
         self.assertEqual(first_id, TelegramService._callback_message_external_id(repeated))
         self.assertNotEqual(first_id, TelegramService._callback_message_external_id(different))
+
+    async def test_concurrent_funnel_start_is_idempotent_after_chat_lock(self) -> None:
+        chat_id = uuid4()
+        current_step = SimpleNamespace(id=uuid4())
+        active_state = SimpleNamespace(
+            completed_at=None,
+            current_step_id=current_step.id,
+            funnel_id=uuid4(),
+            funnel_version_id=uuid4(),
+        )
+        self.service.repo = SimpleNamespace(
+            lock_chat_for_runtime=AsyncMock(return_value=True),
+            get_chat_funnel_state=AsyncMock(return_value=active_state),
+            get_step=AsyncMock(return_value=current_step),
+            list_steps=AsyncMock(),
+        )
+
+        result = await self.service.start_funnel_for_chat(
+            chat_id=chat_id,
+            funnel_id=uuid4(),
+            funnel_version_id=uuid4(),
+        )
+
+        self.assertIs(result, current_step)
+        self.service.repo.lock_chat_for_runtime.assert_awaited_once_with(chat_id)
+        self.service.repo.list_steps.assert_not_awaited()
+
+    async def test_fresh_lifecycle_does_not_restart_current_cycle(self) -> None:
+        chat_id = uuid4()
+        cycle_started_at = datetime.now(timezone.utc)
+        chat = SimpleNamespace(
+            id=chat_id,
+            bot_id=uuid4(),
+            current_cycle_started_at=cycle_started_at,
+        )
+        current_state = SimpleNamespace(completed_at=None)
+        telegram_service = TelegramService.__new__(TelegramService)
+        telegram_service.funnel_runtime = SimpleNamespace(
+            lock_chat_for_runtime=AsyncMock(return_value=True),
+            get_state_status=AsyncMock(return_value=("waiting_for_answer", current_state)),
+            reset_chat_state=AsyncMock(),
+            start_funnel_for_chat=AsyncMock(),
+        )
+        telegram_service.bot_repo = SimpleNamespace(reset_chat_state=AsyncMock())
+        telegram_service._tracking_target_step_key = AsyncMock(return_value=None)
+
+        await telegram_service._run_active_funnel_runtime(
+            chat=chat,
+            active_funnel_id=uuid4(),
+            active_funnel_version_id=uuid4(),
+            user_message=SimpleNamespace(body="/start", caption=None, message_type="text"),
+            start_requested=True,
+            fresh_lifecycle=True,
+        )
+
+        telegram_service.funnel_runtime.reset_chat_state.assert_not_awaited()
+        telegram_service.funnel_runtime.start_funnel_for_chat.assert_not_awaited()
+
+    async def test_fresh_lifecycle_restarts_completed_previous_cycle(self) -> None:
+        chat_id = uuid4()
+        cycle_started_at = datetime.now(timezone.utc)
+        chat = SimpleNamespace(
+            id=chat_id,
+            bot_id=uuid4(),
+            current_cycle_started_at=cycle_started_at,
+        )
+        previous_state = SimpleNamespace(
+            completed_at=cycle_started_at - timedelta(minutes=1),
+        )
+        telegram_service = TelegramService.__new__(TelegramService)
+        telegram_service.funnel_runtime = SimpleNamespace(
+            lock_chat_for_runtime=AsyncMock(return_value=True),
+            get_state_status=AsyncMock(return_value=("completed", previous_state)),
+            reset_chat_state=AsyncMock(),
+            start_funnel_for_chat=AsyncMock(),
+        )
+        telegram_service.bot_repo = SimpleNamespace(reset_chat_state=AsyncMock())
+        telegram_service._tracking_target_step_key = AsyncMock(return_value=None)
+        active_funnel_id = uuid4()
+        active_version_id = uuid4()
+
+        await telegram_service._run_active_funnel_runtime(
+            chat=chat,
+            active_funnel_id=active_funnel_id,
+            active_funnel_version_id=active_version_id,
+            user_message=SimpleNamespace(body="/start", caption=None, message_type="text"),
+            start_requested=True,
+            fresh_lifecycle=True,
+        )
+
+        telegram_service.funnel_runtime.reset_chat_state.assert_awaited_once_with(chat_id)
+        telegram_service.funnel_runtime.start_funnel_for_chat.assert_awaited_once_with(
+            chat_id=chat_id,
+            funnel_id=active_funnel_id,
+            funnel_version_id=active_version_id,
+            start_step_key=None,
+        )
+
+    def test_funnel_start_recovery_only_accepts_real_start_commands(self) -> None:
+        self.assertIsNotNone(START_COMMAND_RE.match("/start"))
+        self.assertIsNotNone(START_COMMAND_RE.match(" /start@crm_bot ref-code"))
+        self.assertIsNone(START_COMMAND_RE.match("/starter"))
+        self.assertIsNone(START_COMMAND_RE.match("text /start"))
+
+    def test_funnel_start_recovery_detects_reactivated_chat_cycle(self) -> None:
+        completed_at = datetime(2026, 7, 13, 7, 0, tzinfo=timezone.utc)
+        cycle_started_at = completed_at + timedelta(minutes=5)
+        self.assertTrue(
+            FunnelStartRecoveryService._starts_new_cycle(
+                message_created_at=cycle_started_at + timedelta(milliseconds=100),
+                cycle_started_at=cycle_started_at,
+                state_completed_at=completed_at,
+            )
+        )
+        self.assertFalse(
+            FunnelStartRecoveryService._starts_new_cycle(
+                message_created_at=cycle_started_at,
+                cycle_started_at=completed_at - timedelta(minutes=5),
+                state_completed_at=completed_at,
+            )
+        )
+
+    async def test_start_queue_does_not_read_expired_chat_fields_after_commit(self) -> None:
+        chat_id = uuid4()
+        message_id = uuid4()
+        bot_id = uuid4()
+        project_id = uuid4()
+
+        class ExpiringChat:
+            id = chat_id
+            external_chat_id = "42"
+            is_blocked = False
+
+            @property
+            def current_cycle_started_at(self):
+                raise AssertionError("expired ORM field was accessed")
+
+            @property
+            def created_at(self):
+                raise AssertionError("expired ORM field was accessed")
+
+        telegram_service = TelegramService.__new__(TelegramService)
+        telegram_service.db = SimpleNamespace(commit=AsyncMock())
+        telegram_service.message_repo = SimpleNamespace(
+            get_by_id=AsyncMock(return_value=SimpleNamespace(funnel_processed_at=None)),
+        )
+        telegram_service._hydrate_start_payload = AsyncMock(
+            return_value=SimpleNamespace(
+                tracking_link_id=None,
+                ref_code=None,
+                utm_key=None,
+                utm_data=None,
+            )
+        )
+        telegram_service._resolve_tracking_link_id = AsyncMock(return_value=None)
+        telegram_service._find_or_create_chat = AsyncMock(
+            return_value=(ExpiringChat(), True, False)
+        )
+        telegram_service._create_message = AsyncMock(
+            return_value=SimpleNamespace(id=message_id, external_message_id="100")
+        )
+        telegram_service._find_or_create_lead = AsyncMock(
+            return_value=SimpleNamespace(id=uuid4())
+        )
+        telegram_service._save_shared_contact = AsyncMock(return_value=False)
+        telegram_service._attach_utm_bridge_data = AsyncMock()
+        telegram_service._enqueue_facebook_event_safely = AsyncMock()
+        update = SimpleNamespace(
+            my_chat_member=None,
+            callback_query=None,
+            update_id=1,
+            message=TelegramMessage(
+                message_id=100,
+                chat=TelegramChat(id=42),
+                from_user=TelegramUser(id=42, first_name="Анна"),
+                text="/start",
+            ),
+        )
+
+        with patch(
+            "app.services.telegram_service.enqueue_funnel_start",
+            new=AsyncMock(return_value=True),
+        ) as enqueue_mock:
+            await telegram_service.handle_update(
+                update=update,
+                project_id=project_id,
+                bot_id=bot_id,
+            )
+
+        enqueue_mock.assert_awaited_once_with(
+            chat_id,
+            message_id,
+            fresh_lifecycle=True,
+        )
+
+    async def test_debounced_input_recovers_pending_start_before_user_reply(self) -> None:
+        now = datetime.now(timezone.utc)
+        chat_id = uuid4()
+        bot_id = uuid4()
+        project_id = uuid4()
+        chat = SimpleNamespace(
+            id=chat_id,
+            bot_id=bot_id,
+            project_id=project_id,
+            is_deleted=False,
+            reset_at=None,
+            is_blocked=False,
+        )
+
+        def incoming_message(body: str, created_at: datetime) -> SimpleNamespace:
+            return SimpleNamespace(
+                id=uuid4(),
+                chat_id=chat_id,
+                external_message_id=str(uuid4()),
+                message_type="text",
+                sender_type="user",
+                sender_id=None,
+                operator_id=None,
+                body=body,
+                translated_text=None,
+                original_text=None,
+                caption=None,
+                telegram_file_id=None,
+                file_unique_id=None,
+                file_name=None,
+                mime_type=None,
+                file_size=None,
+                media_group_id=None,
+                buttons=[],
+                created_at=created_at,
+            )
+
+        start_message = incoming_message("/start campaign", now - timedelta(seconds=10))
+        reply_message = incoming_message("Анна, Москва", now - timedelta(seconds=5))
+        telegram_service = TelegramService.__new__(TelegramService)
+        telegram_service.chat_repo = SimpleNamespace(get_by_id=AsyncMock(return_value=chat))
+        telegram_service.message_repo = SimpleNamespace(
+            get_latest_user_message=AsyncMock(return_value=reply_message),
+            list_unprocessed_user_input_batch=AsyncMock(
+                return_value=[start_message, reply_message]
+            ),
+            claim_funnel_processing=AsyncMock(return_value=True),
+        )
+        telegram_service._process_runtime_or_legacy = AsyncMock()
+
+        result = await telegram_service.process_debounced_user_input(
+            chat_id=chat_id,
+            trigger_message_id=reply_message.id,
+        )
+
+        self.assertEqual(result, "processed")
+        self.assertEqual(telegram_service._process_runtime_or_legacy.await_count, 2)
+        start_call, reply_call = telegram_service._process_runtime_or_legacy.await_args_list
+        self.assertTrue(start_call.kwargs["start_requested"])
+        self.assertTrue(start_call.kwargs["fresh_lifecycle"])
+        self.assertEqual(start_call.kwargs["user_message"].body, "/start campaign")
+        self.assertFalse(reply_call.kwargs["start_requested"])
+        self.assertEqual(reply_call.kwargs["user_message"].body, "Анна, Москва")
+
+    async def test_recovery_queues_only_missing_or_reactivated_starts(self) -> None:
+        now = datetime.now(timezone.utc)
+        missing = SimpleNamespace(
+            message_id=uuid4(),
+            chat_id=uuid4(),
+            body="/start ref-code",
+            message_created_at=now,
+            current_cycle_started_at=now,
+            state_id=None,
+            state_completed_at=None,
+        )
+        active = SimpleNamespace(
+            message_id=uuid4(),
+            chat_id=uuid4(),
+            body="/start",
+            message_created_at=now,
+            current_cycle_started_at=now,
+            state_id=uuid4(),
+            state_completed_at=None,
+        )
+        previous_completion = now - timedelta(minutes=10)
+        reactivated = SimpleNamespace(
+            message_id=uuid4(),
+            chat_id=uuid4(),
+            body="/start next-cycle",
+            message_created_at=now,
+            current_cycle_started_at=now - timedelta(milliseconds=100),
+            state_id=uuid4(),
+            state_completed_at=previous_completion,
+        )
+        rows = SimpleNamespace(all=lambda: [missing, active, reactivated])
+        db = SimpleNamespace(execute=AsyncMock(side_effect=[rows, SimpleNamespace()]))
+        service = FunnelStartRecoveryService(db)
+
+        with patch(
+            "app.services.funnel_start_recovery_service.enqueue_funnel_starts",
+            new=AsyncMock(
+                return_value=FunnelStartEnqueueResult(
+                    requested=2,
+                    enqueued=2,
+                    already_enqueued=0,
+                    failed=0,
+                )
+            ),
+        ) as enqueue_mock:
+            result = await service.recover(
+                lookback_hours=24,
+                limit=100,
+                job_scope="test-run",
+            )
+
+        requests = enqueue_mock.await_args.args[0]
+        self.assertEqual([item.message_id for item in requests], [missing.message_id, reactivated.message_id])
+        self.assertEqual([item.fresh_lifecycle for item in requests], [False, True])
+        self.assertEqual(result.scheduled, 2)
+        self.assertEqual(result.already_running, 1)
+        self.assertEqual(result.fresh_lifecycles, 1)
 
     async def test_current_and_legacy_template_variables_are_preserved(self) -> None:
         self.service.repo = _TemplateRepository()

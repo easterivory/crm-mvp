@@ -103,6 +103,9 @@ class FunnelRuntimeService:
     async def reset_chat_state(self, chat_id: UUID) -> None:
         await self.repo.reset_chat_funnel_state(chat_id)
 
+    async def lock_chat_for_runtime(self, chat_id: UUID) -> bool:
+        return await self.repo.lock_chat_for_runtime(chat_id)
+
     async def get_state_status(
         self,
         *,
@@ -132,8 +135,19 @@ class FunnelRuntimeService:
         funnel_version_id: UUID,
         start_step_key: str | None = None,
     ) -> Optional[FunnelStep]:
+        if not await self.repo.lock_chat_for_runtime(chat_id):
+            logger.warning("Funnel start skipped because chat does not exist chat_id=%s", chat_id)
+            return None
+
         existing = await self.repo.get_chat_funnel_state(chat_id)
-        if existing is not None and existing.is_paused and existing.completed_at is None:
+        if existing is not None and existing.completed_at is None:
+            logger.info(
+                "Funnel start is already active; duplicate request ignored "
+                "chat_id=%s funnel_id=%s funnel_version_id=%s",
+                chat_id,
+                existing.funnel_id,
+                existing.funnel_version_id,
+            )
             return await self.repo.get_step(existing.current_step_id)
 
         steps = await self.repo.list_steps(funnel_version_id)

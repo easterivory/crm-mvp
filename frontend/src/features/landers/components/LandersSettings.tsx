@@ -136,8 +136,8 @@ const emptyLanderForm: LanderForm = {
   metaPixelId: '',
   metaEvents: '',
   autoRedirectEnabled: true,
-  utmSource: '',
-  utmMedium: '',
+  utmSource: 'facebook',
+  utmMedium: 'paid_social',
   utmCampaign: '',
   utmTerm: '',
   utmContent: '',
@@ -915,9 +915,26 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-200">
-                          Активен
-                        </span>
+                        <div className="space-y-1">
+                          <span
+                            title={domain.cname_error ?? domain.cname_target ?? undefined}
+                            className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${
+                              domain.cname_verified
+                                ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                                : 'border-red-500/25 bg-red-500/10 text-red-200'
+                            }`}
+                          >
+                            {domain.cname_verified ? (
+                              <CheckCircle2 size={13} className="shrink-0" />
+                            ) : (
+                              <AlertTriangle size={13} className="shrink-0" />
+                            )}
+                            {domain.cname_verified ? 'CNAME настроен' : 'CNAME не настроен'}
+                          </span>
+                          <div className="max-w-[240px] truncate font-mono text-xs text-zinc-500">
+                            {domain.cname_target ?? domain.cname_error ?? 'Нет данных DNS'}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end">
@@ -950,10 +967,10 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             <div>
               <h3 className="text-sm font-semibold text-cyan-100">DNS-настройка</h3>
               <p className="mt-2 text-sm leading-6 text-cyan-100/75">
-                Для BunnyCDN используйте <span className="font-mono text-cyan-50">{runtimeConfig?.technical_domain ?? 'технический домен'}</span> как origin,
-                добавьте рекламный поддомен в Hostnames нужной Pull Zone, направьте его CNAME на
-                выданный Bunny адрес <span className="font-mono text-cyan-50">*.b-cdn.net</span> и включите SSL.
-                Без CDN поддомен можно направить CNAME прямо на техдомен.
+                В BunnyCDN добавьте рекламный поддомен в Hostnames той же Pull Zone, которая уже
+                обслуживает <span className="font-mono text-cyan-50">{runtimeConfig?.technical_domain ?? 'технический домен'}</span>.
+                Направьте CNAME на выданный Bunny адрес <span className="font-mono text-cyan-50">*.b-cdn.net</span> и включите SSL.
+                Не используйте техдомен как Origin URL и не создавайте redirect rules между этими доменами.
               </p>
             </div>
           </div>

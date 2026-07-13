@@ -43,6 +43,9 @@ class ProjectDomainOut(OrmBase):
     project_id: UUID
     domain_name: str
     is_active: bool
+    cname_verified: bool = False
+    cname_target: Optional[str] = None
+    cname_error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

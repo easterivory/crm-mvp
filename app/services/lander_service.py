@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.facebook_events import normalize_facebook_event_mappings
+from app.core.lander_urls import effective_campaign_utm_defaults
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.repositories.tracking_repository import TrackingEventRepository
@@ -232,7 +233,11 @@ class LanderService:
         if not code:
             raise ValueError("Tracking link не содержит code")
 
-        utm_params = dict(lander.utm_defaults_json or {})
+        utm_params = effective_campaign_utm_defaults(
+            lander.utm_defaults_json,
+            tracking_code=code,
+            is_facebook_campaign=tracking_link.fb_campaign_enabled,
+        )
         utm_params.update(self.utm_bridge.normalize_query_params(query_params))
         start_key = await self.utm_bridge.store_lander_start(
             ref_code=code,

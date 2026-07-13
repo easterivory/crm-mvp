@@ -83,3 +83,21 @@ class ServerLogExportOut(BaseModel):
     file_name: str
     size_bytes: int
     period_minutes: int = 30
+
+
+class FunnelStartRecoveryIn(BaseModel):
+    lookback_hours: int = Field(default=24, ge=1, le=24 * 30)
+    limit: int = Field(default=500, ge=1, le=5000)
+
+
+class FunnelStartRecoveryOut(BaseModel):
+    lookback_hours: int
+    scanned: int
+    eligible: int
+    enqueued: int
+    already_enqueued: int
+    queue_failed: int
+    already_running: int
+    completed_current_cycle: int
+    fresh_lifecycles: int
+    scheduled: int

@@ -1237,6 +1237,8 @@ class BroadcastService:
         if funnel is None or version is None:
             raise RuntimeError("Broadcast funnel is unavailable or unpublished")
 
+        if not await self.funnel_runtime.lock_chat_for_runtime(chat_id):
+            return False
         state = await self.funnel_repo.get_chat_funnel_state(chat_id)
         normalized_mode = mode if mode in {"restart", "skip_if_active", "skip_if_completed"} else "skip_if_active"
         if state is not None and state.completed_at is None and normalized_mode == "skip_if_active":

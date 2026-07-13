@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import re
+from dataclasses import dataclass
+from typing import Any, Sequence
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -16,6 +18,25 @@ except ImportError:  # pragma: no cover
     RedisSettings = None
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FunnelStartRequest:
+    chat_id: UUID
+    message_id: UUID
+    fresh_lifecycle: bool = False
+
+
+@dataclass(frozen=True)
+class FunnelStartEnqueueResult:
+    requested: int
+    enqueued: int
+    already_enqueued: int
+    failed: int
+
+    @property
+    def scheduled(self) -> int:
+        return self.enqueued + self.already_enqueued
 
 
 def _redis_settings_from_url() -> Any:
@@ -37,27 +58,78 @@ async def enqueue_funnel_start(
     *,
     fresh_lifecycle: bool,
 ) -> bool:
+    result = await enqueue_funnel_starts(
+        [
+            FunnelStartRequest(
+                chat_id=chat_id,
+                message_id=message_id,
+                fresh_lifecycle=fresh_lifecycle,
+            )
+        ]
+    )
+    return result.failed == 0 and result.scheduled == 1
+
+
+async def enqueue_funnel_starts(
+    requests: Sequence[FunnelStartRequest],
+    *,
+    job_scope: str | None = None,
+) -> FunnelStartEnqueueResult:
+    requested = len(requests)
+    if requested == 0:
+        return FunnelStartEnqueueResult(0, 0, 0, 0)
     if create_pool is None:
-        return False
+        return FunnelStartEnqueueResult(requested, 0, 0, requested)
+
+    safe_scope = (
+        re.sub(r"[^a-zA-Z0-9_-]+", "-", job_scope).strip("-")[:80]
+        if job_scope
+        else None
+    )
     redis = None
+    enqueued = 0
+    already_enqueued = 0
+    failed = 0
     try:
         redis = await create_pool(_redis_settings_from_url())
-        await redis.enqueue_job(
-            "process_funnel_start_task",
-            str(chat_id),
-            str(message_id),
-            fresh_lifecycle,
-            _job_id=f"funnel-start:{message_id}",
-            _queue_name=JOBS_QUEUE_NAME,
-        )
-        return True
+        for request in requests:
+            job_id = (
+                f"funnel-recovery:{safe_scope}:{request.message_id}"
+                if safe_scope
+                else f"funnel-start:{request.message_id}"
+            )
+            try:
+                job = await redis.enqueue_job(
+                    "process_funnel_start_task",
+                    str(request.chat_id),
+                    str(request.message_id),
+                    request.fresh_lifecycle,
+                    _job_id=job_id,
+                    _queue_name=JOBS_QUEUE_NAME,
+                )
+                if job is None:
+                    already_enqueued += 1
+                else:
+                    enqueued += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "Could not enqueue funnel start chat_id=%s message_id=%s",
+                    request.chat_id,
+                    request.message_id,
+                )
     except Exception:
         logger.exception(
-            "Could not enqueue funnel start chat_id=%s message_id=%s",
-            chat_id,
-            message_id,
+            "Could not connect to funnel start queue requests=%s",
+            requested,
         )
-        return False
+        failed = requested
     finally:
         if redis is not None:
             await redis.close()
+    return FunnelStartEnqueueResult(
+        requested=requested,
+        enqueued=enqueued,
+        already_enqueued=already_enqueued,
+        failed=failed,
+    )

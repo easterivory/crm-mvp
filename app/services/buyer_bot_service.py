@@ -28,6 +28,10 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.constants import LeadStatusCode, RoleName, TrackingSpendSource
 from app.core.facebook_events import default_facebook_event_mappings
+from app.core.lander_urls import (
+    build_lander_public_url,
+    effective_campaign_utm_defaults,
+)
 from app.models.bot import Bot
 from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
@@ -1058,13 +1062,21 @@ class BuyerBotService:
                         {"provider": "meta", "pixel_id": buyer.buyer_fb_pixel_id}
                     ],
                     meta_events_json=[],
-                    utm_defaults_json={"utm_source": "facebook"},
+                    utm_defaults_json=effective_campaign_utm_defaults(
+                        {},
+                        tracking_code=code,
+                        is_facebook_campaign=True,
+                    ),
                     auto_redirect_enabled=auto_redirect_enabled,
                 )
                 self.db.add(lander)
                 await self.db.commit()
                 host = selected_domain_name or technical_domain
-                public_url = f"https://{host}/l/{slug}"
+                public_url = build_lander_public_url(
+                    host=host,
+                    slug=slug,
+                    utm_defaults=lander.utm_defaults_json,
+                )
                 break
             except IntegrityError:
                 await self.db.rollback()
@@ -1178,7 +1190,15 @@ class BuyerBotService:
                     if active_lander.domain is not None
                     else settings.LANDER_TECH_DOMAIN
                 )
-                display_link = f"https://{host}/l/{active_lander.slug}"
+                display_link = build_lander_public_url(
+                    host=host,
+                    slug=active_lander.slug,
+                    utm_defaults=effective_campaign_utm_defaults(
+                        active_lander.utm_defaults_json,
+                        tracking_code=link.code or link.ref_code,
+                        is_facebook_campaign=True,
+                    ),
+                )
                 kind = "FB"
             else:
                 display_link = invite_link

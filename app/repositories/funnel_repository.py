@@ -38,6 +38,19 @@ from app.schemas.funnel import (
 class FunnelRepository(BaseRepository[Funnel]):
     model = Funnel
 
+    async def lock_chat_for_runtime(self, chat_id: UUID) -> bool:
+        """Serialize one chat's runtime without changing row-lock order."""
+        high = chat_id.int >> 64
+        low = chat_id.int & ((1 << 64) - 1)
+        lock_key = high ^ low
+        if lock_key >= 1 << 63:
+            lock_key -= 1 << 64
+        await self.db.execute(select(func.pg_advisory_xact_lock(lock_key)))
+        result = await self.db.execute(
+            select(Chat.id).where(Chat.id == chat_id)
+        )
+        return result.scalar_one_or_none() is not None
+
     async def list_by_project(
         self,
         project_id: UUID,

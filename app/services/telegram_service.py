@@ -203,13 +203,21 @@ class TelegramService:
             bot_id=bot_id,
             tracking_link_id=tracking_link_id,
         )
-        msg = await self._create_message(chat.id, project_id, message)
+        # MessageService updates Chat via a SQL expression, which can expire
+        # attributes on an already loaded ORM instance. Keep primitives before
+        # that update and never rely on lazy ORM reads after an explicit commit.
+        chat_id = chat.id
+        external_chat_id = chat.external_chat_id
+        chat_is_blocked = chat.is_blocked
+        msg = await self._create_message(chat_id, project_id, message)
+        message_id = msg.id
+        event_reference = msg.external_message_id or str(message_id)
         persisted_message = await self.message_repo.get_by_id(msg.id)
         if persisted_message is not None and persisted_message.funnel_processed_at is not None:
             logger.info(
                 "Duplicate Telegram message already processed chat_id=%s message_id=%s",
-                chat.id,
-                msg.id,
+                chat_id,
+                message_id,
             )
             return
         logger.info(
@@ -217,25 +225,26 @@ class TelegramService:
             "message_id=%s text=%s",
             bot_id,
             project_id,
-            chat.id,
-            msg.id,
+            chat_id,
+            message_id,
             message.text,
         )
-        if chat.is_blocked:
-            await self.message_repo.claim_funnel_processing([msg.id])
+        if chat_is_blocked:
+            await self.message_repo.claim_funnel_processing([message_id])
             logger.info(
                 "Ignored blocked Telegram chat bot_id=%s project_id=%s chat_id=%s",
                 bot_id,
                 project_id,
-                chat.id,
+                chat_id,
             )
             return
         lead = await self._find_or_create_lead(
-            chat.id,
+            chat_id,
             project_id,
             message,
             reset_existing=is_reactivated_cycle,
         )
+        lead_id = lead.id if lead is not None else None
         contact_saved = await self._save_shared_contact(
             lead=lead,
             project_id=project_id,
@@ -243,18 +252,10 @@ class TelegramService:
         )
         if contact_saved:
             await self._clear_latest_contact_button(
-                chat=chat,
+                chat_id=chat_id,
+                external_chat_id=external_chat_id,
                 project_id=project_id,
                 bot_id=bot_id,
-            )
-            await FacebookCampaignService(self.db).enqueue_mapped_event(
-                lead_id=lead.id,
-                source_event="contact",
-                event_reference=(
-                    f"telegram_contact:{bot_id}:"
-                    f"{(chat.current_cycle_started_at or chat.created_at).isoformat()}"
-                ),
-                extra_custom_data={"content_name": "Telegram contact"},
             )
         await self._attach_utm_bridge_data(
             lead,
@@ -265,88 +266,90 @@ class TelegramService:
         if start_requested:
             # Make the chat and lead visible before Telegram network calls made by the funnel.
             await self.db.commit()
-            if lead is not None and should_start_runtime:
-                await FacebookCampaignService(self.db).enqueue_mapped_event(
-                    lead_id=lead.id,
-                    source_event="bot_start",
-                    event_reference=(
-                        f"telegram_start:{bot_id}:"
-                        f"{(chat.current_cycle_started_at or chat.created_at).isoformat()}"
-                    ),
-                    extra_custom_data={"content_name": "Telegram bot start"},
-                )
             queued = await enqueue_funnel_start(
-                chat.id,
-                msg.id,
+                chat_id,
+                message_id,
                 fresh_lifecycle=should_start_runtime,
             )
             if queued:
                 logger.info(
                     "Funnel start queued chat_id=%s message_id=%s fresh_lifecycle=%s",
-                    chat.id,
-                    msg.id,
+                    chat_id,
+                    message_id,
                     should_start_runtime,
                 )
-                return
-            if not await self.message_repo.claim_funnel_processing([msg.id]):
-                logger.info(
-                    "Skipped duplicate Telegram start processing chat_id=%s message_id=%s",
-                    chat.id,
-                    msg.id,
+            else:
+                result = await self.process_queued_funnel_start(
+                    chat_id=chat_id,
+                    trigger_message_id=message_id,
+                    fresh_lifecycle=should_start_runtime,
                 )
-                return
-            await self._process_runtime_or_legacy(
-                chat=chat,
-                project_id=project_id,
-                bot_id=bot_id,
-                user_message=msg,
-                start_requested=True,
-                fresh_lifecycle=should_start_runtime,
-            )
+                logger.warning(
+                    "Funnel start queue unavailable; processed inline chat_id=%s "
+                    "message_id=%s result=%s",
+                    chat_id,
+                    message_id,
+                    result,
+                )
+            if lead_id is not None and should_start_runtime:
+                await self._enqueue_facebook_event_safely(
+                    lead_id=lead_id,
+                    source_event="bot_start",
+                    event_reference=f"telegram_start:{bot_id}:{event_reference}",
+                    extra_custom_data={"content_name": "Telegram bot start"},
+                )
             return
 
         if message.contact is not None:
-            if not await self.message_repo.claim_funnel_processing([msg.id]):
+            if not await self.message_repo.claim_funnel_processing([message_id]):
                 logger.info(
                     "Skipped duplicate Telegram contact processing chat_id=%s message_id=%s",
-                    chat.id,
-                    msg.id,
+                    chat_id,
+                    message_id,
                 )
                 return
+            runtime_chat = await self._reload_chat_for_runtime(chat_id)
             await self._process_runtime_or_legacy(
-                chat=chat,
+                chat=runtime_chat,
                 project_id=project_id,
                 bot_id=bot_id,
                 user_message=msg,
                 start_requested=False,
                 fresh_lifecycle=False,
             )
+            await self._enqueue_facebook_event_safely(
+                lead_id=lead_id,
+                source_event="contact",
+                event_reference=f"telegram_contact:{bot_id}:{event_reference}",
+                extra_custom_data={"content_name": "Telegram contact"},
+            )
             logger.info(
                 "Telegram contact processed immediately chat_id=%s message_id=%s",
-                chat.id,
-                msg.id,
+                chat_id,
+                message_id,
             )
             return
 
-        queued = await enqueue_user_input(chat.id, msg.id)
+        queued = await enqueue_user_input(chat_id, message_id)
         if queued:
             logger.info(
                 "Incoming Telegram input deferred chat_id=%s message_id=%s delay_seconds=%s",
-                chat.id,
-                msg.id,
+                chat_id,
+                message_id,
                 settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS,
             )
             return
 
         logger.warning(
             "Debounce queue unavailable; processing input immediately chat_id=%s message_id=%s",
-            chat.id,
-            msg.id,
+            chat_id,
+            message_id,
         )
-        if not await self.message_repo.claim_funnel_processing([msg.id]):
+        if not await self.message_repo.claim_funnel_processing([message_id]):
             return
+        runtime_chat = await self._reload_chat_for_runtime(chat_id)
         await self._process_runtime_or_legacy(
-            chat=chat,
+            chat=runtime_chat,
             project_id=project_id,
             bot_id=bot_id,
             user_message=msg,
@@ -436,14 +439,15 @@ class TelegramService:
     async def _clear_latest_contact_button(
         self,
         *,
-        chat: Chat,
+        chat_id: UUID,
+        external_chat_id: str,
         project_id: UUID,
         bot_id: UUID,
     ) -> None:
         outgoing = next(
             (
                 message
-                for message in await self.message_repo.list_recent_outgoing_with_buttons(chat.id)
+                for message in await self.message_repo.list_recent_outgoing_with_buttons(chat_id)
                 if self._has_contact_web_app(message.raw_payload_json)
             ),
             None,
@@ -453,9 +457,40 @@ class TelegramService:
         await self.telegram_sender.edit_message_reply_markup(
             project_id,
             bot_id,
-            chat.external_chat_id,
+            external_chat_id,
             int(outgoing.external_message_id),
         )
+
+    async def _reload_chat_for_runtime(self, chat_id: UUID) -> Chat:
+        chat = await self.chat_repo.get_by_id(chat_id)
+        if chat is None or chat.is_deleted or chat.reset_at is not None:
+            raise RuntimeError(f"Chat is unavailable for funnel runtime: {chat_id}")
+        return chat
+
+    async def _enqueue_facebook_event_safely(
+        self,
+        *,
+        lead_id: UUID | None,
+        source_event: str,
+        event_reference: str,
+        extra_custom_data: dict[str, Any] | None = None,
+    ) -> None:
+        if lead_id is None:
+            return
+        try:
+            await FacebookCampaignService(self.db).enqueue_mapped_event(
+                lead_id=lead_id,
+                source_event=source_event,
+                event_reference=event_reference,
+                extra_custom_data=extra_custom_data,
+            )
+        except Exception:
+            logger.exception(
+                "Facebook event enqueue failed without blocking Telegram runtime "
+                "lead_id=%s source_event=%s",
+                lead_id,
+                source_event,
+            )
 
     @staticmethod
     def _has_contact_web_app(raw_payload: dict | None) -> bool:
@@ -588,6 +623,7 @@ class TelegramService:
         start_requested: bool,
         fresh_lifecycle: bool,
     ) -> None:
+        chat_id = chat.id
         bot = await self.bot_repo.get_active(bot_id)
         has_active_pointer = bool(
             bot is not None
@@ -600,21 +636,23 @@ class TelegramService:
         )
 
         if active_version is not None and active_funnel is not None:
+            active_funnel_id = active_funnel.id
+            active_version_id = active_version.id
             logger.info(
                 "Using active funnel runtime bot_id=%s project_id=%s chat_id=%s "
                 "funnel_id=%s funnel_version_id=%s start_requested=%s",
                 bot_id,
                 project_id,
-                chat.id,
-                active_funnel.id,
-                active_version.id,
+                chat_id,
+                active_funnel_id,
+                active_version_id,
                 start_requested,
             )
             try:
                 await self._run_active_funnel_runtime(
                     chat=chat,
-                    active_funnel_id=active_funnel.id,
-                    active_funnel_version_id=active_version.id,
+                    active_funnel_id=active_funnel_id,
+                    active_funnel_version_id=active_version_id,
                     user_message=user_message,
                     start_requested=start_requested,
                     fresh_lifecycle=fresh_lifecycle,
@@ -625,10 +663,11 @@ class TelegramService:
                     "funnel_id=%s funnel_version_id=%s",
                     bot_id,
                     project_id,
-                    chat.id,
-                    active_funnel.id,
-                    active_version.id,
+                    chat_id,
+                    active_funnel_id,
+                    active_version_id,
                 )
+                raise
             return
 
         if has_active_pointer:
@@ -694,13 +733,44 @@ class TelegramService:
         if chat.is_blocked:
             return "blocked"
 
+        start_index = next(
+            (
+                index
+                for index, item in enumerate(batch)
+                if self._is_start_command(item.body)
+            ),
+            None,
+        )
+        input_batch = batch
+        if start_index is not None:
+            start_message = batch[start_index]
+            await self._process_runtime_or_legacy(
+                chat=chat,
+                project_id=chat.project_id,
+                bot_id=chat.bot_id,
+                user_message=MessageOut.model_validate(start_message),
+                start_requested=True,
+                fresh_lifecycle=True,
+            )
+            input_batch = batch[start_index + 1 :]
+            logger.warning(
+                "Recovered pending /start from debounced input chat_id=%s "
+                "start_message_id=%s trailing_messages=%s",
+                chat_id,
+                start_message.id,
+                len(input_batch),
+            )
+
+        if not input_batch:
+            return "processed"
+
         chunks = [
             str(item.body or item.caption or item.message_type).strip()
-            for item in batch
+            for item in input_batch
             if str(item.body or item.caption or item.message_type).strip()
         ]
         combined_text = "\n".join(chunks)
-        representative = MessageOut.model_validate(latest).model_copy(
+        representative = MessageOut.model_validate(input_batch[-1]).model_copy(
             update={"body": combined_text, "caption": None},
         )
         await self._process_runtime_or_legacy(
@@ -714,7 +784,7 @@ class TelegramService:
         logger.info(
             "Debounced Telegram input processed chat_id=%s messages=%s chars=%s",
             chat_id,
-            len(batch),
+            len(input_batch),
             len(combined_text),
         )
         return "processed"
@@ -758,6 +828,9 @@ class TelegramService:
         start_requested: bool,
         fresh_lifecycle: bool,
     ) -> None:
+        if not await self.funnel_runtime.lock_chat_for_runtime(chat.id):
+            logger.warning("Funnel runtime skipped because chat does not exist chat_id=%s", chat.id)
+            return
         status_name, state = await self.funnel_runtime.get_state_status(
             chat_id=chat.id,
             active_funnel_version_id=active_funnel_version_id,
@@ -778,6 +851,19 @@ class TelegramService:
         )
 
         if fresh_lifecycle:
+            previous_cycle_state = self._is_completed_state_from_previous_cycle(
+                state=state,
+                cycle_started_at=chat.current_cycle_started_at,
+            )
+            if status_name != "not_started" and not previous_cycle_state:
+                logger.info(
+                    "Ignoring duplicate fresh lifecycle request because the current cycle "
+                    "already has funnel state chat_id=%s funnel_version_id=%s state=%s",
+                    chat.id,
+                    active_funnel_version_id,
+                    status_name,
+                )
+                return
             await self.bot_repo.reset_chat_state(chat.id)
             await self.funnel_runtime.reset_chat_state(chat.id)
             await self.funnel_runtime.start_funnel_for_chat(
@@ -836,6 +922,21 @@ class TelegramService:
                 chat.id,
                 active_funnel_version_id,
             )
+
+    @staticmethod
+    def _is_completed_state_from_previous_cycle(
+        *,
+        state: Any,
+        cycle_started_at: datetime | None,
+    ) -> bool:
+        completed_at = getattr(state, "completed_at", None)
+        if completed_at is None or cycle_started_at is None:
+            return False
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=timezone.utc)
+        if cycle_started_at.tzinfo is None:
+            cycle_started_at = cycle_started_at.replace(tzinfo=timezone.utc)
+        return completed_at < cycle_started_at
 
     async def _tracking_target_step_key(
         self,

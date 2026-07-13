@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +15,8 @@ from app.schemas.system_setting import (
     BuyerBotConfigOut,
     BuyerBotConfigUpdate,
     BackupJobOut,
+    FunnelStartRecoveryIn,
+    FunnelStartRecoveryOut,
     ServerLogExportOut,
     SystemGlobalConfigOut,
     SystemGlobalConfigUpdate,
@@ -20,6 +24,7 @@ from app.schemas.system_setting import (
     TranslationProviderConfigUpdate,
 )
 from app.services.system_setting_service import SystemSettingService
+from app.services.funnel_start_recovery_service import FunnelStartRecoveryService
 from app.services.backup_queue import enqueue_manual_backup
 from app.services.server_log_service import (
     ServerLogExportError,
@@ -202,6 +207,50 @@ async def export_recent_server_logs(
         file_name=file_name,
         size_bytes=len(content),
         period_minutes=30,
+    )
+
+
+@router.post(
+    "/global/funnels/recover-starts",
+    response_model=FunnelStartRecoveryOut,
+)
+async def recover_missed_funnel_starts(
+    data: FunnelStartRecoveryIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelStartRecoveryOut:
+    _ensure_super_admin(current_user)
+    redis = await get_redis()
+    lock_key = "system:funnel-start-recovery:cooldown"
+    acquired = await redis.set(lock_key, str(current_user.id), ex=30, nx=True)
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Восстановление уже запущено. Повторите через 30 секунд.",
+        )
+
+    scope = (
+        f"manual-{current_user.id}-"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    )
+    result = await FunnelStartRecoveryService(db).recover(
+        lookback_hours=data.lookback_hours,
+        limit=data.limit,
+        job_scope=scope,
+    )
+    await db.commit()
+    logger.info(
+        "Super admin requested funnel start recovery user_id=%s lookback_hours=%s "
+        "eligible=%s scheduled=%s failed=%s",
+        current_user.id,
+        result.lookback_hours,
+        result.eligible,
+        result.scheduled,
+        result.queue_failed,
+    )
+    return FunnelStartRecoveryOut(
+        **asdict(result),
+        scheduled=result.scheduled,
     )
 
 

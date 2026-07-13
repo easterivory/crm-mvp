@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from uuid import UUID
 
@@ -10,6 +11,10 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.constants import RoleName
+from app.core.lander_urls import (
+    build_lander_public_url,
+    effective_campaign_utm_defaults,
+)
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.models.user import User
@@ -24,6 +29,7 @@ from app.schemas.lander import (
     ProjectLanderUpdate,
 )
 from app.services.access_control import require_project_access
+from app.services.domain_dns_service import DomainDnsService
 from app.schemas.tracking import TrackingLinkCreate
 from app.services.tracking_service import TrackingService
 
@@ -51,7 +57,10 @@ class LanderAdminService:
             )
             .order_by(ProjectDomain.created_at.desc())
         )
-        return [ProjectDomainOut.model_validate(item) for item in result.scalars().all()]
+        domains = list(result.scalars().all())
+        return list(
+            await asyncio.gather(*(self._to_domain_out(domain) for domain in domains))
+        )
 
     async def create_domain(
         self,
@@ -162,6 +171,7 @@ class LanderAdminService:
         else:
             self._technical_domain()
         tracking_link_id = data.tracking_link_id
+        campaign_tracking_code: str | None = None
         if tracking_link_id is not None:
             await self._ensure_tracking_link_belongs_to_project(tracking_link_id, project_id)
         elif data.campaign is not None:
@@ -188,6 +198,7 @@ class LanderAdminService:
                 actor=actor,
             )
             tracking_link_id = tracking_link.id
+            campaign_tracking_code = tracking_link.code
 
         campaign_pixel_id = data.campaign.fb_pixel_id if data.campaign is not None else None
         pixels_json = [pixel.model_dump() for pixel in data.pixels]
@@ -203,7 +214,11 @@ class LanderAdminService:
             tracking_link_id=tracking_link_id,
             pixels_json=pixels_json,
             meta_events_json=[event.model_dump() for event in data.meta_events],
-            utm_defaults_json=data.utm_defaults,
+            utm_defaults_json=effective_campaign_utm_defaults(
+                data.utm_defaults,
+                tracking_code=campaign_tracking_code,
+                is_facebook_campaign=data.campaign is not None,
+            ),
             auto_redirect_enabled=data.auto_redirect_enabled,
         )
         self.db.add(lander)
@@ -472,10 +487,20 @@ class LanderAdminService:
         domain_name = lander.domain.domain_name if lander.domain is not None else None
         public_host = domain_name or self._technical_domain()
         link = lander.tracking_link
+        effective_utm_defaults = effective_campaign_utm_defaults(
+            lander.utm_defaults_json,
+            tracking_code=link.code if link is not None else None,
+            is_facebook_campaign=bool(link is not None and link.fb_campaign_enabled),
+        )
         return ProjectLanderOut.model_validate(lander).model_copy(
             update={
                 "domain_name": domain_name,
-                "public_url": f"https://{public_host}/l/{lander.slug}",
+                "public_url": build_lander_public_url(
+                    host=public_host,
+                    slug=lander.slug,
+                    utm_defaults=effective_utm_defaults,
+                ),
+                "utm_defaults_json": effective_utm_defaults,
                 "facebook_campaign_enabled": bool(
                     link is not None and link.fb_campaign_enabled
                 ),
@@ -507,6 +532,18 @@ class LanderAdminService:
                     if link is not None
                     else None
                 ),
+            }
+        )
+
+    async def _to_domain_out(self, domain: ProjectDomain) -> ProjectDomainOut:
+        check = await DomainDnsService(
+            technical_domain=self._technical_domain()
+        ).check_cname(domain.domain_name)
+        return ProjectDomainOut.model_validate(domain).model_copy(
+            update={
+                "cname_verified": check.verified,
+                "cname_target": check.target,
+                "cname_error": check.error,
             }
         )
 

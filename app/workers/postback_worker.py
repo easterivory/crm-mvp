@@ -1,6 +1,8 @@
 """Polling worker for sending lead postbacks to partner CRMs."""
 import asyncio
 import logging
+from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
@@ -15,6 +17,7 @@ from app.core.logging_config import configure_file_logging
 from app.models.lead import Lead
 from app.models.tracking import TrackingLink
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
+from app.services.funnel_start_recovery_service import FunnelStartRecoveryService
 from app.services.google_sheets_service import GoogleSheetsService
 from app.services.postback_service import PostbackService
 from app.services.telegram_service import TelegramService
@@ -22,10 +25,11 @@ from app.workers.broadcast_worker import process_broadcast, process_due_broadcas
 from app.workers.funnel_scheduled_worker import process_funnel_scheduled_job_task
 
 try:
-    from arq import Retry
+    from arq import Retry, cron
     from arq.connections import RedisSettings
 except ImportError:  # pragma: no cover - production installs arq from requirements.txt
     Retry = None
+    cron = None
     RedisSettings = None
 
 logger = logging.getLogger(__name__)
@@ -245,6 +249,26 @@ async def process_funnel_start_task(
         raise RuntimeError(str(exc)) from exc
 
 
+async def recover_missed_funnel_starts_task(ctx: dict) -> dict:
+    """Safety net for the commit-to-queue gap in Telegram webhook handling."""
+    # Keep automatic recovery ids stable within an hour so a delayed jobs queue
+    # cannot accumulate copies every minute. ARQ retries transient failures;
+    # the manual recovery action can create a new scope after a code fix.
+    scope = datetime.now(timezone.utc).strftime("auto-%Y%m%d%H")
+    try:
+        async with get_db_session() as db:
+            result = await FunnelStartRecoveryService(db).recover(
+                lookback_hours=24,
+                limit=500,
+                job_scope=scope,
+            )
+            await db.commit()
+        return {"status": "completed", **asdict(result), "scheduled": result.scheduled}
+    except Exception as exc:
+        logger.exception("Automatic funnel start recovery failed")
+        raise RuntimeError(str(exc)) from exc
+
+
 def _redis_settings_from_url() -> Any:
     if RedisSettings is None:
         return None
@@ -266,9 +290,15 @@ class WorkerSettings:
         send_fb_capi_event_task,
         process_user_input_task,
         process_funnel_start_task,
+        recover_missed_funnel_starts_task,
         process_broadcast,
         process_due_broadcasts,
         process_funnel_scheduled_job_task,
     ]
     redis_settings = _redis_settings_from_url()
     queue_name = JOBS_QUEUE_NAME
+    cron_jobs = (
+        [cron(recover_missed_funnel_starts_task, second=20, run_at_startup=True)]
+        if cron is not None
+        else []
+    )

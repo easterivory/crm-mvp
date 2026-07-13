@@ -3,6 +3,9 @@ export type ProjectDomain = {
   project_id: string
   domain_name: string
   is_active: boolean
+  cname_verified: boolean
+  cname_target: string | null
+  cname_error: string | null
   created_at: string
   updated_at: string
 }
