@@ -37,9 +37,16 @@ function PublicHostNotFound() {
   }, [])
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-neutral-950 p-6 text-center">
-      <h1 className="text-4xl font-semibold text-zinc-100">404</h1>
-      <p className="text-sm text-zinc-500">Страница не найдена</p>
+    <div className="grid min-h-screen place-items-center bg-[#090b11] px-5 text-center text-zinc-100">
+      <main className="w-full max-w-[460px]">
+        <div className="mx-auto mb-6 grid h-[58px] w-[58px] place-items-center rounded-lg border border-[#303541] bg-[#11141c] text-sm font-bold text-zinc-400">
+          404
+        </div>
+        <h1 className="text-[28px] font-semibold leading-tight sm:text-[34px]">Page unavailable</h1>
+        <p className="mx-auto mt-3.5 max-w-[390px] text-[15px] leading-6 text-[#8b909c]">
+          This address is unavailable. Check the link and try again.
+        </p>
+      </main>
     </div>
   )
 }

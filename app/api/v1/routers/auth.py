@@ -1,7 +1,6 @@
 import json
 import logging
 from typing import Any
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -9,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import create_access_token
+from app.core.telegram_links import build_telegram_bot_start_link
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import TokenOut
 from app.services.auth_service import AuthService
@@ -87,7 +87,7 @@ async def create_telegram_login_session(
     argument = sessions.start_argument(token)
     return TelegramLoginSessionOut(
         session_token=token,
-        deep_link=f"https://t.me/{quote(username)}?start={quote(argument)}",
+        deep_link=build_telegram_bot_start_link(username, argument),
         bot_username=username,
         expires_in=LOGIN_SESSION_TTL_SECONDS,
     )

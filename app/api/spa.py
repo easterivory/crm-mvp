@@ -2,7 +2,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.core.config import settings
 from app.services.lander_service import LanderService
@@ -14,6 +14,32 @@ FRONTEND_INDEX_PATH = (
     Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
 )
 LOCAL_CRM_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
+PUBLIC_NOT_FOUND_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#090b11">
+  <title>Page unavailable</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; min-height: 100svh; display: grid; place-items: center; background: #090b11; color: #f4f4f5; }
+    main { width: min(100% - 40px, 460px); text-align: center; }
+    .status { display: grid; width: 58px; height: 58px; margin: 0 auto 24px; place-items: center; border: 1px solid #303541; border-radius: 8px; background: #11141c; color: #a1a1aa; font-size: 14px; font-weight: 700; letter-spacing: 0; }
+    h1 { margin: 0; font-size: clamp(26px, 6vw, 34px); line-height: 1.15; letter-spacing: 0; }
+    p { margin: 14px auto 0; max-width: 390px; color: #8b909c; font-size: 15px; line-height: 1.6; letter-spacing: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="status" aria-hidden="true">404</div>
+    <h1>Page unavailable</h1>
+    <p>This address is unavailable. Check the link and try again.</p>
+  </main>
+</body>
+</html>"""
 
 
 def _frontend_index_response() -> FileResponse:
@@ -27,6 +53,19 @@ def _frontend_index_response() -> FileResponse:
         FRONTEND_INDEX_PATH,
         media_type="text/html",
         headers={"Cache-Control": "no-cache"},
+    )
+
+
+def _public_not_found_response() -> HTMLResponse:
+    return HTMLResponse(
+        PUBLIC_NOT_FOUND_HTML,
+        status_code=status.HTTP_404_NOT_FOUND,
+        headers={
+            "Cache-Control": "no-store",
+            "CDN-Cache-Control": "no-store",
+            "Surrogate-Control": "no-store",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+        },
     )
 
 
@@ -94,13 +133,13 @@ async def get_ui_host_context(request: Request) -> JSONResponse:
 @router.get("/settings")
 async def render_frontend(request: Request) -> Response:
     if not _is_crm_application_domain(request):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        return _public_not_found_response()
     return _frontend_index_response()
 
 
 @router.get("/funnels/{funnel_id}/builder")
-async def render_funnel_builder(funnel_id: str, request: Request) -> FileResponse:
+async def render_funnel_builder(funnel_id: str, request: Request) -> Response:
     del funnel_id
     if not _is_crm_application_domain(request):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        return _public_not_found_response()
     return _frontend_index_response()

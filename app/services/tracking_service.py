@@ -15,6 +15,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import RoleName, TrackingCostModel, TrackingSpendSource
+from app.core.telegram_links import (
+    build_telegram_bot_start_link,
+    canonicalize_telegram_web_link,
+)
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
 from app.models.funnel import FunnelStep, FunnelVersion
@@ -102,10 +106,9 @@ class TrackingService:
 
         requested_code = self._normalize_code(data.code or data.ref_code)
         code = requested_code or await self._generate_unique_code(title)
-        invite_link = self._normalize_optional(data.invite_link) or self._build_invite_link(
-            bot.bot_username,
-            code,
-        )
+        invite_link = canonicalize_telegram_web_link(
+            self._normalize_optional(data.invite_link)
+        ) or self._build_invite_link(bot.bot_username, code)
         buyer_id, buyer_name = await self._resolve_buyer(
             project_id=project_id,
             buyer_id=data.buyer_id,
@@ -362,10 +365,9 @@ class TrackingService:
             target_funnel_step_key=data.target_funnel_step_key,
         )
 
-        invite_link = self._normalize_optional(data.invite_link) or self._build_invite_link(
-            bot.bot_username,
-            code,
-        )
+        invite_link = canonicalize_telegram_web_link(
+            self._normalize_optional(data.invite_link)
+        ) or self._build_invite_link(bot.bot_username, code)
         if actor.role_name == RoleName.BUYER:
             buyer_id, buyer_name = actor.id, actor.name
         else:
@@ -766,6 +768,11 @@ class TrackingService:
             if field in values:
                 values[field] = self._normalize_optional(values[field])
 
+        if "invite_link" in values:
+            values["invite_link"] = canonicalize_telegram_web_link(
+                values["invite_link"]
+            )
+
         return values
 
     async def _resolve_buyer(
@@ -917,15 +924,19 @@ class TrackingService:
         username = (bot_username or "").removeprefix("@")
         if not username:
             return None
-        return f"https://t.me/{username}?start={code}"
+        return build_telegram_bot_start_link(username, code)
 
     @classmethod
     def _to_out(cls, link: TrackingLink) -> TrackingLinkOut:
         username = (link.bot.bot_username or "").removeprefix("@")
         ref_code = link.ref_code or link.code
+        invite_link = canonicalize_telegram_web_link(link.invite_link)
+        if not invite_link:
+            invite_link = cls._build_invite_link(username, ref_code)
         return TrackingLinkOut.model_validate(link).model_copy(
             update={
-                "tracking_url": f"https://t.me/{username}?start={ref_code}",
+                "invite_link": invite_link,
+                "tracking_url": build_telegram_bot_start_link(username, ref_code),
                 "has_fb_capi_token": bool((link.fb_capi_token or "").strip()),
                 "has_fb_proxy": bool((link.fb_proxy_url or "").strip()),
             }
@@ -939,7 +950,9 @@ class TrackingService:
     ) -> TrackingLinkRead:
         code = link.code or link.ref_code
         title = link.title or link.name
-        invite_link = link.invite_link or self._build_invite_link(
+        invite_link = canonicalize_telegram_web_link(
+            link.invite_link
+        ) or self._build_invite_link(
             getattr(link.bot, "bot_username", None),
             code,
         )

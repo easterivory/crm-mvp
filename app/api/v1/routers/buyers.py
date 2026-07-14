@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
 from app.core.constants import RoleName
 from app.core.security import hash_password
+from app.core.telegram_links import build_telegram_bot_start_link
 from app.models.project import Project
 from app.models.role import Role
 from app.models.tracking import TrackingLink
@@ -108,7 +109,10 @@ async def create_buyer(
     return BuyerInviteOut(
         buyer=BuyerUserOut.model_validate(user),
         invite_token=invite_token,
-        invite_link=f"https://t.me/{username}?start=act_{invite_token}",
+        invite_link=build_telegram_bot_start_link(
+            username,
+            f"act_{invite_token}",
+        ),
     )
 
 

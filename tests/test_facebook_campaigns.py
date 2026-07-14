@@ -7,7 +7,11 @@ from uuid import uuid4
 import httpx
 from sqlalchemy.dialects import postgresql
 
-from app.api.spa import _is_crm_application_domain, _is_technical_domain
+from app.api.spa import (
+    _is_crm_application_domain,
+    _is_technical_domain,
+    _public_not_found_response,
+)
 from app.core.config import settings
 from app.api.v1.routers.public_landers import _request_host
 from app.core.facebook_events import (
@@ -80,6 +84,15 @@ class FacebookEventMappingTests(unittest.TestCase):
         request = SimpleNamespace(headers={"host": "lp.sfera.cyou:443"})
 
         self.assertIs(_is_technical_domain(request), True)
+
+    def test_public_not_found_page_is_neutral_english_html(self) -> None:
+        response = _public_not_found_response()
+        body = response.body.decode("utf-8")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('<html lang="en">', body)
+        self.assertIn("Page unavailable", body)
+        self.assertNotIn("Страница", body)
 
     def test_crm_ui_is_limited_to_configured_hosts(self) -> None:
         with (

@@ -1127,9 +1127,10 @@ export default function DocsPage() {
           <InfoCallout title="Контракт кастомного лендинга" tone="amber">
             В ZIP обязателен index.html в корне и хотя бы одна кнопка <code>&lt;a data-crm-telegram-link href=&quot;#&quot;&gt;...&lt;/a&gt;</code>.
             CRM на лету заменяет ее href на deep-link конкретной кампании с кодом и UTM. Не вставляйте
-            вручную адрес бота и не делайте самостоятельный redirect в Telegram. Ссылки на t.me
-            текущего бота в старых ZIP поддерживаются для обратной совместимости, но новый контракт
-            должен использовать data-атрибут.
+            вручную адрес бота и не делайте самостоятельный redirect в Telegram. Ссылки на старый
+            домен t.me и новый telegram.me для текущего бота поддерживаются для обратной совместимости,
+            но новый контракт должен использовать data-атрибут. CRM генерирует внешние переходы через
+            telegram.me, сохраняя username и start-параметр без изменений.
           </InfoCallout>
           <InfoCallout title="Meta-события кастомного лендинга" tone="emerald">
             Для новой карты используйте <code>data-crm-fb-source=&quot;telegram_click&quot;</code> или вызов

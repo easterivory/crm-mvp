@@ -13,7 +13,6 @@ import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from collections.abc import Mapping
 from uuid import UUID, uuid4
-from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.facebook_events import normalize_facebook_event_mappings
 from app.core.lander_urls import effective_campaign_utm_defaults
+from app.core.telegram_links import build_telegram_bot_start_link
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.repositories.tracking_repository import TrackingEventRepository
@@ -244,11 +244,11 @@ class LanderService:
             query_params=utm_params,
             browser_context=browser_context,
         )
-        start_payload = quote(
-            self.utm_bridge.build_lander_start_payload(tracking_link.id, start_key),
-            safe="",
+        start_payload = self.utm_bridge.build_lander_start_payload(
+            tracking_link.id,
+            start_key,
         )
-        return f"https://t.me/{username}?start={start_payload}", start_key
+        return build_telegram_bot_start_link(username, start_payload), start_key
 
     def replace_bot_links(
         self,

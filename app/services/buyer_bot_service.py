@@ -32,6 +32,10 @@ from app.core.lander_urls import (
     build_lander_public_url,
     effective_campaign_utm_defaults,
 )
+from app.core.telegram_links import (
+    build_telegram_bot_start_link,
+    canonicalize_telegram_web_link,
+)
 from app.models.bot import Bot
 from app.models.chat import Chat
 from app.models.funnel import FunnelStep, FunnelStepLog
@@ -1176,7 +1180,9 @@ class BuyerBotService:
 
         lines = ["Твои ссылки:"]
         for index, link in enumerate(links, start=1):
-            invite_link = link.invite_link or self._build_client_start_link(
+            invite_link = canonicalize_telegram_web_link(
+                link.invite_link
+            ) or self._build_client_start_link(
                 link.bot.bot_username if link.bot else None,
                 link.code or link.ref_code,
             )
@@ -2031,7 +2037,7 @@ class BuyerBotService:
     def _build_client_start_link(bot_username: str | None, code: str | None) -> str:
         username = (bot_username or "").removeprefix("@").strip()
         ref_code = (code or "").strip()
-        return f"https://t.me/{username}?start=ref_{ref_code}"
+        return build_telegram_bot_start_link(username, f"ref_{ref_code}")
 
     @staticmethod
     def _split_command(text: str) -> tuple[str, str | None]:
