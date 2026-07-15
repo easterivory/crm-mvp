@@ -16,6 +16,7 @@ import ChatsPage from './pages/ChatsPage'
 import DocsPage from './pages/DocsPage'
 import SettingsPage from './pages/SettingsPage'
 import TrackingPage from './pages/TrackingPage'
+import FacebookCampaignsPage from './pages/FacebookCampaignsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
 import { NotificationViewport } from './shared/ui'
@@ -85,6 +86,7 @@ function CrmApplication() {
           <Route path="/bots" element={<BuyerRestrictedRoute><ManagerRestrictedRoute><BotsPage /></ManagerRestrictedRoute></BuyerRestrictedRoute>} />
           <Route path="/leads" element={<BuyerRestrictedRoute><LeadsPage /></BuyerRestrictedRoute>} />
           <Route path="/tracking" element={<ManagerRestrictedRoute><TrackingPage /></ManagerRestrictedRoute>} />
+          <Route path="/tracking/facebook" element={<ManagerRestrictedRoute><FacebookCampaignsPage /></ManagerRestrictedRoute>} />
           <Route path="/docs" element={<SuperAdminRoute><DocsPage /></SuperAdminRoute>} />
           <Route path="/settings" element={<BuyerRestrictedRoute><ManagerRestrictedRoute><SettingsPage /></ManagerRestrictedRoute></BuyerRestrictedRoute>} />
         </Route>

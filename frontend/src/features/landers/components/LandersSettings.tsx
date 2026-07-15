@@ -18,6 +18,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 
 import { fetchBots, type Bot } from '../../bots'
 import { Modal } from '../../../shared/ui'
+import { useAuthStore } from '../../../store/authStore'
 import {
   createProjectDomain,
   createProjectLander,
@@ -46,6 +47,8 @@ import type {
 
 type LandersSettingsProps = {
   projectId: string | null
+  campaignOnly?: boolean
+  canManageDomains?: boolean
 }
 
 type Banner = {
@@ -350,7 +353,12 @@ function buildUtmDefaults(form: LanderForm): Record<string, string> {
   )
 }
 
-export default function LandersSettings({ projectId }: LandersSettingsProps) {
+export default function LandersSettings({
+  projectId,
+  campaignOnly = false,
+  canManageDomains = true,
+}: LandersSettingsProps) {
+  const isBuyer = useAuthStore((state) => state.user?.role_name === 'buyer')
   const [domains, setDomains] = useState<ProjectDomain[]>([])
   const [landers, setLanders] = useState<ProjectLander[]>([])
   const [trackingLinks, setTrackingLinks] = useState<TrackingLinkOption[]>([])
@@ -377,6 +385,12 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
   const trackingLinkById = useMemo(
     () => new Map(trackingLinks.map((link) => [link.id, link])),
     [trackingLinks],
+  )
+  const visibleLanders = useMemo(
+    () => campaignOnly
+      ? landers.filter((lander) => lander.facebook_campaign_enabled)
+      : landers,
+    [campaignOnly, landers],
   )
 
   const loadData = useCallback(async () => {
@@ -426,8 +440,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       campaignBotId: bots[0]?.id ?? '',
       slug: generateSlug(),
       campaignEventMappings: cloneEventMappings(runtimeConfig?.default_event_mappings ?? []),
+      trackingMode: campaignOnly ? 'campaign' : emptyLanderForm.trackingMode,
     })
-  }, [bots, domains, runtimeConfig, trackingLinks])
+  }, [bots, campaignOnly, runtimeConfig, trackingLinks])
 
   useEffect(() => {
     if (!isModalOpen || !projectId || form.trackingMode !== 'campaign' || !form.campaignBotId) {
@@ -730,7 +745,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       setBanner({ tone: 'error', message: 'Заполните slug.' })
       return
     }
-    if (form.trackingMode === 'existing' && !form.trackingLinkId) {
+    if (!campaignOnly && form.trackingMode === 'existing' && !form.trackingLinkId) {
       setBanner({ tone: 'error', message: 'Выберите существующую tracking link.' })
       return
     }
@@ -753,14 +768,15 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
 
     setIsSavingLander(true)
     setBanner(null)
+    let createdLander: ProjectLander | null = null
     try {
-      const created = await createProjectLander(projectId, {
+      createdLander = await createProjectLander(projectId, {
         domain_id: form.domainId || null,
         name: form.name.trim() || slug,
         type: form.type,
         slug,
-        tracking_link_id: form.trackingMode === 'existing' ? form.trackingLinkId : null,
-        campaign: form.trackingMode === 'campaign'
+        tracking_link_id: !campaignOnly && form.trackingMode === 'existing' ? form.trackingLinkId : null,
+        campaign: campaignOnly || form.trackingMode === 'campaign'
           ? {
               bot_id: form.campaignBotId,
               title: form.campaignTitle.trim() || form.name.trim() || `Landing ${slug}`,
@@ -782,18 +798,25 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
         auto_redirect_enabled: form.autoRedirectEnabled,
       })
       if (form.type === 'custom_upload' && form.zipFile) {
-        await uploadProjectLanderZip(projectId, created.id, form.zipFile)
+        await uploadProjectLanderZip(projectId, createdLander.id, form.zipFile)
       }
       setIsModalOpen(false)
       setForm(emptyLanderForm)
       await loadData()
       setBanner({
         tone: 'success',
-        message: form.trackingMode === 'campaign'
-          ? 'Лендинг и отдельная campaign tracking link созданы.'
+        message: campaignOnly || form.trackingMode === 'campaign'
+          ? 'FB-кампания, лендинг и отдельная tracking link созданы.'
           : 'Лендинг создан.',
       })
     } catch (err) {
+      if (createdLander && form.type === 'custom_upload') {
+        try {
+          await deleteProjectLander(projectId, createdLander.id)
+        } catch {
+          // The original upload error is more useful to the operator.
+        }
+      }
       setBanner({
         tone: 'error',
         message: getErrorMessage(err, 'Не удалось создать лендинг.'),
@@ -815,9 +838,13 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
     <div className="max-w-6xl space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-zinc-100">Лендинги и Домены</h2>
+          <h2 className="text-xl font-semibold text-zinc-100">
+            {campaignOnly ? 'Facebook-кампании' : 'Лендинги и Домены'}
+          </h2>
           <p className="mt-1 text-sm text-zinc-500">
-            Парковка доменов, прокладки и сквозная UTM-атрибуция в Telegram.
+            {campaignOnly
+              ? 'Лендинг, рекламный домен, tracking link, Pixel и CAPI в одной кампании.'
+              : 'Парковка доменов, прокладки и сквозная UTM-атрибуция в Telegram.'}
           </p>
         </div>
         <button
@@ -827,7 +854,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
           className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus size={16} />
-          Создать лендинг
+          {campaignOnly ? 'Создать FB-кампанию' : 'Создать лендинг'}
         </button>
       </div>
 
@@ -866,7 +893,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             </button>
           </div>
 
-          <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleAddDomain}>
+          {canManageDomains ? <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={handleAddDomain}>
             <label className="min-w-0 flex-1">
               <span className="mb-1 block text-sm font-medium text-zinc-300">
                 Доменное имя
@@ -887,7 +914,11 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               {isAddingDomain ? <LoaderCircle size={16} className="animate-spin" /> : <Globe2 size={16} />}
               Припарковать
             </button>
-          </form>
+          </form> : (
+            <p className="mt-4 rounded-lg border border-white/5 bg-zinc-950/40 px-3 py-2 text-xs leading-5 text-zinc-500">
+              Домены подключает администратор. Здесь можно выбрать любой уже настроенный домен проекта.
+            </p>
+          )}
 
           <div className="mt-4 overflow-x-auto rounded-lg border border-white/5">
             <table className="w-full min-w-[520px] text-left text-sm">
@@ -945,7 +976,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end">
-                          <button
+                          {canManageDomains ? <button
                             type="button"
                             title="Разлинковать домен"
                             onClick={() => void handleDeleteDomain(domain)}
@@ -957,7 +988,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                             ) : (
                               <Trash2 size={15} />
                             )}
-                          </button>
+                          </button> : null}
                         </div>
                       </td>
                     </tr>
@@ -991,7 +1022,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
       <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-base font-semibold text-zinc-100">Конструктор Прокладок</h3>
+            <h3 className="text-base font-semibold text-zinc-100">
+              {campaignOnly ? 'Кампании и лендинги' : 'Конструктор Прокладок'}
+            </h3>
             <p className="mt-1 text-sm text-zinc-500">
               Кампания, Telegram-переход, UTM-атрибуция и пиксели в одном объекте.
             </p>
@@ -1003,7 +1036,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
             className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-white/10 px-4 text-sm font-semibold text-zinc-100 transition hover:border-emerald-500/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus size={16} />
-            Создать лендинг
+            {campaignOnly ? 'Создать FB-кампанию' : 'Создать лендинг'}
           </button>
         </div>
 
@@ -1018,14 +1051,14 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {landers.length === 0 ? (
+              {visibleLanders.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-10 text-center text-sm text-zinc-500">
-                    Лендинги пока не созданы.
+                    {campaignOnly ? 'FB-кампании пока не созданы.' : 'Лендинги пока не созданы.'}
                   </td>
                 </tr>
               ) : (
-                landers.map((lander) => {
+                visibleLanders.map((lander) => {
                   const link = lander.tracking_link_id
                     ? trackingLinkById.get(lander.tracking_link_id)
                     : null
@@ -1163,8 +1196,10 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
 
       {isModalOpen ? (
         <Modal
-          title="Создать лендинг"
-          description="По умолчанию создается отдельная campaign tracking link. Существующую ссылку можно выбрать только для осознанного переиспользования."
+          title={campaignOnly ? 'Создать Facebook-кампанию' : 'Создать лендинг'}
+          description={campaignOnly
+            ? 'CRM атомарно создаст отдельную tracking link и встроит её Telegram-переход в выбранный лендинг.'
+            : 'По умолчанию создается отдельная campaign tracking link. Существующую ссылку можно выбрать только для осознанного переиспользования.'}
           onClose={() => {
             if (!isSavingLander) {
               setIsModalOpen(false)
@@ -1256,7 +1291,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
 
             <fieldset className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
               <legend className="px-1 text-sm font-semibold text-zinc-100">Tracking-кампания</legend>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {!campaignOnly ? <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => setForm((current) => ({ ...current, trackingMode: 'campaign', trackingLinkId: '' }))}
@@ -1281,9 +1316,13 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                   <span className="block font-semibold">Использовать существующую</span>
                   <span className="mt-0.5 block text-xs opacity-75">Один источник для нескольких лендингов</span>
                 </button>
-              </div>
+              </div> : (
+                <p className="mt-2 text-xs leading-5 text-zinc-500">
+                  Для кампании всегда создаётся собственная tracking link: клики, старты, лиды и расходы не смешиваются с другими источниками.
+                </p>
+              )}
 
-              {form.trackingMode === 'campaign' ? (
+              {campaignOnly || form.trackingMode === 'campaign' ? (
                 <div className="mt-4 space-y-3">
                   <div className="grid gap-3 md:grid-cols-2">
                     <label className="block">
@@ -1328,7 +1367,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                       />
                     </label>
-                    <label className="block">
+                    {!isBuyer ? <label className="block">
                       <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Баер</span>
                       <input
                         value={form.campaignBuyerName}
@@ -1337,7 +1376,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                         placeholder="Имя"
                         className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                       />
-                    </label>
+                    </label> : null}
                     <label className="block">
                       <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Тип рекламы</span>
                       <input
@@ -1400,6 +1439,9 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                       </label>
                     </div>
                     <p className="mt-2 text-xs leading-5 text-zinc-500">
+                      {isBuyer
+                        ? 'Пустые Pixel ID и token будут взяты из настроек баер-бота. Введённые здесь значения применятся только к этой кампании. '
+                        : ''}
                       Токен и proxy никогда не возвращаются из API. Test event code отправляет CAPI-события в режим проверки Meta Events Manager.
                     </p>
                   </div>
@@ -1459,7 +1501,7 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
               <p className="mt-1 text-xs leading-5 text-zinc-500">
                 UTM из рекламного URL сохраняются у лида автоматически; значения ниже заполняют только отсутствующие параметры.
               </p>
-              {form.trackingMode === 'existing' ? (
+              {!campaignOnly && form.trackingMode === 'existing' ? (
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Legacy Meta Pixel ID</span>
@@ -1625,10 +1667,10 @@ export default function LandersSettings({ projectId }: LandersSettingsProps) {
                   <span className="mb-1.5 block text-sm font-medium text-zinc-200">Код ссылки</span>
                   <input value={editForm.campaignCode} onChange={(event) => setEditForm((current) => current ? { ...current, campaignCode: event.target.value } : current)} maxLength={64} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
                 </label>
-                <label className="block">
+                {!isBuyer ? <label className="block">
                   <span className="mb-1.5 block text-sm font-medium text-zinc-200">Баер</span>
                   <input value={editForm.buyerName} onChange={(event) => setEditForm((current) => current ? { ...current, buyerName: event.target.value } : current)} maxLength={255} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
-                </label>
+                </label> : null}
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium text-zinc-200">Тип рекламы</span>
                   <input value={editForm.adType} onChange={(event) => setEditForm((current) => current ? { ...current, adType: event.target.value } : current)} maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />

@@ -37,6 +37,14 @@ export type Funnel = {
   is_active_for_bot: boolean
 }
 
+export type FunnelSelfRestartResult = {
+  chat_id: string
+  funnel_id: string
+  funnel_version_id: string
+  version_number: number
+  bot_id: string
+}
+
 export type FunnelVersion = {
   id: string
   funnel_id: string

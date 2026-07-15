@@ -6,6 +6,7 @@ import {
   Copy,
   DollarSign,
   Flame,
+  Globe2,
   LoaderCircle,
   Pencil,
   Plus,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
+import { useNavigate } from 'react-router-dom'
 import {
   Area,
   AreaChart,
@@ -32,6 +34,8 @@ import { fetchBots } from '../features/bots/api'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
 import type { BuyerUser } from '../features/buyers'
+import { fetchProjectLanders } from '../features/landers/api'
+import type { ProjectLander } from '../features/landers/types'
 import { useAuthStore } from '../store/authStore'
 import {
   archiveTrackingLink,
@@ -337,10 +341,14 @@ function funnelList(items: FunnelStepMetric[]) {
 }
 
 export default function TrackingPage() {
+  const navigate = useNavigate()
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
-  const isBuyer = useAuthStore((state) => state.user?.role_name === 'buyer')
+  const currentRole = useAuthStore((state) => state.user?.role_name ?? '')
+  const isBuyer = currentRole === 'buyer'
+  const canManageFacebookCampaigns = ['super_admin', 'admin', 'buyer'].includes(currentRole)
   const [bots, setBots] = useState<Bot[]>([])
   const [links, setLinks] = useState<TrackingLink[]>([])
+  const [campaignLanders, setCampaignLanders] = useState<ProjectLander[]>([])
   const [metrics, setMetrics] = useState<TrackingProjectMetricsResponse | null>(null)
   const [buyers, setBuyers] = useState<BuyerUser[]>([])
   const [dateFrom, setDateFrom] = useState(daysAgoIso(6))
@@ -363,8 +371,6 @@ export default function TrackingPage() {
   const [createPricePerUnit, setCreatePricePerUnit] = useState('')
   const [createManualSpend, setCreateManualSpend] = useState('')
   const [createInviteLink, setCreateInviteLink] = useState('')
-  const [createFbPixelId, setCreateFbPixelId] = useState('')
-  const [createFbCapiToken, setCreateFbCapiToken] = useState('')
   const [createBaseConversionRate, setCreateBaseConversionRate] = useState(
     DEFAULT_BASE_CONVERSION_RATE,
   )
@@ -426,6 +432,13 @@ export default function TrackingPage() {
   const linkMetricsById = useMemo(() => {
     return new Map((metrics?.links ?? []).map((item) => [item.link_id, item]))
   }, [metrics?.links])
+  const campaignLanderByTrackingLinkId = useMemo(() => {
+    return new Map(
+      campaignLanders
+        .filter((lander) => lander.tracking_link_id && lander.is_active)
+        .map((lander) => [lander.tracking_link_id as string, lander]),
+    )
+  }, [campaignLanders])
 
   const filteredLinks = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -465,6 +478,7 @@ export default function TrackingPage() {
     if (!selectedProjectId) {
       setBots([])
       setLinks([])
+      setCampaignLanders([])
       setMetrics(null)
       setBuyers([])
       return
@@ -487,6 +501,7 @@ export default function TrackingPage() {
         linkResponse,
         projectMetrics,
         buyerUsers,
+        landerItems,
       ] = await Promise.all([
         fetchBots(selectedProjectId),
         fetchTrackingLinks({
@@ -498,10 +513,14 @@ export default function TrackingPage() {
         }),
         fetchProjectTrackingMetrics(params),
         isBuyer ? Promise.resolve([]) : fetchBuyers(selectedProjectId),
+        canManageFacebookCampaigns
+          ? fetchProjectLanders(selectedProjectId)
+          : Promise.resolve([]),
       ])
 
       setBots(botItems)
       setLinks(linkResponse.items)
+      setCampaignLanders(landerItems)
       setMetrics(projectMetrics)
       setBuyers(buyerUsers)
     } catch (err) {
@@ -516,6 +535,7 @@ export default function TrackingPage() {
     selectedBotIdForQuery,
     selectedProjectId,
     isBuyer,
+    canManageFacebookCampaigns,
   ])
 
   const loadDetail = useCallback(
@@ -589,8 +609,6 @@ export default function TrackingPage() {
     setCreatePricePerUnit('')
     setCreateManualSpend('')
     setCreateInviteLink('')
-    setCreateFbPixelId('')
-    setCreateFbCapiToken('')
     setCreateBaseConversionRate(DEFAULT_BASE_CONVERSION_RATE)
     setCreateMinSampleSize(DEFAULT_MIN_SAMPLE_SIZE)
     setCreateTargetStepKey('')
@@ -656,8 +674,6 @@ export default function TrackingPage() {
         price_per_unit: createCostModel === 'cpm' ? 0 : pricePerUnit,
         spend: createCostModel === 'cpm' ? manualSpend : 0,
         invite_link: createInviteLink.trim() || null,
-        fb_pixel_id: createFbPixelId.trim() || null,
-        fb_capi_token: createFbCapiToken.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
         target_funnel_step_key: createTargetStepKey || null,
@@ -766,8 +782,16 @@ export default function TrackingPage() {
   }
 
   const handleCopy = async (link: TrackingLink) => {
-    await navigator.clipboard.writeText(link.invite_link || link.code)
-      setNotice(link.invite_link ? 'Invite link скопирован.' : 'Код скопирован.')
+    const campaignUrl = campaignLanderByTrackingLinkId.get(link.id)?.public_url
+    const value = campaignUrl || link.invite_link || link.code
+    await navigator.clipboard.writeText(value)
+    setNotice(
+      campaignUrl
+        ? 'Ссылка FB-лендинга скопирована.'
+        : link.invite_link
+          ? 'Invite link скопирован.'
+          : 'Код скопирован.',
+    )
   }
 
   const handleArchiveToggle = async (link: TrackingLink) => {
@@ -967,6 +991,17 @@ export default function TrackingPage() {
                 <RefreshCw size={17} />
               )}
             </button>
+            {canManageFacebookCampaigns ? (
+              <button
+                type="button"
+                onClick={() => navigate('/tracking/facebook')}
+                disabled={bots.length === 0}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-400/10 px-4 text-sm font-semibold text-cyan-100 transition hover:border-cyan-300/50 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Globe2 size={17} />
+                FB-кампания
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={openCreateLink}
@@ -974,7 +1009,7 @@ export default function TrackingPage() {
               className="inline-flex h-10 items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus size={17} />
-              Создать ссылку
+              Прямая ссылка
             </button>
           </div>
         </div>
@@ -1185,6 +1220,7 @@ export default function TrackingPage() {
             const baseConversionRate =
               linkMetric?.base_conversion_rate ?? link.base_conversion_rate
             const minSampleSize = linkMetric?.min_sample_size ?? link.min_sample_size
+            const campaignLander = campaignLanderByTrackingLinkId.get(link.id)
             const conversionHelper = conversionHelperText(
               conversionStatus,
               linkSummary,
@@ -1210,13 +1246,15 @@ export default function TrackingPage() {
                       }`}>
                         {link.is_active ? 'Активна' : 'Архив'}
                       </span>
-                      {link.fb_pixel_id ? (
+                      {link.fb_campaign_enabled ? (
                         <span className={`rounded-full border px-2 py-1 text-xs ${
-                          link.has_fb_capi_token
+                          link.fb_pixel_id && link.has_fb_capi_token && campaignLander
                             ? 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100'
                             : 'border-amber-300/20 bg-amber-400/10 text-amber-100'
                         }`}>
-                          Meta CAPI {link.has_fb_capi_token ? 'готов' : 'без token'}
+                          {link.fb_pixel_id && link.has_fb_capi_token && campaignLander
+                            ? 'FB-кампания готова'
+                            : 'FB-кампания требует настройки'}
                         </span>
                       ) : null}
                     </div>
@@ -1226,6 +1264,16 @@ export default function TrackingPage() {
                     <p className="mt-1 truncate text-sm text-gray-500">
                       {botLabel} · {link.buyer_name || 'баер не указан'} · {link.ad_type || 'тип рекламы не указан'} · {costModelLabel(link.cost_model)}
                     </p>
+                    {campaignLander ? (
+                      <a
+                        href={campaignLander.public_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 block max-w-full truncate font-mono text-xs text-cyan-200 transition hover:text-cyan-100"
+                      >
+                        {campaignLander.public_url}
+                      </a>
+                    ) : null}
                     {link.target_funnel_step_key ? (
                       <p className="mt-2 inline-flex max-w-full items-center rounded-lg border border-violet-300/20 bg-violet-400/10 px-2 py-1 text-xs text-violet-100">
                         Вход: {link.target_funnel_step_title || link.target_funnel_step_key}
@@ -1235,8 +1283,10 @@ export default function TrackingPage() {
                   <div className="flex shrink-0 gap-2">
                     <button
                       type="button"
-                      onClick={() => openEditLink(link)}
-                      title="Настроить"
+                      onClick={() => link.fb_campaign_enabled
+                        ? navigate('/tracking/facebook')
+                        : openEditLink(link)}
+                      title={link.fb_campaign_enabled ? 'Настроить FB-кампанию' : 'Настроить ссылку'}
                       className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-gray-300 transition hover:border-accent-300/50 hover:text-white"
                     >
                       <Pencil size={15} />
@@ -1329,8 +1379,8 @@ export default function TrackingPage() {
 
       {isCreateOpen ? (
         <Modal
-          title="Создать tracking link"
-          description="Сгенерируйте source-ссылку для выбранного проекта."
+          title="Создать прямую Telegram-ссылку"
+          description="Ссылка ведёт сразу в выбранного бота. Для домена, лендинга, Pixel и CAPI используйте отдельную FB-кампанию."
           onClose={closeCreateLink}
           maxWidthClassName="max-w-2xl"
         >
@@ -1562,41 +1612,6 @@ export default function TrackingPage() {
                 placeholder="Готовый URL, необязательно"
               />
             </label>
-            <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/5 p-3">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
-                Facebook Conversion API
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                    Pixel ID
-                  </span>
-                  <input
-                    value={createFbPixelId}
-                    onChange={(event) => setCreateFbPixelId(event.target.value)}
-                    inputMode="numeric"
-                    maxLength={50}
-                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                    placeholder="123456789012345"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                    CAPI token
-                  </span>
-                  <input
-                    value={createFbCapiToken}
-                    onChange={(event) => setCreateFbCapiToken(event.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-                    placeholder="Access token"
-                    autoComplete="off"
-                  />
-                </label>
-              </div>
-              <p className="mt-2 text-xs leading-5 text-gray-500">
-                Эти данные используются только для server-side событий из CRM-действий воронки.
-              </p>
-            </div>
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1769,9 +1784,10 @@ export default function TrackingPage() {
                   : 'Ссылка зайдет прямо на выбранный шаг, если активная воронка этого бота не изменилась.'}
               </span>
             </label>
-            <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/5 p-3">
+            {(editingLink.fb_pixel_id || editingLink.has_fb_capi_token) && !editingLink.fb_campaign_enabled ? (
+            <div className="rounded-xl border border-amber-300/20 bg-amber-400/5 p-3">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
-                Facebook Conversion API
+                Legacy Facebook-настройки
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
@@ -1801,9 +1817,10 @@ export default function TrackingPage() {
                 </label>
               </div>
               <p className="mt-2 text-xs leading-5 text-gray-500">
-                Текущий token не показывается. Введите новый, только если его нужно заменить.
+                Эти поля оставлены только для совместимости со старой прямой ссылкой. Новую рекламу создавайте через «FB-кампания», где ссылка связана с доменом и лендингом.
               </p>
             </div>
+            ) : null}
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">

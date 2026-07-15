@@ -228,6 +228,14 @@ class FunnelCopyOut(BaseModel):
     new_version_id: uuid.UUID
 
 
+class FunnelSelfRestartOut(BaseModel):
+    chat_id: uuid.UUID
+    funnel_id: uuid.UUID
+    funnel_version_id: uuid.UUID
+    version_number: int
+    bot_id: uuid.UUID
+
+
 class BotActiveFunnelSetIn(BaseModel):
     funnel_id: uuid.UUID
     version_id: uuid.UUID

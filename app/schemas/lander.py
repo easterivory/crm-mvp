@@ -86,6 +86,7 @@ class LanderTrackingCampaignCreate(BaseModel):
     bot_id: UUID
     title: str = Field(..., min_length=1, max_length=255)
     code: Optional[str] = Field(default=None, max_length=64)
+    buyer_id: Optional[UUID] = None
     buyer_name: Optional[str] = Field(default=None, max_length=255)
     ad_type: Optional[str] = Field(default=None, max_length=100)
     payment_type: Optional[str] = Field(default=None, max_length=100)

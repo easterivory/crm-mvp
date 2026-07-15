@@ -54,6 +54,7 @@ export type LanderTrackingCampaign = {
   bot_id: string
   title: string
   code?: string | null
+  buyer_id?: string | null
   buyer_name?: string | null
   ad_type?: string | null
   payment_type?: string | null

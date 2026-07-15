@@ -118,6 +118,7 @@ class AuditAction:
     LEAD_REJECTED = "lead.rejected"
     CHAT_FUNNEL_PAUSED = "chat.funnel_paused"
     CHAT_FUNNEL_RESUMED = "chat.funnel_resumed"
+    CHAT_FUNNEL_RESTARTED_BY_BUYER = "chat.funnel_restarted_by_buyer"
 
 
 class EntityType:

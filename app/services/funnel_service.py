@@ -9,9 +9,11 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import ChatEventType, RoleName
+from app.core.constants import AuditAction, ChatEventType, EntityType, RoleName
 from app.models.funnel import Funnel, FunnelVersion
 from app.models.user import User
+from app.repositories.bot_repository import BotRepository
+from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
@@ -31,6 +33,7 @@ from app.schemas.funnel import (
     FunnelOut,
     FunnelPublishedVersionOut,
     FunnelPushRuleOut,
+    FunnelSelfRestartOut,
     FunnelStepIn,
     FunnelStepOut,
     FunnelUpdate,
@@ -39,12 +42,14 @@ from app.schemas.funnel import (
     FunnelVersionOut,
     FunnelVersionUpdate,
 )
+from app.services.access_control import require_project_access
+from app.services.audit_service import AuditService
+from app.services.chat_audit_service import ChatAuditService
 from app.services.funnel_block_registry import (
     FunnelBlockRegistry,
     is_supported_lead_field_key,
 )
-from app.services.access_control import require_project_access
-from app.services.chat_audit_service import ChatAuditService
+from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.funnel_validator import FunnelGraphValidator
 
 
@@ -55,6 +60,9 @@ class FunnelService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.repo = FunnelRepository(db)
+        self.bot_repo = BotRepository(db)
+        self.chat_repo = ChatRepository(db)
+        self.audit = AuditService(db)
         self.registry = FunnelBlockRegistry()
         self.graph_validator = FunnelGraphValidator()
 
@@ -127,6 +135,100 @@ class FunnelService:
         self._ensure_read_allowed(current_user)
         funnel = await self._get_funnel_or_404(funnel_id, project_id)
         return await self._funnel_out(funnel)
+
+    async def restart_funnel_for_buyer_self(
+        self,
+        *,
+        funnel_id: UUID,
+        project_id: UUID,
+        current_user: User,
+    ) -> FunnelSelfRestartOut:
+        if current_user.role_name != RoleName.BUYER:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Только аккаунт баера может запускать воронку себе.",
+            )
+        if current_user.buyer_telegram_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Сначала привяжите Telegram к аккаунту баера через баер-бота."
+                ),
+            )
+
+        funnel = await self._get_funnel_or_404(funnel_id, project_id)
+        if funnel.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Архивную воронку нельзя запустить.",
+            )
+        version = await self.repo.get_current_published_version(funnel.id)
+        if version is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="У воронки пока нет опубликованной актуальной версии.",
+            )
+        steps = await self.repo.list_steps(version.id)
+        if not any(step.step_type == "trigger" for step in steps):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="В опубликованной версии нет стартового блока.",
+            )
+
+        chat = await self.chat_repo.get_active_by_telegram_identity(
+            project_id=project_id,
+            bot_id=funnel.bot_id,
+            telegram_id=current_user.buyer_telegram_id,
+        )
+        if chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Сначала нажмите Start в клиентском боте этой воронки, "
+                    "затем повторите запуск."
+                ),
+            )
+        if chat.is_blocked or chat.is_blocked_by_user:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Этот Telegram-диалог заблокирован, запуск невозможен.",
+            )
+
+        runtime = FunnelRuntimeService(self.db)
+        await runtime.lock_chat_for_runtime(chat.id)
+        await self.bot_repo.reset_chat_state(chat.id)
+        await runtime.reset_chat_state(chat.id)
+        started_step = await runtime.start_funnel_for_chat(
+            chat_id=chat.id,
+            funnel_id=funnel.id,
+            funnel_version_id=version.id,
+        )
+        if started_step is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Воронку не удалось запустить с её стартового блока.",
+            )
+
+        await self.audit.log(
+            project_id=project_id,
+            action=AuditAction.CHAT_FUNNEL_RESTARTED_BY_BUYER,
+            entity_type=EntityType.CHAT,
+            entity_id=chat.id,
+            actor_id=current_user.id,
+            meta={
+                "bot_id": str(funnel.bot_id),
+                "funnel_id": str(funnel.id),
+                "funnel_version_id": str(version.id),
+                "version_number": version.version_number,
+            },
+        )
+        return FunnelSelfRestartOut(
+            chat_id=chat.id,
+            funnel_id=funnel.id,
+            funnel_version_id=version.id,
+            version_number=version.version_number,
+            bot_id=funnel.bot_id,
+        )
 
     async def update_funnel(
         self,

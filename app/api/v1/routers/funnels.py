@@ -24,6 +24,7 @@ from app.schemas.funnel import (
     FunnelGraphOut,
     FunnelHoldModeUpdate,
     FunnelOut,
+    FunnelSelfRestartOut,
     FunnelUpdate,
     FunnelValidationOut,
     FunnelVersionOut,
@@ -135,6 +136,20 @@ async def get_funnel(
     db: AsyncSession = Depends(get_db),
 ) -> FunnelOut:
     return await FunnelService(db).get_funnel(
+        funnel_id=funnel_id,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+
+@router.post("/{funnel_id}/restart-self", response_model=FunnelSelfRestartOut)
+async def restart_funnel_for_buyer_self(
+    funnel_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelSelfRestartOut:
+    return await FunnelService(db).restart_funnel_for_buyer_self(
         funnel_id=funnel_id,
         project_id=project_id,
         current_user=current_user,

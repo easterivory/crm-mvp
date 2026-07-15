@@ -711,8 +711,6 @@ class BuyerBotService:
                     buyer_name=buyer.name,
                     invite_link=invite_link,
                     created_by_user_id=buyer.id,
-                    fb_pixel_id=buyer.buyer_fb_pixel_id,
-                    fb_capi_token=buyer.buyer_fb_capi_token,
                 )
             )
             try:

@@ -48,7 +48,7 @@ class LanderAdminService:
         project_id: UUID,
         actor: User,
     ) -> list[ProjectDomainOut]:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
         result = await self.db.execute(
             select(ProjectDomain)
             .where(
@@ -130,8 +130,8 @@ class LanderAdminService:
         project_id: UUID,
         actor: User,
     ) -> list[ProjectLanderOut]:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
-        result = await self.db.execute(
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
+        statement = (
             select(ProjectLander)
             .options(
                 selectinload(ProjectLander.domain),
@@ -140,6 +140,12 @@ class LanderAdminService:
             .where(ProjectLander.project_id == project_id)
             .order_by(ProjectLander.created_at.desc())
         )
+        if actor.role_name == RoleName.BUYER:
+            statement = statement.join(
+                TrackingLink,
+                TrackingLink.id == ProjectLander.tracking_link_id,
+            ).where(TrackingLink.buyer_id == actor.id)
+        result = await self.db.execute(statement)
         return [self._to_lander_out(item) for item in result.scalars().all()]
 
     async def get_runtime_config(
@@ -148,7 +154,7 @@ class LanderAdminService:
         project_id: UUID,
         actor: User,
     ) -> LanderRuntimeConfigOut:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
         return LanderRuntimeConfigOut(technical_domain=self._technical_domain())
 
     async def create_lander(
@@ -158,7 +164,14 @@ class LanderAdminService:
         data: ProjectLanderCreate,
         actor: User,
     ) -> ProjectLanderOut:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
+        if actor.role_name == RoleName.BUYER and (
+            data.campaign is None or data.tracking_link_id is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Buyers can only create a new campaign with its own tracking link",
+            )
         lander_type = self._validate_lander_type(data.type)
         slug = self._validate_slug(data.slug)
         if await self._slug_exists(slug):
@@ -171,22 +184,37 @@ class LanderAdminService:
         else:
             self._technical_domain()
         tracking_link_id = data.tracking_link_id
+        tracking_link = None
         campaign_tracking_code: str | None = None
         if tracking_link_id is not None:
             await self._ensure_tracking_link_belongs_to_project(tracking_link_id, project_id)
         elif data.campaign is not None:
             campaign = data.campaign
+            fb_pixel_id = campaign.fb_pixel_id
+            fb_capi_token = campaign.fb_capi_token
+            if actor.role_name == RoleName.BUYER:
+                fb_pixel_id = fb_pixel_id or actor.buyer_fb_pixel_id
+                fb_capi_token = fb_capi_token or actor.buyer_fb_capi_token
+                if not fb_pixel_id or not fb_capi_token:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            "Configure Facebook Pixel ID and CAPI token in the buyer bot "
+                            "or enter them in the campaign form"
+                        ),
+                    )
             tracking_link = await TrackingService(self.db).create_tracking_link(
                 data=TrackingLinkCreate(
                     project_id=project_id,
                     bot_id=campaign.bot_id,
                     title=campaign.title,
                     code=campaign.code,
+                    buyer_id=campaign.buyer_id,
                     buyer_name=campaign.buyer_name,
                     ad_type=campaign.ad_type,
                     payment_type=campaign.payment_type,
-                    fb_pixel_id=campaign.fb_pixel_id,
-                    fb_capi_token=campaign.fb_capi_token,
+                    fb_pixel_id=fb_pixel_id,
+                    fb_capi_token=fb_capi_token,
                     fb_campaign_enabled=True,
                     fb_event_mappings=campaign.fb_event_mappings,
                     fb_proxy_url=campaign.fb_proxy_url,
@@ -200,7 +228,11 @@ class LanderAdminService:
             tracking_link_id = tracking_link.id
             campaign_tracking_code = tracking_link.code
 
-        campaign_pixel_id = data.campaign.fb_pixel_id if data.campaign is not None else None
+        campaign_pixel_id = (
+            tracking_link.fb_pixel_id
+            if data.campaign is not None and tracking_link is not None
+            else None
+        )
         pixels_json = [pixel.model_dump() for pixel in data.pixels]
         if campaign_pixel_id and not pixels_json:
             pixels_json = [{"provider": "meta", "pixel_id": campaign_pixel_id}]
@@ -235,8 +267,9 @@ class LanderAdminService:
         data: ProjectLanderUpdate,
         actor: User,
     ) -> ProjectLanderOut:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
         lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
+        self._ensure_buyer_owns_lander(actor=actor, lander=lander)
         if "domain_id" in data.model_fields_set:
             if data.domain_id is not None:
                 await self._ensure_domain_belongs_to_project(data.domain_id, project_id)
@@ -303,7 +336,10 @@ class LanderAdminService:
                     link.code = code
                     link.ref_code = code
                     code_changed = True
-            if "buyer_name" in campaign.model_fields_set:
+            if (
+                actor.role_name != RoleName.BUYER
+                and "buyer_name" in campaign.model_fields_set
+            ):
                 link.buyer_name = tracking_service._normalize_optional(campaign.buyer_name)
             if "ad_type" in campaign.model_fields_set:
                 link.ad_type = tracking_service._normalize_optional(campaign.ad_type)
@@ -368,7 +404,19 @@ class LanderAdminService:
         lander_id: UUID,
         actor: User,
     ) -> None:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
+        lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
+        self._ensure_buyer_owns_lander(actor=actor, lander=lander)
+        tracking_link = lander.tracking_link
+        other_landers_count = 0
+        if tracking_link is not None:
+            count_result = await self.db.execute(
+                select(func.count(ProjectLander.id)).where(
+                    ProjectLander.tracking_link_id == tracking_link.id,
+                    ProjectLander.id != lander.id,
+                )
+            )
+            other_landers_count = int(count_result.scalar_one())
         result = await self.db.execute(
             delete(ProjectLander).where(
                 ProjectLander.id == lander_id,
@@ -380,6 +428,13 @@ class LanderAdminService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Lander not found",
             )
+        if (
+            tracking_link is not None
+            and tracking_link.fb_campaign_enabled
+            and other_landers_count == 0
+        ):
+            tracking_link.is_active = False
+            tracking_link.fb_campaign_enabled = False
 
     async def ensure_upload_access(
         self,
@@ -388,8 +443,9 @@ class LanderAdminService:
         lander_id: UUID,
         actor: User,
     ) -> None:
-        await self._ensure_admin_project_access(actor=actor, project_id=project_id)
-        await self._get_lander(lander_id=lander_id, project_id=project_id)
+        await self._ensure_lander_project_access(actor=actor, project_id=project_id)
+        lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
+        self._ensure_buyer_owns_lander(actor=actor, lander=lander)
 
     async def _ensure_admin_project_access(
         self,
@@ -402,12 +458,47 @@ class LanderAdminService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only admin/super_admin can manage landers",
             )
+        await self._ensure_active_project_access(actor=actor, project_id=project_id)
+
+    async def _ensure_lander_project_access(
+        self,
+        *,
+        actor: User,
+        project_id: UUID,
+    ) -> None:
+        if actor.role_name not in {
+            RoleName.SUPER_ADMIN,
+            RoleName.ADMIN,
+            RoleName.BUYER,
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Current user cannot manage Facebook campaigns",
+            )
+        await self._ensure_active_project_access(actor=actor, project_id=project_id)
+
+    async def _ensure_active_project_access(
+        self,
+        *,
+        actor: User,
+        project_id: UUID,
+    ) -> None:
         require_project_access(actor, project_id)
         project = await self.project_repo.get_active(project_id)
         if project is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found",
+            )
+
+    @staticmethod
+    def _ensure_buyer_owns_lander(*, actor: User, lander: ProjectLander) -> None:
+        if actor.role_name != RoleName.BUYER:
+            return
+        if lander.tracking_link is None or lander.tracking_link.buyer_id != actor.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lander not found",
             )
 
     async def _slug_exists(self, slug: str, exclude_id: UUID | None = None) -> bool:

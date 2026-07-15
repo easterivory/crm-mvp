@@ -7,6 +7,7 @@ import {
   archiveFunnel,
   createFunnel,
   fetchFunnels,
+  restartFunnelForBuyerSelf,
   setFunnelCurrentVersion,
   setBotActiveFunnel,
   type Funnel,
@@ -54,6 +55,7 @@ export default function FunnelsPage() {
   const roleName = useAuthStore((state) => state.user?.role_name)
   const canEdit = roleName === 'super_admin' || roleName === 'admin'
   const canActivate = roleName === 'super_admin' || roleName === 'admin' || roleName === 'manager'
+  const canRestartSelf = roleName === 'buyer'
 
   const [funnels, setFunnels] = useState<Funnel[]>([])
   const [bots, setBots] = useState<BotRecord[]>([])
@@ -61,6 +63,7 @@ export default function FunnelsPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [copyTarget, setCopyTarget] = useState<Funnel | null>(null)
+  const [restartingFunnelId, setRestartingFunnelId] = useState<string | null>(null)
 
   const funnelId = params.funnelId ?? null
   const versionId = searchParams.get('versionId')
@@ -197,6 +200,44 @@ export default function FunnelsPage() {
     }
   }
 
+  const handleRestartSelf = async (funnel: Funnel) => {
+    if (!selectedProjectId || restartingFunnelId) {
+      return
+    }
+    const version =
+      funnel.published_versions.find((item) => item.is_current_for_funnel) ??
+      funnel.published_versions[0] ??
+      null
+    if (!version) {
+      notify({ tone: 'error', message: 'Сначала опубликуйте версию этой воронки.' })
+      return
+    }
+    const bot = bots.find((item) => item.id === funnel.bot_id)
+    const confirmed = window.confirm(
+      `Сбросить «${funnel.name}» до начала актуальной версии v${version.version_number} у себя в ${bot?.name ?? 'Telegram-боте'}? История сообщений и данные лида сохранятся.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setRestartingFunnelId(funnel.id)
+    try {
+      const result = await restartFunnelForBuyerSelf(funnel.id, selectedProjectId)
+      notify({
+        tone: 'success',
+        message: `Воронка запущена у вас с начала версии v${result.version_number}.`,
+      })
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : null
+      notify({
+        tone: 'error',
+        message: typeof detail === 'string' && detail ? detail : getErrorMessage(err),
+      })
+    } finally {
+      setRestartingFunnelId(null)
+    }
+  }
+
   const handleVersionReady = useCallback(
     (resolvedVersionId: string) => {
       if (versionId === resolvedVersionId) {
@@ -235,6 +276,8 @@ export default function FunnelsPage() {
         isCreating={isCreating}
         canEdit={canEdit}
         canActivate={canActivate}
+        canRestartSelf={canRestartSelf}
+        restartingFunnelId={restartingFunnelId}
         onCreate={handleCreate}
         onOpen={(funnel) =>
           navigate(
@@ -249,6 +292,7 @@ export default function FunnelsPage() {
         onSetCurrentVersion={(funnel, versionId) =>
           void handleSetCurrentVersion(funnel, versionId)
         }
+        onRestartSelf={(funnel) => void handleRestartSelf(funnel)}
       />
 
       {copyTarget ? (

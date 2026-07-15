@@ -420,6 +420,29 @@ class ChatRepository(BaseRepository[Chat]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_active_by_telegram_identity(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+        telegram_id: int,
+    ) -> Optional[Chat]:
+        """Return the current private chat for one Telegram user and bot."""
+        identity = str(telegram_id)
+        result = await self.db.execute(
+            select(Chat)
+            .where(
+                Chat.project_id == project_id,
+                Chat.bot_id == bot_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Chat.external_chat_id == identity,
+            )
+            .order_by(Chat.updated_at.desc(), Chat.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_reset_by_external(
         self,
         project_id: UUID,

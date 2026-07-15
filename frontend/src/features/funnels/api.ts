@@ -12,6 +12,7 @@ import type {
   FunnelGraph,
   FunnelGraphValidatePayload,
   FunnelGraphValidationResult,
+  FunnelSelfRestartResult,
   FunnelValidationResult,
   FunnelVersion,
 } from './types'
@@ -81,6 +82,18 @@ export async function archiveFunnel(funnel: Funnel): Promise<Funnel> {
   const { data } = await api.post<Funnel>(`/funnels/${funnel.id}/archive`, null, {
     params: { project_id: funnel.project_id },
   })
+  return data
+}
+
+export async function restartFunnelForBuyerSelf(
+  funnelId: string,
+  projectId: string,
+): Promise<FunnelSelfRestartResult> {
+  const { data } = await api.post<FunnelSelfRestartResult>(
+    `/funnels/${funnelId}/restart-self`,
+    null,
+    { params: { project_id: projectId } },
+  )
   return data
 }
 

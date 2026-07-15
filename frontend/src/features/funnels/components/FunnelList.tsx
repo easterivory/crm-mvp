@@ -20,12 +20,15 @@ type FunnelListProps = {
   isCreating: boolean
   canEdit: boolean
   canActivate: boolean
+  canRestartSelf: boolean
+  restartingFunnelId: string | null
   onCreate: (payload: { name: string; description: string; botId: string }) => void
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
   onMakeActive: (selection: ActiveFunnelSelection) => void
   onSetCurrentVersion: (funnel: Funnel, versionId: string) => void
+  onRestartSelf: (funnel: Funnel) => void
 }
 
 export default function FunnelList({
@@ -37,12 +40,15 @@ export default function FunnelList({
   isCreating,
   canEdit,
   canActivate,
+  canRestartSelf,
+  restartingFunnelId,
   onCreate,
   onOpen,
   onCopy,
   onArchive,
   onMakeActive,
   onSetCurrentVersion,
+  onRestartSelf,
 }: FunnelListProps) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -277,10 +283,13 @@ export default function FunnelList({
                             funnel={funnel}
                             bot={bot}
                             canEdit={canEdit}
+                            canRestartSelf={canRestartSelf}
+                            isRestartingSelf={restartingFunnelId === funnel.id}
                             onOpen={onOpen}
                             onCopy={onCopy}
                             onArchive={onArchive}
                             onSetCurrentVersion={onSetCurrentVersion}
+                            onRestartSelf={onRestartSelf}
                           />
                         ))
                       )}

@@ -1,4 +1,4 @@
-import { Archive, Bot, Copy, Edit3 } from 'lucide-react'
+import { Archive, Bot, Copy, Edit3, LoaderCircle, RotateCcw } from 'lucide-react'
 
 import type { Bot as BotRecord } from '../../bots'
 import type { Funnel } from '../types'
@@ -7,20 +7,26 @@ type FunnelCardProps = {
   funnel: Funnel
   bot: BotRecord | undefined
   canEdit: boolean
+  canRestartSelf: boolean
+  isRestartingSelf: boolean
   onOpen: (funnel: Funnel) => void
   onCopy: (funnel: Funnel) => void
   onArchive: (funnel: Funnel) => void
   onSetCurrentVersion: (funnel: Funnel, versionId: string) => void
+  onRestartSelf: (funnel: Funnel) => void
 }
 
 export default function FunnelCard({
   funnel,
   bot,
   canEdit,
+  canRestartSelf,
+  isRestartingSelf,
   onOpen,
   onCopy,
   onArchive,
   onSetCurrentVersion,
+  onRestartSelf,
 }: FunnelCardProps) {
   const publishedVersions = funnel.published_versions ?? []
   const hasPublished = publishedVersions.length > 0
@@ -96,6 +102,26 @@ export default function FunnelCard({
       ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
+        {canRestartSelf ? (
+          <button
+            type="button"
+            onClick={() => onRestartSelf(funnel)}
+            disabled={!currentVersion || isRestartingSelf}
+            title={
+              currentVersion
+                ? `Сбросить у себя до начала актуальной версии v${currentVersion.version_number}`
+                : 'Сначала опубликуйте версию воронки'
+            }
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-3 text-sm font-medium text-cyan-50 transition hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {isRestartingSelf ? (
+              <LoaderCircle size={15} className="animate-spin" />
+            ) : (
+              <RotateCcw size={15} />
+            )}
+            Сбросить себе
+          </button>
+        ) : null}
         {canEdit ? (
           <button
             type="button"
