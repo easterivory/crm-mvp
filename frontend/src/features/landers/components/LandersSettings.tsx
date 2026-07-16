@@ -37,7 +37,11 @@ import type {
   LanderPixel,
   LanderMetaEvent,
   FacebookEventMapping,
+  FacebookEventTrigger,
+  FacebookEventTriggerType,
+  FacebookLeadStatusTrigger,
   FacebookSourceEvent,
+  FacebookTagTrigger,
   LanderRuntimeConfig,
   LanderTargetStep,
   ProjectDomain,
@@ -204,18 +208,27 @@ function cloneEventMappings(mappings: FacebookEventMapping[]): FacebookEventMapp
   return mappings.map((mapping) => ({
     ...mapping,
     parameters: { ...mapping.parameters },
+    triggers: (mapping.triggers ?? (
+      ['page_view', 'telegram_click', 'bot_start', 'contact'].includes(mapping.source_event)
+        ? []
+        : [{ type: 'funnel_action' as const }]
+    )).map((trigger) => ({ ...trigger })),
   }))
 }
 
 type FacebookEventMappingsEditorProps = {
   mappings: FacebookEventMapping[]
   sourceEvents: FacebookSourceEvent[]
+  statuses: FacebookLeadStatusTrigger[]
+  tags: FacebookTagTrigger[]
   onChange: (mappings: FacebookEventMapping[]) => void
 }
 
 function FacebookEventMappingsEditor({
   mappings,
   sourceEvents,
+  statuses,
+  tags,
   onChange,
 }: FacebookEventMappingsEditorProps) {
   const sourceByKey = useMemo(
@@ -237,10 +250,67 @@ function FacebookEventMappingsEditor({
     )
   }
 
+  const triggerIdentity = (trigger: FacebookEventTrigger) =>
+    `${trigger.type}:${trigger.value ?? ''}`
+
+  const defaultTrigger = (
+    type: FacebookEventTriggerType,
+    existing: FacebookEventTrigger[],
+  ): FacebookEventTrigger | null => {
+    const used = new Set(existing.map(triggerIdentity))
+    if (type === 'funnel_action') {
+      return used.has('funnel_action:') ? null : { type }
+    }
+    const options = type === 'lead_status' ? statuses : tags
+    const option = options.find((item) => !used.has(`${type}:${item.id}`))
+    return option ? { type, value: option.id } : null
+  }
+
+  const patchTrigger = (
+    mappingIndex: number,
+    triggerIndex: number,
+    nextTrigger: FacebookEventTrigger,
+  ) => {
+    const mapping = mappings[mappingIndex]
+    const triggers = mapping.triggers ?? []
+    if (triggers.some(
+      (trigger, index) => index !== triggerIndex && triggerIdentity(trigger) === triggerIdentity(nextTrigger),
+    )) {
+      return
+    }
+    patchMapping(mappingIndex, {
+      triggers: triggers.map((trigger, index) => index === triggerIndex ? nextTrigger : trigger),
+    })
+  }
+
+  const addTrigger = (mappingIndex: number) => {
+    const triggers = mappings[mappingIndex].triggers ?? []
+    const next = (
+      defaultTrigger('funnel_action', triggers)
+      ?? defaultTrigger('lead_status', triggers)
+      ?? defaultTrigger('lead_tag', triggers)
+    )
+    if (next) {
+      patchMapping(mappingIndex, { triggers: [...triggers, next] })
+    }
+  }
+
+  const removeTrigger = (mappingIndex: number, triggerIndex: number) => {
+    const triggers = mappings[mappingIndex].triggers ?? []
+    if (triggers.length <= 1) {
+      return
+    }
+    patchMapping(mappingIndex, {
+      triggers: triggers.filter((_, index) => index !== triggerIndex),
+    })
+  }
+
   return (
     <div className="divide-y divide-white/10 rounded-lg border border-white/10 bg-zinc-950/40">
       {mappings.map((mapping, index) => {
         const source = sourceByKey.get(mapping.source_event)
+        const isAutomatic = source?.trigger === 'automatic'
+        const triggers = mapping.triggers ?? []
         const hasValueParameters =
           mapping.event_name.toLowerCase() === 'purchase' ||
           Boolean(mapping.parameters.value || mapping.parameters.currency)
@@ -266,7 +336,7 @@ function FacebookEventMappingsEditor({
                 </span>
                 <span className="mt-0.5 block text-xs text-zinc-500">
                   {source?.delivery === 'browser' ? 'Pixel · браузер' : 'CAPI · сервер'}
-                  {source?.trigger === 'funnel' ? ' · из CRM-действия' : ' · автоматически'}
+                  {' · '}{source?.trigger_description ?? (isAutomatic ? 'Автоматически' : 'По правилу CRM')}
                 </span>
               </span>
             </label>
@@ -309,6 +379,104 @@ function FacebookEventMappingsEditor({
                     className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base uppercase text-zinc-100 outline-none ring-emerald-500 focus:ring-2 disabled:opacity-45 md:text-sm"
                   />
                 </label>
+              </div>
+            ) : null}
+            {!isAutomatic && mapping.enabled ? (
+              <div className="space-y-2 rounded-md border border-white/10 bg-zinc-950/55 p-3 lg:col-span-full">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                      Когда отправлять событие
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-zinc-500">
+                      Срабатывает при выполнении любого из правил. Для регистрации и депозита можно выбрать соответствующий тег.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addTrigger(index)}
+                    disabled={
+                      !defaultTrigger('funnel_action', triggers)
+                      && !defaultTrigger('lead_status', triggers)
+                      && !defaultTrigger('lead_tag', triggers)
+                    }
+                    className="inline-flex min-h-10 items-center gap-2 rounded-md border border-white/10 px-3 text-sm font-medium text-zinc-200 transition hover:border-cyan-400/40 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    Добавить правило
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {triggers.map((trigger, triggerIndex) => {
+                    const valueOptions = trigger.type === 'lead_status' ? statuses : tags
+                    const otherTriggers = triggers.filter((_, itemIndex) => itemIndex !== triggerIndex)
+                    const usedValues = new Set(
+                      otherTriggers
+                        .filter((item) => item.type === trigger.type)
+                        .map((item) => item.value),
+                    )
+                    return (
+                      <div
+                        key={`${triggerIdentity(trigger)}:${triggerIndex}`}
+                        className="grid min-w-0 gap-2 sm:grid-cols-[minmax(180px,0.8fr)_minmax(220px,1.2fr)_40px]"
+                      >
+                        <select
+                          value={trigger.type}
+                          onChange={(event) => {
+                            const type = event.target.value as FacebookEventTriggerType
+                            const next = defaultTrigger(
+                              type,
+                              triggers.filter((_, itemIndex) => itemIndex !== triggerIndex),
+                            )
+                            if (next) {
+                              patchTrigger(index, triggerIndex, next)
+                            }
+                          }}
+                          className="min-h-10 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-3 text-base text-zinc-100 outline-none ring-cyan-500 focus:ring-2 md:text-sm"
+                          aria-label="Тип триггера Facebook-события"
+                        >
+                          <option value="funnel_action" disabled={!defaultTrigger('funnel_action', otherTriggers)}>CRM-действие воронки</option>
+                          <option value="lead_status" disabled={!defaultTrigger('lead_status', otherTriggers)}>Статус изменён на</option>
+                          <option value="lead_tag" disabled={!defaultTrigger('lead_tag', otherTriggers)}>Добавлен тег</option>
+                        </select>
+                        {trigger.type === 'funnel_action' ? (
+                          <div className="flex min-h-10 min-w-0 items-center rounded-md border border-white/5 bg-white/[0.025] px-3 text-sm text-zinc-400">
+                            Вызывается блоком «Отправить FB-событие»
+                          </div>
+                        ) : (
+                          <select
+                            value={trigger.value ?? ''}
+                            onChange={(event) => patchTrigger(index, triggerIndex, {
+                              ...trigger,
+                              value: event.target.value,
+                            })}
+                            className="min-h-10 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-3 text-base text-zinc-100 outline-none ring-cyan-500 focus:ring-2 md:text-sm"
+                            aria-label={trigger.type === 'lead_status' ? 'Статус лида' : 'Тег лида'}
+                          >
+                            {trigger.value && !valueOptions.some((item) => item.id === trigger.value) ? (
+                              <option value={trigger.value}>Недоступный объект · выберите другой</option>
+                            ) : null}
+                            {valueOptions.map((item) => (
+                              <option key={item.id} value={item.id} disabled={usedValues.has(item.id)}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeTrigger(index, triggerIndex)}
+                          disabled={triggers.length <= 1}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-white/10 text-zinc-500 transition hover:border-red-400/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-30"
+                          title={triggers.length <= 1 ? 'У события должно остаться хотя бы одно правило' : 'Удалить правило'}
+                          aria-label="Удалить правило"
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             ) : null}
           </div>
@@ -1448,11 +1616,13 @@ export default function LandersSettings({
                   <div className="border-t border-white/10 pt-4">
                     <div className="mb-1 text-sm font-semibold text-zinc-100">Карта событий</div>
                     <p className="mb-3 text-xs leading-5 text-zinc-500">
-                      Просмотр и переход фиксируются Pixel в лендинге. Старт бота и контакт отправляются CAPI автоматически. Остальные источники вызываются CRM-действием воронки.
+                      Автоматические события имеют фиксированную точку срабатывания. Для серверных событий задайте одно или несколько правил CRM: действие воронки, переход в статус или добавление тега.
                     </p>
                     <FacebookEventMappingsEditor
                       mappings={form.campaignEventMappings}
                       sourceEvents={runtimeConfig?.source_events ?? []}
+                      statuses={runtimeConfig?.lead_statuses ?? []}
+                      tags={runtimeConfig?.tags ?? []}
                       onChange={(campaignEventMappings) => setForm((current) => ({ ...current, campaignEventMappings }))}
                     />
                   </div>
@@ -1728,6 +1898,8 @@ export default function LandersSettings({
               <FacebookEventMappingsEditor
                 mappings={editForm.eventMappings}
                 sourceEvents={runtimeConfig?.source_events ?? []}
+                statuses={runtimeConfig?.lead_statuses ?? []}
+                tags={runtimeConfig?.tags ?? []}
                 onChange={(eventMappings) => setEditForm((current) => current ? { ...current, eventMappings } : current)}
               />
             </div>

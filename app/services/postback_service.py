@@ -24,6 +24,7 @@ from app.models.partner import LeadSubmission, PartnerIntegration
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.services.chat_audit_service import ChatAuditService
+from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.google_sheets_trigger_service import GoogleSheetsTriggerService
 from app.services.lead_identity_service import LeadIdentityService
 
@@ -57,6 +58,7 @@ class PostbackService:
         self.audit_service = ChatAuditService(db)
         self.identity_service = LeadIdentityService(db)
         self.google_sheets_trigger = GoogleSheetsTriggerService(db)
+        self.facebook_campaign = FacebookCampaignService(db)
 
     def build_payload(
         self,
@@ -603,6 +605,11 @@ class PostbackService:
                         lead_id=updated.id,
                         project_id=updated.project_id,
                         status_id=updated.status_id,
+                    )
+                    await self.facebook_campaign.enqueue_status_change(
+                        lead_id=updated.id,
+                        previous_status_id=old_status_id,
+                        current_status_id=updated.status_id,
                     )
                 return status_code
         logger.warning(

@@ -2,7 +2,7 @@ import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -13,11 +13,17 @@ from app.core.facebook_events import normalize_facebook_event_mappings
 from app.schemas.common import OrmBase
 
 
+class FacebookEventTrigger(BaseModel):
+    type: Literal["funnel_action", "lead_status", "lead_tag"]
+    value: Optional[str] = None
+
+
 class FacebookEventMapping(BaseModel):
     source_event: str = Field(..., min_length=1, max_length=50)
     event_name: str = Field(..., min_length=1, max_length=40)
     enabled: bool = True
     parameters: dict[str, str] = Field(default_factory=dict)
+    triggers: Optional[list[FacebookEventTrigger]] = Field(default=None, max_length=10)
 
 
 def normalize_event_mapping_models(

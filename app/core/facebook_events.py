@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from typing import Any
+from uuid import UUID
 
 
 FACEBOOK_EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -10,6 +11,12 @@ FACEBOOK_SOURCE_EVENT_RE = re.compile(r"^[a-z][a-z0-9_]{0,49}$")
 FACEBOOK_PARAMETER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
 
 FACEBOOK_BROWSER_SOURCE_EVENTS = frozenset({"page_view", "telegram_click"})
+FACEBOOK_AUTOMATIC_SOURCE_EVENTS = frozenset(
+    {*FACEBOOK_BROWSER_SOURCE_EVENTS, "bot_start", "contact"}
+)
+FACEBOOK_EVENT_TRIGGER_TYPES = frozenset(
+    {"funnel_action", "lead_status", "lead_tag"}
+)
 
 FACEBOOK_SOURCE_EVENT_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
@@ -17,60 +24,70 @@ FACEBOOK_SOURCE_EVENT_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "label": "Просмотр лендинга",
         "delivery": "browser",
         "trigger": "automatic",
+        "trigger_description": "Открытие лендинга в браузере",
     },
     {
         "key": "telegram_click",
         "label": "Переход в Telegram",
         "delivery": "browser",
         "trigger": "automatic",
+        "trigger_description": "Клик по кнопке перехода в Telegram",
     },
     {
         "key": "bot_start",
         "label": "Запуск бота",
         "delivery": "server",
         "trigger": "automatic",
+        "trigger_description": "Команда /start по ссылке этой кампании",
     },
     {
         "key": "contact",
         "label": "Получен контакт",
         "delivery": "server",
         "trigger": "automatic",
+        "trigger_description": "Телефон сохранён после отправки контакта",
     },
     {
         "key": "registration",
         "label": "Регистрация",
         "delivery": "server",
         "trigger": "funnel",
+        "trigger_description": "CRM-действие, переход в статус или добавление тега",
     },
     {
         "key": "channel_subscribe",
         "label": "Подписка на канал",
         "delivery": "server",
         "trigger": "funnel",
+        "trigger_description": "CRM-действие, переход в статус или добавление тега",
     },
     {
         "key": "channel_unsubscribe",
         "label": "Отписка от канала",
         "delivery": "server",
         "trigger": "funnel",
+        "trigger_description": "CRM-действие, переход в статус или добавление тега",
     },
     {
         "key": "sale",
-        "label": "Продажа",
+        "label": "Первый депозит / продажа",
         "delivery": "server",
         "trigger": "funnel",
+        "trigger_description": "CRM-действие, переход в статус или добавление тега",
     },
     {
         "key": "resale",
-        "label": "Повторная продажа",
+        "label": "Повторный депозит / продажа",
         "delivery": "server",
         "trigger": "funnel",
+        "trigger_description": "CRM-действие, переход в статус или добавление тега",
     },
     {
         "key": "contact_invite_bot",
         "label": "Приглашение контакта в бота",
         "delivery": "server",
         "trigger": "funnel",
+        "trigger_description": "CRM-действие, переход в статус или добавление тега",
     },
 )
 
@@ -87,30 +104,35 @@ _DEFAULT_FACEBOOK_EVENT_MAPPINGS: tuple[dict[str, Any], ...] = (
         "event_name": "ViewContent",
         "enabled": True,
         "parameters": {},
+        "triggers": [],
     },
     {
         "source_event": "telegram_click",
         "event_name": "Lead",
         "enabled": True,
         "parameters": {},
+        "triggers": [],
     },
     {
         "source_event": "registration",
         "event_name": "CompleteRegistration",
         "enabled": True,
         "parameters": {},
+        "triggers": [{"type": "funnel_action"}],
     },
     {
         "source_event": "channel_subscribe",
         "event_name": "Subscribe",
         "enabled": True,
         "parameters": {},
+        "triggers": [{"type": "funnel_action"}],
     },
     {
         "source_event": "channel_unsubscribe",
         "event_name": "Search",
         "enabled": True,
         "parameters": {},
+        "triggers": [{"type": "funnel_action"}],
     },
     {
         "source_event": "sale",
@@ -120,6 +142,7 @@ _DEFAULT_FACEBOOK_EVENT_MAPPINGS: tuple[dict[str, Any], ...] = (
             "value": "{{lead.expected_start_amount}}",
             "currency": "USD",
         },
+        "triggers": [{"type": "funnel_action"}],
     },
     {
         "source_event": "resale",
@@ -129,24 +152,28 @@ _DEFAULT_FACEBOOK_EVENT_MAPPINGS: tuple[dict[str, Any], ...] = (
             "value": "{{lead.expected_start_amount}}",
             "currency": "USD",
         },
+        "triggers": [{"type": "funnel_action"}],
     },
     {
         "source_event": "bot_start",
         "event_name": "Schedule",
         "enabled": True,
         "parameters": {},
+        "triggers": [],
     },
     {
         "source_event": "contact",
         "event_name": "Contact",
         "enabled": True,
         "parameters": {},
+        "triggers": [],
     },
     {
         "source_event": "contact_invite_bot",
         "event_name": "AddToWishlist",
         "enabled": True,
         "parameters": {},
+        "triggers": [{"type": "funnel_action"}],
     },
 )
 
@@ -208,15 +235,93 @@ def normalize_facebook_event_mappings(value: object) -> list[dict[str, Any]]:
             if parameter_value:
                 parameters[key] = parameter_value
 
+        triggers = normalize_facebook_event_triggers(
+            raw_mapping.get("triggers") if "triggers" in raw_mapping else None,
+            source_event=source_event,
+        )
+
         normalized.append(
             {
                 "source_event": source_event,
                 "event_name": event_name,
                 "enabled": bool(raw_mapping.get("enabled", True)),
                 "parameters": parameters,
+                "triggers": triggers,
             }
         )
     return normalized
+
+
+def normalize_facebook_event_triggers(
+    value: object,
+    *,
+    source_event: str,
+) -> list[dict[str, str]]:
+    if source_event in FACEBOOK_AUTOMATIC_SOURCE_EVENTS:
+        if value not in (None, []):
+            raise ValueError(
+                f"Automatic Facebook source event {source_event} cannot have custom triggers"
+            )
+        return []
+
+    # Existing campaigns predate explicit trigger rules. Their server events
+    # were fired by funnel CRM actions, so missing data must preserve that path.
+    if value is None:
+        return [{"type": "funnel_action"}]
+    if not isinstance(value, list):
+        raise ValueError("Facebook event triggers must be a list")
+    if len(value) > 10:
+        raise ValueError("Facebook event mappings may contain at most 10 triggers")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_trigger in value:
+        if not isinstance(raw_trigger, dict):
+            raise ValueError("Each Facebook event trigger must be an object")
+        trigger_type = str(raw_trigger.get("type") or "").strip().lower()
+        if trigger_type not in FACEBOOK_EVENT_TRIGGER_TYPES:
+            raise ValueError(f"Unsupported Facebook event trigger type: {trigger_type}")
+
+        trigger_value = ""
+        if trigger_type in {"lead_status", "lead_tag"}:
+            raw_value = str(raw_trigger.get("value") or "").strip()
+            try:
+                trigger_value = str(UUID(raw_value))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Facebook trigger {trigger_type} requires a valid UUID value"
+                ) from exc
+
+        identity = (trigger_type, trigger_value)
+        if identity in seen:
+            raise ValueError(
+                f"Duplicate Facebook event trigger: {trigger_type}:{trigger_value}"
+            )
+        seen.add(identity)
+        trigger = {"type": trigger_type}
+        if trigger_value:
+            trigger["value"] = trigger_value
+        normalized.append(trigger)
+    return normalized
+
+
+def facebook_mapping_has_trigger(
+    mapping: dict[str, Any],
+    *,
+    trigger_type: str,
+    trigger_value: object = None,
+) -> bool:
+    normalized_type = str(trigger_type or "").strip().lower()
+    normalized_value = str(trigger_value or "").strip().lower()
+    for trigger in mapping.get("triggers") or []:
+        if not isinstance(trigger, dict):
+            continue
+        if str(trigger.get("type") or "").strip().lower() != normalized_type:
+            continue
+        configured_value = str(trigger.get("value") or "").strip().lower()
+        if configured_value == normalized_value:
+            return True
+    return False
 
 
 def facebook_mapping_for_source(

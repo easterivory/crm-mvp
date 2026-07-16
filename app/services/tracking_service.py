@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import RoleName, TrackingCostModel, TrackingSpendSource
+from app.core.facebook_events import normalize_facebook_event_mappings
 from app.core.telegram_links import (
     build_telegram_bot_start_link,
     canonicalize_telegram_web_link,
@@ -41,6 +42,7 @@ from app.schemas.tracking import (
 )
 from app.services.bot_service import BotService
 from app.services.access_control import require_project_access
+from app.services.facebook_campaign_service import FacebookCampaignService
 
 
 class TrackingService:
@@ -90,6 +92,10 @@ class TrackingService:
         data: TrackingLinkCreate,
     ) -> TrackingLinkOut:
         self._validate_cost_configuration(data.cost_model, data.price_per_unit)
+        await self._validate_facebook_event_mappings(
+            project_id=project_id,
+            mappings=data.fb_event_mappings,
+        )
         bot = await self.bot_service.ensure_bot_username(
             bot_id=data.bot_id,
             project_id=project_id,
@@ -199,6 +205,15 @@ class TrackingService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Tracking link not found",
+            )
+
+        if (
+            "fb_event_mappings" in data.model_fields_set
+            and data.fb_event_mappings is not None
+        ):
+            await self._validate_facebook_event_mappings(
+                project_id=project_id,
+                mappings=data.fb_event_mappings,
             )
 
         values = self._build_link_update_values(data, link=link, allow_code_update=True)
@@ -346,6 +361,10 @@ class TrackingService:
         self._validate_cost_configuration(data.cost_model, data.price_per_unit)
         await self._ensure_project_access(actor, data.project_id)
         project = await self._get_active_project_or_404(data.project_id)
+        await self._validate_facebook_event_mappings(
+            project_id=project.id,
+            mappings=data.fb_event_mappings,
+        )
         bot = await self.bot_service.ensure_bot_username(
             bot_id=data.bot_id,
             project_id=project.id,
@@ -425,6 +444,14 @@ class TrackingService:
         actor: User,
     ) -> TrackingLinkRead:
         link = await self._get_link_for_actor(link_id, actor)
+        if (
+            "fb_event_mappings" in data.model_fields_set
+            and data.fb_event_mappings is not None
+        ):
+            await self._validate_facebook_event_mappings(
+                project_id=link.project_id,
+                mappings=data.fb_event_mappings,
+            )
         values = self._build_link_update_values(data, link=link, allow_code_update=False)
         if actor.role_name == RoleName.BUYER:
             values.pop("buyer_id", None)
@@ -812,6 +839,23 @@ class TrackingService:
             )
         return buyer.id, buyer.name
 
+    async def _validate_facebook_event_mappings(
+        self,
+        *,
+        project_id: UUID,
+        mappings: object,
+    ) -> None:
+        try:
+            await FacebookCampaignService(self.db).validate_mapping_triggers(
+                project_id=project_id,
+                mappings=mappings,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+
     async def _create_initial_manual_spend(
         self,
         link: TrackingLink,
@@ -939,6 +983,9 @@ class TrackingService:
                 "tracking_url": build_telegram_bot_start_link(username, ref_code),
                 "has_fb_capi_token": bool((link.fb_capi_token or "").strip()),
                 "has_fb_proxy": bool((link.fb_proxy_url or "").strip()),
+                "fb_event_mappings_json": normalize_facebook_event_mappings(
+                    link.fb_event_mappings_json
+                ),
             }
         )
 
@@ -992,7 +1039,9 @@ class TrackingService:
             fb_pixel_id=link.fb_pixel_id,
             has_fb_capi_token=bool((link.fb_capi_token or "").strip()),
             fb_campaign_enabled=link.fb_campaign_enabled,
-            fb_event_mappings_json=list(link.fb_event_mappings_json or []),
+            fb_event_mappings_json=normalize_facebook_event_mappings(
+                link.fb_event_mappings_json
+            ),
             has_fb_proxy=bool((link.fb_proxy_url or "").strip()),
             fb_test_event_code=link.fb_test_event_code,
             total_spend=total_spend,

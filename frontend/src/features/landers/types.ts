@@ -30,11 +30,19 @@ export type LanderMetaEvent = {
   name: string
 }
 
+export type FacebookEventTriggerType = 'funnel_action' | 'lead_status' | 'lead_tag'
+
+export type FacebookEventTrigger = {
+  type: FacebookEventTriggerType
+  value?: string
+}
+
 export type FacebookEventMapping = {
   source_event: string
   event_name: string
   enabled: boolean
   parameters: Record<string, string>
+  triggers: FacebookEventTrigger[]
 }
 
 export type FacebookSourceEvent = {
@@ -42,12 +50,27 @@ export type FacebookSourceEvent = {
   label: string
   delivery: 'browser' | 'server'
   trigger: 'automatic' | 'funnel'
+  trigger_description: string
+}
+
+export type FacebookLeadStatusTrigger = {
+  id: string
+  code: string
+  name: string
+}
+
+export type FacebookTagTrigger = {
+  id: string
+  name: string
+  color: string
 }
 
 export type LanderRuntimeConfig = {
   technical_domain: string
   source_events: FacebookSourceEvent[]
   default_event_mappings: FacebookEventMapping[]
+  lead_statuses: FacebookLeadStatusTrigger[]
+  tags: FacebookTagTrigger[]
 }
 
 export type LanderTrackingCampaign = {

@@ -11,6 +11,7 @@ from app.repositories.lead_repository import LeadRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
 from app.models.tag import random_tag_color
+from app.services.facebook_campaign_service import FacebookCampaignService
 
 
 class TagService:
@@ -18,6 +19,7 @@ class TagService:
         self.db = db
         self.tag_repo = TagRepository(db)
         self.lead_repo = LeadRepository(db)
+        self.facebook_campaign = FacebookCampaignService(db)
 
     async def list_tags(
         self,
@@ -118,9 +120,13 @@ class TagService:
             project_id=project_id,
         )
 
+        added = False
         try:
             async with self.db.begin_nested():
-                await self.tag_repo.add_tag_to_lead(lead_id=lead_id, tag_id=tag_id)
+                added = await self.tag_repo.add_tag_to_lead(
+                    lead_id=lead_id,
+                    tag_id=tag_id,
+                )
         except IntegrityError:
             # Idempotent under races: another request may have inserted the
             # same composite PK after our pre-check.
@@ -130,6 +136,11 @@ class TagService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not attach tag to lead",
+            )
+        if added:
+            await self.facebook_campaign.enqueue_tag_added(
+                lead_id=lead_id,
+                tag_id=tag_id,
             )
 
     async def remove_tag_from_lead(

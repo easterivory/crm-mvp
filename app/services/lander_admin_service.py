@@ -11,11 +11,14 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.constants import RoleName
+from app.core.facebook_events import normalize_facebook_event_mappings
 from app.core.lander_urls import (
     build_lander_public_url,
     effective_campaign_utm_defaults,
 )
 from app.models.lander import ProjectDomain, ProjectLander
+from app.models.lead_status import LeadStatus
+from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
@@ -155,7 +158,19 @@ class LanderAdminService:
         actor: User,
     ) -> LanderRuntimeConfigOut:
         await self._ensure_lander_project_access(actor=actor, project_id=project_id)
-        return LanderRuntimeConfigOut(technical_domain=self._technical_domain())
+        statuses_result = await self.db.execute(
+            select(LeadStatus).order_by(LeadStatus.sort_order.asc())
+        )
+        tags_result = await self.db.execute(
+            select(Tag)
+            .where(Tag.project_id == project_id)
+            .order_by(Tag.name.asc(), Tag.created_at.desc())
+        )
+        return LanderRuntimeConfigOut(
+            technical_domain=self._technical_domain(),
+            lead_statuses=list(statuses_result.scalars().all()),
+            tags=list(tags_result.scalars().all()),
+        )
 
     async def create_lander(
         self,
@@ -314,6 +329,10 @@ class LanderAdminService:
             campaign = data.facebook_campaign
             link = lander.tracking_link
             tracking_service = TrackingService(self.db)
+            await tracking_service._validate_facebook_event_mappings(
+                project_id=project_id,
+                mappings=campaign.fb_event_mappings,
+            )
             bot = link.bot
             bot_changed = False
             if "bot_id" in campaign.model_fields_set and campaign.bot_id is not None:
@@ -606,7 +625,9 @@ class LanderAdminService:
                     link.fb_test_event_code if link is not None else None
                 ),
                 "fb_event_mappings_json": list(
-                    link.fb_event_mappings_json if link is not None else []
+                    normalize_facebook_event_mappings(link.fb_event_mappings_json)
+                    if link is not None
+                    else []
                 ),
                 "facebook_campaign": (
                     LanderFacebookCampaignOut(

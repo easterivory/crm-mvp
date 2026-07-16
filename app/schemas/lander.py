@@ -338,6 +338,19 @@ class FacebookSourceEventOut(BaseModel):
     label: str
     delivery: Literal["browser", "server"]
     trigger: Literal["automatic", "funnel"]
+    trigger_description: str
+
+
+class FacebookLeadStatusTriggerOut(BaseModel):
+    id: UUID
+    code: str
+    name: str
+
+
+class FacebookTagTriggerOut(BaseModel):
+    id: UUID
+    name: str
+    color: str
 
 
 class LanderRuntimeConfigOut(BaseModel):
@@ -354,3 +367,5 @@ class LanderRuntimeConfigOut(BaseModel):
             for item in default_facebook_event_mappings()
         ]
     )
+    lead_statuses: list[FacebookLeadStatusTriggerOut] = Field(default_factory=list)
+    tags: list[FacebookTagTriggerOut] = Field(default_factory=list)

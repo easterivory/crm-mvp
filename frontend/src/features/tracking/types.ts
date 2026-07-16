@@ -5,6 +5,10 @@ export type TrackingFacebookEventMapping = {
   event_name: string
   enabled: boolean
   parameters: Record<string, string>
+  triggers?: Array<{
+    type: 'funnel_action' | 'lead_status' | 'lead_tag'
+    value?: string
+  }>
 }
 
 export type TrackingLink = {

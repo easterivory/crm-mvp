@@ -28,6 +28,7 @@ from app.models.lander import ProjectDomain
 from app.models.tracking import TrackingEvent
 from app.repositories.tracking_repository import TrackingEventRepository
 from app.schemas.lander import ProjectDomainCreate, ProjectLanderUpdate
+from app.schemas.tracking import FacebookEventMapping
 from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.facebook_capi_service import FacebookCAPIService
 from app.services.lander_admin_service import LanderAdminService
@@ -72,6 +73,60 @@ class FacebookEventMappingTests(unittest.TestCase):
 
     def test_legacy_source_alias_is_normalized(self) -> None:
         self.assertEqual(normalize_facebook_source_event("subscribe_channel"), "channel_subscribe")
+
+    def test_legacy_server_mapping_keeps_funnel_action_trigger(self) -> None:
+        mappings = normalize_facebook_event_mappings(
+            [
+                {
+                    "source_event": "registration",
+                    "event_name": "CompleteRegistration",
+                    "enabled": True,
+                    "parameters": {},
+                }
+            ]
+        )
+
+        self.assertEqual(mappings[0]["triggers"], [{"type": "funnel_action"}])
+
+    def test_status_and_tag_triggers_are_normalized(self) -> None:
+        status_id = uuid4()
+        tag_id = uuid4()
+        mappings = normalize_facebook_event_mappings(
+            [
+                {
+                    "source_event": "sale",
+                    "event_name": "Purchase",
+                    "enabled": True,
+                    "parameters": {},
+                    "triggers": [
+                        {"type": "lead_status", "value": str(status_id)},
+                        {"type": "lead_tag", "value": str(tag_id)},
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(
+            mappings[0]["triggers"],
+            [
+                {"type": "lead_status", "value": str(status_id)},
+                {"type": "lead_tag", "value": str(tag_id)},
+            ],
+        )
+
+    def test_automatic_event_rejects_manual_trigger(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot have custom triggers"):
+            normalize_facebook_event_mappings(
+                [
+                    {
+                        "source_event": "bot_start",
+                        "event_name": "Schedule",
+                        "enabled": True,
+                        "parameters": {},
+                        "triggers": [{"type": "funnel_action"}],
+                    }
+                ]
+            )
 
     def test_deleting_domain_does_not_orphan_delete_landers(self) -> None:
         cascade = ProjectDomain.landers.property.cascade
@@ -379,6 +434,127 @@ class FacebookCampaignParameterTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered["value"], 750)
+
+
+class FacebookCampaignTriggerTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _campaign_lead(*, mappings: list[dict]) -> SimpleNamespace:
+        link = SimpleNamespace(
+            id=uuid4(),
+            fb_campaign_enabled=True,
+            fb_pixel_id="123456789012345",
+            fb_capi_token="token",
+            fb_event_mappings_json=mappings,
+        )
+        chat = SimpleNamespace(
+            tracking_link=link,
+            current_cycle_started_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
+        )
+        return SimpleNamespace(
+            id=uuid4(),
+            chat=chat,
+            created_at=datetime(2026, 7, 15, tzinfo=timezone.utc),
+        )
+
+    async def test_tag_rule_queues_registration_without_funnel_action(self) -> None:
+        tag_id = uuid4()
+        lead = self._campaign_lead(
+            mappings=[
+                {
+                    "source_event": "registration",
+                    "event_name": "CompleteRegistration",
+                    "enabled": True,
+                    "parameters": {},
+                    "triggers": [{"type": "lead_tag", "value": str(tag_id)}],
+                }
+            ]
+        )
+        service = FacebookCampaignService(SimpleNamespace())
+        service._load_lead = AsyncMock(return_value=lead)
+        service._enqueue_mapping = AsyncMock(return_value="job-1")
+
+        queued = await service.enqueue_triggered_events(
+            lead_id=lead.id,
+            trigger_type="lead_tag",
+            trigger_value=tag_id,
+        )
+
+        self.assertEqual(queued, ["job-1"])
+        service._enqueue_mapping.assert_awaited_once()
+        call = service._enqueue_mapping.await_args.kwargs
+        self.assertEqual(call["source_event"], "registration")
+        self.assertIn("crm_rule:registration:", call["event_reference"])
+
+    async def test_unrelated_tag_does_not_queue_event(self) -> None:
+        configured_tag_id = uuid4()
+        lead = self._campaign_lead(
+            mappings=[
+                {
+                    "source_event": "sale",
+                    "event_name": "Purchase",
+                    "enabled": True,
+                    "parameters": {},
+                    "triggers": [
+                        {"type": "lead_tag", "value": str(configured_tag_id)}
+                    ],
+                }
+            ]
+        )
+        service = FacebookCampaignService(SimpleNamespace())
+        service._load_lead = AsyncMock(return_value=lead)
+        service._enqueue_mapping = AsyncMock(return_value="unexpected")
+
+        queued = await service.enqueue_triggered_events(
+            lead_id=lead.id,
+            trigger_type="lead_tag",
+            trigger_value=uuid4(),
+        )
+
+        self.assertEqual(queued, [])
+        service._enqueue_mapping.assert_not_awaited()
+
+    async def test_status_only_mapping_is_not_fired_by_funnel_action(self) -> None:
+        status_id = uuid4()
+        lead = self._campaign_lead(
+            mappings=[
+                {
+                    "source_event": "registration",
+                    "event_name": "CompleteRegistration",
+                    "enabled": True,
+                    "parameters": {},
+                    "triggers": [
+                        {"type": "lead_status", "value": str(status_id)}
+                    ],
+                }
+            ]
+        )
+        service = FacebookCampaignService(SimpleNamespace())
+        service._load_lead = AsyncMock(return_value=lead)
+        service._enqueue_mapping = AsyncMock(return_value="unexpected")
+
+        queued = await service.enqueue_mapped_event(
+            lead_id=lead.id,
+            source_event="registration",
+            event_reference="funnel:step:cycle",
+        )
+
+        self.assertIsNone(queued)
+        service._enqueue_mapping.assert_not_awaited()
+
+    async def test_trigger_validation_accepts_pydantic_mapping_models(self) -> None:
+        service = FacebookCampaignService(SimpleNamespace())
+        mapping = FacebookEventMapping(
+            source_event="registration",
+            event_name="CompleteRegistration",
+            triggers=[{"type": "funnel_action"}],
+        )
+
+        normalized = await service.validate_mapping_triggers(
+            project_id=uuid4(),
+            mappings=[mapping],
+        )
+
+        self.assertEqual(normalized[0]["triggers"], [{"type": "funnel_action"}])
 
 
 class FacebookCAPIPayloadTests(unittest.TestCase):

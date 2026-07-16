@@ -7,8 +7,17 @@
 - The lander embeds the same Telegram start payload that a plain tracking link uses, so bot, buyer, UTM attribution, and the optional funnel step are preserved.
 - `page_view` and `telegram_click` are browser Pixel events.
 - `bot_start` and `contact` are automatic server CAPI events.
-- Funnel-driven sources are emitted by the `send_fb_event` CRM action.
+- Server event mappings have explicit OR trigger rules: `funnel_action`,
+  `lead_status`, and `lead_tag`.
+- Existing mappings without a `triggers` field keep the legacy
+  `funnel_action` behavior.
+- A `lead_status` rule fires only when the lead actually moves to the selected
+  status. A `lead_tag` rule fires only when the selected tag is newly attached.
+- Registration and first/repeat deposit events can therefore be driven by CRM
+  tags even when those actions happen outside the funnel.
 - CAPI delivery is asynchronous through ARQ and uses a stable `event_id` for retry safety.
+- When several rules for one source event match in the same lead lifecycle,
+  they share the same stable event identity to prevent duplicate Meta events.
 
 ## Required environment
 
@@ -72,8 +81,10 @@ After deploy, purge the CDN cache for `/` and `/l/*`. The technical root must re
 4. Enter Pixel / Dataset ID and CAPI access token.
 5. Add a proxy only when Meta traffic must leave through that proxy.
 6. Use Test event code during Events Manager verification, then clear it for normal traffic.
-7. Review the event map. `Purchase` supports `value` and `currency`.
-8. Open the public URL with test UTM values and confirm the resulting lead contains attribution and Facebook context.
+7. Review the event map. Automatic rows explain their fixed runtime trigger.
+8. For each server event, add one or more OR rules: funnel action, target lead
+   status, or newly added project tag. `Purchase` supports `value` and `currency`.
+9. Open the public URL with test UTM values and confirm the resulting lead contains attribution and Facebook context.
 
 Generated Facebook campaign URLs always include visible defaults for
 `utm_source`, `utm_medium`, and `utm_campaign`. Values configured in CRM replace

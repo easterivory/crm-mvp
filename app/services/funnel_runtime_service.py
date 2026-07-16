@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
 from app.core.lead_names import normalize_name_part, split_lead_name
+from app.models.lead import Lead
 from app.models.user import User
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
 from app.repositories.bot_repository import BotRepository
@@ -89,6 +90,7 @@ class FunnelRuntimeService:
         self.chat_audit = ChatAuditService(db)
         self.telegram_sender = TelegramSenderService(db)
         self.audit = AuditService(db)
+        self.facebook_campaign = FacebookCampaignService(db)
 
     async def get_published_funnel_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         return await self.repo.get_published_for_bot(bot_id)
@@ -1673,6 +1675,43 @@ class FunnelRuntimeService:
             current_step_id,
         )
 
+    async def _set_lead_status_with_facebook_triggers(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        status_code: str,
+    ) -> Optional[Lead]:
+        current = await self.lead_repo.get_active(lead_id, project_id)
+        if current is None:
+            return None
+        previous_status_id = current.status_id
+        updated = await self.lead_repo.set_status_by_code(
+            lead_id,
+            project_id,
+            status_code,
+        )
+        if updated is not None and updated.status_id != previous_status_id:
+            await self.facebook_campaign.enqueue_status_change(
+                lead_id=updated.id,
+                previous_status_id=previous_status_id,
+                current_status_id=updated.status_id,
+            )
+        return updated
+
+    async def _add_lead_tag_with_facebook_trigger(
+        self,
+        *,
+        lead_id: UUID,
+        tag_id: UUID,
+    ) -> bool:
+        added = await self.tag_repo.add_tag_to_lead(lead_id, tag_id)
+        if added:
+            await self.facebook_campaign.enqueue_tag_added(
+                lead_id=lead_id,
+                tag_id=tag_id,
+            )
+        return added
+
     async def _apply_finish_result(self, *, chat_id: UUID, step: FunnelStep) -> None:
         config = step.config_json or {}
         if config.get("set_lead_status") is False:
@@ -1696,13 +1735,13 @@ class FunnelRuntimeService:
             logger.warning("Finish result has no lead to update chat_id=%s step_id=%s", chat_id, step.id)
             return
 
-        updated = await self.lead_repo.set_status_by_code(
+        updated = await self._set_lead_status_with_facebook_triggers(
             lead.id,
             lead.project_id,
             status_code,
         )
         if updated is None and result == "rejected":
-            updated = await self.lead_repo.set_status_by_code(
+            updated = await self._set_lead_status_with_facebook_triggers(
                 lead.id,
                 lead.project_id,
                 LeadStatusCode.LOST,
@@ -1746,7 +1785,10 @@ class FunnelRuntimeService:
                     tag_id = UUID(str(raw.get("tag_id")))
                     tag = await self.tag_repo.get_by_id_in_project(tag_id, lead.project_id)
                     if tag is not None:
-                        await self.tag_repo.add_tag_to_lead(lead.id, tag.id)
+                        await self._add_lead_tag_with_facebook_trigger(
+                            lead_id=lead.id,
+                            tag_id=tag.id,
+                        )
                 elif action_type == "remove_tag" and raw.get("tag_id"):
                     await self.tag_repo.remove_tag_from_lead(lead.id, UUID(str(raw.get("tag_id"))))
                 elif action_type == "clear_tags":
@@ -1754,15 +1796,35 @@ class FunnelRuntimeService:
                 elif action_type == "set_lead_status":
                     status_code = str(raw.get("status") or raw.get("value") or "").strip()
                     if status_code:
-                        await self.lead_repo.set_status_by_code(lead.id, lead.project_id, status_code)
+                        await self._set_lead_status_with_facebook_triggers(
+                            lead.id,
+                            lead.project_id,
+                            status_code,
+                        )
                 elif action_type == "mark_lost":
-                    await self.lead_repo.set_status_by_code(lead.id, lead.project_id, LeadStatusCode.LOST)
+                    await self._set_lead_status_with_facebook_triggers(
+                        lead.id,
+                        lead.project_id,
+                        LeadStatusCode.LOST,
+                    )
                 elif action_type == "mark_success":
-                    await self.lead_repo.set_status_by_code(lead.id, lead.project_id, LeadStatusCode.QUALIFIED)
+                    await self._set_lead_status_with_facebook_triggers(
+                        lead.id,
+                        lead.project_id,
+                        LeadStatusCode.QUALIFIED,
+                    )
                 elif action_type == "mark_rejected":
-                    updated = await self.lead_repo.set_status_by_code(lead.id, lead.project_id, "rejected")
+                    updated = await self._set_lead_status_with_facebook_triggers(
+                        lead.id,
+                        lead.project_id,
+                        "rejected",
+                    )
                     if updated is None:
-                        await self.lead_repo.set_status_by_code(lead.id, lead.project_id, LeadStatusCode.LOST)
+                        await self._set_lead_status_with_facebook_triggers(
+                            lead.id,
+                            lead.project_id,
+                            LeadStatusCode.LOST,
+                        )
                 elif action_type == "write_field":
                     field = self._normalize_field_key(raw.get("field") or raw.get("lead_field_key"))
                     if field:
@@ -1973,13 +2035,13 @@ class FunnelRuntimeService:
 
         if lead is not None:
             status_code = await self._manual_processing_status_code(lead.project_id)
-            updated = await self.lead_repo.set_status_by_code(
+            updated = await self._set_lead_status_with_facebook_triggers(
                 lead.id,
                 lead.project_id,
                 status_code,
             )
             if updated is None and status_code != LeadStatusCode.NEW:
-                await self.lead_repo.set_status_by_code(
+                await self._set_lead_status_with_facebook_triggers(
                     lead.id,
                     lead.project_id,
                     LeadStatusCode.NEW,

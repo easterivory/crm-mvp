@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import time
 from decimal import Decimal, InvalidOperation
@@ -12,14 +13,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.facebook_events import (
+    FACEBOOK_AUTOMATIC_SOURCE_EVENTS,
     FACEBOOK_BROWSER_SOURCE_EVENTS,
+    facebook_mapping_has_trigger,
     facebook_mapping_for_source,
+    normalize_facebook_event_mappings,
     normalize_facebook_source_event,
 )
 from app.models.chat import Chat
 from app.models.lead import Lead
+from app.models.lead_status import LeadStatus
+from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.services.facebook_capi_queue import enqueue_facebook_capi_event
+
+
+logger = logging.getLogger(__name__)
 
 
 class FacebookCampaignService:
@@ -41,14 +50,8 @@ class FacebookCampaignService:
             return None
 
         lead = await self._load_lead(lead_id)
-        if lead is None or lead.chat is None or lead.chat.tracking_link is None:
-            return None
-        link = lead.chat.tracking_link
-        if (
-            not link.fb_campaign_enabled
-            or not link.fb_pixel_id
-            or not link.fb_capi_token
-        ):
+        link = self._campaign_link(lead)
+        if lead is None or link is None:
             return None
 
         mapping = facebook_mapping_for_source(
@@ -58,17 +61,214 @@ class FacebookCampaignService:
         if mapping is None:
             return None
 
+        if (
+            normalized_source not in FACEBOOK_AUTOMATIC_SOURCE_EVENTS
+            and not facebook_mapping_has_trigger(
+                mapping,
+                trigger_type="funnel_action",
+            )
+        ):
+            return None
+
+        has_data_rule = any(
+            isinstance(trigger, dict)
+            and trigger.get("type") in {"lead_status", "lead_tag"}
+            for trigger in mapping.get("triggers") or []
+        )
+        effective_reference = (
+            f"crm_rule:{normalized_source}:{self._lifecycle_reference(lead)}"
+            if has_data_rule
+            else event_reference
+        )
+
+        return await self._enqueue_mapping(
+            lead=lead,
+            link=link,
+            mapping=mapping,
+            source_event=normalized_source,
+            event_reference=effective_reference,
+            extra_custom_data=extra_custom_data,
+        )
+
+    async def enqueue_triggered_events(
+        self,
+        *,
+        lead_id: UUID,
+        trigger_type: str,
+        trigger_value: UUID | str,
+    ) -> list[str]:
+        normalized_type = str(trigger_type or "").strip().lower()
+        if normalized_type not in {"lead_status", "lead_tag"}:
+            raise ValueError(f"Unsupported Facebook CRM trigger type: {trigger_type}")
+        normalized_value = str(UUID(str(trigger_value)))
+
+        lead = await self._load_lead(lead_id)
+        link = self._campaign_link(lead)
+        if lead is None or link is None:
+            return []
+        try:
+            mappings = normalize_facebook_event_mappings(
+                link.fb_event_mappings_json
+            )
+        except ValueError:
+            logger.exception(
+                "Invalid Facebook event mappings; CRM trigger skipped "
+                "lead_id=%s tracking_link_id=%s",
+                lead.id,
+                link.id,
+            )
+            return []
+
+        lifecycle_reference = self._lifecycle_reference(lead)
+        queued_job_ids: list[str] = []
+        for mapping in mappings:
+            source_event = str(mapping["source_event"])
+            if (
+                not mapping["enabled"]
+                or source_event in FACEBOOK_BROWSER_SOURCE_EVENTS
+                or not facebook_mapping_has_trigger(
+                    mapping,
+                    trigger_type=normalized_type,
+                    trigger_value=normalized_value,
+                )
+            ):
+                continue
+            job_id = await self._enqueue_mapping(
+                lead=lead,
+                link=link,
+                mapping=mapping,
+                source_event=source_event,
+                event_reference=f"crm_rule:{source_event}:{lifecycle_reference}",
+                extra_custom_data={
+                    "crm_trigger_type": normalized_type,
+                    "crm_trigger_value": normalized_value,
+                },
+            )
+            if job_id is not None:
+                queued_job_ids.append(job_id)
+        return queued_job_ids
+
+    async def enqueue_status_change(
+        self,
+        *,
+        lead_id: UUID,
+        previous_status_id: UUID,
+        current_status_id: UUID,
+    ) -> list[str]:
+        if previous_status_id == current_status_id:
+            return []
+        try:
+            return await self.enqueue_triggered_events(
+                lead_id=lead_id,
+                trigger_type="lead_status",
+                trigger_value=current_status_id,
+            )
+        except Exception:
+            logger.exception(
+                "Facebook status trigger enqueue failed without blocking CRM "
+                "lead_id=%s status_id=%s",
+                lead_id,
+                current_status_id,
+            )
+            return []
+
+    async def enqueue_tag_added(
+        self,
+        *,
+        lead_id: UUID,
+        tag_id: UUID,
+    ) -> list[str]:
+        try:
+            return await self.enqueue_triggered_events(
+                lead_id=lead_id,
+                trigger_type="lead_tag",
+                trigger_value=tag_id,
+            )
+        except Exception:
+            logger.exception(
+                "Facebook tag trigger enqueue failed without blocking CRM "
+                "lead_id=%s tag_id=%s",
+                lead_id,
+                tag_id,
+            )
+            return []
+
+    async def validate_mapping_triggers(
+        self,
+        *,
+        project_id: UUID,
+        mappings: object,
+    ) -> list[dict[str, Any]]:
+        raw_mappings = (
+            [
+                item.model_dump() if hasattr(item, "model_dump") else item
+                for item in mappings
+            ]
+            if isinstance(mappings, list)
+            else mappings
+        )
+        normalized = normalize_facebook_event_mappings(raw_mappings)
+        status_ids: set[UUID] = set()
+        tag_ids: set[UUID] = set()
+        for mapping in normalized:
+            for trigger in mapping.get("triggers") or []:
+                trigger_type = trigger.get("type")
+                trigger_value = trigger.get("value")
+                if trigger_type == "lead_status" and trigger_value:
+                    status_ids.add(UUID(str(trigger_value)))
+                elif trigger_type == "lead_tag" and trigger_value:
+                    tag_ids.add(UUID(str(trigger_value)))
+
+        if status_ids:
+            status_result = await self.db.execute(
+                select(LeadStatus.id).where(LeadStatus.id.in_(status_ids))
+            )
+            found_status_ids = set(status_result.scalars().all())
+            missing_status_ids = status_ids - found_status_ids
+            if missing_status_ids:
+                raise ValueError(
+                    "Facebook event trigger references unknown lead status: "
+                    + ", ".join(sorted(str(item) for item in missing_status_ids))
+                )
+
+        if tag_ids:
+            tag_result = await self.db.execute(
+                select(Tag.id).where(
+                    Tag.id.in_(tag_ids),
+                    Tag.project_id == project_id,
+                )
+            )
+            found_tag_ids = set(tag_result.scalars().all())
+            missing_tag_ids = tag_ids - found_tag_ids
+            if missing_tag_ids:
+                raise ValueError(
+                    "Facebook event trigger references a tag outside this project: "
+                    + ", ".join(sorted(str(item) for item in missing_tag_ids))
+                )
+        return normalized
+
+    async def _enqueue_mapping(
+        self,
+        *,
+        lead: Lead,
+        link: TrackingLink,
+        mapping: dict[str, Any],
+        source_event: str,
+        event_reference: str,
+        extra_custom_data: dict[str, Any] | None,
+    ) -> str | None:
+
         custom_data = self._render_parameters(
             mapping.get("parameters"),
             lead=lead,
             tracking_link=link,
         )
         custom_data.update(extra_custom_data or {})
-        custom_data["crm_source_event"] = normalized_source
+        custom_data["crm_source_event"] = source_event
         event_id = self.build_event_id(
             tracking_link_id=link.id,
             lead_id=lead.id,
-            source_event=normalized_source,
+            source_event=source_event,
             event_reference=event_reference,
         )
         fb_data = lead.custom_fields.get("fb_data") if isinstance(lead.custom_fields, dict) else None
@@ -86,6 +286,25 @@ class FacebookCampaignService:
             event_id=event_id,
             event_source_url=event_source_url or None,
         )
+
+    @staticmethod
+    def _campaign_link(lead: Lead | None) -> TrackingLink | None:
+        if lead is None or lead.chat is None or lead.chat.tracking_link is None:
+            return None
+        link = lead.chat.tracking_link
+        if (
+            not link.fb_campaign_enabled
+            or not link.fb_pixel_id
+            or not link.fb_capi_token
+        ):
+            return None
+        return link
+
+    @staticmethod
+    def _lifecycle_reference(lead: Lead) -> str:
+        if lead.chat is not None and lead.chat.current_cycle_started_at is not None:
+            return lead.chat.current_cycle_started_at.isoformat()
+        return lead.created_at.isoformat()
 
     async def _load_lead(self, lead_id: UUID) -> Lead | None:
         result = await self.db.execute(

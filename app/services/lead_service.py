@@ -55,6 +55,7 @@ from app.schemas.lead import (
 )
 from app.services.audit_service import AuditService
 from app.services.chat_audit_service import ChatAuditService
+from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.google_sheets_trigger_service import GoogleSheetsTriggerService
 from app.services.lead_scoring_service import LeadScoringService
 
@@ -69,6 +70,7 @@ class LeadService:
         self.chat_audit = ChatAuditService(db)
         self.scoring = LeadScoringService(db)
         self.google_sheets_trigger = GoogleSheetsTriggerService(db)
+        self.facebook_campaign = FacebookCampaignService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
 
@@ -159,6 +161,11 @@ class LeadService:
             lead_id=updated.id,
             project_id=project_id,
             status_id=new_status.id,
+        )
+        await self.facebook_campaign.enqueue_status_change(
+            lead_id=updated.id,
+            previous_status_id=lead.status_id,
+            current_status_id=updated.status_id,
         )
 
         return await self._lead_out(updated)
@@ -703,6 +710,11 @@ class LeadService:
             lead_id=updated.id,
             project_id=project_id,
             status_id=target_status.id,
+        )
+        await self.facebook_campaign.enqueue_status_change(
+            lead_id=updated.id,
+            previous_status_id=lead.status_id,
+            current_status_id=updated.status_id,
         )
         return updated
 
