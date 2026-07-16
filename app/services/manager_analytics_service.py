@@ -45,13 +45,20 @@ class ManagerAnalyticsService:
             AuditLog.meta["to_manager_id"].astext == cast(AuditLog.actor_id, String),
         ]
         self._append_period(taken_filters, AuditLog.created_at, start_at, end_at)
-        taken_totals = (
+        taken_events = (
             select(
                 AuditLog.actor_id.label("manager_id"),
-                func.count(distinct(AuditLog.entity_id)).label("chats_taken"),
+                AuditLog.entity_id.label("lead_id"),
             )
             .where(*taken_filters)
-            .group_by(AuditLog.actor_id)
+            .subquery()
+        )
+        taken_totals = (
+            select(
+                taken_events.c.manager_id,
+                func.count(distinct(taken_events.c.lead_id)).label("chats_taken"),
+            )
+            .group_by(taken_events.c.manager_id)
             .subquery()
         )
 

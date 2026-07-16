@@ -168,8 +168,22 @@ class LanderAdminService:
         )
         return LanderRuntimeConfigOut(
             technical_domain=self._technical_domain(),
-            lead_statuses=list(statuses_result.scalars().all()),
-            tags=list(tags_result.scalars().all()),
+            lead_statuses=[
+                {
+                    "id": item.id,
+                    "code": item.code,
+                    "name": item.name,
+                }
+                for item in statuses_result.scalars().all()
+            ],
+            tags=[
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "color": item.color,
+                }
+                for item in tags_result.scalars().all()
+            ],
         )
 
     async def create_lander(
