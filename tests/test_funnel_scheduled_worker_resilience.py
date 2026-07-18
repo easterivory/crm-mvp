@@ -24,6 +24,75 @@ class _SessionContext:
 
 
 class FunnelScheduledWorkerResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_job_status_is_snapshotted_before_session_rollback(self) -> None:
+        job_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.invalidate = AsyncMock()
+
+        class RollbackSensitiveJob:
+            @property
+            def status(self) -> str:
+                if db.rollback.await_count:
+                    raise RuntimeError("expired ORM attribute was accessed")
+                return "done"
+
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(return_value=RollbackSensitiveJob())
+        )
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+        ):
+            status = await funnel_scheduled_worker._job_status(job_id)
+
+        self.assertEqual(status, "done")
+        db.rollback.assert_awaited_once()
+
+    async def test_skipped_job_status_is_snapshotted_before_rollback(self) -> None:
+        job_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.invalidate = AsyncMock()
+
+        class RollbackSensitiveJob:
+            @property
+            def status(self) -> str:
+                if db.rollback.await_count:
+                    raise RuntimeError("expired ORM attribute was accessed")
+                return "done"
+
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(return_value=RollbackSensitiveJob())
+        )
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+        ):
+            result = await funnel_scheduled_worker._execute_claimed_job(job_id)
+
+        self.assertEqual(
+            result,
+            {"status": "skipped", "job_id": str(job_id), "job_status": "done"},
+        )
+        db.rollback.assert_awaited_once()
+
     async def test_failed_runtime_rolls_back_and_persists_failure_in_fresh_session(self) -> None:
         job_id = uuid4()
         execution_db = MagicMock()

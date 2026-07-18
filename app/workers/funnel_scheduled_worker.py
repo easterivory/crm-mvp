@@ -99,8 +99,12 @@ async def _job_status(job_id: UUID) -> str:
         async with get_db_session() as db:
             try:
                 job = await FunnelRepository(db).get_scheduled_job(job_id)
+                # AsyncSession.rollback() expires loaded ORM attributes. Snapshot the
+                # scalar while the query greenlet is still active so a normal claim
+                # race cannot trigger an implicit async refresh (MissingGreenlet).
+                job_status = job.status if job is not None else "not_found"
                 await db.rollback()
-                return job.status if job is not None else "not_found"
+                return job_status
             except Exception:
                 await _rollback_session(db)
                 raise
@@ -140,12 +144,13 @@ async def _execute_claimed_job(job_id: UUID) -> dict[str, str | bool]:
                     if job is None:
                         await db.rollback()
                         return {"status": "not_found", "job_id": str(job_id)}
-                    if job.status != "running":
+                    job_status = job.status
+                    if job_status != "running":
                         await db.rollback()
                         return {
                             "status": "skipped",
                             "job_id": str(job_id),
-                            "job_status": job.status,
+                            "job_status": job_status,
                         }
 
                     runtime = FunnelRuntimeService(
@@ -153,7 +158,10 @@ async def _execute_claimed_job(job_id: UUID) -> dict[str, str | bool]:
                         release_transaction_before_external_io=True,
                     )
                     await runtime.process_scheduled_job(job)
-                    await repo.mark_scheduled_job_done(job.id)
+                    # The runtime may commit before Telegram I/O. Use the immutable
+                    # function argument instead of touching an ORM instance after
+                    # that transaction boundary.
+                    await repo.mark_scheduled_job_done(job_id)
                     await db.commit()
                     return {"status": "completed", "job_id": str(job_id)}
             except Exception:
