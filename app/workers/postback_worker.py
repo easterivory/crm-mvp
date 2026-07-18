@@ -15,10 +15,13 @@ from app.core.config import settings
 from app.core.database import get_db_session
 from app.core.logging_config import configure_file_logging
 from app.models.lead import Lead
+from app.models.partner import PartnerIntegration
 from app.models.tracking import TrackingLink
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.funnel_start_recovery_service import FunnelStartRecoveryService
 from app.services.google_sheets_service import GoogleSheetsService
+from app.services.lead_confidence_service import LeadConfidenceService
+from app.services.operational_alert_service import prime_operational_alert_config
 from app.services.postback_service import PostbackService
 from app.services.telegram_service import TelegramService
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
@@ -34,6 +37,11 @@ except ImportError:  # pragma: no cover - production installs arq from requireme
 
 logger = logging.getLogger(__name__)
 configure_file_logging()
+
+
+async def _on_worker_startup(ctx: dict) -> None:
+    _ = ctx
+    await prime_operational_alert_config()
 
 
 async def run_once() -> int:
@@ -76,10 +84,100 @@ async def send_lead_postback(
             lead_id=lead_uuid,
             partner_integration_id=partner_uuid,
             status="pending",
+            submitted_manually=False,
+            submission_source="api",
         )
         await service.process_submission(submission.id)
         await db.commit()
         return {"status": submission.status, "submission_id": str(submission.id)}
+
+
+async def auto_submit_lead_task(
+    ctx: dict,
+    lead_id: str,
+    partner_integration_id: str,
+    forced_manual: bool = False,
+) -> dict:
+    del ctx
+    try:
+        lead_uuid = UUID(lead_id)
+        partner_uuid = UUID(partner_integration_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    async with get_db_session() as db:
+        integration_result = await db.execute(
+            select(PartnerIntegration).where(PartnerIntegration.id == partner_uuid)
+        )
+        integration = integration_result.scalar_one_or_none()
+        if integration is None:
+            return {"status": "skipped", "reason": "partner_not_found"}
+        if not integration.is_active or not integration.is_auto_submit_enabled:
+            return {"status": "skipped", "reason": "auto_submit_disabled"}
+
+        service = PostbackService(db)
+        lead = await service.repo.get_lead_in_project(
+            lead_uuid,
+            integration.project_id,
+            for_update=True,
+        )
+        if lead is None:
+            return {"status": "skipped", "reason": "lead_unavailable"}
+        if not forced_manual:
+            confidence = LeadConfidenceService(db)
+            confidence_result = await confidence.calculate_confidence(lead)
+            eligible, routing_reasons = await confidence.auto_submit_eligibility(
+                lead=lead,
+                result=confidence_result,
+                rules=integration.auto_submit_rules or {},
+                required_fields=integration.required_fields or [],
+            )
+            if not eligible:
+                reason = "; ".join(routing_reasons)
+                await service.repo.upsert_manual_required_decision(
+                    lead_id=lead.id,
+                    partner_integration_id=integration.id,
+                    reason=reason,
+                )
+                await db.commit()
+                return {
+                    "status": "skipped",
+                    "reason": "manual_required",
+                    "routing_reasons": routing_reasons,
+                }
+
+        submissions = await service.repo.list_submissions_for_lead_partner(
+            lead_id=lead.id,
+            partner_integration_id=integration.id,
+            project_id=integration.project_id,
+            for_update=True,
+        )
+        blocking_statuses = {
+            "pending",
+            "processing",
+            "success",
+            "accepted",
+            "submitted",
+            "duplicate",
+        }
+        if any(str(item.status).lower() in blocking_statuses for item in submissions):
+            return {"status": "skipped", "reason": "submission_already_exists"}
+
+        await service.repo.clear_manual_required_decision(
+            lead_id=lead.id,
+            partner_integration_id=integration.id,
+        )
+        submission = await service.repo.create_submission(
+            lead_id=lead.id,
+            partner_integration_id=integration.id,
+            status="pending",
+            submitted_by_user_id=lead.manager_id,
+            submission_source="vip" if forced_manual else "auto",
+            submitted_manually=forced_manual,
+        )
+        result = await service.process_submission(submission.id)
+        await db.commit()
+        return result
 
 
 async def export_lead_to_sheets_task(
@@ -286,6 +384,7 @@ class WorkerSettings:
     """ARQ compatibility settings."""
     functions = [
         send_lead_postback,
+        auto_submit_lead_task,
         export_lead_to_sheets_task,
         send_fb_capi_event_task,
         process_user_input_task,
@@ -297,6 +396,7 @@ class WorkerSettings:
     ]
     redis_settings = _redis_settings_from_url()
     queue_name = JOBS_QUEUE_NAME
+    on_startup = _on_worker_startup
     cron_jobs = (
         [cron(recover_missed_funnel_starts_task, second=20, run_at_startup=True)]
         if cron is not None

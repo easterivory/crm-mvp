@@ -322,6 +322,8 @@ export default function StepSettingsPanel({
                                 type: event.target.value,
                                 ...(event.target.value === 'send_fb_event'
                                   ? { source_event: 'registration' }
+                                  : event.target.value === 'record_lead_event'
+                                    ? { event_type: 'registration' }
                                   : {}),
                               }
                             : item,
@@ -484,6 +486,56 @@ export default function StepSettingsPanel({
                       ))}
                     </select>
                   ) : null}
+                  {action.type === 'record_lead_event' ? (
+                    <div className="grid gap-2">
+                      <select
+                        value={action.event_type || 'registration'}
+                        onChange={(event) =>
+                          patchConfig({
+                            actions: actions.map((item, idx) =>
+                              idx === index ? { ...item, event_type: event.target.value } : item,
+                            ),
+                          })
+                        }
+                        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                      >
+                        <option value="registration">Регистрация</option>
+                        <option value="deposit">Депозит</option>
+                        <option value="redeposit">Повторный депозит (RD)</option>
+                      </select>
+                      {action.event_type === 'deposit' || action.event_type === 'redeposit' ? (
+                        <div className="grid grid-cols-[minmax(0,1fr)_92px] gap-2">
+                          <input
+                            value={action.amount ?? ''}
+                            onChange={(event) =>
+                              patchConfig({
+                                actions: actions.map((item, idx) =>
+                                  idx === index ? { ...item, amount: event.target.value } : item,
+                                ),
+                              })
+                            }
+                            placeholder="Сумма или {{custom.amount}}"
+                            className="min-w-0 rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                          />
+                          <input
+                            value={action.currency || 'USD'}
+                            onChange={(event) =>
+                              patchConfig({
+                                actions: actions.map((item, idx) =>
+                                  idx === index
+                                    ? { ...item, currency: event.target.value.toUpperCase().slice(0, 3) }
+                                    : item,
+                                ),
+                              })
+                            }
+                            maxLength={3}
+                            placeholder="USD"
+                            className="rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm uppercase text-gray-100 outline-none"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {action.type === 'send_fb_event' ? (
                     <div className="space-y-2">
                       <label className="block">
@@ -614,7 +666,9 @@ export default function StepSettingsPanel({
           ) : null}
 
           {step.step_type === 'operator' ? (
-            <label className="block">
+            <div className="space-y-3">
+            {step.block_type !== 'manager_review' ? (
+              <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 Действие оператора
               </span>
@@ -627,7 +681,37 @@ export default function StepSettingsPanel({
                 <option value="notify">Уведомить оператора</option>
                 <option value="stop_bot">Остановить бота</option>
               </select>
-            </label>
+              </label>
+            ) : (
+              <p className="rounded-lg border border-amber-300/15 bg-amber-300/[0.06] p-3 text-xs leading-5 text-amber-100/85">
+                На этом шаге сценарий остановится до апрува менеджера или возврата лида на выбранный шаг.
+              </p>
+            )}
+              {step.block_type === 'manager_review' ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Сообщение клиенту перед проверкой
+                    </span>
+                    <textarea
+                      value={textValue(step.config_json, 'message_text')}
+                      onChange={(event) => patchConfig({ message_text: event.target.value })}
+                      rows={3}
+                      placeholder="Необязательно"
+                      className="w-full resize-y rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-sm text-gray-200">
+                    <span>Установить статус ручной обработки</span>
+                    <input
+                      type="checkbox"
+                      checked={step.config_json.set_manual_status !== false}
+                      onChange={(event) => patchConfig({ set_manual_status: event.target.checked })}
+                    />
+                  </label>
+                </>
+              ) : null}
+            </div>
           ) : null}
 
           {step.step_type === 'integration' ? (

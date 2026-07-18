@@ -45,6 +45,21 @@ function percent(value: number | string | null | undefined) {
   return `${toNumber(value).toFixed(1)}%`
 }
 
+function formatDuration(value: number | string | null | undefined) {
+  const totalSeconds = Math.max(0, Math.round(toNumber(value)))
+  if (totalSeconds < 60) {
+    return `${totalSeconds} сек`
+  }
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes} мин ${seconds} сек` : `${minutes} мин`
+  }
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes > 0 ? `${hours} ч ${restMinutes} мин` : `${hours} ч`
+}
+
 function isoDateDaysAgo(days: number) {
   const value = new Date()
   value.setDate(value.getDate() - days)
@@ -154,12 +169,36 @@ export default function DashboardPage() {
       managers.reduce(
         (acc, manager) => ({
           taken: acc.taken + manager.chats_taken,
+          retained: acc.retained + manager.chats_retained,
+          expired: acc.expired + manager.chats_expired,
+          answered: acc.answered + manager.answered_chats,
+          unanswered: acc.unanswered + manager.unanswered_chats,
           submitted: acc.submitted + manager.submitted_leads,
+          manual: acc.manual + manager.manual_submissions,
+          automatic: acc.automatic + manager.auto_submissions,
           valid: acc.valid + manager.valid_leads,
           pushed: acc.pushed + manager.funnels_pushed,
           returned: acc.returned + manager.returned_to_funnel,
+          registrations: acc.registrations + manager.registrations,
+          deposits: acc.deposits + manager.deposits,
+          redeposits: acc.redeposits + manager.redeposits,
         }),
-        { taken: 0, submitted: 0, valid: 0, pushed: 0, returned: 0 },
+        {
+          taken: 0,
+          retained: 0,
+          expired: 0,
+          answered: 0,
+          unanswered: 0,
+          submitted: 0,
+          manual: 0,
+          automatic: 0,
+          valid: 0,
+          pushed: 0,
+          returned: 0,
+          registrations: 0,
+          deposits: 0,
+          redeposits: 0,
+        },
       ),
     [managers],
   )
@@ -450,7 +489,7 @@ export default function DashboardPage() {
                 <h2 className="font-semibold text-white">Эффективность менеджеров</h2>
               </div>
               <p className="mt-1 text-sm text-gray-500">
-                Взятые чаты, подачи, подтверждённые партнёром лиды и возвраты в воронку.
+                Lease, ответы, подачи, прохождение воронок и события по закреплённым чатам.
               </p>
             </div>
             <p className="max-w-md text-xs leading-5 text-gray-500">
@@ -458,39 +497,52 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
             <MetricCard label="Взято чатов" value={String(managerTotals.taken)} tone="zinc" />
+            <MetricCard label="Удержано" value={String(managerTotals.retained)} tone="cyan" />
+            <MetricCard label="Слетело по таймеру" value={String(managerTotals.expired)} tone="zinc" />
             <MetricCard label="Подано" value={String(managerTotals.submitted)} tone="violet" />
             <MetricCard label="Валидных" value={String(managerTotals.valid)} tone="emerald" />
             <MetricCard label="Доведено воронкой" value={String(managerTotals.pushed)} tone="cyan" />
+            <MetricCard label="Рег / Деп / RD" value={`${managerTotals.registrations} / ${managerTotals.deposits} / ${managerTotals.redeposits}`} tone="emerald" />
           </div>
 
           <div className="mt-4 hidden overflow-x-auto rounded-xl border border-white/10 lg:block">
-            <table className="w-full min-w-[980px] text-left text-sm">
+            <table className="w-full min-w-[1880px] text-left text-sm">
               <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-gray-500">
                 <tr>
                   <th className="px-4 py-3">Менеджер</th>
                   <th className="px-4 py-3 text-right">Взял</th>
+                  <th className="px-4 py-3 text-right">Удержал</th>
+                  <th className="px-4 py-3 text-right">Слетело</th>
+                  <th className="px-4 py-3 text-right">Ответил</th>
+                  <th className="px-4 py-3 text-right">Не ответил</th>
+                  <th className="px-4 py-3 text-right">Первый ответ</th>
                   <th className="px-4 py-3 text-right">Подал</th>
+                  <th className="px-4 py-3 text-right">Ручных</th>
+                  <th className="px-4 py-3 text-right">Авто</th>
                   <th className="px-4 py-3 text-right">Валид</th>
                   <th className="px-4 py-3 text-right">Взял → подал</th>
                   <th className="px-4 py-3 text-right">Подал → валид</th>
                   <th className="px-4 py-3 text-right">Взял → валид</th>
                   <th className="px-4 py-3 text-right">Довёл воронкой</th>
                   <th className="px-4 py-3 text-right">Вернул</th>
+                  <th className="px-4 py-3 text-right">Рег</th>
+                  <th className="px-4 py-3 text-right">Деп</th>
+                  <th className="px-4 py-3 text-right">RD</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={19} className="px-4 py-10 text-center text-gray-500">
                       <LoaderCircle size={18} className="mr-2 inline animate-spin" />
                       Загрузка аналитики
                     </td>
                   </tr>
                 ) : managers.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={19} className="px-4 py-10 text-center text-gray-500">
                       За выбранный период нет действий менеджеров.
                     </td>
                   </tr>
@@ -504,13 +556,23 @@ export default function DashboardPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-gray-200">{manager.chats_taken}</td>
+                      <td className="px-4 py-3 text-right font-mono text-cyan-100">{manager.chats_retained}</td>
+                      <td className="px-4 py-3 text-right font-mono text-amber-200">{manager.chats_expired}</td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-200">{manager.answered_chats}</td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-400">{manager.unanswered_chats}</td>
+                      <td className="px-4 py-3 text-right text-gray-300">{formatDuration(manager.average_first_response_seconds)}</td>
                       <td className="px-4 py-3 text-right font-mono text-violet-200">{manager.submitted_leads}</td>
+                      <td className="px-4 py-3 text-right font-mono text-violet-100">{manager.manual_submissions}</td>
+                      <td className="px-4 py-3 text-right font-mono text-violet-100">{manager.auto_submissions}</td>
                       <td className="px-4 py-3 text-right font-mono text-emerald-200">{manager.valid_leads}</td>
                       <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.taken_to_submitted_percent)}</td>
                       <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.submitted_to_valid_percent)}</td>
                       <td className="px-4 py-3 text-right text-cyan-100">{percent(manager.taken_to_valid_percent)}</td>
                       <td className="px-4 py-3 text-right font-mono text-cyan-100">{manager.funnels_pushed}</td>
                       <td className="px-4 py-3 text-right font-mono text-gray-300">{manager.returned_to_funnel}</td>
+                      <td className="px-4 py-3 text-right font-mono text-emerald-100">{manager.registrations}</td>
+                      <td className="px-4 py-3 text-right font-mono text-emerald-100">{manager.deposits}</td>
+                      <td className="px-4 py-3 text-right font-mono text-emerald-100">{manager.redeposits}</td>
                     </tr>
                   ))
                 )}
@@ -537,9 +599,18 @@ export default function DashboardPage() {
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 min-[420px]:grid-cols-4">
                   <CompactMetric label="Взял" value={String(manager.chats_taken)} />
+                  <CompactMetric label="Удержал" value={String(manager.chats_retained)} />
+                  <CompactMetric label="Слетело" value={String(manager.chats_expired)} />
+                  <CompactMetric label="Первый ответ" value={formatDuration(manager.average_first_response_seconds)} />
                   <CompactMetric label="Подал" value={String(manager.submitted_leads)} />
+                  <CompactMetric label="Ручных / авто" value={`${manager.manual_submissions} / ${manager.auto_submissions}`} />
                   <CompactMetric label="Валид" value={String(manager.valid_leads)} />
                   <CompactMetric label="Довёл" value={String(manager.funnels_pushed)} />
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-3 border-t border-white/10 pt-3">
+                  <CompactMetric label="Рег" value={String(manager.registrations)} />
+                  <CompactMetric label="Деп" value={String(manager.deposits)} />
+                  <CompactMetric label="RD" value={String(manager.redeposits)} />
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/10 pt-3">
                   <CompactMetric label="Взял → подал" value={percent(manager.taken_to_submitted_percent)} />

@@ -102,6 +102,7 @@ async def list_leads(
         pattern="^(active|submitted)$",
     ),
     funnel_completed: bool = Query(default=False),
+    current_step_id: Optional[UUID] = Query(default=None),
     q: Optional[str] = Query(default=None, max_length=255),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
@@ -130,6 +131,7 @@ async def list_leads(
         country=country,
         submission_state=submission_state,
         funnel_completed=funnel_completed,
+        current_step_id=current_step_id,
         limit=limit,
         offset=offset,
     )

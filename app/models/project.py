@@ -4,7 +4,7 @@ from typing import Optional
 
 from sqlalchemy import Boolean, CheckConstraint, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import LeadStatusCode
@@ -23,6 +23,18 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         CheckConstraint(
             "status IN ('active', 'archived')",
             name="ck_projects_status",
+        ),
+        CheckConstraint(
+            "chat_lease_minutes >= 0",
+            name="ck_projects_chat_lease_minutes_nonnegative",
+        ),
+        CheckConstraint(
+            "project_format IN ('submission', 'gambling')",
+            name="ck_projects_project_format",
+        ),
+        CheckConstraint(
+            "push_unread_threshold >= 1",
+            name="ck_projects_push_unread_threshold_positive",
         ),
     )
 
@@ -67,6 +79,50 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         nullable=False,
         default=lambda: list(LeadStatusCode.TRACKING_LEAD_DEFAULT),
         server_default=text("'[\"submitted\",\"qualified\"]'::jsonb"),
+    )
+    use_confidence_score: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+    hide_assigned_chats_from_all: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    chat_lease_minutes: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=30,
+        server_default="30",
+    )
+    project_format: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="submission",
+        server_default="submission",
+    )
+    vip_tags: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    push_unread_threshold: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+    confidence_weights: Mapped[Optional[dict[str, int]]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=True,
+    )
+    confidence_thresholds: Mapped[Optional[dict[str, int]]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=True,
     )
 
     # Relationships

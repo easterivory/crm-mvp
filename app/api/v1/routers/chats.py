@@ -18,7 +18,15 @@ from app.api.v1.dependencies import get_current_project_id, get_current_user, ge
 from app.core.constants import RoleName
 from app.models.user import User
 from app.repositories.funnel_repository import FunnelRepository
-from app.schemas.chat import ChatCreate, ChatFilters, ChatLanguageUpdate, ChatOut
+from app.schemas.chat import (
+    ChatCreate,
+    ChatFavoriteUpdate,
+    ChatFilters,
+    ChatLanguageUpdate,
+    ChatOut,
+    ChatWorkspaceCountsOut,
+    ChatWorkspaceView,
+)
 from app.schemas.chat_event_log import ChatEventLogOut
 from app.schemas.chat_filter_preset import (
     ChatFilterPresetCreate,
@@ -26,7 +34,12 @@ from app.schemas.chat_filter_preset import (
     ChatFilterPresetUpdate,
 )
 from app.schemas.common import PaginatedResponse
-from app.schemas.funnel import ChatFunnelControlOut, ChatFunnelResumeIn, FunnelRuntimeLogOut
+from app.schemas.funnel import (
+    ChatFunnelControlOut,
+    ChatFunnelResumeIn,
+    ChatFunnelSmartResumeIn,
+    FunnelRuntimeLogOut,
+)
 from app.services.chat_filter_preset_service import ChatFilterPresetService
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_service import ChatService
@@ -104,8 +117,11 @@ async def list_chats(
         default=None,
         pattern="^(in_funnel|waiting_for_answer|paused|completed|manual)$",
     ),
+    current_step_id: Optional[UUID] = Query(default=None),
     sort_by: str = Query(default="latest", pattern="^(latest|priority)$"),
+    workspace_view: Optional[ChatWorkspaceView] = Query(default=None, alias="view"),
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[ChatOut]:
     """
@@ -164,13 +180,16 @@ async def list_chats(
             lead_statuses_array,
         ),
         funnel_state=funnel_state,
+        current_step_id=current_step_id,
         sort_by=sort_by,
+        workspace_view=workspace_view,
     )
     items, total = await ChatService(db).get_chat_list(
         project_id=project_id,
         filters=filters,
         limit=limit,
         offset=offset,
+        actor=current_user,
     )
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
@@ -231,6 +250,23 @@ def _merge_string_values(
     return result
 
 
+@router.get("/workspace-counts", response_model=ChatWorkspaceCountsOut)
+async def get_chat_workspace_counts(
+    bot_id: Optional[UUID] = Query(default=None),
+    bot_ids: Optional[str] = Query(default=None),
+    bot_ids_array: Optional[list[UUID]] = Query(default=None, alias="bot_ids[]"),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatWorkspaceCountsOut:
+    return await ChatService(db).get_workspace_counts(
+        project_id=project_id,
+        actor=current_user,
+        bot_id=bot_id,
+        bot_ids=_merge_uuid_values(_parse_bot_ids(bot_ids), bot_ids_array),
+    )
+
+
 @router.get("/filter-presets", response_model=list[ChatFilterPresetOut])
 async def list_filter_presets(
     project_id: UUID = Depends(get_current_project_id),
@@ -289,10 +325,31 @@ async def delete_filter_preset(
 async def get_chat(
     chat_id: UUID,
     project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatOut:
     """Returns a single chat with computed flags (unread, unanswered, is_red)."""
-    return await ChatService(db).get_chat(chat_id=chat_id, project_id=project_id)
+    return await ChatService(db).get_chat(
+        chat_id=chat_id,
+        project_id=project_id,
+        actor=current_user,
+    )
+
+
+@router.patch("/{chat_id}/favorite", response_model=ChatOut)
+async def update_chat_favorite(
+    chat_id: UUID,
+    data: ChatFavoriteUpdate,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatOut:
+    _ensure_chat_trace_access(current_user)
+    return await ChatService(db).set_favorite(
+        chat_id=chat_id,
+        project_id=project_id,
+        is_favorite=data.is_favorite,
+    )
 
 
 @router.patch("/{chat_id}/language", response_model=ChatOut)
@@ -387,6 +444,42 @@ async def resume_chat_funnel(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The funnel is not paused or the selected step is unavailable.",
+        )
+    control = await FunnelRuntimeService(db).get_manager_funnel_control(
+        chat_id=chat_id,
+        project_id=project_id,
+    )
+    return ChatFunnelControlOut.model_validate(control)
+
+
+@router.post("/{chat_id}/resume-funnel", response_model=ChatFunnelControlOut)
+async def smart_resume_chat_funnel(
+    chat_id: UUID,
+    data: ChatFunnelSmartResumeIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatFunnelControlOut:
+    _ensure_chat_trace_access(current_user)
+    if current_user.role_name == RoleName.BUYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Buyers have read-only chat access",
+        )
+    try:
+        resumed = await FunnelRuntimeService(db).resume_funnel_from_manager(
+            chat_id=chat_id,
+            project_id=project_id,
+            actor=current_user,
+            target_step_id=data.target_step_id,
+            manager_approved=data.manager_approved,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if not resumed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The funnel is not paused or the requested resume mode is unavailable.",
         )
     control = await FunnelRuntimeService(db).get_manager_funnel_control(
         chat_id=chat_id,

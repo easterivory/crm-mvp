@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -40,6 +41,19 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         )
         return int(result.scalar_one() or 0)
 
+    async def list_auto_submit_by_project(
+        self,
+        project_id: UUID,
+    ) -> list[PartnerIntegration]:
+        result = await self.db.execute(
+            select(PartnerIntegration).where(
+                PartnerIntegration.project_id == project_id,
+                PartnerIntegration.is_active.is_(True),
+                PartnerIntegration.is_auto_submit_enabled.is_(True),
+            )
+        )
+        return list(result.scalars().all())
+
     async def get_in_project(
         self,
         integration_id: UUID,
@@ -68,6 +82,8 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         retry_config: dict[str, Any],
         request_config: dict[str, Any],
         is_active: bool,
+        is_auto_submit_enabled: bool,
+        auto_submit_rules: dict[str, Any],
     ) -> PartnerIntegration:
         integration = PartnerIntegration(
             project_id=project_id,
@@ -82,6 +98,8 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
             retry_config=retry_config,
             request_config=request_config,
             is_active=is_active,
+            is_auto_submit_enabled=is_auto_submit_enabled,
+            auto_submit_rules=auto_submit_rules,
         )
         self.db.add(integration)
         await self.db.flush()
@@ -113,8 +131,14 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         )
         return bool(result.rowcount)
 
-    async def get_lead_in_project(self, lead_id: UUID, project_id: UUID) -> Optional[Lead]:
-        result = await self.db.execute(
+    async def get_lead_in_project(
+        self,
+        lead_id: UUID,
+        project_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> Optional[Lead]:
+        stmt = (
             select(Lead)
             .options(
                 selectinload(Lead.project),
@@ -130,6 +154,9 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
                 Lead.is_trash.is_(False),
             )
         )
+        if for_update:
+            stmt = stmt.with_for_update()
+        result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def create_submission(
@@ -139,17 +166,73 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         partner_integration_id: UUID,
         status: str,
         submitted_by_user_id: UUID | None = None,
+        submitted_manually: bool = False,
+        routing_decision_reason: str | None = None,
+        submission_source: str = "legacy",
     ) -> LeadSubmission:
         submission = LeadSubmission(
             lead_id=lead_id,
             partner_integration_id=partner_integration_id,
             status=status,
             submitted_by_user_id=submitted_by_user_id,
+            submitted_manually=submitted_manually,
+            routing_decision_reason=routing_decision_reason,
+            submission_source=submission_source,
         )
         self.db.add(submission)
         await self.db.flush()
         await self.db.refresh(submission)
         return submission
+
+    async def upsert_manual_required_decision(
+        self,
+        *,
+        lead_id: UUID,
+        partner_integration_id: UUID,
+        reason: str,
+    ) -> LeadSubmission:
+        result = await self.db.execute(
+            select(LeadSubmission)
+            .where(
+                LeadSubmission.lead_id == lead_id,
+                LeadSubmission.partner_integration_id == partner_integration_id,
+                LeadSubmission.status == "manual_required",
+            )
+            .order_by(LeadSubmission.submitted_at.desc())
+            .limit(1)
+        )
+        decision = result.scalar_one_or_none()
+        if decision is None:
+            return await self.create_submission(
+                lead_id=lead_id,
+                partner_integration_id=partner_integration_id,
+                status="manual_required",
+                routing_decision_reason=reason,
+                submission_source="auto",
+            )
+        decision.routing_decision_reason = reason
+        decision.completed_at = None
+        await self.db.flush()
+        return decision
+
+    async def clear_manual_required_decision(
+        self,
+        *,
+        lead_id: UUID,
+        partner_integration_id: UUID,
+    ) -> None:
+        await self.db.execute(
+            update(LeadSubmission)
+            .where(
+                LeadSubmission.lead_id == lead_id,
+                LeadSubmission.partner_integration_id == partner_integration_id,
+                LeadSubmission.status == "manual_required",
+            )
+            .values(
+                status="routing_cleared",
+                completed_at=datetime.now(timezone.utc),
+            )
+        )
 
     async def list_submissions_for_lead_partner(
         self,

@@ -6,11 +6,12 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, ChatEventType, EntityType, RoleName
-from app.models.funnel import Funnel, FunnelVersion
+from app.models.funnel import Funnel, FunnelStep, FunnelVersion
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
@@ -34,6 +35,7 @@ from app.schemas.funnel import (
     FunnelPublishedVersionOut,
     FunnelPushRuleOut,
     FunnelSelfRestartOut,
+    FunnelStepOptionOut,
     FunnelStepIn,
     FunnelStepOut,
     FunnelUpdate,
@@ -91,6 +93,44 @@ class FunnelService:
         )
         items = [await self._funnel_out(funnel) for funnel in funnels]
         return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+    async def list_current_step_options(
+        self,
+        *,
+        project_id: UUID,
+        current_user: User,
+    ) -> list[FunnelStepOptionOut]:
+        self._ensure_read_allowed(current_user)
+        require_project_access(current_user, project_id)
+        rows = (
+            await self.db.execute(
+                select(
+                    FunnelStep.id,
+                    FunnelStep.key,
+                    FunnelStep.title,
+                    FunnelStep.step_type,
+                    Funnel.id.label("funnel_id"),
+                    Funnel.name.label("funnel_name"),
+                    FunnelVersion.id.label("version_id"),
+                    FunnelVersion.version_number,
+                )
+                .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
+                .join(Funnel, Funnel.id == FunnelVersion.funnel_id)
+                .where(
+                    Funnel.project_id == project_id,
+                    Funnel.status == "active",
+                    Funnel.current_version_id == FunnelVersion.id,
+                    FunnelStep.step_type != "trigger",
+                )
+                .order_by(
+                    Funnel.name.asc(),
+                    FunnelStep.position_y.asc(),
+                    FunnelStep.position_x.asc(),
+                    FunnelStep.created_at.asc(),
+                )
+            )
+        ).mappings().all()
+        return [FunnelStepOptionOut(**row) for row in rows]
 
     async def create_funnel(
         self,

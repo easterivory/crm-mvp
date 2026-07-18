@@ -69,6 +69,9 @@ export type ActionConfig = {
   partner_integration_id?: string
   event_name?: string
   source_event?: string
+  event_type?: string
+  amount?: string
+  currency?: string
   note?: string
 }
 
@@ -108,6 +111,7 @@ export const conditionSources = [
   ['tag', 'Тег'],
   ['status', 'Статус'],
   ['tracking_link', 'Tracking link'],
+  ['confidence_score', 'Уверенность лида, %'],
   ['hold_mode', 'Hold включён'],
   ['operator_assigned', 'Назначен менеджер'],
 ] as const
@@ -119,7 +123,9 @@ export const conditionOperators = [
   ['exists', 'заполнено'],
   ['empty', 'пусто'],
   ['gt', 'больше'],
+  ['gte', 'больше или равно'],
   ['lt', 'меньше'],
+  ['lte', 'меньше или равно'],
 ] as const
 
 export const actionTypes = [
@@ -131,6 +137,7 @@ export const actionTypes = [
   ['assign_operator', 'Назначить оператора'],
   ['add_note', 'Добавить заметку'],
   ['submit_to_partner', 'Отправить в partner CRM'],
+  ['record_lead_event', 'Записать регистрацию / депозит / RD'],
   ['send_fb_event', 'Facebook CAPI event'],
 ] as const
 
@@ -408,6 +415,11 @@ export function normalizeActions(raw: unknown): ActionConfig[] {
           ? action.fb_event_name
           : 'Lead',
       source_event: typeof action.source_event === 'string' ? action.source_event : '',
+      event_type: typeof action.event_type === 'string' ? action.event_type : '',
+      amount: typeof action.amount === 'string' || typeof action.amount === 'number'
+        ? String(action.amount)
+        : '',
+      currency: typeof action.currency === 'string' ? action.currency : '',
       note: typeof action.note === 'string' ? action.note : '',
     }
   })

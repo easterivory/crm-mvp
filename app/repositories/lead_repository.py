@@ -116,6 +116,7 @@ class LeadRepository(BaseRepository[Lead]):
         country: Optional[str] = None,
         submission_state: Optional[str] = None,
         funnel_completed: bool = False,
+        current_step_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Lead]:
@@ -175,6 +176,7 @@ class LeadRepository(BaseRepository[Lead]):
             partner_id=partner_id if submission_state == "submitted" else None,
         )
         stmt = self._apply_funnel_completed(stmt, funnel_completed)
+        stmt = self._apply_current_step(stmt, current_step_id)
         if age_from is not None:
             stmt = stmt.where(Lead.age >= age_from)
         if age_to is not None:
@@ -225,6 +227,7 @@ class LeadRepository(BaseRepository[Lead]):
         country: Optional[str] = None,
         submission_state: Optional[str] = None,
         funnel_completed: bool = False,
+        current_step_id: Optional[UUID] = None,
     ) -> int:
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -282,6 +285,7 @@ class LeadRepository(BaseRepository[Lead]):
             partner_id=partner_id if submission_state == "submitted" else None,
         )
         stmt = self._apply_funnel_completed(stmt, funnel_completed)
+        stmt = self._apply_current_step(stmt, current_step_id)
         if age_from is not None:
             stmt = stmt.where(Lead.age >= age_from)
         if age_to is not None:
@@ -342,6 +346,20 @@ class LeadRepository(BaseRepository[Lead]):
             .where(
                 ChatFunnelState.chat_id == Chat.id,
                 ChatFunnelState.completed_at.is_not(None),
+            )
+            .exists()
+        )
+
+    @staticmethod
+    def _apply_current_step(stmt, current_step_id: Optional[UUID]):
+        if current_step_id is None:
+            return stmt
+        return stmt.where(
+            select(ChatFunnelState.id)
+            .where(
+                ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.current_step_id == current_step_id,
+                ChatFunnelState.completed_at.is_(None),
             )
             .exists()
         )

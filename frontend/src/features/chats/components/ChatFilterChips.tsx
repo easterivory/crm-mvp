@@ -5,6 +5,7 @@ import type { ChatFiltersState, FilterOption } from '../types'
 type ChatFilterChipsProps = {
   filters: ChatFiltersState
   trackingOptions: FilterOption[]
+  stepOptions: FilterOption[]
   tagOptions: FilterOption[]
   statusOptions: FilterOption[]
   userOptions: FilterOption[]
@@ -33,6 +34,7 @@ function optionLabel(options: FilterOption[], id: string, fallback: string) {
 export default function ChatFilterChips({
   filters,
   trackingOptions,
+  stepOptions,
   tagOptions,
   statusOptions,
   userOptions,
@@ -126,6 +128,13 @@ export default function ChatFilterChips({
       key: 'funnel',
       label: `Воронка: ${funnelLabels[filters.funnelState]}`,
       remove: () => onChange({ ...filters, funnelState: '' }),
+    })
+  }
+  if (filters.currentStepId) {
+    chips.push({
+      key: 'current-step',
+      label: `Шаг: ${optionLabel(stepOptions, filters.currentStepId, 'выбран')}`,
+      remove: () => onChange({ ...filters, currentStepId: '' }),
     })
   }
   if (filters.assignedUserId) {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -79,19 +79,19 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         JSONB,
         nullable=False,
         default=list,
-        server_default="'[]'::jsonb",
+        server_default=text("'[]'::jsonb"),
     )
     utm_defaults_json: Mapped[dict[str, str]] = mapped_column(
         JSONB,
         nullable=False,
         default=dict,
-        server_default="'{}'::jsonb",
+        server_default=text("'{}'::jsonb"),
     )
     meta_events_json: Mapped[list[dict]] = mapped_column(
         JSONB,
         nullable=False,
         default=list,
-        server_default="'[]'::jsonb",
+        server_default=text("'[]'::jsonb"),
     )
     auto_redirect_enabled: Mapped[bool] = mapped_column(
         Boolean,

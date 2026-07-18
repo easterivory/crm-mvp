@@ -25,6 +25,7 @@ from app.schemas.funnel import (
     FunnelHoldModeUpdate,
     FunnelOut,
     FunnelSelfRestartOut,
+    FunnelStepOptionOut,
     FunnelUpdate,
     FunnelValidationOut,
     FunnelVersionOut,
@@ -51,6 +52,18 @@ def _ensure_funnel_editor(current_user: User) -> None:
 @router.get("/block-registry", response_model=FunnelBlockRegistryOut)
 async def get_block_registry() -> FunnelBlockRegistryOut:
     return FunnelBlockRegistry().as_schema()
+
+
+@router.get("/step-options", response_model=list[FunnelStepOptionOut])
+async def list_funnel_step_options(
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[FunnelStepOptionOut]:
+    return await FunnelService(db).list_current_step_options(
+        project_id=project_id,
+        current_user=current_user,
+    )
 
 
 @router.post("/media/uploads", response_model=BroadcastUploadOut, status_code=status.HTTP_201_CREATED)

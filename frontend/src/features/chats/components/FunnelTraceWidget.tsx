@@ -6,6 +6,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import axios from 'axios'
 
 import { fetchFunnelTrace } from '../api'
@@ -14,6 +15,12 @@ import type { FunnelRuntimeLog } from '../types'
 type FunnelTraceWidgetProps = {
   chatId: string | null
   projectId: string | null
+  currentStepId?: string | null
+  currentStepTitle?: string | null
+  isPaused?: boolean
+  isManualReview?: boolean
+  refreshKey?: number
+  actions?: ReactNode
 }
 
 function formatTraceTime(value: string) {
@@ -41,7 +48,16 @@ function getTraceError(err: unknown) {
   return 'Не удалось загрузить путь в воронке.'
 }
 
-export default function FunnelTraceWidget({ chatId, projectId }: FunnelTraceWidgetProps) {
+export default function FunnelTraceWidget({
+  chatId,
+  projectId,
+  currentStepId = null,
+  currentStepTitle = null,
+  isPaused = false,
+  isManualReview = false,
+  refreshKey = 0,
+  actions,
+}: FunnelTraceWidgetProps) {
   const [logs, setLogs] = useState<FunnelRuntimeLog[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -81,7 +97,7 @@ export default function FunnelTraceWidget({ chatId, projectId }: FunnelTraceWidg
 
   useEffect(() => {
     void loadTrace()
-  }, [loadTrace])
+  }, [loadTrace, refreshKey])
 
   return (
     <section className="rounded-xl border border-white/5 bg-white/[0.03]">
@@ -120,6 +136,30 @@ export default function FunnelTraceWidget({ chatId, projectId }: FunnelTraceWidg
             </button>
           </div>
 
+          {currentStepId ? (
+            <div className={`mb-3 rounded-lg border p-3 ${
+              isManualReview
+                ? 'border-amber-300/25 bg-amber-300/10'
+                : isPaused
+                  ? 'border-yellow-300/20 bg-yellow-300/[0.07]'
+                  : 'border-sky-300/20 bg-sky-300/[0.07]'
+            }`}>
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                Текущий шаг
+              </p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {currentStepTitle || currentStepId}
+              </p>
+              <p className="mt-1 text-xs text-gray-400">
+                {isManualReview
+                  ? 'На ручной проверке менеджером'
+                  : isPaused
+                    ? 'Воронка приостановлена'
+                    : 'Воронка выполняется'}
+              </p>
+            </div>
+          ) : null}
+
           {isLoading ? (
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <LoaderCircle size={15} className="animate-spin" />
@@ -142,7 +182,10 @@ export default function FunnelTraceWidget({ chatId, projectId }: FunnelTraceWidg
           {!isLoading && !error && logs.length > 0 ? (
             <ol className="space-y-0">
               {logs.map((log, index) => {
-                const isCurrent = index === currentSuccessIndex
+                const isCurrent = currentStepId
+                  ? log.step_id === currentStepId
+                    && !logs.slice(index + 1).some((item) => item.step_id === currentStepId)
+                  : index === currentSuccessIndex
                 const isFailed = log.status === 'failed'
                 const isLast = index === logs.length - 1
                 const title = log.step_title || log.step_key
@@ -213,6 +256,12 @@ export default function FunnelTraceWidget({ chatId, projectId }: FunnelTraceWidg
                 )
               })}
             </ol>
+          ) : null}
+
+          {actions ? (
+            <div className="mt-4 border-t border-white/5 pt-4">
+              {actions}
+            </div>
           ) : null}
         </div>
       ) : null}

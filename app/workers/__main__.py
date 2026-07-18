@@ -45,6 +45,10 @@ def main() -> None:
         from app.workers.funnel_scheduled_worker import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "push":
+        from app.workers.funnel_push_worker import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "broadcast":
         from app.workers.broadcast_worker import run_loop
         asyncio.run(run_loop())
@@ -75,6 +79,7 @@ def main() -> None:
         from app.workers.buyer_bot import run_loop as buyer_loop
         from app.workers.admin_bot import run_loop as admin_loop
         from app.workers.funnel_scheduled_worker import run_loop as funnel_loop
+        from app.workers.funnel_push_worker import run_loop as push_loop
         from app.workers.postback_worker import run_loop as postback_loop
         from app.workers.scheduled_message_worker import run_loop as scheduled_loop
         from app.workers.stats_worker import run_loop as stats_loop
@@ -85,6 +90,7 @@ def main() -> None:
                 alert_loop(),
                 stats_loop(),
                 funnel_loop(),
+                push_loop(),
                 broadcast_loop(),
                 scheduled_loop(),
                 postback_loop(),
@@ -96,7 +102,7 @@ def main() -> None:
 
     else:
         logger.error(
-            "Unknown worker mode: %r. Use: alert | stats | funnel | broadcast | scheduled | postback | buyer | admin | backup | all",
+            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | backup | all",
             mode,
         )
         sys.exit(1)

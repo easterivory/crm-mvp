@@ -30,6 +30,15 @@ export type PartnerRetryConfig = {
   timeout_seconds: number
 }
 
+export type PartnerAutoSubmitRules = {
+  min_score: number
+  allowed_geos: string[]
+  require_phone_valid: boolean
+  reject_high_duplicate_risk: boolean
+  require_partner_fields: boolean
+  require_card: boolean
+}
+
 export type PartnerRequestConfig = {
   method: 'POST' | 'PUT' | 'PATCH'
   body_format: 'json' | 'form'
@@ -59,6 +68,8 @@ export type PartnerIntegration = {
   request_config: PartnerRequestConfig
   secret_variable_keys: string[]
   is_active: boolean
+  is_auto_submit_enabled: boolean
+  auto_submit_rules: PartnerAutoSubmitRules
   created_at: string
   updated_at: string
 }
@@ -75,6 +86,8 @@ export type PartnerIntegrationPayload = {
   retry_config: PartnerRetryConfig
   request_config: PartnerRequestConfig
   is_active: boolean
+  is_auto_submit_enabled: boolean
+  auto_submit_rules: PartnerAutoSubmitRules
 }
 
 export type PartnerConnectionTestResult = {
@@ -115,4 +128,10 @@ export type LeadSubmission = {
   partner_status_updated_at: string | null
   submitted_at: string
   completed_at: string | null
+  submitted_by_user_id?: string | null
+  is_valid?: boolean | null
+  validated_at?: string | null
+  submitted_manually?: boolean
+  routing_decision_reason?: string | null
+  submission_source?: string
 }

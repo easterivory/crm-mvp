@@ -21,6 +21,7 @@ from app.api.v1.routers import (
     leads,
     messages,
     partners,
+    postbacks,
     projects,
     public_landers,
     settings as settings_router,
@@ -91,6 +92,8 @@ app.include_router(tags.router, prefix=_v1_prefix)
 app.include_router(tags.project_router, prefix=_v1_prefix)
 app.include_router(snippets.router, prefix=_v1_prefix)
 app.include_router(partners.router, prefix=f"{_v1_prefix}/partners")
+app.include_router(postbacks.router, prefix=_v1_prefix)
+app.include_router(postbacks.lead_event_router, prefix=_v1_prefix)
 app.include_router(bots.router, prefix=_v1_prefix)
 app.include_router(broadcasts.router, prefix=_v1_prefix)
 app.include_router(tracking.router, prefix=_v1_prefix)
@@ -98,6 +101,7 @@ app.include_router(tracking.v1_router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)
 app.include_router(telegram_contact.router)
+app.include_router(postbacks.public_router)
 
 # BrowserRouter pages need an explicit index.html fallback on direct requests.
 # Keep these routes before the broad public /{slug} lander route.

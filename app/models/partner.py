@@ -31,6 +31,11 @@ class PartnerIntegration(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         ),
         Index("ix_partner_integrations_project_id", "project_id"),
         Index("ix_partner_integrations_project_active", "project_id", "is_active"),
+        Index(
+            "ix_partner_integrations_project_auto_submit",
+            "project_id",
+            "is_auto_submit_enabled",
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -79,6 +84,18 @@ class PartnerIntegration(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         server_default=text("'{}'::jsonb"),
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_auto_submit_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    auto_submit_rules: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
 
     project: Mapped[Project] = relationship("Project", back_populates="partner_integrations")
     submissions: Mapped[list[LeadSubmission]] = relationship(
@@ -94,6 +111,11 @@ class LeadSubmission(Base, UUIDPrimaryKey):
         Index("ix_lead_submissions_partner_integration_id", "partner_integration_id"),
         Index("ix_lead_submissions_status", "status"),
         Index("ix_lead_submissions_partner_status", "partner_status"),
+        Index(
+            "ix_lead_submissions_manual_source",
+            "submitted_manually",
+            "submission_source",
+        ),
     )
 
     lead_id: Mapped[uuid.UUID] = mapped_column(
@@ -123,6 +145,19 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    submitted_manually: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    routing_decision_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    submission_source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="legacy",
+        server_default="legacy",
     )
 
     lead: Mapped[Lead] = relationship("Lead")

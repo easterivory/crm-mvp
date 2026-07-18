@@ -19,6 +19,7 @@ type ChatFiltersPopoverProps = {
   statusOptions: FilterOption[]
   tagOptions: FilterOption[]
   trackingOptions: FilterOption[]
+  stepOptions: FilterOption[]
   userOptions: FilterOption[]
   onApply: (filters: ChatFiltersState) => void
   onApplyPreset: (preset: ChatFilterPreset) => void
@@ -85,6 +86,7 @@ function withoutSearch(filters: ChatFiltersState) {
     tagIds: [] as string[],
     tagMode: 'any' as const,
     trackingLinkId: '',
+    currentStepId: '',
     unassigned: false,
   }
 }
@@ -100,6 +102,7 @@ export default function ChatFiltersPopover({
   statusOptions,
   tagOptions,
   trackingOptions,
+  stepOptions,
   userOptions,
   onApply,
   onApplyPreset,
@@ -447,6 +450,15 @@ export default function ChatFiltersPopover({
                 funnelState: (values[0] ?? '') as ChatFiltersState['funnelState'],
               })
             }
+          />
+
+          <SelectableChipGroup
+            label="Текущий шаг воронки"
+            options={stepOptions}
+            values={draft.currentStepId ? [draft.currentStepId] : []}
+            single
+            emptyLabel="Шагов активных воронок нет"
+            onChange={(values) => setDraft({ ...draft, currentStepId: values[0] ?? '' })}
           />
 
           <SelectableChipGroup

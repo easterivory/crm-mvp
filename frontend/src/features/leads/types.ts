@@ -94,6 +94,7 @@ export type LeadListParams = {
   country?: string
   submission_state?: 'active' | 'submitted'
   funnel_completed?: boolean
+  current_step_id?: string
   limit?: number
   offset?: number
 }

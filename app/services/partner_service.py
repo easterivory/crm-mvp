@@ -27,7 +27,9 @@ from app.services.postback_service import PostbackService
 
 
 class PartnerService:
-    RETRYABLE_SUBMISSION_STATUSES = frozenset({"failed"})
+    RETRYABLE_SUBMISSION_STATUSES = frozenset(
+        {"failed", "manual_required", "routing_cleared"}
+    )
     TEMPLATE_PATTERN = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.]{0,127})\s*}}")
 
     def __init__(self, db: AsyncSession) -> None:
@@ -71,6 +73,8 @@ class PartnerService:
             retry_config=data.retry_config.model_dump(),
             request_config=request_config,
             is_active=data.is_active,
+            is_auto_submit_enabled=data.is_auto_submit_enabled,
+            auto_submit_rules=data.auto_submit_rules.model_dump(),
         )
         return self._integration_out(integration)
 
@@ -144,7 +148,11 @@ class PartnerService:
     ) -> LeadSubmissionOut:
         self._ensure_can_submit(actor)
         self._ensure_project_access(actor, project_id)
-        lead = await self.repo.get_lead_in_project(lead_id, project_id)
+        lead = await self.repo.get_lead_in_project(
+            lead_id,
+            project_id,
+            for_update=True,
+        )
         if lead is None:
             raise HTTPException(status_code=404, detail="Lead not found")
         integration = await self._get_or_404(partner_integration_id, project_id)
@@ -171,6 +179,12 @@ class PartnerService:
                     partner_integration_id=integration.id,
                     status="pending",
                     submitted_by_user_id=actor.id,
+                    submitted_manually=True,
+                    submission_source="manual",
+                )
+                await self.repo.clear_manual_required_decision(
+                    lead_id=lead.id,
+                    partner_integration_id=integration.id,
                 )
         except IntegrityError as exc:
             raise HTTPException(

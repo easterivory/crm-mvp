@@ -8,6 +8,7 @@ export type ChatFunnelStateFilter =
 export type ChatDatePreset = '' | 'today' | 'yesterday' | '7d' | '30d' | 'custom'
 export type ChatTagMode = 'any' | 'all'
 export type ChatQuickFilter = '' | 'all' | 'mine' | 'unanswered' | 'hot'
+export type ChatWorkspaceView = 'unread' | 'mine' | 'all' | 'favorites'
 export type ChatSort = 'latest' | 'priority'
 
 export type ChatFiltersState = {
@@ -19,6 +20,7 @@ export type ChatFiltersState = {
   tagMode: ChatTagMode
   leadStatuses: string[]
   trackingLinkId: string
+  currentStepId: string
   funnelState: ChatFunnelStateFilter
   hasUnansweredIncoming: boolean
   isRed: boolean
@@ -26,6 +28,7 @@ export type ChatFiltersState = {
   assignedUserId: string
   unassigned: boolean
   quickFilter: ChatQuickFilter
+  workspaceView: ChatWorkspaceView
   sortBy: ChatSort
 }
 
@@ -63,6 +66,7 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   tagMode: 'any',
   leadStatuses: [],
   trackingLinkId: '',
+  currentStepId: '',
   funnelState: '',
   hasUnansweredIncoming: false,
   isRed: false,
@@ -70,6 +74,7 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   assignedUserId: '',
   unassigned: false,
   quickFilter: '',
+  workspaceView: 'all',
   sortBy: 'latest',
 }
 
@@ -80,6 +85,7 @@ export function countActiveChatFilters(filters: ChatFiltersState) {
     filters.tagIds.length > 0 ? 'tags' : '',
     ...filters.leadStatuses,
     filters.trackingLinkId,
+    filters.currentStepId,
     filters.funnelState,
     filters.hasUnansweredIncoming ? 'has_unanswered' : '',
     filters.isRed ? 'is_red' : '',

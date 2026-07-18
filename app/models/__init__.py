@@ -40,6 +40,8 @@ from app.models.funnel import (  # noqa: F401
     FunnelVersion,
 )
 from app.models.partner import PartnerIntegration, LeadSubmission  # noqa: F401
+from app.models.postback import PostbackEndpoint, PostbackReceipt  # noqa: F401
+from app.models.lead_event import LeadEvent  # noqa: F401
 
 __all__ = [
     "Base",
@@ -90,4 +92,7 @@ __all__ = [
     "ChatFunnelState",
     "PartnerIntegration",
     "LeadSubmission",
+    "PostbackEndpoint",
+    "PostbackReceipt",
+    "LeadEvent",
 ]

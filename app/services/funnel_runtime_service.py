@@ -4,6 +4,7 @@ import logging
 import re
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
@@ -34,6 +35,7 @@ from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.funnel_block_registry import is_supported_lead_field_key
 from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
+from app.services.lead_event_service import LeadEventService
 from app.services.telegram_sender import TelegramSenderService
 
 logger = logging.getLogger(__name__)
@@ -73,8 +75,14 @@ class FunnelRuntimeService:
     state start/read/move, field mappings, and stuck-chat lookup for push rules.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        release_transaction_before_external_io: bool = False,
+    ) -> None:
         self.db = db
+        self.release_transaction_before_external_io = release_transaction_before_external_io
         self.repo = FunnelRepository(db)
         self.broadcast_repo = BroadcastRepository(db)
         self.chat_repo = ChatRepository(db)
@@ -85,10 +93,16 @@ class FunnelRuntimeService:
         self.tracking_link_repo = TrackingLinkRepository(db)
         from app.services.message_service import MessageService
 
-        self.message_service = MessageService(db)
+        self.message_service = MessageService(
+            db,
+            release_transaction_before_telegram=release_transaction_before_external_io,
+        )
         self.scoring = LeadScoringService(db)
         self.chat_audit = ChatAuditService(db)
-        self.telegram_sender = TelegramSenderService(db)
+        self.telegram_sender = TelegramSenderService(
+            db,
+            release_transaction_before_network=release_transaction_before_external_io,
+        )
         self.audit = AuditService(db)
         self.facebook_campaign = FacebookCampaignService(db)
 
@@ -268,9 +282,17 @@ class FunnelRuntimeService:
             return {"is_available": False, "is_paused": False, "steps": []}
         current_step = await self.repo.get_step(state.current_step_id)
         steps = await self.repo.list_steps(state.funnel_version_id)
+        runtime = state.runtime_json if isinstance(state.runtime_json, dict) else {}
+        manual_review = runtime.get("manual_review")
         return {
             "is_available": True,
             "is_paused": state.is_paused,
+            "is_manual_review": isinstance(manual_review, dict),
+            "manual_review_started_at": (
+                manual_review.get("started_at")
+                if isinstance(manual_review, dict)
+                else None
+            ),
             "funnel_id": state.funnel_id,
             "funnel_name": funnel.name,
             "current_step_id": state.current_step_id,
@@ -295,21 +317,57 @@ class FunnelRuntimeService:
         step_id: UUID,
         actor: User,
     ) -> Optional[FunnelStep]:
+        resumed = await self.resume_funnel_from_manager(
+            chat_id=chat_id,
+            project_id=project_id,
+            actor=actor,
+            target_step_id=step_id,
+            manager_approved=False,
+        )
+        return await self.repo.get_step(step_id) if resumed else None
+
+    async def resume_funnel_from_manager(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        actor: User,
+        target_step_id: UUID | None,
+        manager_approved: bool,
+    ) -> bool:
         chat = await self.chat_repo.get_active(chat_id, project_id)
         if chat is None:
-            return None
+            return False
         lead = await self.repo.get_lead_by_chat(chat_id)
         if actor.role_name == RoleName.MANAGER and (lead is None or lead.manager_id != actor.id):
             raise PermissionError("Only the assigned manager can resume this funnel.")
 
         state = await self.repo.get_chat_funnel_state(chat_id)
-        if state is None or state.completed_at is not None or not state.is_paused:
-            return None
-        step = await self.repo.get_step(step_id)
-        if step is None or step.funnel_version_id != state.funnel_version_id:
-            return None
+        if state is None or state.completed_at is not None:
+            return False
+
+        if manager_approved and not state.is_paused:
+            return False
+
+        if manager_approved:
+            step = await self.repo.get_step(state.current_step_id)
+        elif target_step_id is not None:
+            step = await self.repo.get_step(target_step_id)
+        else:
+            return False
+        if (
+            step is None
+            or step.funnel_version_id != state.funnel_version_id
+            or (target_step_id is not None and step.step_type == "trigger")
+        ):
+            return False
 
         await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        previous_step = await self.repo.get_step(state.current_step_id)
+        runtime_json = self._runtime_for_manager_resume(
+            state.runtime_json,
+            preserve_answers=manager_approved,
+        )
         await self.repo.upsert_chat_funnel_state(
             chat_id=chat_id,
             funnel_id=state.funnel_id,
@@ -318,17 +376,76 @@ class FunnelRuntimeService:
             entered_step_at=datetime.now(timezone.utc),
             waiting_for_answer=False,
             is_paused=False,
-            runtime_json={},
+            runtime_json=runtime_json,
         )
+        assigned_manager_id = getattr(lead, "manager_id", None) if lead is not None else None
+        if assigned_manager_id is not None:
+            from app.services.chat_lease_service import ChatLeaseService
+
+            assignment_expires_at = await ChatLeaseService(
+                self.db,
+            ).assignment_deadline(
+                project_id=project_id,
+                manager_id=assigned_manager_id,
+            )
+            await self.chat_repo.set_assignment_expires_at(
+                chat_id=chat_id,
+                project_id=project_id,
+                assignment_expires_at=assignment_expires_at,
+            )
         await self.audit.log(
             project_id=project_id,
             action=AuditAction.CHAT_FUNNEL_RESUMED,
             entity_type=EntityType.CHAT,
             entity_id=chat_id,
             actor_id=actor.id,
-            meta={"funnel_id": str(state.funnel_id), "step_id": str(step.id)},
+            meta={
+                "funnel_id": str(state.funnel_id),
+                "from_step_id": str(state.current_step_id),
+                "from_step_title": previous_step.title if previous_step is not None else None,
+                "to_step_id": str(step.id),
+                "to_step_title": step.title,
+                "approved_step_id": (
+                    str(state.current_step_id) if manager_approved else None
+                ),
+                "resume_mode": "manager_approved" if manager_approved else "target_step",
+            },
         )
-        return await self._execute_from_step(chat_id=chat_id, step=step)
+        await self.chat_audit.log_event(
+            chat_id=chat_id,
+            project_id=project_id,
+            user_id=actor.id,
+            event_type=ChatEventType.NOTE_ADDED,
+            new_value=(
+                f"{getattr(actor, 'name', None) or getattr(actor, 'email', None) or actor.id} "
+                f"подтвердил шаг «{step.title}» и продолжил воронку."
+                if manager_approved
+                else (
+                    f"{getattr(actor, 'name', None) or getattr(actor, 'email', None) or actor.id} "
+                    f"вернул лида с шага "
+                    f"«{previous_step.title if previous_step is not None else 'неизвестно'}» "
+                    f"на шаг «{step.title}»."
+                )
+            ),
+        )
+        if target_step_id is not None:
+            await self._execute_from_step(chat_id=chat_id, step=step)
+            if lead is not None:
+                await self.scoring.update_lead_score(lead.id)
+            return True
+
+        next_step = await self._move_from_step(
+            chat_id=chat_id,
+            step=step,
+            answer=None,
+        )
+        if next_step is not None:
+            await self._execute_from_step(chat_id=chat_id, step=next_step)
+        else:
+            await self._mark_completed(chat_id, step=step)
+        if lead is not None:
+            await self.scoring.update_lead_score(lead.id)
+        return True
 
     async def process_user_answer(
         self,
@@ -841,10 +958,62 @@ class FunnelRuntimeService:
     async def find_stuck_chats_for_push_rules(self):
         return await self.repo.find_stuck_chats_for_push_rules()
 
-    async def mark_push_sent(self, *, chat_id: UUID, push_rule_id: UUID) -> None:
-        # Placeholder for a future audit/event table. Keeping the method in place
-        # lets the worker call a stable API without inventing runtime writes later.
-        _ = (chat_id, push_rule_id)
+    async def mark_push_sent(self, *, chat_id: UUID, push_rule_id: UUID) -> bool:
+        if not await self.repo.lock_chat_for_runtime(chat_id):
+            return False
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        rule = await self.repo.get_push_rule(push_rule_id)
+        if (
+            state is None
+            or rule is None
+            or state.completed_at is not None
+            or state.is_paused
+            or not state.waiting_for_answer
+            or not rule.is_active
+            or state.current_step_id != rule.step_id
+        ):
+            return False
+
+        runtime = dict(state.runtime_json or {})
+        sent = dict(runtime.get("push_rules_sent") or {})
+        marker = state.entered_step_at.isoformat()
+        if sent.get(str(rule.id)) == marker:
+            return False
+
+        await self._create_outgoing_message(
+            chat_id=chat_id,
+            text=rule.message_text,
+            reply_markup=None,
+        )
+        sent[str(rule.id)] = marker
+        runtime["push_rules_sent"] = sent
+        await self.repo.update_chat_funnel_runtime(
+            chat_id=chat_id,
+            runtime_json=runtime,
+        )
+        await self.chat_repo.increment_unanswered_push_count(chat_id=chat_id)
+
+        if rule.action_after_send == "move_to_step" and rule.target_step_id is not None:
+            current_step = await self.repo.get_step(state.current_step_id)
+            if current_step is not None:
+                next_step = await self._move_to_step_id(
+                    chat_id=chat_id,
+                    target_step_id=rule.target_step_id,
+                    from_step=current_step,
+                )
+                if next_step is not None:
+                    await self._execute_from_step(chat_id=chat_id, step=next_step)
+        elif rule.action_after_send == "finish":
+            current_step = await self.repo.get_step(state.current_step_id)
+            await self._mark_completed(chat_id, step=current_step)
+        elif rule.action_after_send == "assign_operator":
+            await self.repo.set_chat_funnel_paused(
+                chat_id=chat_id,
+                is_paused=True,
+                paused_at=datetime.now(timezone.utc),
+                paused_by_user_id=None,
+            )
+        return True
 
     async def process_scheduled_job(self, job: FunnelScheduledJob) -> None:
         state = await self.repo.get_chat_funnel_state(job.chat_id)
@@ -1098,6 +1267,12 @@ class FunnelRuntimeService:
                 continue
 
             if current.step_type == "operator":
+                if current.block_type == "manager_review":
+                    await self._execute_manager_review_pause(
+                        chat_id=chat_id,
+                        step=current,
+                    )
+                    return current
                 await self._execute_operator_handoff(chat_id=chat_id, step=current)
                 return None
 
@@ -1667,6 +1842,9 @@ class FunnelRuntimeService:
             waiting_for_answer=False,
             completed_at=datetime.now(timezone.utc),
         )
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if lead is not None:
+            await self.scoring.update_lead_score(lead.id)
         logger.info(
             "Finish applied chat_id=%s funnel_id=%s funnel_version_id=%s finish_step_id=%s",
             chat_id,
@@ -1710,6 +1888,7 @@ class FunnelRuntimeService:
                 lead_id=lead_id,
                 tag_id=tag_id,
             )
+            await self.scoring.update_lead_score(lead_id)
         return added
 
     async def _apply_finish_result(self, *, chat_id: UUID, step: FunnelStep) -> None:
@@ -1791,8 +1970,10 @@ class FunnelRuntimeService:
                         )
                 elif action_type == "remove_tag" and raw.get("tag_id"):
                     await self.tag_repo.remove_tag_from_lead(lead.id, UUID(str(raw.get("tag_id"))))
+                    await self.scoring.update_lead_score(lead.id)
                 elif action_type == "clear_tags":
                     await self.lead_repo.clear_tags(lead.id)
+                    await self.scoring.update_lead_score(lead.id)
                 elif action_type == "set_lead_status":
                     status_code = str(raw.get("status") or raw.get("value") or "").strip()
                     if status_code:
@@ -1833,6 +2014,7 @@ class FunnelRuntimeService:
                             {field: raw.get("value")} if field in DIRECT_LEAD_FIELDS else {},
                             {field: raw.get("value")} if field not in DIRECT_LEAD_FIELDS else {},
                         )
+                        await self.scoring.update_lead_score(lead.id)
                 elif action_type == "assign_operator":
                     manager_id = raw.get("operator_id") or raw.get("manager_id")
                     if manager_id:
@@ -1855,6 +2037,52 @@ class FunnelRuntimeService:
                             direct_values,
                             custom_values,
                         )
+                        await self.scoring.update_lead_score(lead.id)
+                elif action_type in {
+                    "record_lead_event",
+                    "registration",
+                    "deposit",
+                    "redeposit",
+                }:
+                    event_type = str(
+                        raw.get("event_type")
+                        or raw.get("value")
+                        or (
+                            action_type
+                            if action_type != "record_lead_event"
+                            else ""
+                        )
+                    ).strip()
+                    if not event_type:
+                        raise ValueError("Lead event type is required")
+                    amount_value = raw.get("amount")
+                    amount: Decimal | None = None
+                    if amount_value is not None and amount_value != "":
+                        rendered_amount = await self._render_text_template(
+                            chat_id,
+                            str(amount_value),
+                        )
+                        try:
+                            amount = Decimal(
+                                rendered_amount.strip().replace(" ", "").replace(",", ".")
+                            )
+                        except InvalidOperation as exc:
+                            raise ValueError("Lead event amount is invalid") from exc
+                    integration_id = raw.get("partner_integration_id")
+                    await LeadEventService(self.db).record_event(
+                        lead=lead,
+                        event_type=event_type,
+                        source="funnel",
+                        amount=amount,
+                        currency=str(raw.get("currency") or "").strip() or None,
+                        partner_integration_id=(
+                            UUID(str(integration_id)) if integration_id else None
+                        ),
+                        payload={
+                            "funnel_step_id": str(step.id),
+                            "funnel_step_key": step.key,
+                        },
+                    )
                 elif action_type in {"submit_to_partner", "send_to_crm"}:
                     integration_id = raw.get("partner_integration_id") or raw.get("integration_id")
                     if not integration_id:
@@ -1899,6 +2127,9 @@ class FunnelRuntimeService:
                         lead_id=lead.id,
                         partner_integration_id=integration.id,
                         status="pending",
+                        submitted_by_user_id=lead.manager_id,
+                        submitted_manually=False,
+                        submission_source="funnel",
                     )
                 elif action_type in {"send_fb_event", "send_facebook_capi_event"}:
                     source_event = str(raw.get("source_event") or "").strip()
@@ -2082,6 +2313,92 @@ class FunnelRuntimeService:
             step.id,
         )
 
+    async def _execute_manager_review_pause(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+    ) -> None:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        chat = await self.chat_repo.get_by_id(chat_id)
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if state is None or chat is None:
+            logger.warning(
+                "Manager review step has no runtime state chat_id=%s step_id=%s",
+                chat_id,
+                step.id,
+            )
+            return
+
+        config = step.config_json or {}
+        review_message = str(
+            config.get("message_text")
+            or config.get("text")
+            or config.get("handoff_message")
+            or ""
+        ).strip()
+        if review_message:
+            await self._create_outgoing_message(
+                chat_id=chat_id,
+                text=review_message,
+                reply_markup=None,
+            )
+
+        if lead is not None and config.get("set_manual_status", True):
+            status_code = await self._manual_processing_status_code(lead.project_id)
+            await self._set_lead_status_with_facebook_triggers(
+                lead.id,
+                lead.project_id,
+                status_code,
+            )
+
+        runtime = dict(state.runtime_json or {})
+        runtime["manual_review"] = {
+            "step_id": str(step.id),
+            "step_title": step.title,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.repo.upsert_chat_funnel_state(
+            chat_id=chat_id,
+            funnel_id=state.funnel_id,
+            funnel_version_id=state.funnel_version_id,
+            current_step_id=step.id,
+            entered_step_at=state.entered_step_at,
+            waiting_for_answer=False,
+            is_paused=True,
+            paused_at=datetime.now(timezone.utc),
+            paused_by_user_id=None,
+            runtime_json=runtime,
+        )
+        await self.chat_repo.mark_as_unread(chat_id)
+        await self._log_runtime_step(chat_id=chat_id, step=step, status="success")
+        await self.chat_audit.log_event(
+            chat_id=chat_id,
+            project_id=chat.project_id,
+            user_id=None,
+            event_type=ChatEventType.NOTE_ADDED,
+            new_value=f"Воронка передала чат менеджеру на проверку на шаге «{step.title}».",
+        )
+        await self.audit.log(
+            project_id=chat.project_id,
+            action=AuditAction.CHAT_FUNNEL_PAUSED,
+            entity_type=EntityType.CHAT,
+            entity_id=chat_id,
+            actor_id=None,
+            meta={
+                "reason": "manager_review",
+                "funnel_id": str(state.funnel_id),
+                "step_id": str(step.id),
+                "step_title": step.title,
+            },
+        )
+        await self._send_operator_alert(
+            chat=chat,
+            lead_id=lead.id if lead is not None else None,
+            step=step,
+        )
+
     async def _execute_integration_step(self, *, chat_id: UUID, step: FunnelStep) -> bool:
         config = step.config_json or {}
         integration_type = str(config.get("integration_type") or step.block_type or "").strip()
@@ -2110,6 +2427,8 @@ class FunnelRuntimeService:
         headers = config.get("headers") if isinstance(config.get("headers"), dict) else {}
         timeout_seconds = self._integration_timeout_seconds(config)
         payload = await self._integration_payload(chat_id=chat_id, step=step)
+        if self.release_transaction_before_external_io and self.db.in_transaction():
+            await self.db.commit()
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 response = await client.request(
@@ -2440,6 +2759,16 @@ class FunnelRuntimeService:
             expected = config.get("tracking_link") or config.get("tracking_code") or config.get("value")
             return "true" if self._compare_condition(actual, "equals", expected) else "false"
 
+        if block_type == "confidence_score":
+            actual = await self._condition_source_value(
+                chat_id,
+                "confidence_score",
+                None,
+            )
+            operator = str(config.get("operator") or "gte")
+            expected = config.get("value", config.get("score", 80))
+            return "true" if self._compare_condition(actual, operator, expected) else "false"
+
         if block_type in {"operator_assigned", "operator_not_assigned"}:
             assigned = bool(await self._condition_source_value(chat_id, "operator_assigned", None))
             passed = assigned if block_type == "operator_assigned" else not assigned
@@ -2526,6 +2855,8 @@ class FunnelRuntimeService:
             return context.get("tracking_ref_code") or context.get("tracking_code") or context.get("tracking_title")
         if source == "operator_assigned":
             return lead.manager_id is not None
+        if source in {"confidence_score", "score_percent"}:
+            return lead.score_percent
         return None
 
     async def _should_override_call_time_for_hold(
@@ -2624,13 +2955,19 @@ class FunnelRuntimeService:
             return str(expected).lower() in str(actual or "").lower()
         if operator in {"not_equals", "!="}:
             return str(actual or "").strip().lower() != str(expected or "").strip().lower()
-        if operator in {"gt", "lt"}:
+        if operator in {"gt", ">", "gte", ">=", "lt", "<", "lte", "<="}:
             try:
                 left = float(actual)
                 right = float(expected)
             except (TypeError, ValueError):
                 return False
-            return left > right if operator == "gt" else left < right
+            if operator in {"gt", ">"}:
+                return left > right
+            if operator in {"gte", ">="}:
+                return left >= right
+            if operator in {"lte", "<="}:
+                return left <= right
+            return left < right
         return str(actual or "").strip().lower() == str(expected or "").strip().lower()
 
     async def _apply_hold_call_plan(
@@ -3452,6 +3789,19 @@ class FunnelRuntimeService:
             return 0
 
     @staticmethod
+    def _runtime_for_manager_resume(
+        runtime_json: Optional[dict],
+        *,
+        preserve_answers: bool,
+    ) -> dict:
+        runtime = dict(runtime_json or {}) if preserve_answers else {}
+        runtime.pop("manual_review", None)
+        runtime.pop("input_prompt_pending_step_id", None)
+        runtime.pop("message_sequence", None)
+        runtime.pop("no_reply", None)
+        return runtime
+
+    @staticmethod
     def _runtime_with_retry_count(
         runtime_json: Optional[dict],
         step_id: UUID,
@@ -3461,6 +3811,10 @@ class FunnelRuntimeService:
         retries = dict(runtime.get("input_retries") or {})
         retries[str(step_id)] = retry_count
         runtime["input_retries"] = retries
+        runtime["confidence_reask_count"] = max(
+            int(runtime.get("confidence_reask_count") or 0) + 1,
+            0,
+        )
         return runtime
 
     @classmethod

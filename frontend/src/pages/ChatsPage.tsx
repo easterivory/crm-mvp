@@ -19,6 +19,7 @@ import {
   Plus,
   Search,
   Send,
+  Star,
   UserRound,
   Video,
   Phone,
@@ -32,6 +33,7 @@ import {
   KeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -57,6 +59,7 @@ import {
   type ChatFiltersState,
   type ChatSort,
   type ChatTagMode,
+  type ChatWorkspaceView,
   type FilterOption,
 } from '../features/chats/types'
 import { useNotificationStore, useProjectBotSelection } from '../shared/lib'
@@ -68,6 +71,35 @@ type PaginatedResponse<T> = {
   total: number
   limit: number
   offset: number
+}
+
+type ChatWorkspaceCounts = Record<ChatWorkspaceView, number> & {
+  unanswered: number
+  hide_assigned_chats_from_all: boolean
+  chat_lease_minutes: number
+  project_format: 'submission' | 'gambling'
+  push_unread_threshold: number
+}
+
+const EMPTY_WORKSPACE_COUNTS: ChatWorkspaceCounts = {
+  unread: 0,
+  mine: 0,
+  all: 0,
+  favorites: 0,
+  unanswered: 0,
+  hide_assigned_chats_from_all: false,
+  chat_lease_minutes: 30,
+  project_format: 'submission',
+  push_unread_threshold: 1,
+}
+
+type FunnelStepOptionRecord = {
+  id: string
+  key: string
+  title: string
+  funnel_id: string
+  funnel_name: string
+  version_number: number
 }
 
 type Message = {
@@ -505,6 +537,10 @@ function isQuickFilter(value: string | null): value is ChatFiltersState['quickFi
     || value === 'unanswered' || value === 'hot'
 }
 
+function isWorkspaceView(value: string | null | undefined): value is ChatWorkspaceView {
+  return value === 'unread' || value === 'mine' || value === 'all' || value === 'favorites'
+}
+
 function isChatSort(value: string | null): value is ChatSort {
   return value === 'latest' || value === 'priority'
 }
@@ -524,6 +560,7 @@ function normalizeChatFilters(value: Partial<ChatFiltersState> | null | undefine
     isRed: value?.isRed === true && quickFilter !== 'hot',
     isHotLead: value?.isHotLead === true || (quickFilter === 'hot' && value?.isRed === true),
     quickFilter,
+    workspaceView: isWorkspaceView(value?.workspaceView) ? value.workspaceView : 'all',
     sortBy: isChatSort(value?.sortBy ?? null) ? value?.sortBy ?? 'latest' : 'latest',
   }
 }
@@ -543,6 +580,7 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     tagMode: isTagMode(tagMode) ? tagMode : 'any',
     leadStatuses: csvOrAll(params, 'lead_statuses'),
     trackingLinkId: params.get('tracking_link_id') ?? '',
+    currentStepId: params.get('current_step_id') ?? '',
     funnelState: isFunnelState(funnelState) ? funnelState : '',
     hasUnansweredIncoming: params.get('has_unanswered_incoming') === 'true',
     isRed: params.get('is_red') === 'true' && quickFilter !== 'hot',
@@ -551,6 +589,9 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     assignedUserId: params.get('assigned_user_id') ?? '',
     unassigned: params.get('unassigned') === 'true',
     quickFilter: isQuickFilter(quickFilter) ? quickFilter : '',
+    workspaceView: isWorkspaceView(params.get('view'))
+      ? params.get('view') as ChatWorkspaceView
+      : 'all',
     sortBy: isChatSort(params.get('sort_by'))
       ? params.get('sort_by') as ChatSort
       : 'latest',
@@ -570,6 +611,7 @@ function writeChatFilters(filters: ChatFiltersState) {
   }
   for (const status of filters.leadStatuses) params.append('lead_statuses', status)
   if (filters.trackingLinkId) params.set('tracking_link_id', filters.trackingLinkId)
+  if (filters.currentStepId) params.set('current_step_id', filters.currentStepId)
   if (filters.funnelState) params.set('funnel_state', filters.funnelState)
   if (filters.hasUnansweredIncoming) params.set('has_unanswered_incoming', 'true')
   if (filters.isRed) params.set('is_red', 'true')
@@ -577,6 +619,7 @@ function writeChatFilters(filters: ChatFiltersState) {
   if (filters.assignedUserId) params.set('assigned_user_id', filters.assignedUserId)
   if (filters.unassigned) params.set('unassigned', 'true')
   if (filters.quickFilter) params.set('quick_filter', filters.quickFilter)
+  if (filters.workspaceView !== 'all') params.set('view', filters.workspaceView)
   if (filters.sortBy !== 'latest') params.set('sort_by', filters.sortBy)
   return params
 }
@@ -630,11 +673,15 @@ export default function ChatsPage() {
   const [trackingOptions, setTrackingOptions] = useState<FilterOption[]>([])
   const [tagOptions, setTagOptions] = useState<FilterOption[]>([])
   const [statusOptions, setStatusOptions] = useState<FilterOption[]>([])
+  const [stepOptions, setStepOptions] = useState<FilterOption[]>([])
   const [userOptions, setUserOptions] = useState<FilterOption[]>([])
   const [users, setUsers] = useState<UserOptionRecord[]>([])
   const [filterPresets, setFilterPresets] = useState<ChatFilterPreset[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState('')
   const [total, setTotal] = useState(0)
+  const [workspaceCounts, setWorkspaceCounts] = useState<ChatWorkspaceCounts>(
+    EMPTY_WORKSPACE_COUNTS,
+  )
   const [loadedChatCount, setLoadedChatCount] = useState(0)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(() =>
     searchParams.get('chat_id'),
@@ -699,16 +746,20 @@ export default function ChatsPage() {
   const messagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
   const shouldAutoScrollMessagesRef = useRef(true)
+  const latestLoadedMessageIdRef = useRef<string | null>(null)
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     window.requestAnimationFrame(() => {
-      const container = messagesScrollRef.current
-      if (!container) {
-        return
-      }
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior,
+      window.requestAnimationFrame(() => {
+        const container = messagesScrollRef.current
+        if (!container) {
+          return
+        }
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior,
+        })
+        messagesEndRef.current?.scrollIntoView({ block: 'end', behavior })
       })
     })
   }, [])
@@ -887,6 +938,29 @@ export default function ChatsPage() {
     syncChatSearchParams(chatFilters, selectedChatId)
   }, [chatFilters, selectedChatId, syncChatSearchParams])
 
+  const loadWorkspaceCounts = useCallback(async () => {
+    if (!selectedProjectId) {
+      setWorkspaceCounts(EMPTY_WORKSPACE_COUNTS)
+      return
+    }
+    const params: Record<string, string> = { project_id: selectedProjectId }
+    if (selectedBotIds.length === 1) {
+      params.bot_id = selectedBotIds[0]
+    } else if (selectedBotIds.length > 1) {
+      params.bot_ids = selectedBotIds.join(',')
+    }
+    try {
+      const { data } = await api.get<ChatWorkspaceCounts>('/chats/workspace-counts', {
+        params,
+      })
+      setWorkspaceCounts(data)
+    } catch (err) {
+      if (!isRequestCanceled(err)) {
+        notify({ tone: 'error', message: getErrorMessage(err) })
+      }
+    }
+  }, [notify, selectedBotIds, selectedProjectId])
+
   const loadChats = useCallback(async (options: { append?: boolean } = {}) => {
     const append = options.append === true
     if (!selectedProjectId) {
@@ -913,6 +987,7 @@ export default function ChatsPage() {
       project_id: selectedProjectId,
       sort_by: debouncedChatFilters.sortBy,
       timezone_offset_minutes: new Date().getTimezoneOffset(),
+      view: debouncedChatFilters.workspaceView,
     }
 
     if (selectedBotIds.length === 1) {
@@ -957,6 +1032,9 @@ export default function ChatsPage() {
     }
     if (debouncedChatFilters.funnelState) {
       params.funnel_state = debouncedChatFilters.funnelState
+    }
+    if (debouncedChatFilters.currentStepId) {
+      params.current_step_id = debouncedChatFilters.currentStepId
     }
 
     const queryParams = { ...params }
@@ -1102,13 +1180,14 @@ export default function ChatsPage() {
       setTrackingOptions([])
       setTagOptions([])
       setStatusOptions([])
+      setStepOptions([])
       setUserOptions([])
       setUsers([])
       return
     }
 
     try {
-      const [trackingResponse, tagsResponse, statusesResponse, usersResponse] = await Promise.all([
+      const [trackingResponse, tagsResponse, statusesResponse, usersResponse, stepsResponse] = await Promise.all([
         api.get<PaginatedResponse<TrackingLinkOption>>('/tracking/links', {
           params: {
             project_id: selectedProjectId,
@@ -1132,6 +1211,9 @@ export default function ChatsPage() {
             offset: 0,
           },
         }),
+        api.get<FunnelStepOptionRecord[]>('/funnels/step-options', {
+          params: { project_id: selectedProjectId },
+        }),
       ])
       setTrackingOptions(
         trackingResponse.data.items.map((link) => ({
@@ -1153,10 +1235,15 @@ export default function ChatsPage() {
         })),
       )
       setUsers(usersResponse.data.items)
+      setStepOptions(stepsResponse.data.map((step) => ({
+        id: step.id,
+        label: `${step.funnel_name} v${step.version_number} · ${step.title}`,
+      })))
     } catch {
       setTrackingOptions([])
       setTagOptions([])
       setStatusOptions([])
+      setStepOptions([])
       setUserOptions([])
       setUsers([])
     }
@@ -1291,7 +1378,13 @@ export default function ChatsPage() {
       if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
         return
       }
-      setMessages(sortMessagesByDate(messagesResponse.data.items))
+      const nextMessages = sortMessagesByDate(messagesResponse.data.items)
+      const latestMessageId = nextMessages[nextMessages.length - 1]?.id ?? null
+      if (showLoader || latestMessageId !== latestLoadedMessageIdRef.current) {
+        shouldAutoScrollMessagesRef.current = true
+      }
+      latestLoadedMessageIdRef.current = latestMessageId
+      setMessages(nextMessages)
       setAuditLogs(auditResponse.data)
       await api.post(`/chats/${chatId}/read`, null, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
@@ -1325,8 +1418,50 @@ export default function ChatsPage() {
     }
   }, [notify, selectedProjectId])
 
+  const handleLeadSidebarChanged = useCallback(() => {
+    void loadChats()
+    if (!selectedChatId) {
+      return
+    }
+    void loadMessages(selectedChatId)
+    void loadSelectedChat(selectedChatId)
+  }, [loadChats, loadMessages, loadSelectedChat, selectedChatId])
+
+  const handleToggleFavorite = useCallback(async (
+    chatId: string,
+    isFavorite: boolean,
+  ) => {
+    if (!selectedProjectId) {
+      return
+    }
+    setChats((current) => current.map((chat) => (
+      chat.id === chatId ? { ...chat, is_favorite: isFavorite } : chat
+    )))
+    setWorkspaceCounts((current) => ({
+      ...current,
+      favorites: Math.max(0, current.favorites + (isFavorite ? 1 : -1)),
+    }))
+    try {
+      const { data } = await api.patch<Chat>(
+        `/chats/${chatId}/favorite`,
+        { is_favorite: isFavorite },
+        { params: { project_id: selectedProjectId } },
+      )
+      setChats((current) => current.map((chat) => (chat.id === chatId ? data : chat)))
+      await loadWorkspaceCounts()
+      void loadChats()
+    } catch (err) {
+      setChats((current) => current.map((chat) => (
+        chat.id === chatId ? { ...chat, is_favorite: !isFavorite } : chat
+      )))
+      await loadWorkspaceCounts()
+      notify({ tone: 'error', message: getErrorMessage(err) })
+    }
+  }, [loadChats, loadWorkspaceCounts, notify, selectedProjectId])
+
   useEffect(() => {
     void loadChats()
+    void loadWorkspaceCounts()
     void loadBots()
     void loadProjectTranslation()
     void loadFilterOptions()
@@ -1334,6 +1469,7 @@ export default function ChatsPage() {
     void loadSnippets()
     const timer = window.setInterval(() => {
       void loadChats()
+      void loadWorkspaceCounts()
     }, 5000)
 
     return () => {
@@ -1341,7 +1477,7 @@ export default function ChatsPage() {
       chatsAbortRef.current?.abort()
       chatsAbortRef.current = null
     }
-  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadProjectTranslation, loadSnippets])
+  }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadProjectTranslation, loadSnippets, loadWorkspaceCounts])
 
   useEffect(() => {
     if (!isDesktopChatLayout || selectedChatId || chats.length === 0) {
@@ -1369,6 +1505,7 @@ export default function ChatsPage() {
     selectedChatIdRef.current = null
     setSelectedChatId(null)
     setMessages([])
+    latestLoadedMessageIdRef.current = null
     setAuditLogs([])
     syncChatSearchParams(EMPTY_CHAT_FILTERS, null)
   }, [selectedProjectId, syncChatSearchParams])
@@ -1377,6 +1514,7 @@ export default function ChatsPage() {
     if (!selectedChatId) {
       setIsLeadOpen(false)
       shouldAutoScrollMessagesRef.current = true
+      latestLoadedMessageIdRef.current = null
       messagesAbortRef.current?.abort()
       setMessages([])
       setAuditLogs([])
@@ -1389,6 +1527,7 @@ export default function ChatsPage() {
     }
 
     shouldAutoScrollMessagesRef.current = true
+    latestLoadedMessageIdRef.current = null
     setMessages([])
     setAuditLogs([])
     setScheduledMessages([])
@@ -1425,7 +1564,7 @@ export default function ChatsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChatId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (shouldAutoScrollMessagesRef.current) {
       scrollMessagesToBottom()
     }
@@ -1586,12 +1725,20 @@ export default function ChatsPage() {
             },
             { params },
           )
+      shouldAutoScrollMessagesRef.current = true
+      latestLoadedMessageIdRef.current = data.id
       setMessages((current) => sortMessagesByDate([...current, data]))
+      setChats((current) => current.map((chat) => (
+        chat.id === selectedChatId
+          ? { ...chat, has_restarted_bot: false, is_read: true, unread: false }
+          : chat
+      )))
       setDraft('')
       clearAttachment()
       setSnippetMedia(null)
       setPendingTranslation(null)
       await loadChats()
+      void loadWorkspaceCounts()
       return true
     } catch (err) {
       notify({ tone: 'error', message: getErrorMessage(err) })
@@ -2078,7 +2225,7 @@ export default function ChatsPage() {
   }
 
   return (
-    <section className="relative grid h-full min-h-0 grid-cols-1 gap-0 overflow-hidden text-gray-200 md:gap-4 md:grid-cols-[20rem_minmax(0,1fr)] lg:grid-cols-[minmax(280px,25%)_minmax(0,50%)_minmax(280px,25%)]">
+    <section className="relative grid h-full min-h-0 grid-cols-1 gap-0 overflow-hidden text-gray-200 md:gap-4 md:grid-cols-[minmax(250px,35%)_minmax(0,1fr)] lg:grid-cols-[minmax(250px,25%)_minmax(0,50%)_minmax(250px,25%)]">
       <div
         className={`h-full min-h-0 overflow-hidden ${
           selectedChat ? 'hidden md:block' : ''
@@ -2096,12 +2243,14 @@ export default function ChatsPage() {
           trackingOptions={trackingOptions}
           tagOptions={tagOptions}
           statusOptions={statusOptions}
+          stepOptions={stepOptions}
           userOptions={userOptions}
           isLoading={isChatsLoading}
           isLoadingMore={isChatsLoadingMore}
           scopeLabel={botScopeLabel}
           selectedChatId={selectedChatId}
           total={total}
+          workspaceCounts={workspaceCounts}
           onFiltersChange={setChatFilters}
           onLoadMore={() => void loadChats({ append: true })}
           onApplyPreset={handleApplyPreset}
@@ -2110,6 +2259,7 @@ export default function ChatsPage() {
           onRefresh={() => void loadChats()}
           onSavePreset={(name, isShared) => void handleSavePreset(name, isShared)}
           onSelectChat={handleSelectChat}
+          onToggleFavorite={(chatId, isFavorite) => void handleToggleFavorite(chatId, isFavorite)}
           onUpdatePreset={(presetId) => void handleUpdatePreset(presetId)}
           selectedPresetId={selectedPresetId}
         />
@@ -2189,6 +2339,19 @@ export default function ChatsPage() {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleToggleFavorite(selectedChat.id, !selectedChat.is_favorite)}
+                  className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${
+                    selectedChat.is_favorite
+                      ? 'border-amber-300/30 bg-amber-300/10 text-amber-200'
+                      : 'border-white/10 bg-white/[0.03] text-gray-400 hover:border-amber-300/30 hover:text-amber-200'
+                  }`}
+                  title={selectedChat.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+                  aria-label={selectedChat.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+                >
+                  <Star size={16} className={selectedChat.is_favorite ? 'fill-current' : ''} />
+                </button>
                 <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-2 py-2 text-xs text-gray-400 sm:px-3">
                   <Languages size={15} className="text-accent-200" />
                   <span className="sr-only">Язык клиента</span>
@@ -2721,7 +2884,7 @@ export default function ChatsPage() {
                 void handleSetChatBlocked(false)
               }}
           onResetRequest={user?.role_name === 'manager' || isBuyer ? undefined : () => setIsResetConfirmOpen(true)}
-          onLeadStatusChanged={() => void loadChats()}
+          onLeadStatusChanged={handleLeadSidebarChanged}
         />
       </div>
 
@@ -3025,7 +3188,7 @@ export default function ChatsPage() {
                     void handleSetChatBlocked(false)
                   }}
               onResetRequest={user?.role_name === 'manager' || isBuyer ? undefined : () => setIsResetConfirmOpen(true)}
-              onLeadStatusChanged={() => void loadChats()}
+              onLeadStatusChanged={handleLeadSidebarChanged}
             />
           </div>
           </aside>

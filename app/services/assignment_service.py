@@ -36,19 +36,23 @@ from app.core.constants import AuditAction, EntityType, RoleName
 
 logger = logging.getLogger(__name__)
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.chat_repository import ChatRepository
 from app.repositories.tag_repository import TagRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.lead import LeadOut, LeadTagOut
 from app.services.audit_service import AuditService
+from app.services.chat_lease_service import ChatLeaseService
 
 
 class AssignmentService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.lead_repo = LeadRepository(db)
+        self.chat_repo = ChatRepository(db)
         self.tag_repo = TagRepository(db)
         self.user_repo = UserRepository(db)
         self.audit = AuditService(db)
+        self.chat_lease = ChatLeaseService(db)
 
     async def assign_manager(
         self,
@@ -139,6 +143,21 @@ class AssignmentService:
                 ),
             )
 
+        assignment_expires_at = await self.chat_lease.assignment_deadline(
+            project_id=project_id,
+            manager_id=manager_id,
+        )
+        assignment_updated = await self.chat_repo.set_assignment_expires_at(
+            chat_id=lead.chat_id,
+            project_id=project_id,
+            assignment_expires_at=assignment_expires_at,
+        )
+        if not assignment_updated:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Chat changed while manager assignment was being updated.",
+            )
+
         # ── Determine audit action ────────────────────────────────────────────
         action = (
             AuditAction.LEAD_MANAGER_ASSIGNED
@@ -156,6 +175,12 @@ class AssignmentService:
             meta={
                 "from_manager_id": str(old_manager_id) if old_manager_id else None,
                 "to_manager_id": str(manager_id) if manager_id else None,
+                "chat_id": str(lead.chat_id),
+                "assignment_expires_at": (
+                    assignment_expires_at.isoformat()
+                    if assignment_expires_at is not None
+                    else None
+                ),
             },
         )
 

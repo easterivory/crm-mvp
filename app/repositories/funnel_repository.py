@@ -811,9 +811,43 @@ class FunnelRepository(BaseRepository[Funnel]):
             )
             .order_by(FunnelScheduledJob.run_at.asc(), FunnelScheduledJob.created_at.asc())
             .limit(limit)
-            .with_for_update(skip_locked=True)
         )
         return list(result.scalars().all())
+
+    async def recover_stale_running_jobs(
+        self,
+        *,
+        stale_before: datetime,
+        max_attempts: int,
+    ) -> tuple[int, int]:
+        failed = await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(
+                FunnelScheduledJob.status == "running",
+                FunnelScheduledJob.updated_at < stale_before,
+                FunnelScheduledJob.attempts >= max_attempts,
+            )
+            .values(
+                status="failed",
+                last_error="Worker execution was interrupted and the retry limit was reached",
+                updated_at=func.now(),
+            )
+        )
+        requeued = await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(
+                FunnelScheduledJob.status == "running",
+                FunnelScheduledJob.updated_at < stale_before,
+                FunnelScheduledJob.attempts < max_attempts,
+            )
+            .values(
+                status="pending",
+                last_error="Recovered after interrupted worker execution",
+                run_at=func.now(),
+                updated_at=func.now(),
+            )
+        )
+        return requeued.rowcount, failed.rowcount
 
     async def claim_scheduled_job(self, job_id: UUID) -> bool:
         result = await self.db.execute(
@@ -1134,15 +1168,41 @@ class FunnelRepository(BaseRepository[Funnel]):
                 FunnelPushRule,
                 FunnelPushRule.step_id == ChatFunnelState.current_step_id,
             )
+            .join(Chat, Chat.id == ChatFunnelState.chat_id)
+            .join(Project, Project.id == Chat.project_id)
             .where(
                 ChatFunnelState.completed_at.is_(None),
+                ChatFunnelState.is_paused.is_(False),
+                ChatFunnelState.waiting_for_answer.is_(True),
                 FunnelPushRule.is_active.is_(True),
+                Project.project_format == "gambling",
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Chat.is_blocked.is_(False),
+                Chat.is_blocked_by_user.is_(False),
                 ChatFunnelState.entered_step_at
                 <= now - func.make_interval(0, 0, 0, 0, 0, FunnelPushRule.delay_minutes),
             )
-            .limit(limit)
+            .order_by(ChatFunnelState.entered_step_at.asc(), FunnelPushRule.delay_minutes.asc())
+            .limit(max(limit * 4, limit))
         )
-        return [(state, rule) for state, rule in result.all()]
+        candidates: list[tuple[ChatFunnelState, FunnelPushRule]] = []
+        for state, rule in result.all():
+            runtime = state.runtime_json if isinstance(state.runtime_json, dict) else {}
+            sent = runtime.get("push_rules_sent")
+            marker = sent.get(str(rule.id)) if isinstance(sent, dict) else None
+            if marker == state.entered_step_at.isoformat():
+                continue
+            candidates.append((state, rule))
+            if len(candidates) >= limit:
+                break
+        return candidates
+
+    async def get_push_rule(self, push_rule_id: UUID) -> Optional[FunnelPushRule]:
+        result = await self.db.execute(
+            select(FunnelPushRule).where(FunnelPushRule.id == push_rule_id)
+        )
+        return result.scalar_one_or_none()
 
     @staticmethod
     def _step_from_in(version_id: UUID, step_in: FunnelStepIn) -> FunnelStep:

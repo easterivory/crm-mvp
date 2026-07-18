@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import OrmBase
 
@@ -68,6 +68,17 @@ class FunnelOut(OrmBase):
     published_version_id: Optional[uuid.UUID] = None
     current_version_id: Optional[uuid.UUID] = None
     published_versions: list[FunnelPublishedVersionOut] = Field(default_factory=list)
+
+
+class FunnelStepOptionOut(BaseModel):
+    id: uuid.UUID
+    key: str
+    title: str
+    step_type: str
+    funnel_id: uuid.UUID
+    funnel_name: str
+    version_id: uuid.UUID
+    version_number: int
     is_active_for_bot: bool = False
 
 
@@ -319,6 +330,8 @@ class ChatFunnelStepChoiceOut(BaseModel):
 class ChatFunnelControlOut(BaseModel):
     is_available: bool
     is_paused: bool
+    is_manual_review: bool = False
+    manual_review_started_at: Optional[datetime] = None
     funnel_id: Optional[uuid.UUID] = None
     funnel_name: Optional[str] = None
     current_step_id: Optional[uuid.UUID] = None
@@ -328,6 +341,19 @@ class ChatFunnelControlOut(BaseModel):
 
 class ChatFunnelResumeIn(BaseModel):
     step_id: uuid.UUID
+
+
+class ChatFunnelSmartResumeIn(BaseModel):
+    target_step_id: Optional[uuid.UUID] = None
+    manager_approved: bool = False
+
+    @model_validator(mode="after")
+    def validate_resume_mode(self) -> "ChatFunnelSmartResumeIn":
+        if self.target_step_id is None and not self.manager_approved:
+            raise ValueError("target_step_id or manager_approved=true is required")
+        if self.target_step_id is not None and self.manager_approved:
+            raise ValueError("Choose either target_step_id or manager_approved, not both")
+        return self
 
 
 class FunnelBlockDefinitionOut(BaseModel):

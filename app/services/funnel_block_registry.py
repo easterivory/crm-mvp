@@ -95,6 +95,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("operator_not_assigned", "Оператор не назначен"),
         ("client_no_reply_for", "Нет ответа N минут"),
         ("field_compare", "Сравнение поля"),
+        ("confidence_score", "Уверенность лида"),
     ],
     "action": [
         ("generic_crm_action", "CRM-действие"),
@@ -114,6 +115,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
         ("mark_rejected", "Пометить rejected"),
         ("mark_success", "Пометить success"),
         ("submit_to_partner", "Отправить в partner CRM"),
+        ("record_lead_event", "Записать событие лида"),
     ],
     "delay": [
         ("generic_delay", "Таймер / ожидание"),
@@ -123,6 +125,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
     ],
     "operator": [
         ("generic_operator", "Оператор"),
+        ("manager_review", "Передать менеджеру на проверку"),
         ("handoff_to_operator", "Передать оператору"),
         ("assign_specific_operator", "Назначить конкретного оператора"),
         ("assign_random_operator", "Назначить случайного оператора"),

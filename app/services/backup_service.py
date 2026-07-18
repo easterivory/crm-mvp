@@ -363,11 +363,15 @@ def send_telegram_message(
     config: Settings = settings,
     bot_token: str | None = None,
     chat_id: str | None = None,
+    timeout_seconds: float = 30.0,
 ) -> None:
     if not telegram_delivery_configured(config, bot_token=bot_token, chat_id=chat_id):
         return
     destination = chat_id or config.BACKUP_TELEGRAM_CHAT_ID
-    with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+    request_timeout = max(float(timeout_seconds), 1.0)
+    with httpx.Client(
+        timeout=httpx.Timeout(request_timeout, connect=min(request_timeout, 10.0))
+    ) as client:
         response = client.post(
             _telegram_method_url("sendMessage", config, bot_token),
             json={

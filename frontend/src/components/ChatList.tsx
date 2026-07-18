@@ -1,5 +1,5 @@
-import { ArrowDownWideNarrow, Ban, LoaderCircle, RefreshCw, UserRound } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { ArrowDownWideNarrow, Ban, LoaderCircle, RefreshCw, RotateCcw, Star, UserRound } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
 import ChatFilterChips from '../features/chats/components/ChatFilterChips'
@@ -25,6 +25,9 @@ export type Chat = {
   is_read: boolean
   is_blocked: boolean
   is_blocked_by_user: boolean
+  assignment_expires_at: string | null
+  is_favorite: boolean
+  has_restarted_bot: boolean
   unanswered_minutes: number
   last_incoming_at: string | null
   last_outgoing_at: string | null
@@ -76,8 +79,12 @@ type ChatListProps = {
   scopeLabel: string
   selectedChatId: string | null
   statusOptions: FilterOption[]
+  stepOptions: FilterOption[]
   tagOptions: FilterOption[]
   total: number
+  workspaceCounts: Record<'unread' | 'mine' | 'all' | 'favorites', number> & {
+    unanswered?: number
+  }
   trackingOptions: FilterOption[]
   userOptions: FilterOption[]
   onApplyPreset: (preset: ChatFilterPreset) => void
@@ -88,6 +95,7 @@ type ChatListProps = {
   onResetFilters: () => void
   onSavePreset: (name: string, isShared: boolean, filters: ChatFiltersState) => void
   onSelectChat: (chatId: string) => void
+  onToggleFavorite: (chatId: string, isFavorite: boolean) => void
   onUpdatePreset: (presetId: string) => void
   selectedPresetId: string
 }
@@ -246,8 +254,10 @@ export default function ChatList({
   scopeLabel,
   selectedChatId,
   statusOptions,
+  stepOptions,
   tagOptions,
   total,
+  workspaceCounts,
   trackingOptions,
   userOptions,
   onApplyPreset,
@@ -258,6 +268,7 @@ export default function ChatList({
   onResetFilters,
   onSavePreset,
   onSelectChat,
+  onToggleFavorite,
   onUpdatePreset,
   selectedPresetId,
 }: ChatListProps) {
@@ -265,7 +276,57 @@ export default function ChatList({
   const [isMobileControlsOpen, setIsMobileControlsOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
+  const scrollAnchorRef = useRef<{ chatId: string; offset: number } | null>(null)
+  const previousFilterIdentityRef = useRef('')
   const activeFilterCount = countActiveChatFilters(filters)
+  const filterIdentity = useMemo(
+    () => JSON.stringify({ ...filters, q: filters.q.trim() }),
+    [filters],
+  )
+
+  const rememberScrollAnchor = useCallback(() => {
+    const root = scrollContainerRef.current
+    if (!root) {
+      return
+    }
+    const rootTop = root.getBoundingClientRect().top
+    const items = Array.from(root.querySelectorAll<HTMLElement>('[data-chat-list-id]'))
+    const firstVisible = items.find((item) => item.getBoundingClientRect().bottom > rootTop + 1)
+    if (!firstVisible) {
+      scrollAnchorRef.current = null
+      return
+    }
+    scrollAnchorRef.current = {
+      chatId: firstVisible.dataset.chatListId ?? '',
+      offset: firstVisible.getBoundingClientRect().top - rootTop,
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    const root = scrollContainerRef.current
+    if (!root) {
+      return
+    }
+    if (previousFilterIdentityRef.current !== filterIdentity) {
+      previousFilterIdentityRef.current = filterIdentity
+      scrollAnchorRef.current = null
+      root.scrollTop = 0
+      return
+    }
+    const anchor = scrollAnchorRef.current
+    if (!anchor?.chatId) {
+      rememberScrollAnchor()
+      return
+    }
+    const target = root.querySelector<HTMLElement>(
+      `[data-chat-list-id="${CSS.escape(anchor.chatId)}"]`,
+    )
+    if (target) {
+      const nextOffset = target.getBoundingClientRect().top - root.getBoundingClientRect().top
+      root.scrollTop += nextOffset - anchor.offset
+    }
+    rememberScrollAnchor()
+  }, [chats, filterIdentity, rememberScrollAnchor])
 
   useEffect(() => {
     const root = scrollContainerRef.current
@@ -295,6 +356,11 @@ export default function ChatList({
             <p className="truncate text-sm text-gray-500">
               {total} всего · {scopeLabel}
             </p>
+            {(workspaceCounts.unanswered ?? 0) > 0 ? (
+              <p className="mt-1 text-xs font-medium text-orange-200">
+                Неотвеченных: {workspaceCounts.unanswered}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -341,6 +407,7 @@ export default function ChatList({
         <div className={`${isMobileControlsOpen ? 'mt-3 block' : 'hidden'} md:mt-3 md:block`}>
           <ChatQuickFilters
             currentUserId={currentUserId}
+            counts={workspaceCounts}
             filters={filters}
             onChange={onFiltersChange}
           />
@@ -371,6 +438,7 @@ export default function ChatList({
               statusOptions={statusOptions}
               tagOptions={tagOptions}
               trackingOptions={trackingOptions}
+              stepOptions={stepOptions}
               userOptions={userOptions}
               onChange={onFiltersChange}
               onReset={onResetFilters}
@@ -388,6 +456,7 @@ export default function ChatList({
           statusOptions={statusOptions}
           tagOptions={tagOptions}
           trackingOptions={trackingOptions}
+          stepOptions={stepOptions}
           userOptions={userOptions}
           selectedPresetId={selectedPresetId}
           onApplyPreset={onApplyPreset}
@@ -400,7 +469,11 @@ export default function ChatList({
         />
       </div>
 
-      <div ref={scrollContainerRef} className="touch-scroll min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scrollContainerRef}
+        onScroll={rememberScrollAnchor}
+        className="touch-scroll min-h-0 flex-1 overflow-y-auto"
+      >
         {chats.length === 0 && !isLoading ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
             <p className="text-sm text-gray-400">
@@ -433,16 +506,20 @@ export default function ChatList({
           const waitingForReplyMinutes = waitingMinutes(chat)
 
           return (
-            <button
+            <div
               key={chat.id}
-              type="button"
-              onClick={() => onSelectChat(chat.id)}
-              className={`flex w-full gap-3 border-b border-white/5 p-4 text-left transition ${
+              data-chat-list-id={chat.id}
+              className={`flex w-full border-b border-white/5 text-left transition ${
                 isSelected
                   ? 'bg-gradient-to-r from-primary-500/18 to-transparent shadow-[inset_2px_0_0_rgba(34,211,238,0.9)]'
                   : 'hover:bg-white/[0.035]'
               }`}
             >
+              <button
+                type="button"
+                onClick={() => onSelectChat(chat.id)}
+                className="flex min-w-0 flex-1 gap-3 p-4 pr-1 text-left"
+              >
               <div className="relative shrink-0">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-sm font-semibold text-accent-200 shadow-glow-accent">
                   {getInitials(title) || <UserRound size={18} />}
@@ -459,6 +536,13 @@ export default function ChatList({
                         size={14}
                         className="shrink-0 text-red-300"
                         aria-label="Пользователь заблокировал бота"
+                      />
+                    ) : null}
+                    {chat.has_restarted_bot ? (
+                      <RotateCcw
+                        size={14}
+                        className="shrink-0 text-amber-200"
+                        aria-label="Пользователь повторно запустил бота"
                       />
                     ) : null}
                     <p className={`min-w-0 truncate text-sm text-white ${isUnread ? 'font-bold' : 'font-semibold'}`}>
@@ -548,7 +632,21 @@ export default function ChatList({
                   </div>
                 ) : null}
               </div>
-            </button>
+              </button>
+              <button
+                type="button"
+                onClick={() => onToggleFavorite(chat.id, !chat.is_favorite)}
+                className={`m-2 ml-0 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
+                  chat.is_favorite
+                    ? 'border-amber-300/30 bg-amber-300/10 text-amber-200'
+                    : 'border-transparent text-gray-600 hover:border-white/10 hover:bg-white/[0.04] hover:text-gray-300'
+                }`}
+                title={chat.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+                aria-label={chat.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+              >
+                <Star size={16} className={chat.is_favorite ? 'fill-current' : ''} />
+              </button>
+            </div>
           )
         })}
         <div ref={loadMoreRef} className="flex min-h-16 items-center justify-center px-4 py-3">

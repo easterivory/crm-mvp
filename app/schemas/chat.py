@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,25 @@ class ChatUpdate(BaseModel):
 
 class ChatLanguageUpdate(BaseModel):
     client_lang: Optional[str] = Field(None, max_length=10)
+
+
+class ChatFavoriteUpdate(BaseModel):
+    is_favorite: bool
+
+
+ChatWorkspaceView = Literal["unread", "mine", "all", "favorites"]
+
+
+class ChatWorkspaceCountsOut(BaseModel):
+    unread: int = 0
+    unanswered: int = 0
+    mine: int = 0
+    all: int = 0
+    favorites: int = 0
+    hide_assigned_chats_from_all: bool = False
+    chat_lease_minutes: int = 30
+    project_format: str = "submission"
+    push_unread_threshold: int = 1
 
 
 class ChatTagOut(BaseModel):
@@ -53,6 +72,11 @@ class ChatOut(OrmBase):
     is_blocked: bool = False
     is_blocked_by_user: bool = False
     unanswered_minutes: int = 0
+    assignment_expires_at: Optional[datetime] = None
+    is_favorite: bool = False
+    has_restarted_bot: bool = False
+    unanswered_push_count: int = 0
+    has_out_of_scenario_message: bool = False
     last_read_at: Optional[datetime]
     reset_at: Optional[datetime]
     reset_count: int = 0
@@ -118,4 +142,6 @@ class ChatFilters(BaseModel):
     tag_mode: str = "any"
     lead_statuses: list[str] = Field(default_factory=list)
     funnel_state: Optional[str] = None
+    current_step_id: Optional[uuid.UUID] = None
     sort_by: str = Field(default="latest", pattern="^(latest|priority)$")
+    workspace_view: Optional[ChatWorkspaceView] = None

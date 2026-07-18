@@ -54,6 +54,14 @@ type Project = {
   default_client_lang: string
   is_translation_enabled: boolean
   tracking_lead_status_codes: string[]
+  use_confidence_score: boolean
+  hide_assigned_chats_from_all: boolean
+  chat_lease_minutes: number
+  project_format: 'submission' | 'gambling'
+  vip_tags: string[]
+  push_unread_threshold: number
+  confidence_weights: Record<string, number> | null
+  confidence_thresholds: Record<string, number> | null
   created_at: string
   is_deleted: boolean
 }
@@ -154,6 +162,48 @@ const translationProviderOptions: Array<{ value: TranslationProvider; label: str
 ]
 
 const defaultTrackingLeadStatusCodes = ['submitted', 'qualified']
+
+const defaultConfidenceWeights = {
+  suspicious_first_name: 15,
+  suspicious_last_name: 10,
+  invalid_phone: 25,
+  geo_missing: 10,
+  geo_conflict: 20,
+  card_missing: 20,
+  card_unknown: 10,
+  amount_below_minimum: 14,
+  amount_unknown: 10,
+  missing_tracking_link: 20,
+  reask: 20,
+  long_response_pause: 20,
+  broadcast_followup: 20,
+  probable_duplicate: 40,
+} as const
+
+const confidenceWeightLabels: Record<keyof typeof defaultConfidenceWeights, string> = {
+  suspicious_first_name: 'Подозрительное имя',
+  suspicious_last_name: 'Подозрительная или отсутствующая фамилия',
+  invalid_phone: 'Невалидный телефон',
+  geo_missing: 'Гео не определено',
+  geo_conflict: 'Конфликт источников гео',
+  card_missing: 'Карта отсутствует',
+  card_unknown: 'Статус карты неизвестен',
+  amount_below_minimum: 'Сумма ниже минимума',
+  amount_unknown: 'Сумма не определена',
+  missing_tracking_link: 'Нет трекинг-ссылки',
+  reask: 'Повторный вопрос бота',
+  long_response_pause: 'Длительная пауза между ответами',
+  broadcast_followup: 'Лида догоняли рассылкой',
+  probable_duplicate: 'Вероятный дубль',
+}
+
+const confidenceWeightDraft = (overrides?: Record<string, number> | null) =>
+  Object.fromEntries(
+    Object.entries(defaultConfidenceWeights).map(([key, value]) => [
+      key,
+      String(overrides?.[key] ?? value),
+    ]),
+  ) as Record<keyof typeof defaultConfidenceWeights, string>
 
 function getErrorMessage(err: unknown, fallback = 'Request failed.') {
   if (axios.isAxiosError(err)) {
@@ -323,6 +373,16 @@ export default function SettingsPage() {
   const [trackingLeadStatusCodes, setTrackingLeadStatusCodes] = useState<string[]>(
     defaultTrackingLeadStatusCodes,
   )
+  const [useConfidenceScore, setUseConfidenceScore] = useState(true)
+  const [hideAssignedChatsFromAll, setHideAssignedChatsFromAll] = useState(false)
+  const [chatLeaseMinutes, setChatLeaseMinutes] = useState('30')
+  const [projectFormat, setProjectFormat] = useState<'submission' | 'gambling'>('submission')
+  const [vipTags, setVipTags] = useState<string[]>([])
+  const [pushUnreadThreshold, setPushUnreadThreshold] = useState('1')
+  const [confidenceWeights, setConfidenceWeights] = useState(() => confidenceWeightDraft())
+  const [confidenceHighMin, setConfidenceHighMin] = useState('80')
+  const [confidenceMediumMin, setConfidenceMediumMin] = useState('50')
+  const [hasConfidenceOverrides, setHasConfidenceOverrides] = useState(false)
   const [translationEnabled, setTranslationEnabled] = useState(false)
   const [operatorLang, setOperatorLang] = useState('ru')
   const [defaultClientLang, setDefaultClientLang] = useState('en')
@@ -493,6 +553,21 @@ export default function SettingsPage() {
     })
   }, [])
 
+  const toggleVipTag = useCallback((tag: ProjectTag) => {
+    setVipTags((current) => {
+      const isSelected = current.includes(tag.id) || current.includes(tag.name)
+      const withoutTag = current.filter((value) => value !== tag.id && value !== tag.name)
+      return isSelected ? withoutTag : [...withoutTag, tag.id]
+    })
+  }, [])
+
+  const resetConfidenceSettings = useCallback(() => {
+    setConfidenceWeights(confidenceWeightDraft())
+    setConfidenceHighMin('80')
+    setConfidenceMediumMin('50')
+    setHasConfidenceOverrides(false)
+  }, [])
+
   useEffect(() => {
     if (!visibleTabs.some((tab) => tab.key === activeTab)) {
       setActiveTab(visibleTabs[0]?.key ?? 'tags')
@@ -547,6 +622,16 @@ export default function SettingsPage() {
         ? data.tracking_lead_status_codes
         : defaultTrackingLeadStatusCodes,
     )
+    setUseConfidenceScore(data.use_confidence_score ?? true)
+    setHideAssignedChatsFromAll(data.hide_assigned_chats_from_all ?? false)
+    setChatLeaseMinutes(String(data.chat_lease_minutes ?? 30))
+    setProjectFormat(data.project_format ?? 'submission')
+    setVipTags(data.vip_tags ?? [])
+    setPushUnreadThreshold(String(data.push_unread_threshold ?? 1))
+    setConfidenceWeights(confidenceWeightDraft(data.confidence_weights))
+    setConfidenceHighMin(String(data.confidence_thresholds?.high_min ?? 80))
+    setConfidenceMediumMin(String(data.confidence_thresholds?.medium_min ?? 50))
+    setHasConfidenceOverrides(Boolean(data.confidence_weights || data.confidence_thresholds))
     setTranslationEnabled(data.is_translation_enabled)
     setOperatorLang(data.operator_lang || 'ru')
     setDefaultClientLang(data.default_client_lang || 'en')
@@ -658,6 +743,23 @@ export default function SettingsPage() {
       return
     }
 
+    const highMin = Number(confidenceHighMin)
+    const mediumMin = Number(confidenceMediumMin)
+    const weightValues = Object.values(confidenceWeights).map(Number)
+    if (
+      !Number.isInteger(highMin)
+      || !Number.isInteger(mediumMin)
+      || highMin < 0
+      || mediumMin < 0
+      || highMin > 100
+      || mediumMin > 100
+      || mediumMin > highMin
+      || weightValues.some((value) => !Number.isInteger(value) || value < 0 || value > 100)
+    ) {
+      setError('Проверьте веса уверенности: значения должны быть от 0 до 100, а высокий порог не ниже среднего.')
+      return
+    }
+
     setIsSavingProject(true)
     setError('')
     setNotice('')
@@ -667,6 +769,23 @@ export default function SettingsPage() {
         name: projectName.trim(),
         sla_threshold_minutes: Number(slaMinutes),
         tracking_lead_status_codes: trackingLeadStatusCodes,
+        use_confidence_score: useConfidenceScore,
+        hide_assigned_chats_from_all: hideAssignedChatsFromAll,
+        chat_lease_minutes: Number(chatLeaseMinutes),
+        project_format: projectFormat,
+        vip_tags: vipTags,
+        push_unread_threshold: Number(pushUnreadThreshold),
+        confidence_weights: hasConfidenceOverrides
+          ? Object.fromEntries(
+              Object.entries(confidenceWeights).map(([key, value]) => [key, Number(value)]),
+            )
+          : null,
+        confidence_thresholds: hasConfidenceOverrides
+          ? {
+              high_min: Number(confidenceHighMin),
+              medium_min: Number(confidenceMediumMin),
+            }
+          : null,
       })
       setProject(data)
       setProjectName(data.name)
@@ -676,6 +795,16 @@ export default function SettingsPage() {
           ? data.tracking_lead_status_codes
           : defaultTrackingLeadStatusCodes,
       )
+      setUseConfidenceScore(data.use_confidence_score)
+      setHideAssignedChatsFromAll(data.hide_assigned_chats_from_all)
+      setChatLeaseMinutes(String(data.chat_lease_minutes))
+      setProjectFormat(data.project_format)
+      setVipTags(data.vip_tags ?? [])
+      setPushUnreadThreshold(String(data.push_unread_threshold ?? 1))
+      setConfidenceWeights(confidenceWeightDraft(data.confidence_weights))
+      setConfidenceHighMin(String(data.confidence_thresholds?.high_min ?? 80))
+      setConfidenceMediumMin(String(data.confidence_thresholds?.medium_min ?? 50))
+      setHasConfidenceOverrides(Boolean(data.confidence_weights || data.confidence_thresholds))
       setNotice('Настройки проекта сохранены.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось сохранить проект.'))
@@ -1495,6 +1624,190 @@ export default function SettingsPage() {
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2"
               />
             </label>
+            <section className="space-y-4 border-y border-zinc-800 py-4">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-100">Формат проекта</h3>
+                <p className="mt-1 text-sm leading-5 text-zinc-500">
+                  Submission сохраняет текущую логику подачи. Gambling включает маршрутизацию по регистрациям, депозитам и пушам.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-zinc-800 bg-zinc-950/70 p-1">
+                {([
+                  ['submission', 'Подача лидов'],
+                  ['gambling', 'Gambling'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setProjectFormat(value)}
+                    className={`min-h-10 rounded-md px-3 text-sm font-medium transition ${
+                      projectFormat === value
+                        ? 'bg-emerald-500 text-zinc-950'
+                        : 'text-zinc-400 hover:text-zinc-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-200">
+                  Пушей без ответа до «Непрочитанных»
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={pushUnreadThreshold}
+                  onChange={(event) => setPushUnreadThreshold(event.target.value)}
+                  disabled={projectFormat !== 'gambling'}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+                />
+              </label>
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium text-zinc-200">VIP-теги принудительной подачи</span>
+                  <span className="text-xs text-zinc-500">Выбрано: {vipTags.length}</span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {tags.map((tag) => {
+                    const checked = vipTags.includes(tag.id) || vipTags.includes(tag.name)
+                    return (
+                      <label
+                        key={tag.id}
+                        className="flex min-w-0 cursor-pointer items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-200"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleVipTag(tag)}
+                          className="h-5 w-5 shrink-0 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                        />
+                        <span className="truncate">{tag.name}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+                {tags.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Создайте теги проекта, чтобы использовать VIP-маршрутизацию.</p>
+                ) : null}
+              </div>
+            </section>
+            <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <h3 className="text-sm font-semibold text-zinc-100">Рабочее пространство чатов</h3>
+              <label className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-zinc-200">Оценка уверенности лида</span>
+                  <span className="mt-1 block text-sm leading-5 text-zinc-500">Пересчитывать score и учитывать его в автоматической подаче.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={useConfidenceScore}
+                  onChange={(event) => setUseConfidenceScore(event.target.checked)}
+                  className="mt-0.5 h-5 w-5 shrink-0 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                />
+              </label>
+              <label className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-zinc-200">Скрывать занятые чаты во вкладке «Все»</span>
+                  <span className="mt-1 block text-sm leading-5 text-zinc-500">Оставлять видимыми свободные и назначенные текущему пользователю диалоги.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={hideAssignedChatsFromAll}
+                  onChange={(event) => setHideAssignedChatsFromAll(event.target.checked)}
+                  className="mt-0.5 h-5 w-5 shrink-0 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                />
+              </label>
+              <label className="block rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                <span className="mb-1 block text-sm font-medium text-zinc-200">Срок брони чата, минут</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={chatLeaseMinutes}
+                  onChange={(event) => setChatLeaseMinutes(event.target.value)}
+                  required
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                />
+                <span className="mt-1 block text-sm leading-5 text-zinc-500">0 отключает автоматический сброс назначения.</span>
+              </label>
+            </div>
+            <section className="space-y-4 border-y border-zinc-800 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-100">Уверенность лида</h3>
+                  <p className="mt-1 text-sm leading-5 text-zinc-500">
+                    Штрафы вычитаются из 100. Неприменимые к воронке проверки дают нулевой штраф.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={resetConfidenceSettings}
+                  className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm text-zinc-300 transition hover:border-emerald-500/50 hover:text-zinc-100"
+                >
+                  <RotateCcw size={15} />
+                  Сбросить к дефолтам
+                </button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(Object.keys(defaultConfidenceWeights) as Array<keyof typeof defaultConfidenceWeights>).map((key) => (
+                  <label
+                    key={key}
+                    className="grid grid-cols-[minmax(0,1fr)_76px] items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5"
+                  >
+                    <span className="min-w-0 text-sm leading-5 text-zinc-300">{confidenceWeightLabels[key]}</span>
+                    <span className="relative">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={confidenceWeights[key]}
+                        onChange={(event) => {
+                          setHasConfidenceOverrides(true)
+                          setConfidenceWeights((current) => ({ ...current, [key]: event.target.value }))
+                        }}
+                        className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 pr-7 text-right text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-600">−</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-300">Высокая уверенность от, %</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={confidenceHighMin}
+                    onChange={(event) => {
+                      setHasConfidenceOverrides(true)
+                      setConfidenceHighMin(event.target.value)
+                    }}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-300">Средняя уверенность от, %</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={confidenceMediumMin}
+                    onChange={(event) => {
+                      setHasConfidenceOverrides(true)
+                      setConfidenceMediumMin(event.target.value)
+                    }}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-zinc-500">
+                {hasConfidenceOverrides ? 'Для проекта сохранены индивидуальные значения.' : 'Используются системные значения по умолчанию.'}
+              </p>
+            </section>
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div>

@@ -31,6 +31,13 @@ type ProjectTag = {
   created_at: string
 }
 
+type FunnelStepOption = {
+  id: string
+  title: string
+  funnel_name: string
+  version_number: number
+}
+
 type PendingAction = { type: 'trash'; lead: Lead } | null
 type LeadTab = 'active' | 'submitted' | 'trash'
 
@@ -131,6 +138,8 @@ export default function LeadsPage() {
   const [ageFrom, setAgeFrom] = useState('')
   const [ageTo, setAgeTo] = useState('')
   const [countryFilter, setCountryFilter] = useState('')
+  const [currentStepFilter, setCurrentStepFilter] = useState('')
+  const [stepOptions, setStepOptions] = useState<FunnelStepOption[]>([])
   const [dateFrom, setDateFrom] = useState(daysAgoIso(30))
   const [dateTo, setDateTo] = useState(todayIso())
   const [error, setError] = useState('')
@@ -204,11 +213,12 @@ export default function LeadsPage() {
           q: search,
           is_trash: isTrashTab,
           submission_state: isTrashTab ? undefined : isSubmittedTab ? 'submitted' : 'active',
-          funnel_completed: activeTab === 'active',
+          funnel_completed: activeTab === 'active' && !currentStepFilter,
           partner_id: partnerFilter || undefined,
           age_from: parseOptionalNumber(ageFrom),
           age_to: parseOptionalNumber(ageTo),
           country: countryFilter,
+          current_step_id: currentStepFilter || undefined,
           limit: 100,
           offset: 0,
         }),
@@ -227,6 +237,7 @@ export default function LeadsPage() {
     ageFrom,
     ageTo,
     countryFilter,
+    currentStepFilter,
     dateFrom,
     dateTo,
     isTrashTab,
@@ -257,6 +268,23 @@ export default function LeadsPage() {
     }
   }, [selectedProjectId])
 
+  const loadStepOptions = useCallback(async () => {
+    if (!selectedProjectId) {
+      setStepOptions([])
+      setCurrentStepFilter('')
+      return
+    }
+    try {
+      const { data } = await api.get<FunnelStepOption[]>('/funnels/step-options', {
+        params: { project_id: selectedProjectId },
+      })
+      setStepOptions(data)
+      setCurrentStepFilter((current) => data.some((step) => step.id === current) ? current : '')
+    } catch {
+      setStepOptions([])
+    }
+  }, [selectedProjectId])
+
   useEffect(() => {
     void loadPage()
   }, [loadPage])
@@ -264,6 +292,10 @@ export default function LeadsPage() {
   useEffect(() => {
     void loadPartners()
   }, [loadPartners])
+
+  useEffect(() => {
+    void loadStepOptions()
+  }, [loadStepOptions])
 
   const handleConfirmAction = async () => {
     if (!pendingAction || !selectedProjectId || mutatingLeadId) {
@@ -529,7 +561,7 @@ export default function LeadsPage() {
         </div>
 
         {isFiltersOpen ? (
-          <div className="mt-3 grid gap-3 rounded-xl border border-white/5 bg-white/[0.025] p-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-3 grid gap-3 rounded-xl border border-white/5 bg-white/[0.025] p-3 md:grid-cols-2 xl:grid-cols-5">
             <select
               value={partnerFilter}
               onChange={(event) => setPartnerFilter(event.target.value)}
@@ -566,6 +598,18 @@ export default function LeadsPage() {
               placeholder="Страна"
               className="h-10 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-accent-300/60"
             />
+            <select
+              value={currentStepFilter}
+              onChange={(event) => setCurrentStepFilter(event.target.value)}
+              className="h-10 min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60"
+            >
+              <option value="">Все шаги воронки</option>
+              {stepOptions.map((step) => (
+                <option key={step.id} value={step.id}>
+                  {step.funnel_name} v{step.version_number} · {step.title}
+                </option>
+              ))}
+            </select>
           </div>
         ) : null}
       </header>

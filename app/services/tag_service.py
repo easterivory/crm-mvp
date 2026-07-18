@@ -12,6 +12,7 @@ from app.repositories.tag_repository import TagRepository
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
 from app.models.tag import random_tag_color
 from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.lead_scoring_service import LeadScoringService
 
 
 class TagService:
@@ -20,6 +21,7 @@ class TagService:
         self.tag_repo = TagRepository(db)
         self.lead_repo = LeadRepository(db)
         self.facebook_campaign = FacebookCampaignService(db)
+        self.scoring = LeadScoringService(db)
 
     async def list_tags(
         self,
@@ -142,6 +144,7 @@ class TagService:
                 lead_id=lead_id,
                 tag_id=tag_id,
             )
+            await self.scoring.update_lead_score(lead_id)
 
     async def remove_tag_from_lead(
         self,
@@ -155,6 +158,7 @@ class TagService:
             project_id=project_id,
         )
         await self.tag_repo.remove_tag_from_lead(lead_id=lead_id, tag_id=tag_id)
+        await self.scoring.update_lead_score(lead_id)
 
     async def _ensure_lead_and_tag_in_project(
         self,

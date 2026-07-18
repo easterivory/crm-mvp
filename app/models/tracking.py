@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, Text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, Text, text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -72,7 +72,7 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         JSONB,
         nullable=False,
         default=list,
-        server_default="'[]'::jsonb",
+        server_default=text("'[]'::jsonb"),
     )
     fb_proxy_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fb_test_event_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

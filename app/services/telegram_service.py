@@ -42,7 +42,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.constants import AuditAction, EntityType, LeadStatusCode, MessageType, SenderType
+from app.core.constants import (
+    AuditAction,
+    ChatEventType,
+    EntityType,
+    LeadStatusCode,
+    MessageType,
+    SenderType,
+)
 from app.core.lead_names import compose_lead_name, normalize_name_part, resolve_lead_names
 from app.models.chat import Chat
 from app.models.lead import Lead
@@ -50,6 +57,7 @@ from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.message_repository import MessageRepository
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.tracking_repository import TrackingRepository
 from app.schemas.message import MessageCreate, MessageOut
 from app.schemas.telegram import (
@@ -62,6 +70,8 @@ from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
 from app.services.chat_user_block_service import ChatUserBlockService
+from app.services.chat_audit_service import ChatAuditService
+from app.services.chat_lease_service import ChatLeaseService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.funnel_start_queue import enqueue_funnel_start
@@ -92,12 +102,15 @@ class TelegramService:
         self.lead_repo = LeadRepository(db)
         self.message_repo = MessageRepository(db)
         self.tracking_repo = TrackingRepository(db)
+        self.project_repo = ProjectRepository(db)
         self.message_service = MessageService(db)
         self.bot_engine = BotEngineService(db)
         self.broadcasts = BroadcastService(db)
         self.funnel_runtime = FunnelRuntimeService(db)
         self.telegram_sender = TelegramSenderService(db)
         self.audit = AuditService(db)
+        self.chat_audit = ChatAuditService(db)
+        self.chat_lease = ChatLeaseService(db)
         self.utm_bridge = UtmBridgeService()
 
     # ── Parsing ────────────────────────────────────────────────────────────────
@@ -203,6 +216,12 @@ class TelegramService:
             bot_id=bot_id,
             tracking_link_id=tracking_link_id,
         )
+        chat_lease = getattr(self, "chat_lease", None)
+        if chat_lease is not None:
+            await chat_lease.release_expired(
+                project_id=project_id,
+                chat_id=chat.id,
+            )
         # MessageService updates Chat via a SQL expression, which can expire
         # attributes on an already loaded ORM instance. Keep primitives before
         # that update and never rely on lazy ORM reads after an explicit commit.
@@ -262,7 +281,31 @@ class TelegramService:
             start_payload.utm_key,
             start_payload.utm_data,
         )
-        start_requested = should_start_runtime or self._is_start_command(message.text)
+        is_start_command = self._is_start_command(message.text)
+        if is_start_command and not should_start_runtime:
+            await self.chat_repo.mark_bot_restarted(
+                chat_id=chat_id,
+                project_id=project_id,
+            )
+            await self.chat_audit.log_event(
+                chat_id=chat_id,
+                project_id=project_id,
+                user_id=None,
+                event_type=ChatEventType.NOTE_ADDED,
+                new_value="Пользователь повторно запустил бота",
+            )
+            await self.message_repo.claim_funnel_processing([message_id])
+            logger.info(
+                "Repeated Telegram /start recorded without restarting funnel "
+                "project_id=%s bot_id=%s chat_id=%s message_id=%s",
+                project_id,
+                bot_id,
+                chat_id,
+                message_id,
+            )
+            return
+
+        start_requested = should_start_runtime
         if start_requested:
             # Make the chat and lead visible before Telegram network calls made by the funnel.
             await self.db.commit()
@@ -299,6 +342,11 @@ class TelegramService:
                     extra_custom_data={"content_name": "Telegram bot start"},
                 )
             return
+
+        await self._mark_gambling_out_of_scenario_activity(
+            chat_id=chat_id,
+            project_id=project_id,
+        )
 
         if message.contact is not None:
             if not await self.message_repo.claim_funnel_processing([message_id]):
@@ -358,6 +406,27 @@ class TelegramService:
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
+
+    async def _mark_gambling_out_of_scenario_activity(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> None:
+        project = await self.project_repo.get_active(project_id)
+        if project is None or project.project_format != "gambling":
+            return
+        state = await self.funnel_runtime.repo.get_chat_funnel_state(chat_id)
+        if (
+            state is None
+            or state.completed_at is not None
+            or state.is_paused
+            or not state.waiting_for_answer
+        ):
+            await self.chat_repo.mark_out_of_scenario_message(
+                chat_id=chat_id,
+                project_id=project_id,
+            )
 
     async def _handle_my_chat_member(
         self,

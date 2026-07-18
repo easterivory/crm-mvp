@@ -29,9 +29,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import AuditAction, EntityType
+from app.core.constants import AuditAction, EntityType, RoleName, SenderType
 from app.models.chat import Chat
 from app.models.message import Message
+from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
@@ -44,8 +45,11 @@ from app.schemas.chat import (
     ChatLeadStatusOut,
     ChatOut,
     ChatTagOut,
+    ChatWorkspaceCountsOut,
 )
+from app.services.assignment_service import AssignmentService
 from app.services.audit_service import AuditService
+from app.services.chat_lease_service import ChatLeaseService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 
 
@@ -58,6 +62,7 @@ class ChatService:
         self.lead_repo = LeadRepository(db)
         self.project_repo = ProjectRepository(db)
         self.audit = AuditService(db)
+        self.chat_lease = ChatLeaseService(db)
 
     # ── Public methods ─────────────────────────────────────────────────────────
 
@@ -67,6 +72,7 @@ class ChatService:
         filters: ChatFilters,
         limit: int,
         offset: int,
+        actor: User | None = None,
     ) -> tuple[list[ChatOut], int]:
         """
         Returns a paginated, filtered, and sorted list of chats together with
@@ -88,6 +94,7 @@ class ChatService:
             )
 
         sla = project.sla_threshold_minutes
+        await self.chat_lease.release_expired(project_id=project_id)
 
         # 3.1 Use `is True` instead of `bool()` so that None and False are both
         # treated as "no filter". bool(None) == False is incidentally the same
@@ -114,7 +121,18 @@ class ChatService:
             tag_mode=filters.tag_mode,
             lead_statuses=filters.lead_statuses,
             funnel_state=filters.funnel_state,
+            current_step_id=filters.current_step_id,
             sort_by=filters.sort_by,
+            workspace_view=filters.workspace_view,
+            viewer_id=actor.id if actor is not None else None,
+            hide_assigned_from_all=(
+                bool(project.hide_assigned_chats_from_all)
+                if filters.workspace_view == "all"
+                else False
+            ),
+            project_format=project.project_format,
+            push_unread_threshold=project.push_unread_threshold,
+            use_confidence_score=project.use_confidence_score,
         )
 
         # Sequential — AsyncSession does not support concurrent operations.
@@ -150,7 +168,12 @@ class ChatService:
         ]
         return items, total
 
-    async def get_chat(self, chat_id: UUID, project_id: UUID) -> ChatOut:
+    async def get_chat(
+        self,
+        chat_id: UUID,
+        project_id: UUID,
+        actor: User | None = None,
+    ) -> ChatOut:
         """Returns a single chat with computed flags populated."""
         project = await self.project_repo.get_active(project_id)
         if project is None:
@@ -159,12 +182,33 @@ class ChatService:
                 detail="Project not found",
             )
 
+        await self.chat_lease.release_expired(project_id=project_id, chat_id=chat_id)
         chat = await self.chat_repo.get_active(chat_id, project_id)
         if chat is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Chat not found",
             )
+
+        if actor is not None and actor.role_name == RoleName.MANAGER:
+            lead = await self.lead_repo.get_existing_by_chat(chat_id, project_id)
+            if lead is not None and lead.manager_id is None:
+                try:
+                    await AssignmentService(self.db).assign_manager(
+                        lead_id=lead.id,
+                        project_id=project_id,
+                        manager_id=actor.id,
+                        actor_id=actor.id,
+                    )
+                except HTTPException as exc:
+                    if exc.status_code != status.HTTP_409_CONFLICT:
+                        raise
+                chat = await self.chat_repo.get_active(chat_id, project_id)
+                if chat is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Chat not found",
+                    )
 
         contexts = await self.funnel_repo.get_chat_funnel_contexts(
             project_id=project_id,
@@ -183,6 +227,58 @@ class ChatService:
             lead_status=statuses_by_chat.get(chat.id),
             is_hot_lead=hot_leads_by_chat.get(chat.id, False),
         )
+
+    async def get_workspace_counts(
+        self,
+        *,
+        project_id: UUID,
+        actor: User,
+        bot_id: UUID | None = None,
+        bot_ids: list[UUID] | None = None,
+    ) -> ChatWorkspaceCountsOut:
+        project = await self.project_repo.get_active(project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+        await self.chat_lease.release_expired(project_id=project_id)
+        counts = await self.chat_repo.workspace_counts(
+            project_id=project_id,
+            viewer_id=actor.id,
+            hide_assigned_from_all=project.hide_assigned_chats_from_all,
+            project_format=project.project_format,
+            push_unread_threshold=project.push_unread_threshold,
+            use_confidence_score=project.use_confidence_score,
+            bot_id=bot_id,
+            bot_ids=bot_ids,
+        )
+        return ChatWorkspaceCountsOut(
+            **counts,
+            hide_assigned_chats_from_all=project.hide_assigned_chats_from_all,
+            chat_lease_minutes=project.chat_lease_minutes,
+            project_format=project.project_format,
+            push_unread_threshold=project.push_unread_threshold,
+        )
+
+    async def set_favorite(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        is_favorite: bool,
+    ) -> ChatOut:
+        updated = await self.chat_repo.set_favorite(
+            chat_id=chat_id,
+            project_id=project_id,
+            is_favorite=is_favorite,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found",
+            )
+        return await self.get_chat(chat_id=chat_id, project_id=project_id)
 
     async def update_language(
         self,
@@ -289,6 +385,13 @@ class ChatService:
         Delegates straight to the repository — no business logic here.
         """
         await self.chat_repo.update_timestamps(chat_id, sender_type, ts)
+        if sender_type == SenderType.USER:
+            chat = await self.chat_repo.get_by_id(chat_id)
+            if chat is not None:
+                await self.chat_lease.renew_from_client_message(
+                    project_id=chat.project_id,
+                    chat_id=chat_id,
+                )
 
     async def mark_as_read(self, chat_id: UUID, project_id: UUID) -> None:
         chat = await self.chat_repo.get_active(chat_id, project_id)

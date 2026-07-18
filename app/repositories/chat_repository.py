@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, String, and_, case, func, or_, select, update
+from sqlalchemy import ColumnElement, String, and_, case, false, func, or_, select, update
 
 from app.core.constants import SenderType
 from app.models.chat import Chat
@@ -25,6 +25,7 @@ from app.models.funnel import ChatFunnelState
 from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
+from app.models.partner import LeadSubmission
 from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.repositories.base import BaseRepository
@@ -89,6 +90,86 @@ class ChatRepository(BaseRepository[Chat]):
         True when the chat has unread client activity for the operator workspace.
         """
         return Chat.is_read.is_(False)
+
+    @classmethod
+    def _workspace_unread_expr(
+        cls,
+        *,
+        project_format: str,
+        push_unread_threshold: int,
+        use_confidence_score: bool,
+    ) -> ColumnElement:
+        unassigned_unread = and_(
+            Chat.is_read.is_(False),
+            select(Lead.id)
+            .select_from(Lead)
+            .where(
+                Lead.chat_id == Chat.id,
+                Lead.is_deleted.is_(False),
+                Lead.manager_id.is_(None),
+            )
+            .correlate(Chat)
+            .exists(),
+        )
+        active_submission = (
+            select(LeadSubmission.id)
+            .select_from(LeadSubmission)
+            .where(
+                LeadSubmission.lead_id == Lead.id,
+                LeadSubmission.status.in_(
+                    (
+                        "pending",
+                        "processing",
+                        "success",
+                        "accepted",
+                        "submitted",
+                        "duplicate",
+                    )
+                ),
+            )
+            .correlate(Lead)
+            .exists()
+        )
+        completed_potential = false()
+        if use_confidence_score:
+            completed_potential = (
+                select(Lead.id)
+                .select_from(Lead)
+                .join(ChatFunnelState, ChatFunnelState.chat_id == Lead.chat_id)
+                .where(
+                    Lead.chat_id == Chat.id,
+                    Lead.is_deleted.is_(False),
+                    ChatFunnelState.completed_at.is_not(None),
+                    Lead.score_percent < 100,
+                    ~active_submission,
+                )
+                .correlate(Chat)
+                .exists()
+            )
+        manual_required = (
+            select(LeadSubmission.id)
+            .select_from(LeadSubmission)
+            .join(Lead, Lead.id == LeadSubmission.lead_id)
+            .where(
+                Lead.chat_id == Chat.id,
+                Lead.is_deleted.is_(False),
+                LeadSubmission.status == "manual_required",
+            )
+            .correlate(Chat)
+            .exists()
+        )
+        gambling_attention = false()
+        if project_format == "gambling":
+            gambling_attention = or_(
+                Chat.unanswered_push_count >= max(push_unread_threshold, 1),
+                Chat.has_out_of_scenario_message.is_(True),
+            )
+        return or_(
+            unassigned_unread,
+            completed_potential,
+            manual_required,
+            gambling_attention,
+        )
 
     @staticmethod
     def _has_text_expr(column) -> ColumnElement:
@@ -173,7 +254,54 @@ class ChatRepository(BaseRepository[Chat]):
         tag_mode: str,
         lead_statuses: Sequence[str],
         funnel_state: Optional[str],
+        current_step_id: Optional[UUID] = None,
+        workspace_view: Optional[str] = None,
+        viewer_id: Optional[UUID] = None,
+        hide_assigned_from_all: bool = False,
+        project_format: str = "submission",
+        push_unread_threshold: int = 1,
+        use_confidence_score: bool = True,
     ):
+        if workspace_view == "unread":
+            stmt = stmt.where(
+                self._workspace_unread_expr(
+                    project_format=project_format,
+                    push_unread_threshold=push_unread_threshold,
+                    use_confidence_score=use_confidence_score,
+                )
+            )
+        elif workspace_view == "mine":
+            if viewer_id is None:
+                stmt = stmt.where(Chat.id.is_(None))
+            else:
+                stmt = stmt.where(
+                    select(Lead.id)
+                    .where(
+                        Lead.chat_id == Chat.id,
+                        Lead.is_deleted.is_(False),
+                        Lead.manager_id == viewer_id,
+                    )
+                    .exists()
+                )
+        elif workspace_view == "favorites":
+            stmt = stmt.where(Chat.is_favorite.is_(True))
+        elif workspace_view == "all" and hide_assigned_from_all:
+            foreign_assignment = Lead.manager_id.isnot(None)
+            if viewer_id is not None:
+                foreign_assignment = and_(
+                    foreign_assignment,
+                    Lead.manager_id != viewer_id,
+                )
+            stmt = stmt.where(
+                ~select(Lead.id)
+                .where(
+                    Lead.chat_id == Chat.id,
+                    Lead.is_deleted.is_(False),
+                    foreign_assignment,
+                )
+                .exists()
+            )
+
         effective_manager_id = assigned_user_id or manager_id
         if effective_manager_id is not None:
             stmt = stmt.where(
@@ -246,6 +374,15 @@ class ChatRepository(BaseRepository[Chat]):
 
         if funnel_state:
             stmt = stmt.where(self._funnel_state_expr(funnel_state))
+        if current_step_id is not None:
+            stmt = stmt.where(
+                select(ChatFunnelState.id)
+                .where(
+                    ChatFunnelState.chat_id == Chat.id,
+                    ChatFunnelState.current_step_id == current_step_id,
+                )
+                .exists()
+            )
         return stmt
 
     @staticmethod
@@ -556,7 +693,14 @@ class ChatRepository(BaseRepository[Chat]):
         tag_mode: str = "any",
         lead_statuses: Sequence[str] | None = None,
         funnel_state: Optional[str] = None,
+        current_step_id: Optional[UUID] = None,
         sort_by: str = "latest",
+        workspace_view: Optional[str] = None,
+        viewer_id: Optional[UUID] = None,
+        hide_assigned_from_all: bool = False,
+        project_format: str = "submission",
+        push_unread_threshold: int = 1,
+        use_confidence_score: bool = True,
     ) -> list[Chat]:
         """
         Returns chats matching the given filters. The default order is the
@@ -581,6 +725,13 @@ class ChatRepository(BaseRepository[Chat]):
             tag_mode=tag_mode,
             lead_statuses=lead_statuses or (),
             funnel_state=funnel_state,
+            current_step_id=current_step_id,
+            workspace_view=workspace_view,
+            viewer_id=viewer_id,
+            hide_assigned_from_all=hide_assigned_from_all,
+            project_format=project_format,
+            push_unread_threshold=push_unread_threshold,
+            use_confidence_score=use_confidence_score,
         )
         if sort_by == "priority":
             stmt = stmt.order_by(
@@ -619,7 +770,14 @@ class ChatRepository(BaseRepository[Chat]):
         tag_mode: str = "any",
         lead_statuses: Sequence[str] | None = None,
         funnel_state: Optional[str] = None,
+        current_step_id: Optional[UUID] = None,
         sort_by: str = "latest",
+        workspace_view: Optional[str] = None,
+        viewer_id: Optional[UUID] = None,
+        hide_assigned_from_all: bool = False,
+        project_format: str = "submission",
+        push_unread_threshold: int = 1,
+        use_confidence_score: bool = True,
     ) -> int:
         """
         Mirror of list() without LIMIT/OFFSET — used for pagination totals.
@@ -657,9 +815,86 @@ class ChatRepository(BaseRepository[Chat]):
             tag_mode=tag_mode,
             lead_statuses=lead_statuses or (),
             funnel_state=funnel_state,
+            current_step_id=current_step_id,
+            workspace_view=workspace_view,
+            viewer_id=viewer_id,
+            hide_assigned_from_all=hide_assigned_from_all,
+            project_format=project_format,
+            push_unread_threshold=push_unread_threshold,
+            use_confidence_score=use_confidence_score,
         )
         result = await self.db.execute(stmt)
         return result.scalar_one()
+
+    async def workspace_counts(
+        self,
+        *,
+        project_id: UUID,
+        viewer_id: UUID,
+        hide_assigned_from_all: bool,
+        project_format: str = "submission",
+        push_unread_threshold: int = 1,
+        use_confidence_score: bool = True,
+        bot_id: UUID | None = None,
+        bot_ids: Sequence[UUID] | None = None,
+    ) -> dict[str, int]:
+        all_filter = Lead.manager_id.is_(None)
+        if hide_assigned_from_all:
+            all_filter = or_(all_filter, Lead.manager_id == viewer_id)
+
+        all_count = func.count(Chat.id)
+        if hide_assigned_from_all:
+            all_count = all_count.filter(all_filter)
+
+        stmt = (
+            select(
+                func.count(Chat.id)
+                .filter(
+                    self._workspace_unread_expr(
+                        project_format=project_format,
+                        push_unread_threshold=push_unread_threshold,
+                        use_confidence_score=use_confidence_score,
+                    )
+                )
+                .label("unread"),
+                func.count(Chat.id)
+                .filter(self._unanswered_expr())
+                .label("unanswered"),
+                func.count(Chat.id)
+                .filter(Lead.manager_id == viewer_id)
+                .label("mine"),
+                all_count.label("all"),
+                func.count(Chat.id)
+                .filter(Chat.is_favorite.is_(True))
+                .label("favorites"),
+            )
+            .select_from(Chat)
+            .outerjoin(
+                Lead,
+                and_(
+                    Lead.chat_id == Chat.id,
+                    Lead.is_deleted.is_(False),
+                ),
+            )
+            .where(
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+        )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        if bot_ids:
+            stmt = stmt.where(Chat.bot_id.in_(bot_ids))
+
+        row = (await self.db.execute(stmt)).one()._mapping
+        return {
+            "unread": int(row["unread"] or 0),
+            "unanswered": int(row["unanswered"] or 0),
+            "mine": int(row["mine"] or 0),
+            "all": int(row["all"] or 0),
+            "favorites": int(row["favorites"] or 0),
+        }
 
     async def hot_lead_flags_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, bool]:
         if not chat_ids:
@@ -812,12 +1047,16 @@ class ChatRepository(BaseRepository[Chat]):
             values["is_blocked_by_user"] = False
             values["is_read"] = False
             values["unanswered_minutes"] = 0
+            values["unanswered_push_count"] = 0
         elif sender_type == SenderType.MANAGER:
             values["last_manager_reply_at"] = ts
             values["last_operator_message_at"] = ts
             values["last_read_at"] = ts
             values["is_read"] = True
             values["unanswered_minutes"] = 0
+            values["has_restarted_bot"] = False
+            values["unanswered_push_count"] = 0
+            values["has_out_of_scenario_message"] = False
         elif sender_type == SenderType.BOT:
             values["last_manager_reply_at"] = ts
 
@@ -838,8 +1077,205 @@ class ChatRepository(BaseRepository[Chat]):
         await self.db.execute(
             update(Chat)
             .where(Chat.id == chat_id, Chat.reset_at.is_(None))
-            .values(last_read_at=now, is_read=True, updated_at=now)
+            .values(
+                last_read_at=now,
+                is_read=True,
+                has_out_of_scenario_message=False,
+                updated_at=now,
+            )
         )
+
+    async def mark_as_unread(self, chat_id: UUID) -> None:
+        await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(is_read=False, updated_at=func.now())
+        )
+
+    async def set_favorite(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        is_favorite: bool,
+    ) -> Optional[Chat]:
+        now = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(is_favorite=is_favorite, updated_at=now)
+        )
+        if result.rowcount == 0:
+            return None
+        return await self.get_active(chat_id, project_id)
+
+    async def set_assignment_expires_at(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        assignment_expires_at: datetime | None,
+    ) -> bool:
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(
+                assignment_expires_at=assignment_expires_at,
+                updated_at=func.now(),
+            )
+        )
+        return bool(result.rowcount)
+
+    async def renew_assignment_on_incoming(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        assignment_expires_at: datetime,
+    ) -> bool:
+        assigned_lead = (
+            select(Lead.id)
+            .where(
+                Lead.chat_id == Chat.id,
+                Lead.is_deleted.is_(False),
+                Lead.manager_id.isnot(None),
+            )
+            .exists()
+        )
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                assigned_lead,
+            )
+            .values(
+                assignment_expires_at=assignment_expires_at,
+                updated_at=func.now(),
+            )
+        )
+        return bool(result.rowcount)
+
+    async def mark_out_of_scenario_message(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> bool:
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(
+                has_out_of_scenario_message=True,
+                is_read=False,
+                updated_at=func.now(),
+            )
+        )
+        return bool(result.rowcount)
+
+    async def increment_unanswered_push_count(
+        self,
+        *,
+        chat_id: UUID,
+    ) -> bool:
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(
+                unanswered_push_count=Chat.unanswered_push_count + 1,
+                updated_at=func.now(),
+            )
+        )
+        return bool(result.rowcount)
+
+    async def release_expired_assignments(
+        self,
+        *,
+        project_id: UUID,
+        expires_before: datetime,
+        chat_id: UUID | None = None,
+    ) -> list[tuple[UUID, UUID, UUID]]:
+        stmt = (
+            select(Chat.id, Lead.id, Lead.manager_id)
+            .join(Lead, Lead.chat_id == Chat.id)
+            .where(
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Chat.assignment_expires_at.isnot(None),
+                Chat.assignment_expires_at < expires_before,
+                Lead.is_deleted.is_(False),
+                Lead.manager_id.isnot(None),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if chat_id is not None:
+            stmt = stmt.where(Chat.id == chat_id)
+        result = await self.db.execute(stmt)
+        rows = list(result.all())
+        if not rows:
+            return []
+
+        chat_ids = [row[0] for row in rows]
+        lead_ids = [row[1] for row in rows]
+        await self.db.execute(
+            update(Lead)
+            .where(Lead.id.in_(lead_ids))
+            .values(manager_id=None, updated_at=expires_before)
+        )
+        await self.db.execute(
+            update(Chat)
+            .where(Chat.id.in_(chat_ids))
+            .values(
+                assignment_expires_at=None,
+                is_read=False,
+                updated_at=expires_before,
+            )
+        )
+        return [(row[0], row[1], row[2]) for row in rows if row[2] is not None]
+
+    async def mark_bot_restarted(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> bool:
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.id == chat_id,
+                Chat.project_id == project_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .values(has_restarted_bot=True, updated_at=func.now())
+        )
+        return bool(result.rowcount)
 
     async def reset_chat(self, chat_id: UUID) -> Optional[Chat]:
         now = datetime.now(timezone.utc)
@@ -863,6 +1299,10 @@ class ChatRepository(BaseRepository[Chat]):
                 last_read_at=None,
                 is_read=True,
                 unanswered_minutes=0,
+                assignment_expires_at=None,
+                has_restarted_bot=False,
+                unanswered_push_count=0,
+                has_out_of_scenario_message=False,
                 updated_at=now,
             )
         )
@@ -967,6 +1407,10 @@ class ChatRepository(BaseRepository[Chat]):
                 last_read_at=None,
                 is_read=True,
                 unanswered_minutes=0,
+                assignment_expires_at=None,
+                has_restarted_bot=False,
+                unanswered_push_count=0,
+                has_out_of_scenario_message=False,
                 updated_at=now,
             )
         )

@@ -75,6 +75,8 @@ type User = {
 type FunnelControl = {
   is_available: boolean
   is_paused: boolean
+  is_manual_review: boolean
+  manual_review_started_at: string | null
   funnel_id: string | null
   funnel_name: string | null
   current_step_id: string | null
@@ -271,6 +273,12 @@ export default function LeadSidebar({
   const [selectedReturnStepId, setSelectedReturnStepId] = useState('')
   const [isFunnelControlLoading, setIsFunnelControlLoading] = useState(false)
   const [isResumingFunnel, setIsResumingFunnel] = useState(false)
+  const [funnelTraceRefreshKey, setFunnelTraceRefreshKey] = useState(0)
+  const [leadEventType, setLeadEventType] = useState<'registration' | 'deposit' | 'redeposit'>('registration')
+  const [leadEventAmount, setLeadEventAmount] = useState('')
+  const [leadEventCurrency, setLeadEventCurrency] = useState('USD')
+  const [isCreatingLeadEvent, setIsCreatingLeadEvent] = useState(false)
+  const [leadEventFeedback, setLeadEventFeedback] = useState('')
   const managerCommentSaveSeqRef = useRef(0)
 
   const currentStatus = useMemo(
@@ -574,8 +582,22 @@ export default function LeadSidebar({
     }
   }
 
-  const handleResumeFunnel = async () => {
-    if (!activeChatId || !selectedProjectId || !selectedReturnStepId || isResumingFunnel) {
+  const handleResumeFunnel = async (mode: 'approve' | 'step') => {
+    if (
+      !activeChatId
+      || !selectedProjectId
+      || (mode === 'step' && !selectedReturnStepId)
+      || isResumingFunnel
+    ) {
+      return
+    }
+
+    if (
+      mode === 'step'
+      && funnelControl
+      && !funnelControl.is_manual_review
+      && !window.confirm('Лид сейчас не на ручной проверке. Принудительно переместить его на выбранный шаг?')
+    ) {
       return
     }
 
@@ -583,17 +605,54 @@ export default function LeadSidebar({
     setError('')
     try {
       const { data } = await api.post<FunnelControl>(
-        `/chats/${activeChatId}/funnel-resume`,
-        { step_id: selectedReturnStepId },
+        `/chats/${activeChatId}/resume-funnel`,
+        mode === 'approve'
+          ? { manager_approved: true }
+          : { target_step_id: selectedReturnStepId },
         { params: { project_id: selectedProjectId } },
       )
       setFunnelControl(data)
       setSelectedReturnStepId(data.current_step_id ?? data.steps[0]?.id ?? '')
+      setFunnelTraceRefreshKey((current) => current + 1)
       onLeadStatusChanged?.()
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
       setIsResumingFunnel(false)
+    }
+  }
+
+  const handleCreateLeadEvent = async () => {
+    if (!lead || !selectedProjectId || isCreatingLeadEvent) {
+      return
+    }
+    const needsAmount = leadEventType === 'deposit' || leadEventType === 'redeposit'
+    const normalizedAmount = leadEventAmount.trim().replace(',', '.')
+    if (needsAmount && (!normalizedAmount || Number.isNaN(Number(normalizedAmount)) || Number(normalizedAmount) < 0)) {
+      setLeadEventFeedback('Укажите корректную сумму события.')
+      return
+    }
+
+    setIsCreatingLeadEvent(true)
+    setLeadEventFeedback('')
+    try {
+      await api.post(
+        `/leads/${lead.id}/events`,
+        {
+          event_type: leadEventType,
+          amount: needsAmount ? normalizedAmount : null,
+          currency: needsAmount ? leadEventCurrency.trim().toUpperCase() || 'USD' : null,
+          payload: { source_ui: 'lead_sidebar' },
+        },
+        { params: { project_id: selectedProjectId } },
+      )
+      setLeadEventAmount('')
+      setLeadEventFeedback('Событие записано.')
+      onLeadStatusChanged?.()
+    } catch (err) {
+      setLeadEventFeedback(getErrorMessage(err, 'Не удалось записать событие.'))
+    } finally {
+      setIsCreatingLeadEvent(false)
     }
   }
 
@@ -1038,11 +1097,77 @@ export default function LeadSidebar({
               )}
             </div>
 
-            {funnelControl?.is_available ? (
-              <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <WalletCards size={16} className="shrink-0 text-emerald-200" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white">Событие лида</p>
+                  <p className="text-xs text-gray-500">Единая аналитика для ручных действий, воронки и постбеков.</p>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <select
+                  value={leadEventType}
+                  onChange={(event) => {
+                    setLeadEventType(event.target.value as typeof leadEventType)
+                    setLeadEventFeedback('')
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none md:text-sm"
+                >
+                  <option value="registration">Регистрация</option>
+                  <option value="deposit">Депозит</option>
+                  <option value="redeposit">Повторный депозит (RD)</option>
+                </select>
+                {leadEventType !== 'registration' ? (
+                  <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={leadEventAmount}
+                      onChange={(event) => setLeadEventAmount(event.target.value)}
+                      placeholder="Сумма"
+                      className="min-w-0 rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none md:text-sm"
+                    />
+                    <input
+                      value={leadEventCurrency}
+                      onChange={(event) => setLeadEventCurrency(event.target.value.toUpperCase().slice(0, 3))}
+                      maxLength={3}
+                      className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base uppercase text-gray-100 outline-none md:text-sm"
+                      aria-label="Валюта"
+                    />
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void handleCreateLeadEvent()}
+                  disabled={isCreatingLeadEvent}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isCreatingLeadEvent ? <LoaderCircle size={15} className="animate-spin" /> : <Plus size={15} />}
+                  Записать событие
+                </button>
+                {leadEventFeedback ? (
+                  <p className={`text-xs leading-5 ${leadEventFeedback === 'Событие записано.' ? 'text-emerald-200' : 'text-red-200'}`}>
+                    {leadEventFeedback}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <FunnelTraceWidget
+              chatId={activeChatId}
+              projectId={selectedProjectId}
+              currentStepId={funnelControl?.current_step_id ?? null}
+              currentStepTitle={funnelControl?.current_step_title ?? null}
+              isPaused={funnelControl?.is_paused ?? false}
+              isManualReview={funnelControl?.is_manual_review ?? false}
+              refreshKey={funnelTraceRefreshKey}
+              actions={funnelControl?.is_available ? (
+                <div>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-white">Воронка</p>
+                    <p className="text-sm font-medium text-white">Управление воронкой</p>
                     <p className="mt-1 truncate text-xs text-gray-500">
                       {funnelControl.funnel_name || 'Активный сценарий'}
                       {funnelControl.current_step_title ? ` · ${funnelControl.current_step_title}` : ''}
@@ -1053,12 +1178,35 @@ export default function LeadSidebar({
                       ? 'bg-yellow-400/10 text-yellow-100'
                       : 'bg-emerald-400/10 text-emerald-100'
                   }`}>
-                    {funnelControl.is_paused ? 'На паузе' : 'Активна'}
+                    {funnelControl.is_manual_review
+                      ? 'Проверка менеджером'
+                      : funnelControl.is_paused
+                        ? 'На паузе'
+                        : 'Активна'}
                   </span>
                 </div>
 
-                {funnelControl.is_paused ? (
-                  <div className="mt-3 space-y-3">
+                <div className="mt-3 space-y-3">
+                  {funnelControl.is_manual_review ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleResumeFunnel('approve')}
+                      disabled={isResumingFunnel}
+                      className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/50 hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isResumingFunnel ? <LoaderCircle size={16} className="animate-spin" /> : <Check size={16} />}
+                      Апрув и продолжить
+                    </button>
+                  ) : (
+                    <p className="rounded-lg border border-amber-300/15 bg-amber-300/[0.06] p-2 text-xs leading-5 text-amber-100/80">
+                      Лид не находится на ручной проверке. Принудительный переход остановит текущий шаг и запустит выбранный после подтверждения.
+                    </p>
+                  )}
+                    <div className="flex items-center gap-3 text-xs text-gray-600">
+                      <span className="h-px flex-1 bg-white/5" />
+                      или выбрать шаг
+                      <span className="h-px flex-1 bg-white/5" />
+                    </div>
                     <select
                       value={selectedReturnStepId}
                       onChange={(event) => setSelectedReturnStepId(event.target.value)}
@@ -1073,21 +1221,17 @@ export default function LeadSidebar({
                     </select>
                     <button
                       type="button"
-                      onClick={() => void handleResumeFunnel()}
+                      onClick={() => void handleResumeFunnel('step')}
                       disabled={!selectedReturnStepId || isResumingFunnel}
                       className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 py-2 text-sm font-semibold text-accent-50 transition hover:border-accent-300/50 hover:bg-accent-300/15 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isResumingFunnel ? <LoaderCircle size={16} className="animate-spin" /> : <RotateCcw size={16} />}
-                      Вернуть в выбранный шаг
+                      Вернуть на шаг
                     </button>
                   </div>
-                ) : (
-                  <p className="mt-3 text-xs leading-5 text-gray-500">
-                    Сценарий продолжится автоматически. При взятии диалога менеджером он будет поставлен на паузу.
-                  </p>
-                )}
-              </div>
-            ) : null}
+                </div>
+              ) : null}
+            />
 
                 <div className="space-y-3">
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
@@ -1209,8 +1353,6 @@ export default function LeadSidebar({
                 </div>
               </div>
             </div>
-
-            <FunnelTraceWidget chatId={activeChatId} projectId={selectedProjectId} />
 
             {onSetBlocked ? (
               <div className={`rounded-xl border p-4 ${

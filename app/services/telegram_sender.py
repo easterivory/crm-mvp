@@ -25,16 +25,25 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramSenderService:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        release_transaction_before_network: bool = False,
+    ) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
+        self.release_transaction_before_network = release_transaction_before_network
 
     async def _get_token(self, project_id: UUID, bot_id: UUID | None) -> str | None:
-        return (
+        token = (
             await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
             if bot_id is not None
             else await self.bot_repo.get_active_bot_token(project_id)
         )
+        if self.release_transaction_before_network and self.db.in_transaction():
+            await self.db.commit()
+        return token
 
     async def send_message(
         self,

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -77,7 +77,12 @@ class LeadOut(OrmBase):
     preferred_call_time: Optional[str]
     manager_comment: Optional[str]
     has_card: Optional[bool]
-    score_percent: Optional[int]
+    score_percent: int
+    confidence_level: Literal["high", "medium", "low"]
+    confidence_reasons: list[dict[str, Any]] = Field(default_factory=list)
+    confidence_meta: dict[str, Any] = Field(default_factory=dict)
+    score_calculated_at: Optional[datetime]
+    score_version: int
     custom_fields: dict = Field(default_factory=dict)
     updated_at: datetime
     created_at: datetime

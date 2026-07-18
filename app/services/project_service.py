@@ -79,6 +79,14 @@ class ProjectService:
                 is_deleted=status_value == "archived",
                 sla_threshold_minutes=sla_threshold_minutes,
                 tracking_lead_status_codes=tracking_lead_status_codes,
+                use_confidence_score=data.use_confidence_score,
+                hide_assigned_chats_from_all=data.hide_assigned_chats_from_all,
+                chat_lease_minutes=data.chat_lease_minutes,
+                project_format=data.project_format,
+                vip_tags=data.vip_tags,
+                push_unread_threshold=data.push_unread_threshold,
+                confidence_weights=data.confidence_weights,
+                confidence_thresholds=data.confidence_thresholds,
             )
         except IntegrityError as exc:
             raise HTTPException(
@@ -112,7 +120,18 @@ class ProjectService:
             )
 
         values = data.model_dump(exclude_unset=True)
-        for non_nullable_field in ("name", "slug", "status", "sla_threshold_minutes"):
+        for non_nullable_field in (
+            "name",
+            "slug",
+            "status",
+            "sla_threshold_minutes",
+            "use_confidence_score",
+            "hide_assigned_chats_from_all",
+            "chat_lease_minutes",
+            "project_format",
+            "vip_tags",
+            "push_unread_threshold",
+        ):
             if values.get(non_nullable_field) is None:
                 values.pop(non_nullable_field, None)
 

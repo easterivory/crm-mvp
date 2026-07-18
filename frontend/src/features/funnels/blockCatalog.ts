@@ -155,6 +155,14 @@ export const universalBlocks: UniversalBlock[] = [
     defaultConfig: { operator_action: 'handoff' },
   },
   {
+    stepType: 'operator',
+    blockType: 'manager_review',
+    label: 'Проверка менеджером',
+    defaultTitle: 'Проверка менеджером',
+    description: 'Ставит сценарий на паузу до апрува или возврата менеджером на выбранный шаг.',
+    defaultConfig: { message_text: '', set_manual_status: true },
+  },
+  {
     stepType: 'integration',
     blockType: 'generic_integration',
     label: 'Интеграция',
@@ -193,7 +201,7 @@ export const blockGroups: BlockMenuGroup[] = [
     title: 'CRM',
     accent: 'emerald',
     items: universalBlocks.filter((item) =>
-      ['generic_crm_action', 'set_lead_status', 'generic_operator', 'generic_finish'].includes(
+      ['generic_crm_action', 'set_lead_status', 'generic_operator', 'manager_review', 'generic_finish'].includes(
         item.blockType,
       ),
     ),
@@ -289,6 +297,7 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
     items: [
       { stepType: 'delay', blockType: 'generic_delay', label: 'Таймер', defaultTitle: 'Ожидание' },
       { stepType: 'operator', blockType: 'generic_operator', label: 'Оператор', defaultTitle: 'Оператор' },
+      { stepType: 'operator', blockType: 'manager_review', label: 'Проверка менеджером', defaultTitle: 'Проверка менеджером' },
       { stepType: 'integration', blockType: 'generic_integration', label: 'Интеграция', defaultTitle: 'Интеграция' },
       { stepType: 'finish', blockType: 'generic_finish', label: 'Завершение', defaultTitle: 'Завершение' },
     ],

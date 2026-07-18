@@ -92,7 +92,12 @@ DANGEROUS_EXTENSIONS = {
 
 
 class MessageService:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        release_transaction_before_telegram: bool = False,
+    ) -> None:
         self.db = db
         self.message_repo = MessageRepository(db)
         self.chat_repo = ChatRepository(db)
@@ -100,7 +105,10 @@ class MessageService:
         self.project_repo = ProjectRepository(db)
         self.user_repo = UserRepository(db)
         self.chat_service = ChatService(db)
-        self.telegram_sender = TelegramSenderService(db)
+        self.telegram_sender = TelegramSenderService(
+            db,
+            release_transaction_before_network=release_transaction_before_telegram,
+        )
         self.translation_service = TranslationService(db)
 
     async def send_message_to_client(

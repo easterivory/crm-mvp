@@ -5,6 +5,7 @@ import { useProjectBotSelection } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 
 type HeaderMetrics = {
+  project_format?: 'submission' | 'gambling'
   subscribers_today: number
   conversion_today: string | number
   leads_today: number
@@ -14,6 +15,9 @@ type HeaderMetrics = {
   spend_today: string | number
   cpl_today: string | number
   cost_per_submitted_today: string | number
+  registrations_today: number
+  deposits_today: number
+  redeposits_today: number
 }
 
 function formatMoney(value: string | number) {
@@ -77,10 +81,22 @@ export default function DashboardHeaderMetrics() {
         <Metric label="Подписчиков сегодня" value={formatInteger(metrics.subscribers_today)} />
         <Metric label="Лидов сегодня" value={formatInteger(metrics.leads_today)} />
         <Metric label="Конверсия" value={formatPercent(metrics.conversion_today)} valueClassName="text-orange-400" />
-        <Metric label="Подано сегодня" value={formatInteger(metrics.submitted_today)} valueClassName="text-emerald-400" />
-        <Metric label="% поданных" value={formatPercent(metrics.submitted_percent_today)} valueClassName="text-emerald-400" />
+        {metrics.project_format === 'gambling' ? (
+          <>
+            <Metric label="Регистраций" value={formatInteger(metrics.registrations_today)} valueClassName="text-cyan-200" />
+            <Metric label="Депозитов" value={formatInteger(metrics.deposits_today)} valueClassName="text-emerald-300" />
+            <Metric label="RD" value={formatInteger(metrics.redeposits_today)} valueClassName="text-violet-200" />
+          </>
+        ) : (
+          <>
+            <Metric label="Подано сегодня" value={formatInteger(metrics.submitted_today)} valueClassName="text-emerald-400" />
+            <Metric label="% поданных" value={formatPercent(metrics.submitted_percent_today)} valueClassName="text-emerald-400" />
+          </>
+        )}
         <Metric label="Стоимость лида/день" value={`$${formatMoney(metrics.cpl_today)}`} />
-        <Metric label="Стоимость поданного" value={`$${formatMoney(metrics.cost_per_submitted_today)}`} />
+        {metrics.project_format !== 'gambling' ? (
+          <Metric label="Стоимость поданного" value={`$${formatMoney(metrics.cost_per_submitted_today)}`} />
+        ) : null}
       </div>
     </div>
   )

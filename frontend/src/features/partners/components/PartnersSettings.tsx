@@ -26,6 +26,7 @@ import type {
   PartnerIntegration,
   PartnerIntegrationPayload,
 } from '../types'
+import PostbackEndpointsPanel from './PostbackEndpointsPanel'
 
 type PartnersSettingsProps = {
   projectId: string | null
@@ -52,6 +53,13 @@ type PartnerFormState = {
   query_param_name: string
   token: string
   is_active: boolean
+  is_auto_submit_enabled: boolean
+  auto_submit_min_score: string
+  auto_submit_allowed_geos: string
+  auto_submit_require_phone: boolean
+  auto_submit_reject_duplicates: boolean
+  auto_submit_require_fields: boolean
+  auto_submit_require_card: boolean
   request_method: 'POST' | 'PUT' | 'PATCH'
   body_format: 'json' | 'form'
   omit_null_values: boolean
@@ -173,6 +181,13 @@ const emptyForm = (): PartnerFormState => ({
   query_param_name: 'token',
   token: '',
   is_active: true,
+  is_auto_submit_enabled: false,
+  auto_submit_min_score: '100',
+  auto_submit_allowed_geos: '',
+  auto_submit_require_phone: false,
+  auto_submit_reject_duplicates: false,
+  auto_submit_require_fields: false,
+  auto_submit_require_card: false,
   request_method: 'POST',
   body_format: 'json',
   omit_null_values: true,
@@ -264,6 +279,13 @@ function formFromPartner(partner: PartnerIntegration): PartnerFormState {
     query_param_name: partner.auth_config?.query_param_name ?? 'token',
     token: partner.auth_config?.token ?? '',
     is_active: partner.is_active,
+    is_auto_submit_enabled: partner.is_auto_submit_enabled ?? false,
+    auto_submit_min_score: String(partner.auto_submit_rules?.min_score ?? 100),
+    auto_submit_allowed_geos: (partner.auto_submit_rules?.allowed_geos ?? []).join(', '),
+    auto_submit_require_phone: partner.auto_submit_rules?.require_phone_valid ?? false,
+    auto_submit_reject_duplicates: partner.auto_submit_rules?.reject_high_duplicate_risk ?? false,
+    auto_submit_require_fields: partner.auto_submit_rules?.require_partner_fields ?? false,
+    auto_submit_require_card: partner.auto_submit_rules?.require_card ?? false,
     request_method: requestConfig?.method ?? 'POST',
     body_format: requestConfig?.body_format ?? 'json',
     omit_null_values: requestConfig?.omit_null_values ?? true,
@@ -335,6 +357,17 @@ function toPayload(projectId: string, form: PartnerFormState): PartnerIntegratio
     .split(/[\n,]/)
     .map((item) => item.trim())
     .filter(Boolean)
+  const autoSubmitMinScore = Number(form.auto_submit_min_score)
+  if (!Number.isInteger(autoSubmitMinScore) || autoSubmitMinScore < 0 || autoSubmitMinScore > 100) {
+    throw new Error('Минимальная уверенность для автоподачи должна быть целым числом от 0 до 100.')
+  }
+  const allowedGeos = form.auto_submit_allowed_geos
+    .split(/[\s,;]+/)
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean)
+  if (allowedGeos.some((value) => !/^[A-Z]{2}$/.test(value))) {
+    throw new Error('Разрешённые гео указываются двухбуквенными ISO-кодами, например KZ, AR.')
+  }
 
   return {
     project_id: projectId,
@@ -385,6 +418,15 @@ function toPayload(projectId: string, form: PartnerFormState): PartnerIntegratio
       },
     },
     is_active: form.is_active,
+    is_auto_submit_enabled: form.is_auto_submit_enabled,
+    auto_submit_rules: {
+      min_score: autoSubmitMinScore,
+      allowed_geos: [...new Set(allowedGeos)],
+      require_phone_valid: form.auto_submit_require_phone,
+      reject_high_duplicate_risk: form.auto_submit_reject_duplicates,
+      require_partner_fields: form.auto_submit_require_fields,
+      require_card: form.auto_submit_require_card,
+    },
   }
 }
 
@@ -749,6 +791,74 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
                 />
               </div>
             </label>
+          </div>
+
+          <div className="mt-4 space-y-4 rounded-lg border border-white/10 bg-[#090E18] p-3">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px] sm:items-center">
+              <label className="flex min-w-0 items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.is_auto_submit_enabled}
+                onChange={(event) => patchForm({ is_auto_submit_enabled: event.target.checked })}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-zinc-100">Автоматическая подача</span>
+                <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                  Подавать лидов автоматически после расчёта уверенности. Лиды с низким уровнем не отправляются независимо от порога.
+                </span>
+              </span>
+              </label>
+              <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Минимум, %
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={form.auto_submit_min_score}
+                onChange={(event) => patchForm({ auto_submit_min_score: event.target.value })}
+                disabled={!form.is_auto_submit_enabled}
+                className="h-10 w-full rounded-lg border border-white/10 bg-[#050914] px-3 text-base text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-50 focus:border-emerald-400/60 md:text-sm"
+              />
+              </label>
+            </div>
+            <div className="grid gap-3 border-t border-white/5 pt-3 sm:grid-cols-2">
+              <label className="block sm:col-span-2">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Разрешённые гео
+                </span>
+                <input
+                  value={form.auto_submit_allowed_geos}
+                  onChange={(event) => patchForm({ auto_submit_allowed_geos: event.target.value })}
+                  disabled={!form.is_auto_submit_enabled}
+                  placeholder="KZ, AR, MX"
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#050914] px-3 font-mono text-base uppercase text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-50 focus:border-emerald-400/60 md:text-sm"
+                />
+              </label>
+              {([
+                ['auto_submit_require_phone', 'Требовать валидный телефон'],
+                ['auto_submit_reject_duplicates', 'Запрещать высокий риск дубля'],
+                ['auto_submit_require_fields', 'Проверять обязательные поля партнёра'],
+                ['auto_submit_require_card', 'Требовать наличие карты'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex min-h-10 items-center gap-3 rounded-lg border border-white/5 px-3 text-sm text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={form[key]}
+                    onChange={(event) => patchForm({ [key]: event.target.checked })}
+                    disabled={!form.is_auto_submit_enabled}
+                    className="h-4 w-4 shrink-0 accent-emerald-500 disabled:cursor-not-allowed"
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            <p className="text-xs leading-5 text-zinc-500">
+              Если лид не проходит правила, он остаётся доступным для ручной подачи, а причина отображается оператору.
+            </p>
           </div>
         </section>
 
@@ -1116,6 +1226,11 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
             </button>
           </div>
         </section>
+
+        <PostbackEndpointsPanel
+          projectId={projectId}
+          partnerIntegrationId={selectedPartner?.id ?? null}
+        />
       </form>
     </div>
   )

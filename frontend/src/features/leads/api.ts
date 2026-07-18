@@ -20,6 +20,7 @@ export async function fetchLeads(params: LeadListParams) {
       country: params.country?.trim() || undefined,
       submission_state: params.submission_state,
       funnel_completed: params.funnel_completed || undefined,
+      current_step_id: params.current_step_id || undefined,
       limit: params.limit ?? 50,
       offset: params.offset ?? 0,
     },

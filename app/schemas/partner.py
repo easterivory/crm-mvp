@@ -164,6 +164,29 @@ class PartnerRequestConfig(BaseModel):
         return normalized
 
 
+class PartnerAutoSubmitRules(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_score: int = Field(default=100, ge=0, le=100)
+    allowed_geos: list[str] = Field(default_factory=list, max_length=100)
+    require_phone_valid: bool = False
+    reject_high_duplicate_risk: bool = False
+    require_partner_fields: bool = False
+    require_card: bool = False
+
+    @field_validator("allowed_geos")
+    @classmethod
+    def validate_allowed_geos(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw_code in value:
+            code = raw_code.strip().upper()
+            if len(code) != 2 or not code.isalpha():
+                raise ValueError("Allowed geos must be two-letter ISO codes")
+            if code not in normalized:
+                normalized.append(code)
+        return normalized
+
+
 class PartnerIntegrationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -179,6 +202,10 @@ class PartnerIntegrationCreate(BaseModel):
     retry_config: PartnerRetryConfig = Field(default_factory=PartnerRetryConfig)
     request_config: PartnerRequestConfig = Field(default_factory=PartnerRequestConfig)
     is_active: bool = True
+    is_auto_submit_enabled: bool = False
+    auto_submit_rules: PartnerAutoSubmitRules = Field(
+        default_factory=PartnerAutoSubmitRules
+    )
 
     @field_validator("postback_url")
     @classmethod
@@ -221,6 +248,8 @@ class PartnerIntegrationUpdate(BaseModel):
     retry_config: Optional[PartnerRetryConfig] = None
     request_config: Optional[PartnerRequestConfig] = None
     is_active: Optional[bool] = None
+    is_auto_submit_enabled: Optional[bool] = None
+    auto_submit_rules: Optional[PartnerAutoSubmitRules] = None
 
     @field_validator("postback_url")
     @classmethod
@@ -262,6 +291,8 @@ class PartnerIntegrationOut(OrmBase):
     request_config: PartnerRequestConfig
     secret_variable_keys: list[str] = Field(default_factory=list)
     is_active: bool
+    is_auto_submit_enabled: bool
+    auto_submit_rules: PartnerAutoSubmitRules
     created_at: datetime
     updated_at: datetime
 
@@ -319,3 +350,6 @@ class LeadSubmissionOut(OrmBase):
     validated_at: Optional[datetime]
     submitted_at: datetime
     completed_at: Optional[datetime]
+    submitted_manually: bool = False
+    routing_decision_reason: Optional[str] = None
+    submission_source: str = "legacy"

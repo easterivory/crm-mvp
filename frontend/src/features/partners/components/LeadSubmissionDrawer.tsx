@@ -86,6 +86,13 @@ function finalStatusCopy(submission: LeadSubmission | null) {
       body: submission.partner_feedback ?? submission.error_message ?? submission.partner_status ?? 'Партнёр вернул ошибку.',
     }
   }
+  if (submission.status === 'manual_required') {
+    return {
+      tone: 'warning' as const,
+      title: 'Автоподача требует проверки менеджера',
+      body: submission.routing_decision_reason || 'Лид не прошёл правила автоподачи. Ручная отправка доступна.',
+    }
+  }
   return {
     tone: 'pending' as const,
     title: 'Лид поставлен в очередь отправки',
@@ -100,7 +107,7 @@ type DuplicatePartnerConflict = {
 }
 
 const SUCCESSFUL_DUPLICATE_STATUSES = new Set(['completed', 'success'])
-const RETRYABLE_SUBMISSION_STATUSES = new Set(['failed'])
+const RETRYABLE_SUBMISSION_STATUSES = new Set(['failed', 'manual_required', 'routing_cleared'])
 
 function normalizePartnerName(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -530,6 +537,8 @@ export default function LeadSubmissionDrawer({
                     ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100'
                     : statusCopy.tone === 'duplicate'
                       ? 'border-orange-400/25 bg-orange-500/10 text-orange-100'
+                      : statusCopy.tone === 'warning'
+                        ? 'border-amber-400/25 bg-amber-500/10 text-amber-100'
                       : statusCopy.tone === 'failed'
                         ? 'border-red-400/25 bg-red-500/10 text-red-100'
                         : 'border-sky-400/25 bg-sky-500/10 text-sky-100'
@@ -565,14 +574,18 @@ export default function LeadSubmissionDrawer({
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="font-medium text-gray-100">{partner?.name ?? 'Партнёр'}</span>
                           <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-gray-300">
-                            {item.status}
+                            {item.submitted_manually ? 'Подано вручную' : item.submission_source === 'auto' ? 'Автоподача' : item.status}
                           </span>
                         </div>
                         <div className="mt-1 text-xs text-gray-500">
                           {formatDateTime(item.completed_at ?? item.submitted_at)}
                           {item.partner_status ? ` · ${item.partner_status}` : ''}
                         </div>
-                        {item.partner_feedback ? (
+                        {item.routing_decision_reason ? (
+                          <p className="mt-2 rounded-lg border border-amber-300/15 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                            {item.routing_decision_reason}
+                          </p>
+                        ) : item.partner_feedback ? (
                           <p className="mt-2 rounded-lg border border-white/5 bg-black/15 px-3 py-2 text-xs leading-5 text-gray-300">
                             {item.partner_feedback}
                           </p>

@@ -58,6 +58,8 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_is_read", "is_read"),
         Index("ix_chats_is_blocked", "is_blocked"),
         Index("ix_chats_is_blocked_by_user", "is_blocked_by_user"),
+        Index("ix_chats_assignment_expires_at", "assignment_expires_at"),
+        Index("ix_chats_project_is_favorite", "project_id", "is_favorite"),
         Index("ix_chats_updated_at", "updated_at"),
         Index("ix_chats_project_last_user_msg", "project_id", "last_user_message_at"),
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
@@ -67,6 +69,10 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_reset_at", "reset_at"),
         Index("ix_chats_current_cycle_started_at", "current_cycle_started_at"),
         CheckConstraint("unanswered_minutes >= 0", name="ck_chats_unanswered_minutes_nonnegative"),
+        CheckConstraint(
+            "unanswered_push_count >= 0",
+            name="ck_chats_unanswered_push_count_nonnegative",
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -106,6 +112,34 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         server_default="false",
     )
     unanswered_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    assignment_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    is_favorite: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    has_restarted_bot: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    unanswered_push_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    has_out_of_scenario_message: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Set explicitly when the manager opens the chat
     last_read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

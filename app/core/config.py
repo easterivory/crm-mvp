@@ -51,6 +51,20 @@ class Settings(BaseSettings):
     TELEGRAM_INPUT_DEBOUNCE_SECONDS: int = 4
     TELEGRAM_INPUT_QUIET_SECONDS: int = 2
 
+    # Delayed funnel worker resilience
+    FUNNEL_SCHEDULED_JOB_TIMEOUT_SECONDS: int = 300
+    FUNNEL_SCHEDULED_JOB_STALE_SECONDS: int = 900
+    FUNNEL_SCHEDULED_JOB_MAX_ATTEMPTS: int = 3
+    FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS: int = 15
+    FUNNEL_SCHEDULED_WORKER_MAX_BACKOFF_SECONDS: int = 60
+
+    # Operational alerts reuse the private Telegram backup destination.
+    OPERATIONAL_ALERTS_ENABLED: bool = True
+    OPERATIONAL_ALERT_COOLDOWN_SECONDS: int = 900
+    OPERATIONAL_ALERT_CONFIG_CACHE_SECONDS: int = 300
+    OPERATIONAL_ALERT_CONFIG_TIMEOUT_SECONDS: float = 3.0
+    OPERATIONAL_ALERT_SEND_TIMEOUT_SECONDS: float = 15.0
+
     # Buyer Telegram bot
     BUYER_BOT_TOKEN: Optional[str] = None
     BUYER_BOT_USERNAME: Optional[str] = None

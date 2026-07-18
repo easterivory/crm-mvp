@@ -32,6 +32,9 @@ function fieldOptionsForSource(source: string) {
   if (source === 'operator_assigned') {
     return [['', 'Назначение']] as const
   }
+  if (source === 'confidence_score') {
+    return [['', 'Score лида, 0–100']] as const
+  }
   return [['', 'ID / код / значение']] as const
 }
 
@@ -258,6 +261,21 @@ function RuleValueInput({
         <option value="true">Да</option>
         <option value="false">Нет</option>
       </select>
+    )
+  }
+
+  if (rule.source === 'confidence_score') {
+    return (
+      <input
+        type="number"
+        min={0}
+        max={100}
+        step={1}
+        value={rule.value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="80"
+        className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+      />
     )
   }
 

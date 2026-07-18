@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import (
@@ -37,6 +39,18 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_leads_phone", "phone"),
         Index("ix_leads_is_trash", "is_trash"),
         Index("ix_leads_project_is_trash", "project_id", "is_trash"),
+        CheckConstraint(
+            "score_percent BETWEEN 0 AND 100",
+            name="ck_leads_score_percent_range",
+        ),
+        CheckConstraint(
+            "confidence_level IN ('high', 'medium', 'low')",
+            name="ck_leads_confidence_level",
+        ),
+        CheckConstraint(
+            "score_version >= 1",
+            name="ck_leads_score_version_positive",
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -67,7 +81,40 @@ class Lead(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         server_default="false",
     )
     has_card: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    score_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    score_percent: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=100,
+        server_default="100",
+    )
+    confidence_level: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default="high",
+        server_default="high",
+    )
+    confidence_reasons: Mapped[list[dict]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    confidence_meta: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    score_calculated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    score_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
     custom_fields: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
