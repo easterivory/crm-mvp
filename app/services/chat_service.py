@@ -2,7 +2,8 @@
 ChatService — chat listing, filtering, sorting, and timestamp management.
 
 Computed flags contract:
-  is_red, unanswered, unread are NEVER stored in the DB.
+  is_red and unanswered are computed. unread reflects the persisted
+  Chat.is_read acknowledgement state.
 
   In bulk queries (get_chat_list):
     - SQL expressions in ChatRepository filter and sort rows inside the DB.

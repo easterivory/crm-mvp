@@ -10,11 +10,29 @@ from app.core.lead_confidence import (
     DEFAULT_CONFIDENCE_THRESHOLDS,
     DEFAULT_CONFIDENCE_WEIGHTS,
 )
+from app.core.facebook_events import (
+    FACEBOOK_PROJECT_TAG_SOURCE_EVENTS,
+    normalize_facebook_source_event,
+    normalize_facebook_tag_event_rules,
+)
 from app.schemas.common import OrmBase, PaginatedResponse
 
 
 ProjectStatus = Literal["active", "archived"]
 ProjectFormat = Literal["submission", "gambling"]
+
+
+class FacebookTagEventRule(BaseModel):
+    tag_id: uuid.UUID
+    source_event: str
+
+    @field_validator("source_event")
+    @classmethod
+    def validate_source_event(cls, value: str) -> str:
+        normalized = normalize_facebook_source_event(value)
+        if normalized not in FACEBOOK_PROJECT_TAG_SOURCE_EVENTS:
+            raise ValueError("This Facebook source event cannot be triggered by a project tag")
+        return normalized
 
 
 def default_tracking_lead_status_codes() -> list[str]:
@@ -86,6 +104,10 @@ class ProjectUpdate(BaseModel):
     push_unread_threshold: Optional[int] = Field(default=None, ge=1, le=100)
     confidence_weights: Optional[dict[str, int]] = None
     confidence_thresholds: Optional[dict[str, int]] = None
+    facebook_tag_event_rules: Optional[list[FacebookTagEventRule]] = Field(
+        default=None,
+        max_length=100,
+    )
 
     @field_validator("tracking_lead_status_codes")
     @classmethod
@@ -118,6 +140,17 @@ class ProjectUpdate(BaseModel):
     ) -> Optional[dict[str, int]]:
         return _validate_confidence_thresholds(value)
 
+    @field_validator("facebook_tag_event_rules")
+    @classmethod
+    def validate_facebook_tag_event_rules(
+        cls,
+        value: Optional[list[FacebookTagEventRule]],
+    ) -> Optional[list[FacebookTagEventRule]]:
+        if value is None:
+            return None
+        normalized = normalize_facebook_tag_event_rules(value)
+        return [FacebookTagEventRule.model_validate(item) for item in normalized]
+
 
 class ProjectTranslationUpdate(BaseModel):
     operator_lang: Optional[str] = Field(None, min_length=1, max_length=10)
@@ -144,6 +177,7 @@ class ProjectRead(OrmBase):
     push_unread_threshold: int
     confidence_weights: Optional[dict[str, int]]
     confidence_thresholds: Optional[dict[str, int]]
+    facebook_tag_event_rules: list[FacebookTagEventRule] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     is_deleted: bool

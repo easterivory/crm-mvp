@@ -149,6 +149,23 @@ async def upload_bot_avatar(
     return {"ok": True}
 
 
+@router.get("/bots/{bot_id}/avatar", response_class=Response)
+async def get_bot_avatar(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    content, media_type = await BotService(db).get_bot_profile_photo(
+        bot_id=bot_id,
+        project_id=project_id,
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 @router.get("/bots/{bot_id}/audit-logs/export", response_class=Response)
 async def export_bot_audit_logs(
     bot_id: UUID,

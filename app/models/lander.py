@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -70,6 +70,8 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    button_text: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tracking_links.id", ondelete="SET NULL"),

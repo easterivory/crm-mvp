@@ -91,6 +91,12 @@ FACEBOOK_SOURCE_EVENT_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
 )
 
+FACEBOOK_PROJECT_TAG_SOURCE_EVENTS = frozenset(
+    definition["key"]
+    for definition in FACEBOOK_SOURCE_EVENT_DEFINITIONS
+    if definition["delivery"] == "server" and definition["trigger"] == "funnel"
+)
+
 FACEBOOK_SOURCE_EVENT_ALIASES = {
     "click": "telegram_click",
     "user_start_bot": "bot_start",
@@ -249,6 +255,43 @@ def normalize_facebook_event_mappings(value: object) -> list[dict[str, Any]]:
                 "triggers": triggers,
             }
         )
+    return normalized
+
+
+def normalize_facebook_tag_event_rules(value: object) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Facebook tag event rules must be a list")
+    if len(value) > 100:
+        raise ValueError("Facebook tag event rules may contain at most 100 entries")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_rule in value:
+        if hasattr(raw_rule, "model_dump"):
+            raw_rule = raw_rule.model_dump()
+        if not isinstance(raw_rule, dict):
+            raise ValueError("Each Facebook tag event rule must be an object")
+
+        try:
+            tag_id = str(UUID(str(raw_rule.get("tag_id") or "")))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Facebook tag event rule requires a valid tag_id") from exc
+
+        source_event = normalize_facebook_source_event(raw_rule.get("source_event"))
+        if source_event not in FACEBOOK_PROJECT_TAG_SOURCE_EVENTS:
+            raise ValueError(
+                f"Facebook source event {source_event} cannot be triggered by a project tag"
+            )
+
+        identity = (tag_id, source_event)
+        if identity in seen:
+            raise ValueError(
+                f"Duplicate Facebook tag event rule: {tag_id}:{source_event}"
+            )
+        seen.add(identity)
+        normalized.append({"tag_id": tag_id, "source_event": source_event})
     return normalized
 
 

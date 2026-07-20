@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 Chat repository.
 
-is_red / unanswered / unread are NOT stored — they are SQL boolean expressions
-built from timestamp columns and evaluated inside the DB engine.
+is_red / unanswered are SQL expressions. Unread workspace state is backed by
+Chat.is_read and combined with routing reasons inside the DB engine.
 
 All expressions are defined as @staticmethod so they can be reused in WHERE,
 ORDER BY, and count queries without repeating literal SQL.
@@ -26,6 +26,7 @@ from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.partner import LeadSubmission
+from app.models.project import Project
 from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.repositories.base import BaseRepository
@@ -99,8 +100,10 @@ class ChatRepository(BaseRepository[Chat]):
         push_unread_threshold: int,
         use_confidence_score: bool,
     ) -> ColumnElement:
-        unassigned_unread = and_(
-            Chat.is_read.is_(False),
+        # Routing events set is_read=False when attention is required. A later
+        # explicit read is the global acknowledgement and must win over every
+        # routing reason, otherwise reviewed chats remain in this workspace.
+        unassigned = (
             select(Lead.id)
             .select_from(Lead)
             .where(
@@ -109,7 +112,7 @@ class ChatRepository(BaseRepository[Chat]):
                 Lead.manager_id.is_(None),
             )
             .correlate(Chat)
-            .exists(),
+            .exists()
         )
         active_submission = (
             select(LeadSubmission.id)
@@ -164,11 +167,14 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.unanswered_push_count >= max(push_unread_threshold, 1),
                 Chat.has_out_of_scenario_message.is_(True),
             )
-        return or_(
-            unassigned_unread,
-            completed_potential,
-            manual_required,
-            gambling_attention,
+        return and_(
+            Chat.is_read.is_(False),
+            or_(
+                unassigned,
+                completed_potential,
+                manual_required,
+                gambling_attention,
+            ),
         )
 
     @staticmethod
@@ -1199,6 +1205,17 @@ class ChatRepository(BaseRepository[Chat]):
         *,
         chat_id: UUID,
     ) -> bool:
+        next_push_count = Chat.unanswered_push_count + 1
+        project_format = (
+            select(Project.project_format)
+            .where(Project.id == Chat.project_id)
+            .scalar_subquery()
+        )
+        push_unread_threshold = (
+            select(Project.push_unread_threshold)
+            .where(Project.id == Chat.project_id)
+            .scalar_subquery()
+        )
         result = await self.db.execute(
             update(Chat)
             .where(
@@ -1207,7 +1224,17 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.reset_at.is_(None),
             )
             .values(
-                unanswered_push_count=Chat.unanswered_push_count + 1,
+                unanswered_push_count=next_push_count,
+                is_read=case(
+                    (
+                        and_(
+                            project_format == "gambling",
+                            next_push_count >= func.coalesce(push_unread_threshold, 1),
+                        ),
+                        False,
+                    ),
+                    else_=Chat.is_read,
+                ),
                 updated_at=func.now(),
             )
         )

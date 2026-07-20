@@ -7,10 +7,13 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.facebook_events import normalize_facebook_tag_event_rules
 from app.core.constants import AuditAction, EntityType, RoleName
+from app.models.tag import Tag
 from app.models.user import User
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
@@ -32,6 +35,7 @@ PROJECT_STATUSES: set[str] = {"active", "archived"}
 
 class ProjectService:
     def __init__(self, db: AsyncSession) -> None:
+        self.db = db
         self.project_repo = ProjectRepository(db)
         self.lead_repo = LeadRepository(db)
         self.metrics_repo = ProjectMetricsRepository(db)
@@ -131,6 +135,7 @@ class ProjectService:
             "project_format",
             "vip_tags",
             "push_unread_threshold",
+            "facebook_tag_event_rules",
         ):
             if values.get(non_nullable_field) is None:
                 values.pop(non_nullable_field, None)
@@ -159,6 +164,13 @@ class ProjectService:
                     values["tracking_lead_status_codes"]
                 )
             )
+        if "facebook_tag_event_rules" in values:
+            values["facebook_tag_event_rules"] = (
+                await self._validate_facebook_tag_event_rules(
+                    project_id=project_id,
+                    value=values["facebook_tag_event_rules"],
+                )
+            )
 
         if not values:
             return ProjectOut.model_validate(project)
@@ -170,6 +182,41 @@ class ProjectService:
                 detail="Project not found",
             )
         return ProjectOut.model_validate(project)
+
+    async def _validate_facebook_tag_event_rules(
+        self,
+        *,
+        project_id: UUID,
+        value: object,
+    ) -> list[dict[str, str]]:
+        try:
+            normalized = normalize_facebook_tag_event_rules(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+
+        tag_ids = {UUID(rule["tag_id"]) for rule in normalized}
+        if not tag_ids:
+            return normalized
+        result = await self.db.execute(
+            select(Tag.id).where(
+                Tag.project_id == project_id,
+                Tag.id.in_(tag_ids),
+            )
+        )
+        found_tag_ids = set(result.scalars().all())
+        missing_tag_ids = tag_ids - found_tag_ids
+        if missing_tag_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Facebook tag event rules reference tags outside this project: "
+                    + ", ".join(sorted(str(item) for item in missing_tag_ids))
+                ),
+            )
+        return normalized
 
     async def update_translation_settings(
         self,

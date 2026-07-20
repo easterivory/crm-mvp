@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_db
 from app.services.lander_service import LanderNotFoundError, LanderService
+from app.services.telegram_bot_avatar_service import BotAvatarUnavailableError
 
 router = APIRouter(tags=["public-landers"])
 
@@ -41,6 +42,33 @@ SYSTEM_ROOT_PATHS = frozenset(
     }
 )
 LANDER_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@router.get("/l/{slug}/bot-avatar", response_class=Response, include_in_schema=False)
+async def render_lander_bot_avatar(
+    slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    host = _request_host(request)
+    try:
+        content, media_type = await LanderService(db).resolve_bot_avatar(
+            host=host,
+            slug=slug,
+        )
+    except (LanderNotFoundError, BotAvatarUnavailableError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bot profile photo is unavailable",
+        ) from exc
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=300, stale-while-revalidate=3600",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+        },
+    )
 
 
 @router.get("/l/{slug}/{asset_path:path}", response_class=FileResponse, include_in_schema=False)

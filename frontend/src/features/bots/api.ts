@@ -47,6 +47,17 @@ export async function uploadBotAvatar(
   })
 }
 
+export async function fetchBotAvatar(
+  botId: string,
+  projectId?: string | null,
+): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/bots/${botId}/avatar`, {
+    params: projectId ? { project_id: projectId } : undefined,
+    responseType: 'blob',
+  })
+  return data
+}
+
 export async function downloadBotAuditLogs(
   botId: string,
   projectId?: string | null,

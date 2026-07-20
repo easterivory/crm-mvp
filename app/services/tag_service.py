@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
 from app.models.tag import random_tag_color
@@ -20,6 +21,7 @@ class TagService:
         self.db = db
         self.tag_repo = TagRepository(db)
         self.lead_repo = LeadRepository(db)
+        self.project_repo = ProjectRepository(db)
         self.facebook_campaign = FacebookCampaignService(db)
         self.scoring = LeadScoringService(db)
 
@@ -66,12 +68,41 @@ class TagService:
         return TagOut.model_validate(tag)
 
     async def delete_tag(self, tag_id: UUID, project_id: UUID) -> None:
+        tag = await self.tag_repo.get_by_id_in_project(tag_id, project_id)
+        if tag is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tag not found",
+            )
         deleted = await self.tag_repo.delete_from_project(tag_id, project_id)
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Tag not found",
             )
+        project = await self.project_repo.get_active(project_id)
+        if project is not None:
+            tag_id_text = str(tag_id)
+            rules = [
+                rule
+                for rule in (project.facebook_tag_event_rules or [])
+                if not isinstance(rule, dict)
+                or str(rule.get("tag_id") or "") != tag_id_text
+            ]
+            vip_tags = [
+                value
+                for value in (project.vip_tags or [])
+                if value not in {tag_id_text, tag.name}
+            ]
+            if (
+                rules != (project.facebook_tag_event_rules or [])
+                or vip_tags != (project.vip_tags or [])
+            ):
+                await self.project_repo.update_active(
+                    project_id,
+                    facebook_tag_event_rules=rules,
+                    vip_tags=vip_tags,
+                )
 
     async def update_tag(
         self,

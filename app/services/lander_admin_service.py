@@ -272,6 +272,8 @@ class LanderAdminService:
             name=data.name,
             type=lander_type,
             slug=slug,
+            description=data.description,
+            button_text=data.button_text,
             tracking_link_id=tracking_link_id,
             pixels_json=pixels_json,
             meta_events_json=[event.model_dump() for event in data.meta_events],
@@ -315,6 +317,10 @@ class LanderAdminService:
                     detail="Lander slug already exists",
                 )
             lander.slug = slug
+        if "description" in data.model_fields_set:
+            lander.description = data.description
+        if "button_text" in data.model_fields_set:
+            lander.button_text = data.button_text
         if "type" in data.model_fields_set and data.type is not None:
             lander_type = self._validate_lander_type(data.type)
             if lander_type == "custom_upload" and not lander.custom_html_path:

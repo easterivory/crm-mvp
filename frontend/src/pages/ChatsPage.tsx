@@ -745,6 +745,7 @@ export default function ChatsPage() {
   const chatsAbortRef = useRef<AbortController | null>(null)
   const messagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
+  const readRequestsRef = useRef<Set<string>>(new Set())
   const shouldAutoScrollMessagesRef = useRef(true)
   const latestLoadedMessageIdRef = useRef<string | null>(null)
 
@@ -961,6 +962,36 @@ export default function ChatsPage() {
     }
   }, [notify, selectedBotIds, selectedProjectId])
 
+  const markChatAsRead = useCallback(async (chatId: string) => {
+    if (!selectedProjectId) {
+      return
+    }
+
+    setChats((current) => current.map((chat) => (
+      chat.id === chatId && (chat.unread || !chat.is_read)
+        ? { ...chat, unread: false, is_read: true }
+        : chat
+    )))
+
+    if (readRequestsRef.current.has(chatId)) {
+      return
+    }
+    readRequestsRef.current.add(chatId)
+
+    try {
+      await api.post(`/chats/${chatId}/read`, null, {
+        params: { project_id: selectedProjectId },
+      })
+      void loadWorkspaceCounts()
+    } catch (err) {
+      if (!isRequestCanceled(err)) {
+        notify({ tone: 'error', message: 'Не удалось отметить чат прочитанным.' })
+      }
+    } finally {
+      readRequestsRef.current.delete(chatId)
+    }
+  }, [loadWorkspaceCounts, notify, selectedProjectId])
+
   const loadChats = useCallback(async (options: { append?: boolean } = {}) => {
     const append = options.append === true
     if (!selectedProjectId) {
@@ -1071,32 +1102,47 @@ export default function ChatsPage() {
       if (controller.signal.aborted) {
         return
       }
+      const freshItems = data.items.map((chat) => (
+        chat.id === selectedChatIdRef.current
+          ? { ...chat, unread: false, is_read: true }
+          : chat
+      ))
       const hasRestrictiveFilter =
-        countActiveChatFilters(debouncedChatFilters) > 0 || selectedBotIds.length > 0
+        countActiveChatFilters(debouncedChatFilters) > 0
+        || selectedBotIds.length > 0
+        || debouncedChatFilters.workspaceView !== 'all'
       const selectedChatIsOutsideFilter = Boolean(
         isNewQuery
         && hasRestrictiveFilter
         && selectedChatIdRef.current
-        && !data.items.some((chat) => chat.id === selectedChatIdRef.current),
+        && !freshItems.some((chat) => chat.id === selectedChatIdRef.current),
       )
       if (append) {
         setChats((current) => {
           const knownIds = new Set(current.map((chat) => chat.id))
-          return [...current, ...data.items.filter((chat) => !knownIds.has(chat.id))]
+          return [...current, ...freshItems.filter((chat) => !knownIds.has(chat.id))]
         })
-        loadedChatCountRef.current = Number(params.offset) + data.items.length
+        loadedChatCountRef.current = Number(params.offset) + freshItems.length
       } else if (isNewQuery) {
-        setChats(data.items)
-        loadedChatCountRef.current = data.items.length
+        setChats(freshItems)
+        loadedChatCountRef.current = freshItems.length
       } else {
         setChats((current) => {
-          const freshIds = new Set(data.items.map((chat) => chat.id))
-          const remainingLoadedChats = current.filter((chat) => !freshIds.has(chat.id))
-          return [...data.items, ...remainingLoadedChats].slice(0, data.total)
+          const freshIds = new Set(freshItems.map((chat) => chat.id))
+          const selectedCarry = current.find((chat) => (
+            chat.id === selectedChatIdRef.current && !freshIds.has(chat.id)
+          ))
+          const remainingLoadedChats = current.filter((chat) => (
+            !freshIds.has(chat.id) && chat.id !== selectedCarry?.id
+          ))
+          const merged = [...freshItems, ...remainingLoadedChats].slice(0, data.total)
+          return selectedCarry && !merged.some((chat) => chat.id === selectedCarry.id)
+            ? [...merged, { ...selectedCarry, unread: false, is_read: true }]
+            : merged
         })
         loadedChatCountRef.current = Math.max(
           loadedChatCountRef.current,
-          data.items.length,
+          freshItems.length,
         )
       }
       setLoadedChatCount(loadedChatCountRef.current)
@@ -1109,8 +1155,12 @@ export default function ChatsPage() {
         setAuditLogs([])
         syncChatSearchParams(debouncedChatFilters, null)
       }
-      if (!selectedChatIdRef.current && isDesktopChatLayout) {
-        const nextChatId = data.items[0]?.id ?? null
+      if (
+        !selectedChatIdRef.current
+        && isDesktopChatLayout
+        && debouncedChatFilters.workspaceView !== 'unread'
+      ) {
+        const nextChatId = freshItems[0]?.id ?? null
         if (nextChatId) {
           selectedChatIdRef.current = nextChatId
           setSelectedChatId(nextChatId)
@@ -1324,12 +1374,13 @@ export default function ChatsPage() {
       if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
         return
       }
+      const selectedData = { ...data, unread: false, is_read: true }
       setChats((current) => {
-        const existingIndex = current.findIndex((chat) => chat.id === data.id)
+        const existingIndex = current.findIndex((chat) => chat.id === selectedData.id)
         if (existingIndex < 0) {
-          return [data, ...current]
+          return [selectedData, ...current]
         }
-        return current.map((chat, index) => (index === existingIndex ? data : chat))
+        return current.map((chat, index) => (index === existingIndex ? selectedData : chat))
       })
     } catch (err) {
       if (isRequestCanceled(err)) {
@@ -1380,26 +1431,16 @@ export default function ChatsPage() {
       }
       const nextMessages = sortMessagesByDate(messagesResponse.data.items)
       const latestMessageId = nextMessages[nextMessages.length - 1]?.id ?? null
-      if (showLoader || latestMessageId !== latestLoadedMessageIdRef.current) {
+      const hasNewLatestMessage = latestMessageId !== latestLoadedMessageIdRef.current
+      if (showLoader || hasNewLatestMessage) {
         shouldAutoScrollMessagesRef.current = true
       }
       latestLoadedMessageIdRef.current = latestMessageId
       setMessages(nextMessages)
       setAuditLogs(auditResponse.data)
-      await api.post(`/chats/${chatId}/read`, null, {
-        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
-        signal: controller.signal,
-      })
-      if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
-        return
+      if (hasNewLatestMessage) {
+        void markChatAsRead(chatId)
       }
-      setChats((current) =>
-        current.some((chat) => chat.id === chatId && (chat.unread || !chat.is_read))
-          ? current.map((chat) =>
-              chat.id === chatId ? { ...chat, unread: false, is_read: true } : chat,
-            )
-          : current,
-      )
     } catch (err) {
       if (isRequestCanceled(err)) {
         return
@@ -1416,7 +1457,7 @@ export default function ChatsPage() {
         setIsMessagesLoading(false)
       }
     }
-  }, [notify, selectedProjectId])
+  }, [markChatAsRead, notify, selectedProjectId])
 
   const handleLeadSidebarChanged = useCallback(() => {
     void loadChats()
@@ -1480,7 +1521,12 @@ export default function ChatsPage() {
   }, [loadBots, loadChats, loadFilterOptions, loadFilterPresets, loadProjectTranslation, loadSnippets, loadWorkspaceCounts])
 
   useEffect(() => {
-    if (!isDesktopChatLayout || selectedChatId || chats.length === 0) {
+    if (
+      !isDesktopChatLayout
+      || chatFilters.workspaceView === 'unread'
+      || selectedChatId
+      || chats.length === 0
+    ) {
       return
     }
 
@@ -1531,6 +1577,7 @@ export default function ChatsPage() {
     setMessages([])
     setAuditLogs([])
     setScheduledMessages([])
+    void markChatAsRead(selectedChatId)
     void loadMessages(selectedChatId, true)
     void loadSelectedChat(selectedChatId)
     void loadScheduledMessages(selectedChatId)
@@ -1543,7 +1590,7 @@ export default function ChatsPage() {
       window.clearInterval(timer)
       messagesAbortRef.current?.abort()
     }
-  }, [loadMessages, loadScheduledMessages, loadSelectedChat, selectedChat?.project_id, selectedChatId, selectedProjectId])
+  }, [loadMessages, loadScheduledMessages, loadSelectedChat, markChatAsRead, selectedChat?.project_id, selectedChatId, selectedProjectId])
 
   useEffect(() => {
     setAttachment(null)

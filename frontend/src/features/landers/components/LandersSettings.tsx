@@ -10,13 +10,14 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Send,
   ShieldCheck,
   Trash2,
   Upload,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 
-import { fetchBots, type Bot } from '../../bots'
+import { fetchBotAvatar, fetchBots, type Bot } from '../../bots'
 import { Modal } from '../../../shared/ui'
 import { useAuthStore } from '../../../store/authStore'
 import {
@@ -64,6 +65,8 @@ type LanderForm = {
   name: string
   domainId: string
   slug: string
+  description: string
+  buttonText: string
   trackingMode: 'campaign' | 'existing'
   trackingLinkId: string
   campaignBotId: string
@@ -94,6 +97,8 @@ type LanderEditForm = {
   name: string
   domainId: string
   slug: string
+  description: string
+  buttonText: string
   type: LanderType
   botId: string
   campaignTitle: string
@@ -126,6 +131,8 @@ const emptyLanderForm: LanderForm = {
   name: '',
   domainId: '',
   slug: '',
+  description: '',
+  buttonText: 'Open in Telegram',
   trackingMode: 'campaign',
   trackingLinkId: '',
   campaignBotId: '',
@@ -170,6 +177,129 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
 
 function landerTypeLabel(type: LanderType) {
   return type === 'custom_upload' ? 'Кастомный' : 'Дефолтный'
+}
+
+type TelegramLanderAppearanceEditorProps = {
+  projectId: string
+  bot?: Bot
+  description: string
+  buttonText: string
+  onDescriptionChange: (value: string) => void
+  onButtonTextChange: (value: string) => void
+}
+
+function botDisplayName(bot?: Bot) {
+  return bot?.telegram_first_name?.trim() || bot?.name.trim() || 'Telegram bot'
+}
+
+function botFallbackDescription(bot?: Bot) {
+  return bot?.telegram_description?.trim()
+    || bot?.telegram_about?.trim()
+    || 'Open this bot in Telegram to continue.'
+}
+
+function TelegramLanderAppearanceEditor({
+  projectId,
+  bot,
+  description,
+  buttonText,
+  onDescriptionChange,
+  onButtonTextChange,
+}: TelegramLanderAppearanceEditorProps) {
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let isMounted = true
+    let objectUrl: string | null = null
+    setAvatarUrl(null)
+    if (!bot) {
+      return () => undefined
+    }
+    void fetchBotAvatar(bot.id, projectId)
+      .then((blob) => {
+        if (!isMounted) {
+          return
+        }
+        objectUrl = URL.createObjectURL(blob)
+        setAvatarUrl(objectUrl)
+      })
+      .catch(() => {
+        if (isMounted) {
+          setAvatarUrl(null)
+        }
+      })
+    return () => {
+      isMounted = false
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+      }
+    }
+  }, [bot, projectId])
+
+  const title = botDisplayName(bot)
+  const previewDescription = description.trim() || botFallbackDescription(bot)
+  const previewButtonText = buttonText.trim() || 'Open in Telegram'
+  const initial = Array.from(title).find((character) => /[\p{L}\p{N}]/u.test(character))?.toUpperCase() || 'T'
+
+  return (
+    <fieldset className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+      <legend className="px-1 text-sm font-semibold text-zinc-100">
+        Оформление Telegram-лендинга
+      </legend>
+      <div className="mt-2 grid gap-3 md:grid-cols-[minmax(0,1.4fr)_minmax(220px,0.6fr)]">
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-200">Описание</span>
+          <textarea
+            value={description}
+            onChange={(event) => onDescriptionChange(event.target.value)}
+            maxLength={1000}
+            rows={4}
+            placeholder={botFallbackDescription(bot)}
+            className="min-h-28 w-full resize-y rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base leading-6 text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-200">Текст кнопки</span>
+          <input
+            value={buttonText}
+            onChange={(event) => onButtonTextChange(event.target.value)}
+            maxLength={80}
+            placeholder="Open in Telegram"
+            className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+          />
+        </label>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-[#dcebe4]">
+        <div className="flex h-16 items-center gap-3 bg-white px-4 text-zinc-950">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#2aabee] text-white">
+            <Send size={21} aria-hidden="true" />
+          </span>
+          <span className="text-xl font-bold">Telegram</span>
+        </div>
+        <div className="p-4 sm:p-7">
+          <div className="mx-auto max-w-sm rounded-lg border border-black/5 bg-white px-5 py-7 text-center shadow-lg shadow-emerald-950/10">
+            <div className="relative mx-auto h-24 w-24 overflow-hidden rounded-full bg-[#2aabee] text-white">
+              <span className="absolute inset-0 grid place-items-center text-3xl font-bold">{initial}</span>
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="" className="relative h-full w-full object-cover" />
+              ) : null}
+            </div>
+            <div className="mt-4 break-words text-xl font-bold text-zinc-950">{title}</div>
+            {bot?.bot_username ? (
+              <div className="mt-1 text-sm text-[#229ed9]">@{bot.bot_username.replace(/^@/, '')}</div>
+            ) : null}
+            <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-500">
+              {previewDescription}
+            </div>
+            <div className="mt-5 flex min-h-11 items-center justify-center rounded-lg bg-[#2aabee] px-4 text-sm font-bold text-white">
+              {previewButtonText}
+            </div>
+          </div>
+        </div>
+      </div>
+    </fieldset>
+  )
 }
 
 function generateSlug() {
@@ -560,6 +690,16 @@ export default function LandersSettings({
       : landers,
     [campaignOnly, landers],
   )
+  const selectedCreateBot = useMemo(() => {
+    const botId = form.trackingMode === 'campaign'
+      ? form.campaignBotId
+      : trackingLinkById.get(form.trackingLinkId)?.bot_id
+    return bots.find((bot) => bot.id === botId)
+  }, [bots, form.campaignBotId, form.trackingLinkId, form.trackingMode, trackingLinkById])
+  const selectedEditBot = useMemo(
+    () => bots.find((bot) => bot.id === editForm?.botId),
+    [bots, editForm?.botId],
+  )
 
   const loadData = useCallback(async () => {
     if (!projectId) {
@@ -703,8 +843,10 @@ export default function LandersSettings({
       name: lander.name,
       domainId: lander.domain_id ?? '',
       slug: lander.slug,
+      description: lander.description ?? '',
+      buttonText: lander.button_text ?? 'Open in Telegram',
       type: lander.type,
-      botId: campaign?.bot_id ?? bots[0]?.id ?? '',
+      botId: campaign?.bot_id ?? link?.bot_id ?? bots[0]?.id ?? '',
       campaignTitle: campaign?.title ?? link?.title ?? lander.name,
       campaignCode: campaign?.code ?? link?.code ?? '',
       buyerName: campaign?.buyer_name ?? '',
@@ -779,6 +921,8 @@ export default function LandersSettings({
         name,
         type: editForm.type,
         slug,
+        description: editForm.description.trim() || null,
+        button_text: editForm.buttonText.trim() || null,
         pixels: editForm.metaPixelId.trim()
           ? [{ provider: 'meta', pixel_id: editForm.metaPixelId.trim() }]
           : [],
@@ -943,6 +1087,8 @@ export default function LandersSettings({
         name: form.name.trim() || slug,
         type: form.type,
         slug,
+        description: form.description.trim() || null,
+        button_text: form.buttonText.trim() || null,
         tracking_link_id: !campaignOnly && form.trackingMode === 'existing' ? form.trackingLinkId : null,
         campaign: campaignOnly || form.trackingMode === 'campaign'
           ? {
@@ -1666,6 +1812,17 @@ export default function LandersSettings({
               )}
             </fieldset>
 
+            {form.type === 'default_tg_redirect' ? (
+              <TelegramLanderAppearanceEditor
+                projectId={projectId}
+                bot={selectedCreateBot}
+                description={form.description}
+                buttonText={form.buttonText}
+                onDescriptionChange={(description) => setForm((current) => ({ ...current, description }))}
+                onButtonTextChange={(buttonText) => setForm((current) => ({ ...current, buttonText }))}
+              />
+            ) : null}
+
             <fieldset className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
               <legend className="px-1 text-sm font-semibold text-zinc-100">Переход и UTM</legend>
               <p className="mt-1 text-xs leading-5 text-zinc-500">
@@ -1859,6 +2016,17 @@ export default function LandersSettings({
                 </label>
               </div>
             </fieldset>
+
+            {editForm.type === 'default_tg_redirect' ? (
+              <TelegramLanderAppearanceEditor
+                projectId={projectId}
+                bot={selectedEditBot}
+                description={editForm.description}
+                buttonText={editForm.buttonText}
+                onDescriptionChange={(description) => setEditForm((current) => current ? { ...current, description } : current)}
+                onButtonTextChange={(buttonText) => setEditForm((current) => current ? { ...current, buttonText } : current)}
+              />
+            ) : null}
 
             <fieldset className="space-y-3 border-t border-white/10 pt-4">
               <legend className="text-sm font-semibold text-zinc-100">Facebook Pixel и CAPI</legend>

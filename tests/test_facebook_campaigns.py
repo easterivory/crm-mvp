@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from app.api.spa import (
@@ -19,6 +20,7 @@ from app.core.facebook_events import (
     facebook_mapping_for_source,
     normalize_facebook_event_mappings,
     normalize_facebook_source_event,
+    normalize_facebook_tag_event_rules,
 )
 from app.core.lander_urls import (
     build_lander_public_url,
@@ -27,6 +29,7 @@ from app.core.lander_urls import (
 from app.models.lander import ProjectDomain
 from app.models.tracking import TrackingEvent
 from app.repositories.tracking_repository import TrackingEventRepository
+from app.repositories.tag_repository import TagRepository
 from app.schemas.lander import ProjectDomainCreate, ProjectLanderUpdate
 from app.schemas.tracking import FacebookEventMapping
 from app.services.facebook_campaign_service import FacebookCampaignService
@@ -34,6 +37,7 @@ from app.services.facebook_capi_service import FacebookCAPIService
 from app.services.lander_admin_service import LanderAdminService
 from app.services.lander_service import LanderService
 from app.services.domain_dns_service import DomainDnsService
+from app.services.project_service import ProjectService
 
 
 class FacebookEventMappingTests(unittest.TestCase):
@@ -126,6 +130,25 @@ class FacebookEventMappingTests(unittest.TestCase):
                         "triggers": [{"type": "funnel_action"}],
                     }
                 ]
+            )
+
+    def test_project_tag_event_rules_are_normalized_and_deduplicated(self) -> None:
+        tag_id = uuid4()
+        normalized = normalize_facebook_tag_event_rules(
+            [{"tag_id": tag_id, "source_event": "registration"}]
+        )
+
+        self.assertEqual(
+            normalized,
+            [{"tag_id": str(tag_id), "source_event": "registration"}],
+        )
+        with self.assertRaisesRegex(ValueError, "Duplicate Facebook tag event rule"):
+            normalize_facebook_tag_event_rules([*normalized, *normalized])
+
+    def test_project_tag_event_rule_rejects_automatic_event(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cannot be triggered by a project tag"):
+            normalize_facebook_tag_event_rules(
+                [{"tag_id": uuid4(), "source_event": "bot_start"}]
             )
 
     def test_deleting_domain_does_not_orphan_delete_landers(self) -> None:
@@ -438,7 +461,11 @@ class FacebookCampaignParameterTests(unittest.TestCase):
 
 class FacebookCampaignTriggerTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def _campaign_lead(*, mappings: list[dict]) -> SimpleNamespace:
+    def _campaign_lead(
+        *,
+        mappings: list[dict],
+        project_rules: list[dict] | None = None,
+    ) -> SimpleNamespace:
         link = SimpleNamespace(
             id=uuid4(),
             fb_campaign_enabled=True,
@@ -453,6 +480,10 @@ class FacebookCampaignTriggerTests(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(
             id=uuid4(),
             chat=chat,
+            project_id=uuid4(),
+            project=SimpleNamespace(
+                facebook_tag_event_rules=project_rules or [],
+            ),
             created_at=datetime(2026, 7, 15, tzinfo=timezone.utc),
         )
 
@@ -484,6 +515,58 @@ class FacebookCampaignTriggerTests(unittest.IsolatedAsyncioTestCase):
         call = service._enqueue_mapping.await_args.kwargs
         self.assertEqual(call["source_event"], "registration")
         self.assertIn("crm_rule:registration:", call["event_reference"])
+
+    async def test_project_tag_rule_queues_campaign_event(self) -> None:
+        tag_id = uuid4()
+        lead = self._campaign_lead(
+            mappings=[
+                {
+                    "source_event": "registration",
+                    "event_name": "CompleteRegistration",
+                    "enabled": True,
+                    "parameters": {},
+                    "triggers": [{"type": "funnel_action"}],
+                }
+            ],
+            project_rules=[
+                {"tag_id": str(tag_id), "source_event": "registration"}
+            ],
+        )
+        service = FacebookCampaignService(SimpleNamespace())
+        service._load_lead = AsyncMock(return_value=lead)
+        service._enqueue_mapping = AsyncMock(return_value="job-project-rule")
+
+        queued = await service.enqueue_tag_added(lead_id=lead.id, tag_id=tag_id)
+
+        self.assertEqual(queued, ["job-project-rule"])
+        service._enqueue_mapping.assert_awaited_once()
+        custom_data = service._enqueue_mapping.await_args.kwargs["extra_custom_data"]
+        self.assertEqual(custom_data["crm_trigger_scope"], "project")
+
+    async def test_matching_project_and_campaign_tag_rules_queue_once(self) -> None:
+        tag_id = uuid4()
+        lead = self._campaign_lead(
+            mappings=[
+                {
+                    "source_event": "sale",
+                    "event_name": "Purchase",
+                    "enabled": True,
+                    "parameters": {"currency": "USD"},
+                    "triggers": [{"type": "lead_tag", "value": str(tag_id)}],
+                }
+            ],
+            project_rules=[{"tag_id": str(tag_id), "source_event": "sale"}],
+        )
+        service = FacebookCampaignService(SimpleNamespace())
+        service._load_lead = AsyncMock(return_value=lead)
+        service._enqueue_mapping = AsyncMock(return_value="job-once")
+
+        queued = await service.enqueue_tag_added(lead_id=lead.id, tag_id=tag_id)
+
+        self.assertEqual(queued, ["job-once"])
+        service._enqueue_mapping.assert_awaited_once()
+        custom_data = service._enqueue_mapping.await_args.kwargs["extra_custom_data"]
+        self.assertEqual(custom_data["crm_trigger_scope"], "project_and_campaign")
 
     async def test_unrelated_tag_does_not_queue_event(self) -> None:
         configured_tag_id = uuid4()
@@ -555,6 +638,39 @@ class FacebookCampaignTriggerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(normalized[0]["triggers"], [{"type": "funnel_action"}])
+
+
+class FacebookProjectTagRuleValidationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_project_rule_rejects_tag_from_another_project(self) -> None:
+        tag_id = uuid4()
+        db = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(
+                    scalars=lambda: SimpleNamespace(all=lambda: []),
+                )
+            )
+        )
+        service = ProjectService(db)
+
+        with self.assertRaises(HTTPException) as context:
+            await service._validate_facebook_tag_event_rules(
+                project_id=uuid4(),
+                value=[{"tag_id": str(tag_id), "source_event": "registration"}],
+            )
+
+        self.assertEqual(context.exception.status_code, 422)
+        self.assertIn(str(tag_id), str(context.exception.detail))
+
+    async def test_tag_assignment_insert_is_atomic_and_idempotent(self) -> None:
+        db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)))
+        repository = TagRepository(db)
+
+        added = await repository.add_tag_to_lead(uuid4(), uuid4())
+
+        self.assertTrue(added)
+        statement = db.execute.await_args.args[0]
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        self.assertIn("ON CONFLICT (lead_id, tag_id) DO NOTHING", sql)
 
 
 class FacebookCAPIPayloadTests(unittest.TestCase):

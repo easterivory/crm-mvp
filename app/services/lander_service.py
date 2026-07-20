@@ -26,6 +26,11 @@ from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.repositories.tracking_repository import TrackingEventRepository
 from app.services.utm_bridge_service import QueryParamInput, UtmBridgeService
+from app.services.telegram_bot_avatar_service import (
+    BotAvatarUnavailableError,
+    TelegramBotAvatarService,
+)
+from app.services.telegram_sender import TelegramSenderService
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,10 @@ class LanderService:
         self.storage_root = Path(storage_root or settings.LANDER_STORAGE_PATH)
         self.utm_bridge = utm_bridge or UtmBridgeService()
         self.tracking_event_repo = TrackingEventRepository(db)
+        self.avatar_service = TelegramBotAvatarService(
+            sender=TelegramSenderService(db),
+            storage_root=self.storage_root,
+        )
 
     async def save_custom_lander_zip(
         self,
@@ -159,6 +168,26 @@ class LanderService:
 
         await self._record_lander_click(lander)
         return rendered_html
+
+    async def resolve_bot_avatar(
+        self,
+        *,
+        host: str,
+        slug: str,
+    ) -> tuple[bytes, str]:
+        lander = await self.resolve_lander_request(host=host, slug=slug)
+        bot = lander.tracking_link.bot if lander.tracking_link is not None else None
+        token = (bot.telegram_token or "").strip() if bot is not None else ""
+        telegram_bot_id = bot.telegram_bot_id if bot is not None else None
+        if bot is None or not token or telegram_bot_id is None:
+            raise BotAvatarUnavailableError("Bot profile photo is unavailable")
+        if self.db.in_transaction():
+            await self.db.commit()
+        return await self.avatar_service.get_avatar(
+            bot_id=bot.id,
+            token=token,
+            telegram_bot_id=telegram_bot_id,
+        )
 
     async def _record_lander_click(self, lander: ProjectLander) -> None:
         tracking_link = lander.tracking_link
@@ -632,62 +661,150 @@ class LanderService:
         telegram_url: str,
         pixel_markup: str,
     ) -> str:
+        tracking_link = lander.tracking_link
+        bot = tracking_link.bot if tracking_link is not None else None
+        bot_title = (
+            (getattr(bot, "telegram_first_name", None) or "").strip()
+            or (getattr(bot, "name", None) or "").strip()
+            or (getattr(bot, "bot_username", None) or "").removeprefix("@").strip()
+            or "Telegram bot"
+        )
+        username = (getattr(bot, "bot_username", None) or "").removeprefix("@").strip()
+        description = (
+            (getattr(lander, "description", None) or "").strip()
+            or (getattr(bot, "telegram_description", None) or "").strip()
+            or (getattr(bot, "telegram_about", None) or "").strip()
+            or "Open this bot in Telegram to continue."
+        )
+        button_text = (
+            (getattr(lander, "button_text", None) or "").strip()
+            or "Open in Telegram"
+        )
+        initial = next((char.upper() for char in bot_title if char.isalnum()), "T")
         safe_url = html.escape(telegram_url, quote=True)
         safe_url_json = json.dumps(telegram_url).replace("<", "\\u003c")
+        safe_title = html.escape(bot_title)
+        safe_title_attr = html.escape(bot_title, quote=True)
+        safe_description = html.escape(description)
+        safe_description_attr = html.escape(description.replace("\n", " "), quote=True)
+        safe_button_text = html.escape(button_text)
+        safe_username = html.escape(f"@{username}") if username else ""
+        safe_initial = html.escape(initial)
+        avatar_url = f"/l/{lander.slug}/bot-avatar"
         auto_redirect_script = "window.setTimeout(openTelegram, 650);" if lander.auto_redirect_enabled else ""
         return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Telegram</title>
+  <meta name="description" content="{safe_description_attr}">
+  <title>{safe_title_attr} - Telegram</title>
   {pixel_markup}
   <style>
     :root {{
       color-scheme: light;
-      --telegram-blue: #3390ec;
-      --telegram-blue-hover: #2782dc;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --line: #e7edf3;
+      --telegram-blue: #2aabee;
+      --telegram-blue-hover: #229ed9;
+      --text: #101820;
+      --muted: #66727d;
+      --wallpaper: #dcebe4;
     }}
     * {{ box-sizing: border-box; }}
+    html {{ min-height: 100%; background: var(--wallpaper); }}
     body {{
       min-height: 100vh;
+      min-height: 100dvh;
       margin: 0;
-      display: grid;
-      place-items: center;
-      padding: 24px 18px;
-      background: #ffffff;
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }}
-    main {{
-      width: min(100%, 440px);
-      padding: 16px 8px 28px;
+    .telegram-header {{
+      min-height: 74px;
+      display: flex;
+      align-items: center;
+      padding: 14px max(20px, calc((100vw - 1120px) / 2));
+      background: #ffffff;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, .08);
+    }}
+    .telegram-brand {{
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: #111827;
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+    }}
+    .telegram-brand img {{ width: 46px; height: 46px; display: block; }}
+    .stage {{
+      min-height: calc(100vh - 74px);
+      min-height: calc(100dvh - 74px);
+      display: grid;
+      place-items: center;
+      padding: 42px 18px;
+      background-color: var(--wallpaper);
+    }}
+    .profile {{
+      width: min(100%, 500px);
+      padding: 46px 38px 38px;
+      border: 1px solid rgba(15, 23, 42, .08);
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 18px 50px rgba(39, 67, 57, .14);
       text-align: center;
     }}
-    .logo {{
-      width: 104px;
-      height: 104px;
+    .avatar {{
+      position: relative;
+      width: 132px;
+      height: 132px;
       margin: 0 auto 24px;
+      overflow: hidden;
+      border-radius: 50%;
+      background: var(--telegram-blue);
+      color: #ffffff;
+      box-shadow: 0 0 0 5px #ffffff, 0 8px 24px rgba(42, 171, 238, .22);
+    }}
+    .avatar span {{
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      font-size: 48px;
+      font-weight: 700;
+    }}
+    .avatar img {{
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
     }}
     h1 {{
-      margin: 0 0 10px;
-      font-size: 26px;
-      line-height: 1.25;
-      font-weight: 600;
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-size: 30px;
+      line-height: 1.22;
+      font-weight: 700;
     }}
-    p {{
-      margin: 0 auto 24px;
-      max-width: 22rem;
+    .username {{
+      margin-top: 8px;
+      color: var(--telegram-blue-hover);
+      font-size: 15px;
+      line-height: 1.35;
+    }}
+    .description {{
+      max-width: 390px;
+      margin: 20px auto 28px;
       color: var(--muted);
       font-size: 16px;
-      line-height: 1.45;
+      line-height: 1.55;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
     }}
-    a {{
+    .open-button {{
       display: inline-flex;
-      min-height: 50px;
+      min-height: 52px;
       width: 100%;
       align-items: center;
       justify-content: center;
@@ -696,25 +813,47 @@ class LanderService:
       background: var(--telegram-blue);
       text-decoration: none;
       font-size: 16px;
-      font-weight: 600;
-      transition: background .18s ease;
+      font-weight: 700;
+      transition: background .18s ease, transform .18s ease;
     }}
-    a:hover {{
+    .open-button:hover {{
       background: var(--telegram-blue-hover);
+      transform: translateY(-1px);
     }}
-    .hint {{
-      margin-top: 16px;
-      color: #9ca3af;
-      font-size: 13px;
+    .open-button:focus-visible {{
+      outline: 3px solid rgba(42, 171, 238, .3);
+      outline-offset: 3px;
+    }}
+    @media (max-width: 560px) {{
+      .telegram-header {{ min-height: 64px; padding: 10px 16px; }}
+      .telegram-brand {{ gap: 10px; font-size: 23px; }}
+      .telegram-brand img {{ width: 42px; height: 42px; }}
+      .stage {{ min-height: calc(100dvh - 64px); padding: 18px 12px; }}
+      .profile {{ padding: 34px 22px 24px; }}
+      .avatar {{ width: 112px; height: 112px; margin-bottom: 20px; }}
+      h1 {{ font-size: 26px; }}
+      .description {{ margin: 16px auto 24px; font-size: 16px; }}
     }}
   </style>
 </head>
 <body>
-  <main>
-    <img class="logo" src="https://telegram.org/img/t_logo.png" alt="Telegram">
-    <h1>Open Telegram</h1>
-    <a id="open-telegram" data-crm-telegram-link href="{safe_url}" rel="noopener noreferrer">Open in Telegram</a>
-    <div class="hint">Tap the button to continue.</div>
+  <header class="telegram-header">
+    <div class="telegram-brand">
+      <img src="https://telegram.org/img/t_logo.png" alt="" aria-hidden="true">
+      <span>Telegram</span>
+    </div>
+  </header>
+  <main class="stage">
+    <section class="profile" aria-labelledby="bot-title">
+      <div class="avatar">
+        <span aria-hidden="true">{safe_initial}</span>
+        <img src="{avatar_url}" alt="{safe_title_attr}" onerror="this.remove()">
+      </div>
+      <h1 id="bot-title">{safe_title}</h1>
+      {f'<div class="username">{safe_username}</div>' if safe_username else ''}
+      <div class="description">{safe_description}</div>
+      <a class="open-button" id="open-telegram" data-crm-telegram-link href="{safe_url}" rel="noopener noreferrer">{safe_button_text}</a>
+    </section>
   </main>
   <script>
     (function () {{

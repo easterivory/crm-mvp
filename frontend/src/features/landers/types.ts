@@ -107,6 +107,8 @@ export type ProjectLander = {
   name: string
   type: LanderType
   slug: string
+  description: string | null
+  button_text: string | null
   tracking_link_id: string | null
   pixels_json: LanderPixel[]
   meta_events_json: LanderMetaEvent[]
@@ -140,6 +142,8 @@ export type ProjectLanderCreatePayload = {
   name: string
   type: LanderType
   slug: string
+  description?: string | null
+  button_text?: string | null
   tracking_link_id: string | null
   campaign?: LanderTrackingCampaign | null
   pixels?: LanderPixel[]
@@ -153,6 +157,8 @@ export type ProjectLanderUpdatePayload = {
   name?: string
   type?: LanderType
   slug?: string
+  description?: string | null
+  button_text?: string | null
   pixels?: LanderPixel[]
   meta_events?: LanderMetaEvent[]
   utm_defaults?: Record<string, string>
@@ -186,6 +192,7 @@ export type ProjectLanderUploadResult = {
 export type TrackingLinkOption = {
   id: string
   project_id: string
+  bot_id: string
   code: string
   title: string
   buyer_name: string | null

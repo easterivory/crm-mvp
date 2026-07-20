@@ -13,6 +13,7 @@ import {
   Tag,
   Trash2,
   UserPlus,
+  Zap,
   X,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -62,8 +63,22 @@ type Project = {
   push_unread_threshold: number
   confidence_weights: Record<string, number> | null
   confidence_thresholds: Record<string, number> | null
+  facebook_tag_event_rules: FacebookTagEventRule[]
   created_at: string
   is_deleted: boolean
+}
+
+type FacebookTagSourceEvent =
+  | 'registration'
+  | 'sale'
+  | 'resale'
+  | 'channel_subscribe'
+  | 'channel_unsubscribe'
+  | 'contact_invite_bot'
+
+type FacebookTagEventRule = {
+  tag_id: string
+  source_event: FacebookTagSourceEvent
 }
 
 type User = {
@@ -162,6 +177,19 @@ const translationProviderOptions: Array<{ value: TranslationProvider; label: str
 ]
 
 const defaultTrackingLeadStatusCodes = ['submitted', 'qualified']
+
+const facebookTagSourceEventOptions: Array<{
+  value: FacebookTagSourceEvent
+  label: string
+  defaultMetaEvent: string
+}> = [
+  { value: 'registration', label: 'Регистрация', defaultMetaEvent: 'CompleteRegistration' },
+  { value: 'sale', label: 'Первый депозит / продажа', defaultMetaEvent: 'Purchase' },
+  { value: 'resale', label: 'Повторный депозит / продажа', defaultMetaEvent: 'Purchase' },
+  { value: 'channel_subscribe', label: 'Подписка на канал', defaultMetaEvent: 'Subscribe' },
+  { value: 'channel_unsubscribe', label: 'Отписка от канала', defaultMetaEvent: 'Search' },
+  { value: 'contact_invite_bot', label: 'Приглашение контакта в бота', defaultMetaEvent: 'AddToWishlist' },
+]
 
 const defaultConfidenceWeights = {
   suspicious_first_name: 15,
@@ -383,6 +411,7 @@ export default function SettingsPage() {
   const [confidenceHighMin, setConfidenceHighMin] = useState('80')
   const [confidenceMediumMin, setConfidenceMediumMin] = useState('50')
   const [hasConfidenceOverrides, setHasConfidenceOverrides] = useState(false)
+  const [facebookTagEventRules, setFacebookTagEventRules] = useState<FacebookTagEventRule[]>([])
   const [translationEnabled, setTranslationEnabled] = useState(false)
   const [operatorLang, setOperatorLang] = useState('ru')
   const [defaultClientLang, setDefaultClientLang] = useState('en')
@@ -561,6 +590,40 @@ export default function SettingsPage() {
     })
   }, [])
 
+  const addFacebookTagEventRule = useCallback(() => {
+    const used = new Set(
+      facebookTagEventRules.map((rule) => `${rule.tag_id}:${rule.source_event}`),
+    )
+    const nextRule = tags.flatMap((tag) =>
+      facebookTagSourceEventOptions.map((eventOption) => ({
+        tag_id: tag.id,
+        source_event: eventOption.value,
+      })),
+    ).find((rule) => !used.has(`${rule.tag_id}:${rule.source_event}`))
+
+    if (!nextRule) {
+      setError(tags.length === 0
+        ? 'Сначала создайте тег проекта.'
+        : 'Все доступные сочетания тегов и Facebook-событий уже добавлены.')
+      return
+    }
+    setError('')
+    setFacebookTagEventRules((current) => [...current, nextRule])
+  }, [facebookTagEventRules, tags])
+
+  const updateFacebookTagEventRule = useCallback((
+    index: number,
+    patch: Partial<FacebookTagEventRule>,
+  ) => {
+    setFacebookTagEventRules((current) => current.map((rule, ruleIndex) =>
+      ruleIndex === index ? { ...rule, ...patch } : rule
+    ))
+  }, [])
+
+  const removeFacebookTagEventRule = useCallback((index: number) => {
+    setFacebookTagEventRules((current) => current.filter((_, ruleIndex) => ruleIndex !== index))
+  }, [])
+
   const resetConfidenceSettings = useCallback(() => {
     setConfidenceWeights(confidenceWeightDraft())
     setConfidenceHighMin('80')
@@ -632,6 +695,7 @@ export default function SettingsPage() {
     setConfidenceHighMin(String(data.confidence_thresholds?.high_min ?? 80))
     setConfidenceMediumMin(String(data.confidence_thresholds?.medium_min ?? 50))
     setHasConfidenceOverrides(Boolean(data.confidence_weights || data.confidence_thresholds))
+    setFacebookTagEventRules(data.facebook_tag_event_rules ?? [])
     setTranslationEnabled(data.is_translation_enabled)
     setOperatorLang(data.operator_lang || 'ru')
     setDefaultClientLang(data.default_client_lang || 'en')
@@ -786,6 +850,7 @@ export default function SettingsPage() {
               medium_min: Number(confidenceMediumMin),
             }
           : null,
+        facebook_tag_event_rules: facebookTagEventRules,
       })
       setProject(data)
       setProjectName(data.name)
@@ -805,6 +870,7 @@ export default function SettingsPage() {
       setConfidenceHighMin(String(data.confidence_thresholds?.high_min ?? 80))
       setConfidenceMediumMin(String(data.confidence_thresholds?.medium_min ?? 50))
       setHasConfidenceOverrides(Boolean(data.confidence_weights || data.confidence_thresholds))
+      setFacebookTagEventRules(data.facebook_tag_event_rules ?? [])
       setNotice('Настройки проекта сохранены.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось сохранить проект.'))
@@ -1692,6 +1758,113 @@ export default function SettingsPage() {
                   <p className="text-sm text-zinc-500">Создайте теги проекта, чтобы использовать VIP-маршрутизацию.</p>
                 ) : null}
               </div>
+            </section>
+            <section className="space-y-4 border-b border-zinc-800 pb-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Zap size={17} className="shrink-0 text-cyan-300" aria-hidden="true" />
+                    <h3 className="text-sm font-semibold text-zinc-100">
+                      Facebook-события по тегам
+                    </h3>
+                  </div>
+                  <p className="mt-1 text-sm leading-5 text-zinc-500">
+                    Когда лид впервые получает выбранный тег, CRM отправляет соответствующее CAPI-событие в кампанию, по которой пришёл лид.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={addFacebookTagEventRule}
+                  disabled={tags.length === 0}
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/35 px-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  Добавить правило
+                </button>
+              </div>
+
+              {facebookTagEventRules.length > 0 ? (
+                <div className="space-y-2">
+                  {facebookTagEventRules.map((rule, index) => {
+                    const tagExists = tags.some((tag) => tag.id === rule.tag_id)
+                    return (
+                      <div
+                        key={`${rule.tag_id}:${rule.source_event}:${index}`}
+                        className="grid min-w-0 gap-2 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_40px] sm:items-end"
+                      >
+                        <label className="block min-w-0">
+                          <span className="mb-1 block text-xs font-medium text-zinc-500">Когда добавлен тег</span>
+                          <select
+                            value={rule.tag_id}
+                            onChange={(event) => updateFacebookTagEventRule(index, { tag_id: event.target.value })}
+                            className="min-h-10 w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none ring-cyan-500 focus:ring-2 md:text-sm"
+                          >
+                            {!tagExists ? (
+                              <option value={rule.tag_id}>Удалённый тег · удалите правило</option>
+                            ) : null}
+                            {tags.map((tag) => {
+                              const usedByAnotherRule = facebookTagEventRules.some((candidate, candidateIndex) =>
+                                candidateIndex !== index
+                                && candidate.tag_id === tag.id
+                                && candidate.source_event === rule.source_event
+                              )
+                              return (
+                                <option key={tag.id} value={tag.id} disabled={usedByAnotherRule}>
+                                  {tag.name}
+                                </option>
+                              )
+                            })}
+                          </select>
+                        </label>
+                        <label className="block min-w-0">
+                          <span className="mb-1 block text-xs font-medium text-zinc-500">Отправить событие</span>
+                          <select
+                            value={rule.source_event}
+                            onChange={(event) => updateFacebookTagEventRule(index, {
+                              source_event: event.target.value as FacebookTagSourceEvent,
+                            })}
+                            className="min-h-10 w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-base text-zinc-100 outline-none ring-cyan-500 focus:ring-2 md:text-sm"
+                          >
+                            {facebookTagSourceEventOptions.map((eventOption) => {
+                              const usedByAnotherRule = facebookTagEventRules.some((candidate, candidateIndex) =>
+                                candidateIndex !== index
+                                && candidate.tag_id === rule.tag_id
+                                && candidate.source_event === eventOption.value
+                              )
+                              return (
+                                <option
+                                  key={eventOption.value}
+                                  value={eventOption.value}
+                                  disabled={usedByAnotherRule}
+                                >
+                                  {eventOption.label} · {eventOption.defaultMetaEvent}
+                                </option>
+                              )
+                            })}
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => removeFacebookTagEventRule(index)}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-400/20 text-red-300 transition hover:border-red-400/45 hover:bg-red-500/10"
+                          title="Удалить правило"
+                          aria-label="Удалить правило Facebook-события"
+                        >
+                          <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-zinc-800 px-4 py-5 text-sm text-zinc-500">
+                  Правил нет. Проставление тегов не запускает проектные Facebook-события.
+                </div>
+              )}
+
+              <p className="text-xs leading-5 text-zinc-500">
+                Событие отправляется только для лида с Facebook-кампанией, где заполнены Pixel ID и CAPI token. Итоговое имя Meta event, value и currency задаются в карте событий самой кампании. Повторное назначение уже установленного тега событие не дублирует.
+              </p>
             </section>
             <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
               <h3 className="text-sm font-semibold text-zinc-100">Рабочее пространство чатов</h3>

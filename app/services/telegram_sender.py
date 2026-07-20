@@ -589,6 +589,61 @@ class TelegramSenderService:
             raise RuntimeError("Telegram getFile response does not contain file metadata")
         return result
 
+    async def get_user_profile_photos(
+        self,
+        token: str,
+        *,
+        user_id: int,
+        limit: int = 1,
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"https://api.telegram.org/bot{token}/getUserProfilePhotos",
+                params={"user_id": user_id, "offset": 0, "limit": max(1, min(limit, 100))},
+            )
+            payload = response.json()
+
+        if response.status_code >= 400 or payload.get("ok") is not True:
+            raise RuntimeError(
+                payload.get("description") or "Telegram rejected getUserProfilePhotos"
+            )
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Telegram getUserProfilePhotos response does not contain profile photos"
+            )
+        return result
+
+    async def download_file(
+        self,
+        token: str,
+        file_path: str,
+        *,
+        max_bytes: int,
+    ) -> bytes:
+        normalized_path = file_path.strip().lstrip("/")
+        path_parts = Path(normalized_path).parts
+        if (
+            not normalized_path
+            or "://" in normalized_path
+            or any(part in {"", ".", ".."} for part in path_parts)
+        ):
+            raise RuntimeError("Telegram returned an invalid file path")
+        file_url = f"https://api.telegram.org/file/bot{token}/{normalized_path}"
+        chunks: list[bytes] = []
+        total_bytes = 0
+        async with httpx.AsyncClient(timeout=30) as client:
+            async with client.stream("GET", file_url) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if total_bytes > max_bytes:
+                        raise RuntimeError("Telegram file exceeds the configured size limit")
+                    chunks.append(chunk)
+        return b"".join(chunks)
+
     async def get_webhook_info(self, token: str) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(f"https://api.telegram.org/bot{token}/getWebhookInfo")

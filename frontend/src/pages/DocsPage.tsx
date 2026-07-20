@@ -1113,10 +1113,12 @@ export default function DocsPage() {
             <code>page_view</code> и <code>telegram_click</code> отправляются браузерным Pixel.
             <code>bot_start</code> и <code>contact</code> отправляются серверным CAPI автоматически.
             <code>registration</code>, подписка, отписка, sale, resale и приглашение контакта вызываются
-            CRM-действием воронки. Для каждого источника можно включить событие и заменить его на
-            стандартное или custom Meta event. У Purchase доступны value и currency; по умолчанию value
-            берётся из <code>{'{{lead.expected_start_amount}}'}</code>. CAPI выполняется через ARQ и не
-            задерживает Telegram-воронку.
+            CRM-действием воронки, переходом в статус или добавлением тега. Общую для проекта реакцию
+            на тег задавайте в Настройки → Проект → Facebook-события по тегам; она применяется ко всем
+            Facebook-кампаниям проекта. Для каждого источника в кампании можно включить событие и
+            заменить его на стандартное или custom Meta event. У Purchase доступны value и currency;
+            по умолчанию value берётся из <code>{'{{lead.expected_start_amount}}'}</code>. CAPI
+            выполняется через ARQ и не задерживает Telegram-воронку.
           </InfoCallout>
           <InfoCallout title="Атрибуция и дедупликация" tone="slate">
             Перед переходом в Telegram лендинг синхронизирует fbp, fbc, IP, User-Agent и URL источника

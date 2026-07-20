@@ -19,6 +19,7 @@ from app.core.facebook_events import (
     facebook_mapping_for_source,
     normalize_facebook_event_mappings,
     normalize_facebook_source_event,
+    normalize_facebook_tag_event_rules,
 )
 from app.models.chat import Chat
 from app.models.lead import Lead
@@ -119,18 +120,35 @@ class FacebookCampaignService:
             )
             return []
 
+        project_tag_sources: set[str] = set()
+        if normalized_type == "lead_tag":
+            try:
+                project_tag_sources = self._project_tag_source_events(
+                    lead=lead,
+                    tag_id=normalized_value,
+                )
+            except ValueError:
+                logger.exception(
+                    "Invalid project Facebook tag event rules; project rules skipped "
+                    "lead_id=%s project_id=%s",
+                    lead.id,
+                    getattr(lead, "project_id", None),
+                )
+
         lifecycle_reference = self._lifecycle_reference(lead)
         queued_job_ids: list[str] = []
         for mapping in mappings:
             source_event = str(mapping["source_event"])
+            campaign_rule_matches = facebook_mapping_has_trigger(
+                mapping,
+                trigger_type=normalized_type,
+                trigger_value=normalized_value,
+            )
+            project_rule_matches = source_event in project_tag_sources
             if (
                 not mapping["enabled"]
                 or source_event in FACEBOOK_BROWSER_SOURCE_EVENTS
-                or not facebook_mapping_has_trigger(
-                    mapping,
-                    trigger_type=normalized_type,
-                    trigger_value=normalized_value,
-                )
+                or not (campaign_rule_matches or project_rule_matches)
             ):
                 continue
             job_id = await self._enqueue_mapping(
@@ -142,11 +160,30 @@ class FacebookCampaignService:
                 extra_custom_data={
                     "crm_trigger_type": normalized_type,
                     "crm_trigger_value": normalized_value,
+                    "crm_trigger_scope": (
+                        "project_and_campaign"
+                        if campaign_rule_matches and project_rule_matches
+                        else "project"
+                        if project_rule_matches
+                        else "campaign"
+                    ),
                 },
             )
             if job_id is not None:
                 queued_job_ids.append(job_id)
         return queued_job_ids
+
+    @staticmethod
+    def _project_tag_source_events(*, lead: Lead, tag_id: str) -> set[str]:
+        project = getattr(lead, "project", None)
+        rules = normalize_facebook_tag_event_rules(
+            getattr(project, "facebook_tag_event_rules", None)
+        )
+        return {
+            rule["source_event"]
+            for rule in rules
+            if rule["tag_id"] == tag_id
+        }
 
     async def enqueue_status_change(
         self,

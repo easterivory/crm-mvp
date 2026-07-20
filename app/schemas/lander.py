@@ -139,6 +139,8 @@ class ProjectLanderBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     type: str = Field(..., min_length=1, max_length=32)
     slug: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    button_text: Optional[str] = Field(default=None, max_length=80)
     tracking_link_id: Optional[UUID] = None
     campaign: Optional[LanderTrackingCampaignCreate] = None
     pixels: list[LanderPixel] = Field(default_factory=list, max_length=1)
@@ -153,6 +155,13 @@ class ProjectLanderBase(BaseModel):
         if not normalized:
             raise ValueError("value must not be empty")
         return normalized
+
+    @field_validator("description", "button_text")
+    @classmethod
+    def normalize_optional_lander_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
 
     @field_validator("utm_defaults")
     @classmethod
@@ -189,6 +198,8 @@ class ProjectLanderUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     type: Optional[str] = Field(default=None, min_length=1, max_length=32)
     slug: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    button_text: Optional[str] = Field(default=None, max_length=80)
     pixels: Optional[list[LanderPixel]] = Field(default=None, max_length=1)
     meta_events: Optional[list[LanderMetaEvent]] = Field(default=None, max_length=10)
     utm_defaults: Optional[dict[str, str]] = None
@@ -204,6 +215,11 @@ class ProjectLanderUpdate(BaseModel):
         if not normalized:
             raise ValueError("value must not be empty")
         return normalized
+
+    @field_validator("description", "button_text")
+    @classmethod
+    def normalize_optional_lander_text(cls, value: Optional[str]) -> Optional[str]:
+        return ProjectLanderBase.normalize_optional_lander_text(value)
 
     @field_validator("utm_defaults")
     @classmethod
@@ -310,6 +326,8 @@ class ProjectLanderOut(OrmBase):
     name: str
     type: str
     slug: str
+    description: Optional[str] = None
+    button_text: Optional[str] = None
     tracking_link_id: Optional[UUID] = None
     pixels_json: list[dict] = Field(default_factory=list)
     meta_events_json: list[dict] = Field(default_factory=list)

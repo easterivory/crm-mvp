@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     # Landings/domains
     LANDER_STORAGE_PATH: str = "storage/landers"
     LANDER_TECH_DOMAIN: str = "lp.sfera.cyou"
+    LANDER_BOT_AVATAR_CACHE_SECONDS: int = 300
+    LANDER_BOT_AVATAR_MAX_MB: int = 5
 
     # Facebook Conversion API
     FACEBOOK_CAPI_TIMEOUT_SECONDS: float = 10.0

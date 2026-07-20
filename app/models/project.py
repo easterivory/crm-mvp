@@ -124,6 +124,12 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         MutableDict.as_mutable(JSONB),
         nullable=True,
     )
+    facebook_tag_event_rules: Mapped[list[dict[str, str]]] = mapped_column(
+        MutableList.as_mutable(JSONB),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
 
     # Relationships
     bots: Mapped[list[Bot]] = relationship("Bot", back_populates="project")

@@ -25,6 +25,10 @@ from app.schemas.bot import (
     BotWebhookOut,
 )
 from app.services.access_control import resolve_scoped_project_id
+from app.services.telegram_bot_avatar_service import (
+    BotAvatarUnavailableError,
+    TelegramBotAvatarService,
+)
 from app.services.telegram_sender import TelegramSenderService
 
 
@@ -39,6 +43,7 @@ class BotService:
         self.bot_repo = BotRepository(db)
         self.project_repo = ProjectRepository(db)
         self.telegram_sender = TelegramSenderService(db)
+        self.avatar_service = TelegramBotAvatarService(sender=self.telegram_sender)
 
     async def list_bots(
         self,
@@ -152,6 +157,9 @@ class BotService:
                 values=values,
             )
 
+        if new_token is not None:
+            await self.avatar_service.invalidate(bot_id)
+
         if new_token and old_token and old_token != new_token:
             await self._delete_webhook_safely(old_token)
             return await self.get_bot(bot_id=bot_id, project_id=project_id)
@@ -246,6 +254,8 @@ class BotService:
                 detail=str(exc),
             ) from exc
 
+        await self.avatar_service.invalidate(bot_id)
+
         if actor is not None:
             await self.log_bot_config_change(
                 bot_id=bot_id,
@@ -254,6 +264,34 @@ class BotService:
                 description="Оператор обновил аватар Telegram-бота.",
             )
         return payload
+
+    async def get_bot_profile_photo(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> tuple[bytes, str]:
+        bot = await self._get_bot_or_404(bot_id, project_id)
+        token = self._normalize_optional(bot.telegram_token)
+        telegram_bot_id = bot.telegram_bot_id
+        if not token or telegram_bot_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Bot profile photo is unavailable",
+            )
+        if self.db.in_transaction():
+            await self.db.commit()
+        try:
+            return await self.avatar_service.get_avatar(
+                bot_id=bot.id,
+                token=token,
+                telegram_bot_id=telegram_bot_id,
+            )
+        except BotAvatarUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Bot profile photo is unavailable",
+            ) from exc
 
     async def export_bot_audit_logs_to_csv(self, bot_id: UUID) -> bytes:
         await self._get_active_bot_or_404(bot_id)

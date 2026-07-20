@@ -191,6 +191,7 @@ class ChatWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         all_sql = str(all_visible.compile(dialect=postgresql.dialect()))
         favorites_sql = str(favorites.compile(dialect=postgresql.dialect()))
         self.assertIn("chats.is_read IS false", unread_sql)
+        self.assertIn("chats.is_read IS false AND", unread_sql)
         self.assertIn("NOT (EXISTS", unread_sql)
         self.assertIn("leads.manager_id IS NULL", unread_sql)
         self.assertIn("leads.score_percent", unread_sql)
@@ -222,6 +223,21 @@ class ChatWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FILTER (WHERE", sql)
         self.assertIn("LEFT OUTER JOIN leads", sql)
         self.assertEqual(db.execute.await_count, 1)
+
+    async def test_gambling_push_threshold_marks_chat_unread(self) -> None:
+        result = SimpleNamespace(rowcount=1)
+        db = SimpleNamespace(execute=AsyncMock(return_value=result))
+        repo = ChatRepository(db)
+
+        updated = await repo.increment_unanswered_push_count(chat_id=uuid4())
+
+        self.assertTrue(updated)
+        statement = db.execute.await_args.args[0]
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        self.assertIn("projects.project_format", sql)
+        self.assertIn("projects.push_unread_threshold", sql)
+        self.assertIn("CASE WHEN", sql)
+        self.assertIn("chats.is_read", sql)
 
     async def test_opening_unassigned_chat_auto_assigns_only_manager(self) -> None:
         project_id = uuid4()
