@@ -41,6 +41,7 @@ from app.repositories.message_repository import MessageRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
+from app.services.access_control import has_project_access
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import TelegramSenderService
 from app.services.translation_service import TranslationService, TranslationUnavailableError
@@ -943,7 +944,7 @@ class MessageService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator not found")
         if operator.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER, RoleName.OPERATOR}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot send chat messages")
-        if operator.role_name != RoleName.SUPER_ADMIN and operator.project_id != project_id:
+        if not has_project_access(operator, project_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Operator is not a member of this project",
