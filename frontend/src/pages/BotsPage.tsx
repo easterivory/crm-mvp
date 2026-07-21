@@ -3,6 +3,7 @@ import {
   Check,
   Download,
   ImagePlus,
+  Import as ImportIcon,
   LoaderCircle,
   Pencil,
   PlugZap,
@@ -22,6 +23,7 @@ import {
   uploadBotAvatar,
   type Bot as BotRecord,
 } from '../features/bots'
+import LeadImportModal from '../features/bots/components/LeadImportModal'
 import { useProjectBotSelection } from '../shared/lib'
 import type { PaginatedResponse } from '../shared/types'
 import { useAuthStore } from '../store/authStore'
@@ -84,9 +86,11 @@ export default function BotsPage() {
   const [syncingBotId, setSyncingBotId] = useState<string | null>(null)
   const [avatarUploadingBotId, setAvatarUploadingBotId] = useState<string | null>(null)
   const [auditExportingBotId, setAuditExportingBotId] = useState<string | null>(null)
+  const [leadImportBot, setLeadImportBot] = useState<BotRecord | null>(null)
 
   const [botName, setBotName] = useState('')
   const [botToken, setBotToken] = useState('')
+  const canImportLeads = currentUser?.role_name === 'admin' || currentUser?.role_name === 'super_admin'
 
   const loadBots = useCallback(async () => {
     if (!activeProjectId) {
@@ -123,6 +127,12 @@ export default function BotsPage() {
     if (isAddingBot) {
       return
     }
+    const name = botName.trim()
+    const token = botToken.trim()
+    if (!name && !token) {
+      setError('Укажите название черновика или Telegram token.')
+      return
+    }
 
     setIsAddingBot(true)
     setError('')
@@ -130,15 +140,19 @@ export default function BotsPage() {
 
     try {
       await api.post<BotRecord>('/bots', {
-        name: botName.trim() || undefined,
-        telegram_token: botToken.trim(),
+        name: name || undefined,
+        ...(token ? { telegram_token: token } : {}),
       }, {
         params: { project_id: activeProjectId },
       })
       setBotName('')
       setBotToken('')
       await loadBots()
-      setNotice('Бот добавлен: имя подтянуто из Telegram, webhook зарегистрирован.')
+      setNotice(
+        token
+          ? 'Бот добавлен: имя подтянуто из Telegram, webhook зарегистрирован.'
+          : 'Черновик бота создан. Добавьте новый token после завершения импорта.',
+      )
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось добавить бота.'))
     } finally {
@@ -343,15 +357,14 @@ export default function BotsPage() {
           <input
             value={botToken}
             onChange={(event) => setBotToken(event.target.value)}
-            placeholder="Telegram token"
+            placeholder="Telegram token (можно добавить позже)"
             type="password"
-            required
             maxLength={255}
             className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
           />
           <button
             type="submit"
-            disabled={isAddingBot}
+            disabled={isAddingBot || (!botName.trim() && !botToken.trim())}
             className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isAddingBot ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -483,7 +496,7 @@ export default function BotsPage() {
                         type="button"
                         title="Зарегистрировать webhook"
                         onClick={() => void handleSetWebhook(bot.id)}
-                        disabled={webhookBotId === bot.id}
+                        disabled={webhookBotId === bot.id || !bot.has_telegram_token}
                         className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {webhookBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <PlugZap size={15} />}
@@ -493,7 +506,7 @@ export default function BotsPage() {
                         type="button"
                         title="Синхронизировать с Telegram"
                         onClick={() => void handleSyncBot(bot.id)}
-                        disabled={syncingBotId === bot.id}
+                        disabled={syncingBotId === bot.id || !bot.has_telegram_token}
                         className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {syncingBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
@@ -536,6 +549,17 @@ export default function BotsPage() {
                         {auditExportingBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />}
                         CSV
                       </button>
+                      {canImportLeads && activeProjectId ? (
+                        <button
+                          type="button"
+                          title="Перенести лидов из Chatterfy"
+                          onClick={() => setLeadImportBot(bot)}
+                          className="inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-400/25 bg-cyan-500/10 px-3 text-sm text-cyan-100 transition hover:border-cyan-300/60"
+                        >
+                          <ImportIcon size={15} />
+                          Перенос лидов
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         title="Архивировать"
@@ -558,6 +582,13 @@ export default function BotsPage() {
           Tracking links создаются только в разделе «Трекинг» через кнопку «Создать ссылку».
         </div>
       </div>
+      {leadImportBot && activeProjectId ? (
+        <LeadImportModal
+          bot={leadImportBot}
+          projectId={activeProjectId}
+          onClose={() => setLeadImportBot(null)}
+        />
+      ) : null}
     </section>
   )
 }

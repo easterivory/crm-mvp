@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -64,6 +65,18 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_project_last_user_msg", "project_id", "last_user_message_at"),
         Index("ix_chats_project_last_message", "project_id", "last_message_at"),
         Index("ix_chats_project_is_read", "project_id", "is_read"),
+        Index("ix_chats_lead_import_id", "lead_import_id"),
+        Index("ix_chats_import_username_key", "import_username_key"),
+        Index(
+            "uq_chats_pending_import_username",
+            "project_id",
+            "bot_id",
+            "import_username_key",
+            unique=True,
+            postgresql_where=text(
+                "import_identity_pending IS TRUE AND is_deleted IS FALSE"
+            ),
+        ),
         Index("ix_chats_tracking_created_at", "tracking_link_id", "created_at"),
         Index("ix_chats_project_bot_created_at", "project_id", "bot_id", "created_at"),
         Index("ix_chats_reset_at", "reset_at"),
@@ -135,6 +148,31 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         server_default="0",
     )
     has_out_of_scenario_message: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    is_imported: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    lead_import_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bot_lead_imports.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    imported_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    import_username_key: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    import_identity_pending: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,

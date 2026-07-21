@@ -586,6 +586,46 @@ class ChatRepository(BaseRepository[Chat]):
         )
         return result.scalar_one_or_none()
 
+    async def claim_pending_import_identity(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+        username_key: str,
+        external_chat_id: str,
+        external_user_id: str,
+        contact_name: str | None,
+    ) -> Optional[Chat]:
+        """Bind an imported chat matched by username to Telegram's numeric identity."""
+        result = await self.db.execute(
+            update(Chat)
+            .where(
+                Chat.project_id == project_id,
+                Chat.bot_id == bot_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Chat.is_imported.is_(True),
+                Chat.import_identity_pending.is_(True),
+                Chat.import_username_key == username_key,
+            )
+            .values(
+                external_chat_id=external_chat_id,
+                external_user_id=external_user_id,
+                contact_name=func.coalesce(Chat.contact_name, contact_name),
+                import_identity_pending=False,
+                updated_at=func.now(),
+            )
+            .returning(Chat.id)
+        )
+        claimed_id = result.scalar_one_or_none()
+        if claimed_id is not None:
+            return await self.get_active(claimed_id, project_id)
+        return await self.get_by_external(
+            project_id,
+            external_chat_id,
+            bot_id=bot_id,
+        )
+
     async def get_reset_by_external(
         self,
         project_id: UUID,

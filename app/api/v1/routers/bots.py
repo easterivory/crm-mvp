@@ -16,6 +16,13 @@ from app.schemas.bot import (
 )
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import BotActiveFunnelOut, BotActiveFunnelSetIn
+from app.schemas.lead_import import (
+    BotLeadImportOut,
+    LeadImportExecuteIn,
+    LeadImportExecuteOut,
+    LeadImportPreviewOut,
+)
+from app.services.bot_lead_import_service import BotLeadImportService
 from app.services.bot_service import BotService
 from app.services.funnel_service import FunnelService
 
@@ -66,6 +73,78 @@ async def get_bot(
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
     return await BotService(db).get_bot(bot_id=bot_id, project_id=project_id)
+
+
+@router.get("/bots/{bot_id}/lead-imports", response_model=list[BotLeadImportOut])
+async def list_bot_lead_imports(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[BotLeadImportOut]:
+    return await BotLeadImportService(db).list_imports(
+        project_id=project_id,
+        bot_id=bot_id,
+        actor=current_user,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/lead-imports",
+    response_model=BotLeadImportOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_bot_lead_import_template(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BotLeadImportOut:
+    return await BotLeadImportService(db).create_template(
+        project_id=project_id,
+        bot_id=bot_id,
+        actor=current_user,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/lead-imports/{import_id}/preview",
+    response_model=LeadImportPreviewOut,
+)
+async def preview_bot_lead_import(
+    bot_id: UUID,
+    import_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadImportPreviewOut:
+    return await BotLeadImportService(db).preview_import(
+        project_id=project_id,
+        bot_id=bot_id,
+        import_id=import_id,
+        actor=current_user,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/lead-imports/{import_id}/execute",
+    response_model=LeadImportExecuteOut,
+)
+async def execute_bot_lead_import(
+    bot_id: UUID,
+    import_id: UUID,
+    data: LeadImportExecuteIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadImportExecuteOut:
+    return await BotLeadImportService(db).execute_import(
+        project_id=project_id,
+        bot_id=bot_id,
+        import_id=import_id,
+        preview_checksum=data.preview_checksum,
+        actor=current_user,
+    )
 
 
 @router.get("/bots/{bot_id}/active-funnel", response_model=BotActiveFunnelOut)

@@ -78,9 +78,11 @@ class BotService:
         data: BotCreate,
     ) -> BotOut:
         project = await self._resolve_project_for_create(data.project_id or project_id)
-        token = self._normalize_required(data.telegram_token, "telegram_token")
-        telegram_info = await self._fetch_telegram_bot_info(token)
-        identity_values = self._identity_values_from_get_me(telegram_info)
+        token = self._normalize_optional(data.telegram_token)
+        identity_values: dict[str, Any] = {}
+        if token is not None:
+            telegram_info = await self._fetch_telegram_bot_info(token)
+            identity_values = self._identity_values_from_get_me(telegram_info)
         name = (
             self._normalize_optional(data.name)
             or identity_values.get("telegram_first_name")
@@ -89,8 +91,12 @@ class BotService:
                 if identity_values.get("bot_username")
                 else None
             )
-            or "Telegram bot"
         )
+        if name is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Укажите название черновика или Telegram token",
+            )
 
         bot = await self.bot_repo.create(
             project_id=project.id,
@@ -99,7 +105,8 @@ class BotService:
             **identity_values,
             **self._bot_profile_values(data),
         )
-        await self._set_webhook_for_token(token=token, bot_id=bot.id)
+        if token is not None:
+            await self._set_webhook_for_token(token=token, bot_id=bot.id)
         return await self.get_bot(bot_id=bot.id, project_id=project.id)
 
     async def update_bot(

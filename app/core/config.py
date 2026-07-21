@@ -91,6 +91,7 @@ class Settings(BaseSettings):
 
     # Google Sheets export
     GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    GOOGLE_LEAD_IMPORT_FOLDER_ID: Optional[str] = None
 
     # Landings/domains
     LANDER_STORAGE_PATH: str = "storage/landers"

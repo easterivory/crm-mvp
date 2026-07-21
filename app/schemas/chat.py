@@ -77,6 +77,9 @@ class ChatOut(OrmBase):
     has_restarted_bot: bool = False
     unanswered_push_count: int = 0
     has_out_of_scenario_message: bool = False
+    is_imported: bool = False
+    imported_at: Optional[datetime] = None
+    import_identity_pending: bool = False
     last_read_at: Optional[datetime]
     reset_at: Optional[datetime]
     reset_count: int = 0

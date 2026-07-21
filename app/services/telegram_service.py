@@ -606,14 +606,57 @@ class TelegramService:
         )
         if chat is not None:
             contact_name = self._contact_name_from_message(message)
-            if contact_name and contact_name != chat.contact_name:
+            updates: dict[str, Any] = {}
+            is_imported = bool(getattr(chat, "is_imported", False))
+            identity_pending = bool(
+                getattr(chat, "import_identity_pending", False)
+            )
+            if (
+                contact_name
+                and contact_name != chat.contact_name
+                and (not is_imported or not chat.contact_name)
+            ):
+                updates["contact_name"] = contact_name
+            if is_imported and identity_pending:
+                updates["external_user_id"] = external_user_id
+                updates["import_identity_pending"] = False
+            if updates:
                 updated_chat = await self.chat_repo.update_by_id(
                     chat.id,
-                    contact_name=contact_name,
+                    **updates,
                 )
                 if updated_chat is not None:
                     chat = updated_chat
             return chat, False, False
+
+        username_key = self._telegram_username_key(message)
+        if username_key:
+            try:
+                async with self.db.begin_nested():
+                    imported_chat = await self.chat_repo.claim_pending_import_identity(
+                        project_id=project_id,
+                        bot_id=bot_id,
+                        username_key=username_key,
+                        external_chat_id=external_chat_id,
+                        external_user_id=external_user_id,
+                        contact_name=self._contact_name_from_message(message),
+                    )
+            except IntegrityError:
+                imported_chat = await self.chat_repo.get_by_external(
+                    project_id,
+                    external_chat_id,
+                    bot_id=bot_id,
+                )
+            if imported_chat is not None:
+                logger.info(
+                    "Claimed imported Telegram chat by username project_id=%s "
+                    "bot_id=%s chat_id=%s external_chat_id=%s",
+                    project_id,
+                    bot_id,
+                    imported_chat.id,
+                    external_chat_id,
+                )
+                return imported_chat, False, False
 
         # Build a human-readable contact name from available sender fields
         contact_name = self._contact_name_from_message(message)
@@ -1130,6 +1173,32 @@ class TelegramService:
             str(callback_query.message.chat.id),
             bot_id=bot_id,
         )
+        if chat is None and callback_query.from_user is not None:
+            username_key = self._normalize_username_key(
+                callback_query.from_user.username
+            )
+            if username_key:
+                external_chat_id = str(callback_query.message.chat.id)
+                external_user_id = str(callback_query.from_user.id)
+                try:
+                    async with self.db.begin_nested():
+                        chat = await self.chat_repo.claim_pending_import_identity(
+                            project_id=project_id,
+                            bot_id=bot_id,
+                            username_key=username_key,
+                            external_chat_id=external_chat_id,
+                            external_user_id=external_user_id,
+                            contact_name=compose_lead_name(
+                                callback_query.from_user.first_name,
+                                callback_query.from_user.last_name,
+                            ),
+                        )
+                except IntegrityError:
+                    chat = await self.chat_repo.get_by_external(
+                        project_id,
+                        external_chat_id,
+                        bot_id=bot_id,
+                    )
         if chat is None:
             logger.info(
                 "Telegram callback for unknown chat project_id=%s bot_id=%s chat_id=%s",
@@ -1225,6 +1294,17 @@ class TelegramService:
         source = callback_query.data or callback_query.id
         digest = sha256(source.encode("utf-8")).hexdigest()[:24]
         return f"callback:{source_message_id}:{digest}"
+
+    @classmethod
+    def _telegram_username_key(cls, message: TelegramMessage) -> str | None:
+        return cls._normalize_username_key(
+            message.from_user.username if message.from_user is not None else None
+        )
+
+    @staticmethod
+    def _normalize_username_key(value: str | None) -> str | None:
+        normalized = str(value or "").strip().removeprefix("@").lower()
+        return normalized or None
 
     @staticmethod
     def _contact_name_from_message(message: TelegramMessage) -> Optional[str]:

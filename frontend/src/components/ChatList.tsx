@@ -1,4 +1,4 @@
-import { ArrowDownWideNarrow, Ban, LoaderCircle, RefreshCw, RotateCcw, Star, UserRound } from 'lucide-react'
+import { ArrowDownWideNarrow, Ban, Database, LoaderCircle, RefreshCw, RotateCcw, Star, UserRound } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
@@ -28,6 +28,9 @@ export type Chat = {
   assignment_expires_at: string | null
   is_favorite: boolean
   has_restarted_bot: boolean
+  is_imported: boolean
+  imported_at: string | null
+  import_identity_pending: boolean
   unanswered_minutes: number
   last_incoming_at: string | null
   last_outgoing_at: string | null
@@ -595,6 +598,12 @@ export default function ChatList({
                     <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-200">
                       <Ban size={11} />
                       Бот заблокирован
+                    </span>
+                  ) : null}
+                  {chat.is_imported ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-violet-400/10 px-2 py-0.5 text-xs font-medium text-violet-200">
+                      <Database size={11} />
+                      Импорт
                     </span>
                   ) : null}
                   <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">

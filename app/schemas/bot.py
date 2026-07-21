@@ -12,7 +12,7 @@ class BotCreate(BaseModel):
     # so BotService falls back to the authenticated project for now.
     project_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(None, max_length=255)
-    telegram_token: str = Field(..., max_length=255)
+    telegram_token: Optional[str] = Field(None, max_length=255)
     # Ignored by BotService. Kept only so old clients do not fail validation.
     bot_username: Optional[str] = Field(None, max_length=255)
     crm_description: Optional[str] = Field(None, max_length=4096)

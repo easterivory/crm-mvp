@@ -1,6 +1,11 @@
 import api from '../../api/client'
 import type { PaginatedResponse } from '../../shared/types'
-import type { Bot } from './types'
+import type {
+  Bot,
+  BotLeadImport,
+  LeadImportExecuteResult,
+  LeadImportPreview,
+} from './types'
 
 export async function fetchBots(projectId?: string): Promise<Bot[]> {
   const { data } = await api.get<PaginatedResponse<Bot>>('/bots', {
@@ -74,4 +79,51 @@ export async function downloadBotAuditLogs(
   link.click()
   link.remove()
   window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+}
+
+export async function fetchBotLeadImports(
+  botId: string,
+  projectId: string,
+): Promise<BotLeadImport[]> {
+  const { data } = await api.get<BotLeadImport[]>(`/bots/${botId}/lead-imports`, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function createBotLeadImportTemplate(
+  botId: string,
+  projectId: string,
+): Promise<BotLeadImport> {
+  const { data } = await api.post<BotLeadImport>(`/bots/${botId}/lead-imports`, null, {
+    params: { project_id: projectId },
+  })
+  return data
+}
+
+export async function previewBotLeadImport(
+  botId: string,
+  importId: string,
+  projectId: string,
+): Promise<LeadImportPreview> {
+  const { data } = await api.post<LeadImportPreview>(
+    `/bots/${botId}/lead-imports/${importId}/preview`,
+    null,
+    { params: { project_id: projectId } },
+  )
+  return data
+}
+
+export async function executeBotLeadImport(
+  botId: string,
+  importId: string,
+  projectId: string,
+  previewChecksum: string,
+): Promise<LeadImportExecuteResult> {
+  const { data } = await api.post<LeadImportExecuteResult>(
+    `/bots/${botId}/lead-imports/${importId}/execute`,
+    { preview_checksum: previewChecksum },
+    { params: { project_id: projectId } },
+  )
+  return data
 }
