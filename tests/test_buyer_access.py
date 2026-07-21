@@ -6,6 +6,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from app.api.v1.routers.messages import (
+    _ensure_message_translation_access,
+    _ensure_message_write_access,
+)
 from app.core.constants import RoleName
 from app.schemas.lander import ProjectLanderCreate
 from app.services.buyer_bot_service import BuyerBotService, STATE_CREATE_LINK_BOT
@@ -13,6 +17,23 @@ from app.services.funnel_service import FunnelService
 from app.services.lander_admin_service import LanderAdminService
 from app.services.tracking_metrics_service import TrackingMetricsService
 from app.services.tracking_service import TrackingService
+
+
+class BuyerMessageTranslationAccessTests(unittest.TestCase):
+    def test_buyer_can_translate_existing_message_but_cannot_send(self) -> None:
+        buyer = SimpleNamespace(role_name=RoleName.BUYER)
+
+        _ensure_message_translation_access(buyer)
+
+        with self.assertRaises(HTTPException) as raised:
+            _ensure_message_write_access(buyer)
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_unknown_role_cannot_translate_messages(self) -> None:
+        with self.assertRaises(HTTPException) as raised:
+            _ensure_message_translation_access(SimpleNamespace(role_name="unknown"))
+
+        self.assertEqual(raised.exception.status_code, 403)
 
 
 class BuyerTrackingAccessTests(unittest.IsolatedAsyncioTestCase):

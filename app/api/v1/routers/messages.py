@@ -148,7 +148,7 @@ async def translate_message(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MessageOut:
-    _ensure_message_write_access(current_user)
+    _ensure_message_translation_access(current_user)
     return await MessageService(db).translate_message_on_demand(
         chat_id=chat_id,
         project_id=project_id,
@@ -372,4 +372,12 @@ def _ensure_message_write_access(current_user) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Buyers have read-only chat access",
+        )
+
+
+def _ensure_message_translation_access(current_user) -> None:
+    if current_user.role_name not in RoleName.ALL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current user cannot translate chat messages",
         )
