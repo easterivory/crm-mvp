@@ -32,6 +32,7 @@ class FunnelGraphValidator:
     def validate_graph(self, nodes: list[dict], edges: list[dict]) -> dict:
         parsed_nodes = self._parse_nodes(nodes)
         adjacency = self._build_adjacency(parsed_nodes, edges)
+        automatic_adjacency = self._automatic_adjacency(parsed_nodes, adjacency)
         errors: list[str] = []
         warnings: list[str] = []
 
@@ -69,10 +70,8 @@ class FunnelGraphValidator:
                     f"Блок '{node.title}' является тупиковым (нет связи для следующего шага)"
                 )
 
-        for cycle in self._find_cycles(adjacency):
+        for cycle in self._find_cycles(automatic_adjacency):
             if not cycle:
-                continue
-            if any(self._is_delay(parsed_nodes[node_id]) for node_id in cycle):
                 continue
             titles = [parsed_nodes[node_id].title for node_id in cycle]
             if len(titles) == 1:
@@ -80,7 +79,8 @@ class FunnelGraphValidator:
             else:
                 cycle_label = " -> ".join([*titles, titles[0]])
             errors.append(
-                "Обнаружен бесконечный цикл без задержек между блоками "
+                "Обнаружен бесконечный автоматический цикл без ожидания пользователя "
+                "или задержки между блоками "
                 f"{cycle_label}, это приведет к перегрузке процессора"
             )
 
@@ -149,6 +149,25 @@ class FunnelGraphValidator:
                     adjacency[node_id].append(target)
 
         return {node_id: list(dict.fromkeys(targets)) for node_id, targets in adjacency.items()}
+
+    def _automatic_adjacency(
+        self,
+        nodes: dict[str, _Node],
+        adjacency: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        """Return only transitions that runtime can traverse without pausing.
+
+        React Flow stores button targets as regular graph edges. A backward button
+        therefore forms a graph cycle, but not an automatic runtime cycle: the
+        message/input block stops and waits for a user action before following it.
+        Removing outgoing transitions from runtime boundaries keeps those funnels
+        valid while preserving protection against CPU-bound action/condition loops.
+        """
+
+        return {
+            node_id: [] if self._is_runtime_boundary(nodes[node_id]) else list(targets)
+            for node_id, targets in adjacency.items()
+        }
 
     def _reachable(self, start_ids: list[str], adjacency: dict[str, list[str]]) -> set[str]:
         seen: set[str] = set()
@@ -238,6 +257,41 @@ class FunnelGraphValidator:
 
     def _is_delay(self, node: _Node) -> bool:
         return node.kind in self.DELAY_KINDS
+
+    def _is_runtime_boundary(self, node: _Node) -> bool:
+        if self._is_delay(node):
+            return True
+        if node.kind == "input":
+            return True
+        if node.kind == "operator":
+            return True
+        if node.kind != "message":
+            return False
+
+        config = node.config
+        if config.get("wait_for_answer") is True:
+            return True
+        if self._has_buttons(config.get("buttons")):
+            return True
+
+        messages = config.get("messages")
+        if not isinstance(messages, list):
+            return False
+        return any(
+            isinstance(message, dict)
+            and (
+                message.get("wait_for_answer") is True
+                or message.get("waitForAnswer") is True
+                or self._has_buttons(message.get("buttons"))
+            )
+            for message in messages
+        )
+
+    @staticmethod
+    def _has_buttons(value: Any) -> bool:
+        return isinstance(value, list) and any(
+            isinstance(button, (dict, str)) for button in value
+        )
 
     @staticmethod
     def _normalize_kind(value: str) -> str:
