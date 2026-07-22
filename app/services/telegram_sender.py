@@ -1,9 +1,4 @@
-"""
-TelegramSenderService - outgoing Telegram Bot API client.
-
-Network/API failures are logged and returned as None. Callers decide whether
-the local CRM write should be persisted or rejected for that workflow.
-"""
+"""Outgoing Telegram Bot API client with opt-in delivery diagnostics."""
 import json
 import logging
 from pathlib import Path
@@ -24,16 +19,53 @@ from app.utils.video_processor import (
 logger = logging.getLogger(__name__)
 
 
+class TelegramDeliveryError(RuntimeError):
+    """Safe, token-free description of a failed Telegram delivery attempt."""
+
+    def __init__(
+        self,
+        *,
+        method: str,
+        description: str,
+        status_code: int | None = None,
+        error_code: int | None = None,
+        retry_after: int | None = None,
+        transient: bool = False,
+        blocked: bool = False,
+    ) -> None:
+        normalized_description = " ".join(str(description).split())[:500]
+        self.method = method
+        self.description = normalized_description or "Telegram returned no error details"
+        self.status_code = status_code
+        self.error_code = error_code
+        self.retry_after = retry_after
+        self.transient = transient
+        self.blocked = blocked
+
+        details = [f"method={method}"]
+        if status_code is not None:
+            details.append(f"http_status={status_code}")
+        if error_code is not None:
+            details.append(f"telegram_error_code={error_code}")
+        details.append(f"transient={str(transient).lower()}")
+        if retry_after is not None:
+            details.append(f"retry_after={retry_after}s")
+        details.append(f"description={self.description}")
+        super().__init__("Telegram delivery failed (" + ", ".join(details) + ")")
+
+
 class TelegramSenderService:
     def __init__(
         self,
         db: AsyncSession,
         *,
         release_transaction_before_network: bool = False,
+        raise_on_delivery_error: bool = False,
     ) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
         self.release_transaction_before_network = release_transaction_before_network
+        self.raise_on_delivery_error = raise_on_delivery_error
 
     async def _get_token(self, project_id: UUID, bot_id: UUID | None) -> str | None:
         token = (
@@ -55,10 +87,28 @@ class TelegramSenderService:
     ) -> dict[str, Any] | None:
         token = await self._get_token(project_id, bot_id)
         if not token:
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method="sendMessage",
+                    description="Bot token is not configured",
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
             return None
 
         message_text = text.strip()
         if not message_text:
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method="sendMessage",
+                    description="Message text is empty",
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
             return None
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -69,67 +119,33 @@ class TelegramSenderService:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                if data.get("ok") is not True or not isinstance(data.get("result"), dict):
-                    if self._is_bot_blocked_payload(data):
-                        await self._record_bot_blocked(
-                            project_id=project_id,
-                            bot_id=bot_id,
-                            external_chat_id=external_chat_id,
-                        )
-                        logger.info(
-                            "Telegram sendMessage blocked by user: project_id=%s chat_id=%s",
-                            project_id,
-                            external_chat_id,
-                        )
-                        return None
-                    logger.error(
-                        "Telegram sendMessage failed: project_id=%s chat_id=%s response=%s",
-                        project_id,
-                        external_chat_id,
-                        str(data)[:500],
-                    )
-                    return None
-                return data["result"]
-        except httpx.HTTPStatusError as exc:
-            if self._is_bot_blocked_response(exc.response):
-                await self._record_bot_blocked(
-                    project_id=project_id,
-                    bot_id=bot_id,
-                    external_chat_id=external_chat_id,
-                )
-                logger.info(
-                    "Telegram sendMessage blocked by user: project_id=%s chat_id=%s",
-                    project_id,
-                    external_chat_id,
-                )
-                return None
-            logger.error(
-                "Telegram sendMessage failed: project_id=%s chat_id=%s "
-                "status_code=%s response=%s",
-                project_id,
-                external_chat_id,
-                exc.response.status_code,
-                exc.response.text[:500],
-            )
-            return None
         except httpx.HTTPError as exc:
-            logger.error(
-                "Telegram sendMessage failed: project_id=%s chat_id=%s error_type=%s",
-                project_id,
-                external_chat_id,
-                exc.__class__.__name__,
+            await self._handle_delivery_error(
+                self._network_delivery_error("sendMessage", exc),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
             )
             return None
-        except Exception:
-            logger.exception(
-                "Unexpected error while sending Telegram message: "
-                "project_id=%s chat_id=%s",
-                project_id,
-                external_chat_id,
+        except Exception as exc:
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method="sendMessage",
+                    description=f"Unexpected client error ({exc.__class__.__name__})",
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
             )
             return None
+
+        return await self._result_or_delivery_error(
+            method="sendMessage",
+            response=response,
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+        )
 
     async def send_photo(
         self,
@@ -359,6 +375,15 @@ class TelegramSenderService:
     ) -> dict[str, Any] | None:
         token = await self._get_token(project_id, bot_id)
         if not token:
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method=method,
+                    description="Bot token is not configured",
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
             return None
 
         url = f"https://api.telegram.org/bot{token}/{method}"
@@ -401,79 +426,164 @@ class TelegramSenderService:
                     if reply_markup:
                         payload["reply_markup"] = reply_markup
                     response = await client.post(url, json=payload)
-                response.raise_for_status()
-                payload = response.json()
-                if payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
-                    if self._is_bot_blocked_payload(payload):
-                        await self._record_bot_blocked(
-                            project_id=project_id,
-                            bot_id=bot_id,
-                            external_chat_id=external_chat_id,
-                        )
-                        logger.info(
-                            "Telegram %s blocked by user: project_id=%s chat_id=%s",
-                            method,
-                            project_id,
-                            external_chat_id,
-                        )
-                        return None
-                    logger.error(
-                        "Telegram %s failed: project_id=%s chat_id=%s response=%s",
-                        method,
-                        project_id,
-                        external_chat_id,
-                        str(payload)[:500],
-                    )
-                    return None
-                return payload["result"]
-        except httpx.HTTPStatusError as exc:
-            if self._is_bot_blocked_response(exc.response):
-                await self._record_bot_blocked(
-                    project_id=project_id,
-                    bot_id=bot_id,
-                    external_chat_id=external_chat_id,
-                )
-                logger.info(
-                    "Telegram %s blocked by user: project_id=%s chat_id=%s",
-                    method,
-                    project_id,
-                    external_chat_id,
-                )
-                return None
-            logger.error(
-                "Telegram %s failed: project_id=%s chat_id=%s status_code=%s response=%s",
-                method,
-                project_id,
-                external_chat_id,
-                exc.response.status_code,
-                exc.response.text[:500],
-            )
-            return None
         except httpx.HTTPError as exc:
-            logger.error(
-                "Telegram %s failed: project_id=%s chat_id=%s error_type=%s",
-                method,
-                project_id,
-                external_chat_id,
-                exc.__class__.__name__,
+            await self._handle_delivery_error(
+                self._network_delivery_error(method, exc),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
             )
             return None
         except OSError as exc:
-            logger.error(
-                "Telegram %s failed to read media file: project_id=%s chat_id=%s error=%s",
-                method,
-                project_id,
-                external_chat_id,
-                exc,
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method=method,
+                    description=f"Media file could not be read ({exc.__class__.__name__})",
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
             )
             return None
-        except Exception:
-            logger.exception(
-                "Unexpected error while sending Telegram media: method=%s project_id=%s chat_id=%s",
-                method,
-                project_id,
-                external_chat_id,
+        except Exception as exc:
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method=method,
+                    description=f"Unexpected client error ({exc.__class__.__name__})",
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
             )
+            return None
+
+        return await self._result_or_delivery_error(
+            method=method,
+            response=response,
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+        )
+
+    async def _result_or_delivery_error(
+        self,
+        *,
+        method: str,
+        response: httpx.Response,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+    ) -> dict[str, Any] | None:
+        try:
+            payload: Any = response.json()
+        except ValueError:
+            payload = None
+
+        if (
+            response.is_success
+            and isinstance(payload, dict)
+            and payload.get("ok") is True
+            and isinstance(payload.get("result"), dict)
+        ):
+            return payload["result"]
+
+        error = self._response_delivery_error(
+            method=method,
+            response=response,
+            payload=payload,
+        )
+        await self._handle_delivery_error(
+            error,
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+        )
+        return None
+
+    @classmethod
+    def _response_delivery_error(
+        cls,
+        *,
+        method: str,
+        response: httpx.Response,
+        payload: Any,
+    ) -> TelegramDeliveryError:
+        description = ""
+        error_code: int | None = None
+        retry_after: int | None = None
+        if isinstance(payload, dict):
+            description = str(payload.get("description") or payload.get("error") or "")
+            error_code = cls._optional_int(payload.get("error_code"))
+            parameters = payload.get("parameters")
+            if isinstance(parameters, dict):
+                retry_after = cls._optional_int(parameters.get("retry_after"))
+        if not description:
+            description = response.text[:500] if response.text else "Invalid Telegram response"
+
+        effective_code = error_code or response.status_code
+        blocked = cls._is_bot_blocked_payload(payload) or cls._is_bot_blocked_text(description)
+        transient = effective_code == 429 or response.status_code >= 500
+        if response.is_success and not isinstance(payload, dict):
+            transient = True
+        return TelegramDeliveryError(
+            method=method,
+            description=description,
+            status_code=response.status_code,
+            error_code=error_code,
+            retry_after=retry_after,
+            transient=transient,
+            blocked=blocked,
+        )
+
+    @staticmethod
+    def _network_delivery_error(method: str, exc: httpx.HTTPError) -> TelegramDeliveryError:
+        return TelegramDeliveryError(
+            method=method,
+            description=f"Network error ({exc.__class__.__name__})",
+            transient=True,
+        )
+
+    async def _handle_delivery_error(
+        self,
+        error: TelegramDeliveryError,
+        *,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+    ) -> None:
+        if error.blocked:
+            await self._record_bot_blocked(
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
+
+        log_method = logger.info if error.blocked else (logger.warning if error.transient else logger.error)
+        log_method(
+            "Telegram delivery failed: method=%s project_id=%s bot_id=%s chat_id=%s "
+            "http_status=%s telegram_error_code=%s transient=%s blocked=%s "
+            "retry_after=%s description=%s",
+            error.method,
+            project_id,
+            bot_id,
+            external_chat_id,
+            error.status_code,
+            error.error_code,
+            error.transient,
+            error.blocked,
+            error.retry_after,
+            error.description,
+        )
+        if getattr(self, "raise_on_delivery_error", False):
+            raise error
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
             return None
 
     @staticmethod
@@ -670,6 +780,34 @@ class TelegramSenderService:
             method="setMyShortDescription",
             json_payload={"short_description": about_text or ""},
         )
+
+    async def set_bot_commands(
+        self,
+        token: str,
+        commands: list[dict[str, str]],
+    ) -> dict:
+        return await self._post_bot_api(
+            token=token,
+            method="setMyCommands",
+            json_payload={"commands": commands},
+        )
+
+    async def get_bot_commands(self, token: str) -> list[dict[str, str]]:
+        payload = await self._post_bot_api(
+            token=token,
+            method="getMyCommands",
+        )
+        result = payload.get("result")
+        if not isinstance(result, list):
+            raise RuntimeError("Telegram getMyCommands response does not contain commands")
+        return [
+            {
+                "command": str(item.get("command") or "").strip(),
+                "description": str(item.get("description") or "").strip(),
+            }
+            for item in result
+            if isinstance(item, dict)
+        ]
 
     async def set_bot_profile_photo(
         self,

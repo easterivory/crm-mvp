@@ -875,6 +875,49 @@ class FunnelRepository(BaseRepository[Funnel]):
             .values(status="failed", last_error=error[:2000], updated_at=func.now())
         )
 
+    async def requeue_scheduled_job(
+        self,
+        *,
+        job_id: UUID,
+        run_at: datetime,
+        error: str,
+        job_type: str,
+        step_id: UUID,
+        payload_json: dict,
+    ) -> bool:
+        result = await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(
+                FunnelScheduledJob.id == job_id,
+                FunnelScheduledJob.status == "running",
+            )
+            .values(
+                status="pending",
+                run_at=run_at,
+                last_error=error[:2000],
+                job_type=job_type,
+                step_id=step_id,
+                payload_json=payload_json,
+                updated_at=func.now(),
+            )
+        )
+        return result.rowcount == 1
+
+    async def mark_scheduled_job_cancelled(self, job_id: UUID, error: str) -> bool:
+        result = await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(
+                FunnelScheduledJob.id == job_id,
+                FunnelScheduledJob.status == "running",
+            )
+            .values(
+                status="cancelled",
+                last_error=error[:2000],
+                updated_at=func.now(),
+            )
+        )
+        return result.rowcount == 1
+
     async def cancel_scheduled_jobs_for_chat(
         self,
         *,

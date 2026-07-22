@@ -98,6 +98,7 @@ class MessageService:
         db: AsyncSession,
         *,
         release_transaction_before_telegram: bool = False,
+        raise_on_telegram_delivery_error: bool = False,
     ) -> None:
         self.db = db
         self.message_repo = MessageRepository(db)
@@ -109,6 +110,7 @@ class MessageService:
         self.telegram_sender = TelegramSenderService(
             db,
             release_transaction_before_network=release_transaction_before_telegram,
+            raise_on_delivery_error=raise_on_telegram_delivery_error,
         )
         self.translation_service = TranslationService(db)
 

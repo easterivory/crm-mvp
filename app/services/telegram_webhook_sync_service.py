@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.core.constants import TELEGRAM_WEBHOOK_ALLOWED_UPDATES
 from app.core.database import get_db_session
 from app.repositories.bot_repository import BotRepository
+from app.services.funnel_command_service import FunnelCommandService
 from app.services.telegram_sender import TelegramSenderService
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ async def sync_telegram_webhook_subscriptions() -> None:
         async with get_db_session() as db:
             repo = BotRepository(db)
             sender = TelegramSenderService(db)
+            command_service = FunnelCommandService(db)
             expected_updates = set(TELEGRAM_WEBHOOK_ALLOWED_UPDATES)
             offset = 0
 
@@ -34,6 +36,10 @@ async def sync_telegram_webhook_subscriptions() -> None:
                     token = str(bot.telegram_token or "").strip()
                     if not token:
                         continue
+                    await command_service.sync_for_bot_safely(
+                        bot_id=bot.id,
+                        project_id=bot.project_id,
+                    )
                     expected_url = f"{base_url}/api/v1/telegram/webhook/{bot.id}"
                     try:
                         info = await sender.get_webhook_info(token)

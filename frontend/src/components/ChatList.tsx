@@ -279,7 +279,8 @@ export default function ChatList({
   const [isMobileControlsOpen, setIsMobileControlsOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
-  const scrollAnchorRef = useRef<{ chatId: string; offset: number } | null>(null)
+  const scrollAnchorRef = useRef<{ chatId: string; offset: number; scrollTop: number } | null>(null)
+  const selectedChatIdRef = useRef(selectedChatId)
   const previousFilterIdentityRef = useRef('')
   const activeFilterCount = countActiveChatFilters(filters)
   const filterIdentity = useMemo(
@@ -289,12 +290,15 @@ export default function ChatList({
 
   const rememberScrollAnchor = useCallback(() => {
     const root = scrollContainerRef.current
-    if (!root) {
+    if (!root || root.clientHeight === 0) {
       return
     }
     const rootTop = root.getBoundingClientRect().top
     const items = Array.from(root.querySelectorAll<HTMLElement>('[data-chat-list-id]'))
-    const firstVisible = items.find((item) => item.getBoundingClientRect().bottom > rootTop + 1)
+    const visibleItems = items.filter((item) => item.getBoundingClientRect().bottom > rootTop + 1)
+    const firstVisible = visibleItems.find(
+      (item) => item.dataset.chatListId !== selectedChatIdRef.current,
+    ) ?? visibleItems[0]
     if (!firstVisible) {
       scrollAnchorRef.current = null
       return
@@ -302,8 +306,14 @@ export default function ChatList({
     scrollAnchorRef.current = {
       chatId: firstVisible.dataset.chatListId ?? '',
       offset: firstVisible.getBoundingClientRect().top - rootTop,
+      scrollTop: root.scrollTop,
     }
   }, [])
+
+  useLayoutEffect(() => {
+    selectedChatIdRef.current = selectedChatId
+    rememberScrollAnchor()
+  }, [rememberScrollAnchor, selectedChatId])
 
   useLayoutEffect(() => {
     const root = scrollContainerRef.current
@@ -327,6 +337,11 @@ export default function ChatList({
     if (target) {
       const nextOffset = target.getBoundingClientRect().top - root.getBoundingClientRect().top
       root.scrollTop += nextOffset - anchor.offset
+    } else {
+      root.scrollTop = Math.min(
+        anchor.scrollTop,
+        Math.max(0, root.scrollHeight - root.clientHeight),
+      )
     }
     rememberScrollAnchor()
   }, [chats, filterIdentity, rememberScrollAnchor])

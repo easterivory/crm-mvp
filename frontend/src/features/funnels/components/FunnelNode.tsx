@@ -75,6 +75,19 @@ const headerByType = {
 }
 
 function previewLines(step: FunnelStep) {
+  if (step.step_type === 'trigger') {
+    const triggerType = textValue(step.config_json, 'trigger_type') || 'new_chat'
+    if (triggerType === 'custom_command') {
+      const command = textValue(step.config_json, 'command').replace(/^\//, '')
+      const description = textValue(step.config_json, 'command_description')
+      return [`/${command || 'command'}`, ...(description ? [description] : [])]
+    }
+    if (triggerType === 'start_command') return ['/start']
+    if (triggerType === 'start_with_ref_code') return ['/start с ref-кодом']
+    if (triggerType === 'manual_operator_start') return ['Ручной запуск']
+    return ['Новый чат']
+  }
+
   if (step.step_type === 'message') {
     const messages = normalizeMessages(step.config_json)
     const lines = messages

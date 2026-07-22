@@ -5,10 +5,16 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
+import httpx
+
 from app.repositories.funnel_repository import FunnelRepository
 from app.services import operational_alert_service
+from app.services.funnel_runtime_service import (
+    FunnelRuntimeDeliveryError,
+    FunnelRuntimeService,
+)
 from app.services.operational_alert_service import OperationalAlertConfig
-from app.services.telegram_sender import TelegramSenderService
+from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderService
 from app.workers import funnel_scheduled_worker
 
 
@@ -24,6 +30,39 @@ class _SessionContext:
 
 
 class FunnelScheduledWorkerResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resume_job_executes_current_committed_step(self) -> None:
+        chat_id = uuid4()
+        funnel_version_id = uuid4()
+        step_id = uuid4()
+        step = SimpleNamespace(id=step_id)
+        job = SimpleNamespace(
+            id=uuid4(),
+            chat_id=chat_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step_id,
+            job_type="resume_step",
+        )
+        service = FunnelRuntimeService.__new__(FunnelRuntimeService)
+        service.repo = SimpleNamespace(
+            get_chat_funnel_state=AsyncMock(
+                return_value=SimpleNamespace(
+                    completed_at=None,
+                    is_paused=False,
+                    funnel_version_id=funnel_version_id,
+                    current_step_id=step_id,
+                )
+            ),
+            get_step=AsyncMock(return_value=step),
+        )
+        service._execute_from_step = AsyncMock()
+
+        await service.process_scheduled_job(job)
+
+        service._execute_from_step.assert_awaited_once_with(
+            chat_id=chat_id,
+            step=step,
+        )
+
     async def test_job_status_is_snapshotted_before_session_rollback(self) -> None:
         job_id = uuid4()
         db = MagicMock()
@@ -154,8 +193,131 @@ class FunnelScheduledWorkerResilienceTests(unittest.IsolatedAsyncioTestCase):
         runtime_class.assert_called_once_with(
             execution_db,
             release_transaction_before_external_io=True,
+            raise_on_telegram_delivery_error=True,
         )
         alert.assert_awaited_once()
+
+    async def test_transient_delivery_retry_does_not_emit_final_failure_alert(self) -> None:
+        job_id = uuid4()
+        execution_db = MagicMock()
+        execution_db.rollback = AsyncMock()
+        execution_db.invalidate = AsyncMock()
+        execution_repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(
+                return_value=SimpleNamespace(id=job_id, status="running")
+            )
+        )
+        error = TelegramDeliveryError(
+            method="sendMessage",
+            description="Network error (ReadTimeout)",
+            transient=True,
+        )
+        runtime = SimpleNamespace(process_scheduled_job=AsyncMock(side_effect=error))
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(execution_db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=execution_repo,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRuntimeService",
+                return_value=runtime,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "_resolve_delivery_failure",
+                new=AsyncMock(
+                    return_value={
+                        "status": "retry_scheduled",
+                        "attempts": 1,
+                        "retry_in_seconds": 5,
+                        "job_type": "message_sequence",
+                        "step_id": str(uuid4()),
+                        "failure_status_persisted": True,
+                    }
+                ),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "send_operational_alert",
+                new=AsyncMock(),
+            ) as alert,
+        ):
+            result = await funnel_scheduled_worker._execute_claimed_job(job_id)
+
+        self.assertEqual(result["status"], "retry_scheduled")
+        execution_db.rollback.assert_awaited_once()
+        alert.assert_not_awaited()
+
+    async def test_permanent_delivery_alert_contains_telegram_reason(self) -> None:
+        job_id = uuid4()
+        execution_db = MagicMock()
+        execution_db.rollback = AsyncMock()
+        execution_db.invalidate = AsyncMock()
+        execution_repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(
+                return_value=SimpleNamespace(id=job_id, status="running")
+            )
+        )
+        error = TelegramDeliveryError(
+            method="sendMessage",
+            description="Bad Request: message is too long",
+            status_code=400,
+            error_code=400,
+        )
+        runtime = SimpleNamespace(process_scheduled_job=AsyncMock(side_effect=error))
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(execution_db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=execution_repo,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRuntimeService",
+                return_value=runtime,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "_resolve_delivery_failure",
+                new=AsyncMock(
+                    return_value={
+                        "status": "failed",
+                        "attempts": 1,
+                        "job_type": "message_sequence",
+                        "step_id": str(uuid4()),
+                        "failure_status_persisted": True,
+                    }
+                ),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "send_operational_alert",
+                new=AsyncMock(return_value=True),
+            ) as alert,
+        ):
+            result = await funnel_scheduled_worker._execute_claimed_job(job_id)
+
+        self.assertEqual(result["status"], "failed")
+        details = alert.await_args.kwargs["details"]
+        self.assertEqual(details["telegram_http_status"], 400)
+        self.assertEqual(
+            details["telegram_description"],
+            "Bad Request: message is too long",
+        )
 
     async def test_run_once_continues_after_an_individual_job_failure(self) -> None:
         first_job_id = uuid4()
@@ -194,6 +356,189 @@ class FunnelScheduledWorkerResilienceTests(unittest.IsolatedAsyncioTestCase):
             execute.await_args_list,
             [call(first_job_id), call(second_job_id)],
         )
+
+    async def test_transient_delivery_failure_requeues_exact_message_item(self) -> None:
+        job_id = uuid4()
+        chat_id = uuid4()
+        funnel_version_id = uuid4()
+        step_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.commit = AsyncMock()
+        db.invalidate = AsyncMock()
+        job = SimpleNamespace(
+            id=job_id,
+            status="running",
+            attempts=1,
+            chat_id=chat_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step_id,
+            job_type="delay_step",
+            payload_json={},
+        )
+        state = SimpleNamespace(
+            completed_at=None,
+            is_paused=False,
+            funnel_version_id=funnel_version_id,
+            current_step_id=step_id,
+        )
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(return_value=job),
+            get_chat_funnel_state=AsyncMock(return_value=state),
+            requeue_scheduled_job=AsyncMock(return_value=True),
+        )
+        telegram_error = TelegramDeliveryError(
+            method="sendMessage",
+            description="Too Many Requests: retry later",
+            status_code=429,
+            error_code=429,
+            retry_after=12,
+            transient=True,
+        )
+        runtime_error = FunnelRuntimeDeliveryError(
+            telegram_error,
+            retry_step_id=step_id,
+            retry_job_type="message_sequence",
+            retry_payload={"message_index": 3},
+        )
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+        ):
+            result = await funnel_scheduled_worker._resolve_delivery_failure(
+                job_id,
+                runtime_error,
+                str(runtime_error),
+            )
+
+        self.assertEqual(result["status"], "retry_scheduled")
+        self.assertEqual(result["retry_in_seconds"], 12)
+        requeue = repo.requeue_scheduled_job.await_args.kwargs
+        self.assertEqual(requeue["job_type"], "message_sequence")
+        self.assertEqual(requeue["step_id"], step_id)
+        self.assertEqual(requeue["payload_json"], {"message_index": 3})
+        db.commit.assert_awaited_once()
+
+    async def test_transient_delivery_after_committed_transition_resumes_current_step(self) -> None:
+        job_id = uuid4()
+        chat_id = uuid4()
+        funnel_version_id = uuid4()
+        previous_step_id = uuid4()
+        current_step_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.commit = AsyncMock()
+        db.invalidate = AsyncMock()
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(
+                return_value=SimpleNamespace(
+                    status="running",
+                    attempts=1,
+                    chat_id=chat_id,
+                    funnel_version_id=funnel_version_id,
+                    step_id=previous_step_id,
+                    job_type="delay_step",
+                    payload_json={},
+                )
+            ),
+            get_chat_funnel_state=AsyncMock(
+                return_value=SimpleNamespace(
+                    completed_at=None,
+                    is_paused=False,
+                    funnel_version_id=funnel_version_id,
+                    current_step_id=current_step_id,
+                )
+            ),
+            requeue_scheduled_job=AsyncMock(return_value=True),
+        )
+        error = TelegramDeliveryError(
+            method="sendMessage",
+            description="Network error (ConnectTimeout)",
+            transient=True,
+        )
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+        ):
+            result = await funnel_scheduled_worker._resolve_delivery_failure(
+                job_id,
+                error,
+                str(error),
+            )
+
+        self.assertEqual(result["status"], "retry_scheduled")
+        requeue = repo.requeue_scheduled_job.await_args.kwargs
+        self.assertEqual(requeue["job_type"], "resume_step")
+        self.assertEqual(requeue["step_id"], current_step_id)
+        self.assertEqual(requeue["payload_json"], {})
+
+    async def test_user_block_cancels_job_without_retry(self) -> None:
+        job_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.commit = AsyncMock()
+        db.invalidate = AsyncMock()
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(
+                return_value=SimpleNamespace(
+                    status="running",
+                    attempts=1,
+                    chat_id=uuid4(),
+                    funnel_version_id=uuid4(),
+                    step_id=uuid4(),
+                    job_type="message_sequence",
+                    payload_json={"message_index": 0},
+                )
+            ),
+            mark_scheduled_job_cancelled=AsyncMock(return_value=True),
+        )
+        error = TelegramDeliveryError(
+            method="sendMessage",
+            description="Forbidden: bot was blocked by the user",
+            status_code=403,
+            error_code=403,
+            blocked=True,
+        )
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+        ):
+            result = await funnel_scheduled_worker._resolve_delivery_failure(
+                job_id,
+                error,
+                str(error),
+            )
+
+        self.assertEqual(result["status"], "cancelled")
+        repo.mark_scheduled_job_cancelled.assert_awaited_once()
+        db.commit.assert_awaited_once()
 
     async def test_stale_jobs_are_requeued_or_failed_by_attempt_count(self) -> None:
         db = SimpleNamespace(
@@ -250,6 +595,55 @@ class TelegramTransactionBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(token, "telegram-token")
         db.commit.assert_not_awaited()
+
+    async def test_default_sender_keeps_none_contract_for_telegram_failure(self) -> None:
+        sender = TelegramSenderService(MagicMock())
+        response = httpx.Response(
+            429,
+            request=httpx.Request("POST", "https://api.telegram.org/bot-redacted/sendMessage"),
+            json={
+                "ok": False,
+                "error_code": 429,
+                "description": "Too Many Requests: retry later",
+                "parameters": {"retry_after": 9},
+            },
+        )
+
+        result = await sender._result_or_delivery_error(
+            method="sendMessage",
+            response=response,
+            project_id=uuid4(),
+            bot_id=uuid4(),
+            external_chat_id="123",
+        )
+
+        self.assertIsNone(result)
+
+    async def test_strict_sender_exposes_safe_retry_metadata(self) -> None:
+        sender = TelegramSenderService(MagicMock(), raise_on_delivery_error=True)
+        response = httpx.Response(
+            429,
+            request=httpx.Request("POST", "https://api.telegram.org/bot-secret/sendMessage"),
+            json={
+                "ok": False,
+                "error_code": 429,
+                "description": "Too Many Requests: retry later",
+                "parameters": {"retry_after": 9},
+            },
+        )
+
+        with self.assertRaises(TelegramDeliveryError) as raised:
+            await sender._result_or_delivery_error(
+                method="sendMessage",
+                response=response,
+                project_id=uuid4(),
+                bot_id=uuid4(),
+                external_chat_id="123",
+            )
+
+        self.assertTrue(raised.exception.transient)
+        self.assertEqual(raised.exception.retry_after, 9)
+        self.assertNotIn("bot-secret", str(raised.exception))
 
 
 class OperationalAlertTests(unittest.IsolatedAsyncioTestCase):

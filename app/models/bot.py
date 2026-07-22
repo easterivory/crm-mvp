@@ -41,6 +41,12 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
     crm_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     telegram_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     telegram_about: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    telegram_managed_commands: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     active_funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=True
     )

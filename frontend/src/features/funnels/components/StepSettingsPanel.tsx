@@ -204,21 +204,65 @@ export default function StepSettingsPanel({
       {isSupported ? (
         <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
           {step.block_type === 'generic_trigger' ? (
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Триггер
-              </span>
-              <select
-                value={textValue(step.config_json, 'trigger_type') || 'new_chat'}
-                onChange={(event) => patchConfig({ trigger_type: event.target.value })}
-                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
-              >
-                <option value="new_chat">Новый чат</option>
-                <option value="start_command">/start</option>
-                <option value="start_with_ref_code">/start с ref-кодом</option>
-                <option value="manual_operator_start">Ручной запуск</option>
-              </select>
-            </label>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Триггер
+                </span>
+                <select
+                  value={textValue(step.config_json, 'trigger_type') || 'new_chat'}
+                  onChange={(event) => patchConfig({ trigger_type: event.target.value })}
+                  className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
+                >
+                  <option value="new_chat">Новый чат</option>
+                  <option value="start_command">/start</option>
+                  <option value="start_with_ref_code">/start с ref-кодом</option>
+                  <option value="custom_command">Кастомная команда</option>
+                  <option value="manual_operator_start">Ручной запуск</option>
+                </select>
+              </label>
+
+              {textValue(step.config_json, 'trigger_type') === 'custom_command' ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Команда
+                    </span>
+                    <div className="flex overflow-hidden rounded-lg border border-white/10 bg-background/70 focus-within:ring-2 focus-within:ring-accent-400/50">
+                      <span className="flex h-10 shrink-0 items-center border-r border-white/10 px-3 text-sm text-cyan-200">
+                        /
+                      </span>
+                      <input
+                        value={textValue(step.config_json, 'command').replace(/^\//, '')}
+                        onChange={(event) =>
+                          patchConfig({
+                            command: event.target.value.toLowerCase().replace(/^\//, ''),
+                          })
+                        }
+                        maxLength={32}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        placeholder="help"
+                        className="h-10 min-w-0 flex-1 bg-transparent px-3 text-base text-gray-100 outline-none md:text-sm"
+                      />
+                    </div>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Подпись в меню Telegram
+                    </span>
+                    <input
+                      value={textValue(step.config_json, 'command_description')}
+                      onChange={(event) => patchConfig({ command_description: event.target.value })}
+                      maxLength={256}
+                      placeholder="Помощь"
+                      className="h-10 w-full rounded-lg border border-white/10 bg-background/70 px-3 text-base text-gray-100 outline-none ring-accent-400/50 focus:ring-2 md:text-sm"
+                    />
+                  </label>
+                </>
+              ) : null}
+            </div>
           ) : null}
 
           {step.block_type === 'generic_message' ? (

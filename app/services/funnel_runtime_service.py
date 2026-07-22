@@ -15,6 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
 from app.core.lead_names import normalize_name_part, split_lead_name
+from app.core.telegram_commands import (
+    command_from_trigger_step,
+    is_custom_command_trigger,
+    normalize_telegram_command,
+)
 from app.models.lead import Lead
 from app.models.user import User
 from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
@@ -36,7 +41,7 @@ from app.services.funnel_block_registry import is_supported_lead_field_key
 from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
 from app.services.lead_scoring_service import LeadScoringService
 from app.services.lead_event_service import LeadEventService
-from app.services.telegram_sender import TelegramSenderService
+from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderService
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,24 @@ MANUAL_STATUS_CODE_CANDIDATES = (
 )
 
 
+class FunnelRuntimeDeliveryError(RuntimeError):
+    """Telegram failure plus the exact funnel position that is safe to retry."""
+
+    def __init__(
+        self,
+        telegram_error: TelegramDeliveryError,
+        *,
+        retry_step_id: UUID,
+        retry_job_type: str,
+        retry_payload: dict[str, Any] | None = None,
+    ) -> None:
+        self.telegram_error = telegram_error
+        self.retry_step_id = retry_step_id
+        self.retry_job_type = retry_job_type
+        self.retry_payload = dict(retry_payload or {})
+        super().__init__(str(telegram_error))
+
+
 class FunnelRuntimeService:
     """
     Runtime foundation for published funnel execution.
@@ -80,6 +103,7 @@ class FunnelRuntimeService:
         db: AsyncSession,
         *,
         release_transaction_before_external_io: bool = False,
+        raise_on_telegram_delivery_error: bool = False,
     ) -> None:
         self.db = db
         self.release_transaction_before_external_io = release_transaction_before_external_io
@@ -96,6 +120,7 @@ class FunnelRuntimeService:
         self.message_service = MessageService(
             db,
             release_transaction_before_telegram=release_transaction_before_external_io,
+            raise_on_telegram_delivery_error=raise_on_telegram_delivery_error,
         )
         self.scoring = LeadScoringService(db)
         self.chat_audit = ChatAuditService(db)
@@ -167,7 +192,7 @@ class FunnelRuntimeService:
             return await self.repo.get_step(existing.current_step_id)
 
         steps = await self.repo.list_steps(funnel_version_id)
-        trigger = next((step for step in steps if step.step_type == "trigger"), None)
+        trigger = self._default_start_trigger(steps)
         if trigger is None:
             logger.error(
                 "Active funnel runtime cannot start: no trigger step "
@@ -210,6 +235,80 @@ class FunnelRuntimeService:
             initial_step.id,
         )
         return await self._execute_from_step(chat_id=chat_id, step=initial_step)
+
+    async def get_custom_command_trigger(
+        self,
+        *,
+        funnel_version_id: UUID,
+        command: str,
+    ) -> Optional[FunnelStep]:
+        normalized = normalize_telegram_command(command)
+        if not normalized or normalized == "start":
+            return None
+        for step in await self.repo.list_steps(funnel_version_id):
+            definition = command_from_trigger_step(step)
+            if definition is not None and definition.command == normalized:
+                return step
+        return None
+
+    async def execute_custom_command_for_chat(
+        self,
+        *,
+        chat_id: UUID,
+        funnel_id: UUID,
+        funnel_version_id: UUID,
+        command: str,
+    ) -> Optional[FunnelStep]:
+        if not await self.repo.lock_chat_for_runtime(chat_id):
+            return None
+        trigger = await self.get_custom_command_trigger(
+            funnel_version_id=funnel_version_id,
+            command=command,
+        )
+        if trigger is None:
+            return None
+
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.repo.upsert_chat_funnel_state(
+            chat_id=chat_id,
+            funnel_id=funnel_id,
+            funnel_version_id=funnel_version_id,
+            current_step_id=trigger.id,
+            entered_step_at=datetime.now(timezone.utc),
+            waiting_for_answer=False,
+            is_paused=False,
+            completed_at=None,
+            runtime_json={
+                "custom_command": {
+                    "command": normalize_telegram_command(command),
+                    "trigger_step_id": str(trigger.id),
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        await self._log_runtime_step(chat_id=chat_id, step=trigger, status="success")
+        logger.info(
+            "Executing custom funnel command chat_id=%s funnel_id=%s "
+            "funnel_version_id=%s command=/%s trigger_step_id=%s",
+            chat_id,
+            funnel_id,
+            funnel_version_id,
+            normalize_telegram_command(command),
+            trigger.id,
+        )
+        await self._execute_from_step(chat_id=chat_id, step=trigger)
+        return trigger
+
+    @staticmethod
+    def _default_start_trigger(steps: list[FunnelStep]) -> Optional[FunnelStep]:
+        return next(
+            (
+                step
+                for step in steps
+                if step.step_type == "trigger" and not is_custom_command_trigger(step)
+            ),
+            None,
+        )
 
     async def get_current_step(self, chat_id: UUID) -> Optional[FunnelStep]:
         state = await self.repo.get_chat_funnel_state(chat_id)
@@ -1037,6 +1136,10 @@ class FunnelRuntimeService:
             logger.warning("Scheduled funnel job references missing step job_id=%s", job.id)
             return
 
+        if job.job_type == "resume_step":
+            await self._execute_from_step(chat_id=job.chat_id, step=step)
+            return
+
         if job.job_type == "message_sequence":
             index = int((job.payload_json or {}).get("message_index") or 0)
             next_step = await self._execute_message_sequence(
@@ -1352,17 +1455,25 @@ class FunnelRuntimeService:
                 return step
 
             buttons = self._buttons_from_message_item(item)
-            sent = await self._send_message_item(
-                chat_id=chat_id,
-                step=step,
-                item=item,
-                reply_markup=self._reply_markup_for_buttons(
+            try:
+                sent = await self._send_message_item(
+                    chat_id=chat_id,
                     step=step,
-                    buttons=buttons,
-                    message_index=index,
-                    button_mode=self._message_item_button_mode(item),
-                ),
-            )
+                    item=item,
+                    reply_markup=self._reply_markup_for_buttons(
+                        step=step,
+                        buttons=buttons,
+                        message_index=index,
+                        button_mode=self._message_item_button_mode(item),
+                    ),
+                )
+            except TelegramDeliveryError as exc:
+                raise FunnelRuntimeDeliveryError(
+                    exc,
+                    retry_step_id=step.id,
+                    retry_job_type="message_sequence",
+                    retry_payload={"message_index": index},
+                ) from exc
             if not sent:
                 logger.warning(
                     "Message sequence item has no deliverable payload chat_id=%s step_id=%s index=%s",

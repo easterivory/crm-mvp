@@ -25,6 +25,7 @@ from app.schemas.bot import (
     BotWebhookOut,
 )
 from app.services.access_control import resolve_scoped_project_id
+from app.services.funnel_command_service import FunnelCommandService
 from app.services.telegram_bot_avatar_service import (
     BotAvatarUnavailableError,
     TelegramBotAvatarService,
@@ -44,6 +45,7 @@ class BotService:
         self.project_repo = ProjectRepository(db)
         self.telegram_sender = TelegramSenderService(db)
         self.avatar_service = TelegramBotAvatarService(sender=self.telegram_sender)
+        self.funnel_commands = FunnelCommandService(db)
 
     async def list_bots(
         self,
@@ -107,6 +109,10 @@ class BotService:
         )
         if token is not None:
             await self._set_webhook_for_token(token=token, bot_id=bot.id)
+            await self._sync_funnel_commands_after_commit(
+                bot_id=bot.id,
+                project_id=project.id,
+            )
         return await self.get_bot(bot_id=bot.id, project_id=project.id)
 
     async def update_bot(
@@ -166,6 +172,10 @@ class BotService:
 
         if new_token is not None:
             await self.avatar_service.invalidate(bot_id)
+            await self._sync_funnel_commands_after_commit(
+                bot_id=bot_id,
+                project_id=project_id,
+            )
 
         if new_token and old_token and old_token != new_token:
             await self._delete_webhook_safely(old_token)
@@ -376,6 +386,10 @@ class BotService:
             or bot.name
         )
         await self.bot_repo.update_in_project(bot.id, project_id, **identity_values)
+        await self._sync_funnel_commands_after_commit(
+            bot_id=bot.id,
+            project_id=project_id,
+        )
         return BotWebhookOut(
             ok=True,
             webhook_url=webhook_url,
@@ -406,6 +420,10 @@ class BotService:
         updated = await self.bot_repo.update_in_project(bot_id, project_id, **identity_values)
         if updated is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        await self._sync_funnel_commands_after_commit(
+            bot_id=bot_id,
+            project_id=project_id,
+        )
         return BotOut.model_validate(updated)
 
     async def telegram_status(self, bot_id: UUID, project_id: UUID) -> BotTelegramStatusOut:
@@ -596,6 +614,18 @@ class BotService:
             await self.telegram_sender.delete_webhook(token)
         except Exception:
             logger.warning("Could not delete old Telegram webhook", exc_info=True)
+
+    async def _sync_funnel_commands_after_commit(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> None:
+        await self.db.commit()
+        await self.funnel_commands.sync_for_bot_safely(
+            bot_id=bot_id,
+            project_id=project_id,
+        )
 
     async def _fetch_telegram_bot_info(self, token: str) -> dict[str, Any]:
         try:

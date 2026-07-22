@@ -51,6 +51,7 @@ from app.core.constants import (
     SenderType,
 )
 from app.core.lead_names import compose_lead_name, normalize_name_part, resolve_lead_names
+from app.core.telegram_commands import extract_telegram_command
 from app.models.chat import Chat
 from app.models.lead import Lead
 from app.repositories.bot_repository import BotRepository
@@ -282,6 +283,44 @@ class TelegramService:
             start_payload.utm_data,
         )
         is_start_command = self._is_start_command(message.text)
+        custom_command = extract_telegram_command(message.text)
+        if (
+            custom_command is not None
+            and custom_command != "start"
+            and await self._has_active_custom_command(
+                project_id=project_id,
+                bot_id=bot_id,
+                command=custom_command,
+            )
+        ):
+            await self.db.commit()
+            queued = await enqueue_funnel_start(
+                chat_id,
+                message_id,
+                fresh_lifecycle=False,
+            )
+            if queued:
+                logger.info(
+                    "Custom funnel command queued chat_id=%s message_id=%s command=/%s",
+                    chat_id,
+                    message_id,
+                    custom_command,
+                )
+            else:
+                result = await self.process_queued_funnel_start(
+                    chat_id=chat_id,
+                    trigger_message_id=message_id,
+                    fresh_lifecycle=False,
+                )
+                logger.warning(
+                    "Funnel queue unavailable; custom command processed inline "
+                    "chat_id=%s message_id=%s command=/%s result=%s",
+                    chat_id,
+                    message_id,
+                    custom_command,
+                    result,
+                )
+            return
         if is_start_command and not should_start_runtime:
             await self.chat_repo.mark_bot_restarted(
                 chat_id=chat_id,
@@ -918,6 +957,39 @@ class TelegramService:
             or chat.bot_id is None
         ):
             return "unavailable"
+        inferred_command = extract_telegram_command(getattr(message, "body", None))
+        requested_command = inferred_command
+        if requested_command and requested_command != "start":
+            active_funnel, active_version = (
+                await self.funnel_runtime.get_active_published_funnel_for_bot(
+                    chat.bot_id,
+                    chat.project_id,
+                )
+            )
+            if active_funnel is None or active_version is None:
+                if not fresh_lifecycle:
+                    await self.message_repo.claim_funnel_processing([message.id])
+                    return "command_unavailable"
+            else:
+                trigger = await self.funnel_runtime.get_custom_command_trigger(
+                    funnel_version_id=active_version.id,
+                    command=requested_command,
+                )
+                if trigger is None:
+                    if not fresh_lifecycle:
+                        await self.message_repo.claim_funnel_processing([message.id])
+                        return "command_unavailable"
+                else:
+                    if not await self.message_repo.claim_funnel_processing([message.id]):
+                        return "already_processed"
+                    await self.bot_repo.reset_chat_state(chat.id)
+                    started = await self.funnel_runtime.execute_custom_command_for_chat(
+                        chat_id=chat.id,
+                        funnel_id=active_funnel.id,
+                        funnel_version_id=active_version.id,
+                        command=requested_command,
+                    )
+                    return "processed" if started is not None else "command_unavailable"
         if not await self.message_repo.claim_funnel_processing([message.id]):
             return "already_processed"
         await self._process_runtime_or_legacy(
@@ -929,6 +1001,27 @@ class TelegramService:
             fresh_lifecycle=fresh_lifecycle,
         )
         return "processed"
+
+    async def _has_active_custom_command(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+        command: str,
+    ) -> bool:
+        active_funnel, active_version = (
+            await self.funnel_runtime.get_active_published_funnel_for_bot(
+                bot_id,
+                project_id,
+            )
+        )
+        if active_funnel is None or active_version is None:
+            return False
+        trigger = await self.funnel_runtime.get_custom_command_trigger(
+            funnel_version_id=active_version.id,
+            command=command,
+        )
+        return trigger is not None
 
     async def _run_active_funnel_runtime(
         self,

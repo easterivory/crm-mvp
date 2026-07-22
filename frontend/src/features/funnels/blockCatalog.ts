@@ -27,7 +27,7 @@ export const universalBlocks: UniversalBlock[] = [
     blockType: 'generic_trigger',
     label: 'Старт / Триггер',
     defaultTitle: 'Старт',
-    description: 'Запускает сценарий: новый чат, /start или ручной запуск.',
+    description: 'Запускает сценарий: новый чат, /start, кастомная команда или ручной запуск.',
     defaultConfig: { trigger_type: 'new_chat' },
   },
   {

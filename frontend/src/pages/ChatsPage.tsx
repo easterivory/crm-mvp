@@ -20,6 +20,7 @@ import {
   Search,
   Send,
   Star,
+  Trash2,
   UserRound,
   Video,
   Phone,
@@ -341,7 +342,7 @@ function getChatTitle(chat: Chat) {
   return chat.contact_name || `Telegram ${chat.external_chat_id}`
 }
 
-function getErrorMessage(err: unknown) {
+function getErrorMessage(err: unknown, fallback = 'Запрос не выполнен. Попробуйте снова.') {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail
     if (typeof detail === 'string' && detail.length > 0) {
@@ -352,7 +353,7 @@ function getErrorMessage(err: unknown) {
     }
   }
 
-  return 'Запрос не выполнен. Попробуйте снова.'
+  return fallback
 }
 
 function isRequestCanceled(err: unknown) {
@@ -716,6 +717,8 @@ export default function ChatsPage() {
   const [newSnippetType, setNewSnippetType] = useState<ProjectSnippet['type']>('text')
   const [newSnippetFile, setNewSnippetFile] = useState<File | null>(null)
   const [isCreatingSnippet, setIsCreatingSnippet] = useState(false)
+  const [snippetPendingDeletion, setSnippetPendingDeletion] = useState<ProjectSnippet | null>(null)
+  const [isDeletingSnippet, setIsDeletingSnippet] = useState(false)
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([])
   const [isScheduleOpen, setIsScheduleOpen] = useState(false)
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
@@ -803,6 +806,7 @@ export default function ChatsPage() {
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const canCreateSnippets = user?.role_name === 'manager' || user?.role_name === 'admin' || user?.role_name === 'super_admin'
+  const canDeleteSnippets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const isBuyer = user?.role_name === 'buyer'
   const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
   const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users])
@@ -1857,6 +1861,26 @@ export default function ChatsPage() {
     }
   }
 
+  const handleDeleteSnippet = async () => {
+    if (!selectedProjectId || !snippetPendingDeletion || !canDeleteSnippets || isDeletingSnippet) {
+      return
+    }
+
+    const snippetId = snippetPendingDeletion.id
+    setIsDeletingSnippet(true)
+    try {
+      await api.delete(`/projects/${selectedProjectId}/snippets/${snippetId}`)
+      setSnippets((current) => current.filter((snippet) => snippet.id !== snippetId))
+      setSnippetMedia((current) => current?.id === snippetId ? null : current)
+      setSnippetPendingDeletion(null)
+      notify({ tone: 'success', message: 'Заготовка удалена.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось удалить заготовку.') })
+    } finally {
+      setIsDeletingSnippet(false)
+    }
+  }
+
   const handleTranslateMessage = async (message: Message) => {
     const isOutgoing = message.sender_type === 'manager' || message.sender_type === 'bot'
     const hasSavedAlternative = isOutgoing
@@ -2828,32 +2852,48 @@ export default function ChatsPage() {
                         {filteredSnippets.map((snippet) => {
                           const Icon = getMediaIcon(snippet.type)
                           return (
-                            <button
+                            <div
                               key={snippet.id}
-                              type="button"
-                              onClick={() => insertSnippetIntoComposer(snippet)}
-                              disabled={isSending}
-                              className="flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50"
+                              className="group flex items-start gap-1 rounded-lg transition hover:bg-white/[0.05]"
                             >
-                              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-accent-100">
-                                <Icon size={16} />
-                              </span>
-                              <span className="min-w-0 flex-1">
-                                <span className="flex items-center gap-2">
-                                  <span className="truncate text-sm font-semibold text-white">
-                                    {snippet.name}
-                                  </span>
-                                  <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] text-gray-400">
-                                    {mediaLabels[snippet.type] ?? snippet.type}
-                                  </span>
+                              <button
+                                type="button"
+                                onClick={() => insertSnippetIntoComposer(snippet)}
+                                disabled={isSending || isDeletingSnippet}
+                                className="flex min-w-0 flex-1 items-start gap-3 rounded-lg px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-accent-100">
+                                  <Icon size={16} />
                                 </span>
-                                {snippet.content ? (
-                                  <span className="mt-0.5 line-clamp-2 text-xs leading-5 text-gray-500">
-                                    {snippet.content}
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex items-center gap-2">
+                                    <span className="truncate text-sm font-semibold text-white">
+                                      {snippet.name}
+                                    </span>
+                                    <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] text-gray-400">
+                                      {mediaLabels[snippet.type] ?? snippet.type}
+                                    </span>
                                   </span>
-                                ) : null}
-                              </span>
-                            </button>
+                                  {snippet.content ? (
+                                    <span className="mt-0.5 line-clamp-2 text-xs leading-5 text-gray-500">
+                                      {snippet.content}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </button>
+                              {canDeleteSnippets ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setSnippetPendingDeletion(snippet)}
+                                  disabled={isDeletingSnippet}
+                                  className="mr-1 mt-2 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                  title={`Удалить заготовку «${snippet.name}»`}
+                                  aria-label={`Удалить заготовку «${snippet.name}»`}
+                                >
+                                  <Trash2 size={15} />
+                                </button>
+                              ) : null}
+                            </div>
                           )
                         })}
                       </div>
@@ -3263,6 +3303,22 @@ export default function ChatsPage() {
           isLoading={isUpdatingChatBlock}
           onCancel={() => setIsBlockConfirmOpen(false)}
           onConfirm={() => void handleSetChatBlocked(true)}
+        />
+      ) : null}
+
+      {snippetPendingDeletion ? (
+        <ConfirmDialog
+          title="Удалить заготовку?"
+          description={`«${snippetPendingDeletion.name}» исчезнет у всех операторов проекта. Это действие нельзя отменить.`}
+          confirmLabel="Удалить"
+          tone="danger"
+          isLoading={isDeletingSnippet}
+          onCancel={() => {
+            if (!isDeletingSnippet) {
+              setSnippetPendingDeletion(null)
+            }
+          }}
+          onConfirm={() => void handleDeleteSnippet()}
         />
       ) : null}
     </section>

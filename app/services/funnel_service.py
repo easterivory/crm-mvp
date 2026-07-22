@@ -11,6 +11,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, ChatEventType, EntityType, RoleName
+from app.core.telegram_commands import (
+    CUSTOM_COMMAND_TRIGGER_TYPE,
+    MAX_TELEGRAM_COMMANDS,
+    normalize_telegram_command,
+)
 from app.models.funnel import Funnel, FunnelStep, FunnelVersion
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
@@ -51,6 +56,7 @@ from app.services.funnel_block_registry import (
     FunnelBlockRegistry,
     is_supported_lead_field_key,
 )
+from app.services.funnel_command_service import FunnelCommandService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.funnel_validator import FunnelGraphValidator
 
@@ -67,6 +73,7 @@ class FunnelService:
         self.audit = AuditService(db)
         self.registry = FunnelBlockRegistry()
         self.graph_validator = FunnelGraphValidator()
+        self.command_service = FunnelCommandService(db)
 
     async def list_funnels(
         self,
@@ -306,6 +313,10 @@ class FunnelService:
             bot_id=funnel.bot_id,
             funnel_id=funnel.id,
         )
+        await self._sync_bot_commands_after_commit(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+        )
         assert updated is not None
         return await self._funnel_out(updated)
 
@@ -488,6 +499,10 @@ class FunnelService:
             version=version,
             project_id=project_id,
         )
+        await self._sync_bot_commands_after_commit(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+        )
         return await self.get_active_funnel_for_bot(
             bot_id=bot_id,
             project_id=project_id,
@@ -635,6 +650,10 @@ class FunnelService:
                 detail="Ошибка публикации воронки: база данных отклонила изменения версии.",
             ) from exc
         funnel = await self._get_funnel_or_404(funnel_id, project_id)
+        await self._sync_bot_commands_after_commit(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+        )
         _, active_version = await self.repo.get_active_funnel_for_bot(
             funnel.bot_id,
             project_id,
@@ -671,6 +690,10 @@ class FunnelService:
         await self.repo.sync_active_bot_version_for_funnel(
             funnel_id=funnel_id,
             version_id=version_id,
+        )
+        await self._sync_bot_commands_after_commit(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
         )
         _, active_version = await self.repo.get_active_funnel_for_bot(
             funnel.bot_id,
@@ -746,6 +769,10 @@ class FunnelService:
             project_id=project_id,
             current_user_id=current_user.id,
         )
+        await self._sync_bot_commands_after_commit(
+            bot_id=funnel.bot_id,
+            project_id=project_id,
+        )
         return FunnelVersionOut.model_validate(version).model_copy(
             update={"is_active_for_bot": True}
         )
@@ -816,6 +843,18 @@ class FunnelService:
             project_id=project_id,
             funnel_id=funnel.id,
             version_id=version.id,
+        )
+
+    async def _sync_bot_commands_after_commit(
+        self,
+        *,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> None:
+        await self.db.commit()
+        await self.command_service.sync_for_bot_safely(
+            bot_id=bot_id,
+            project_id=project_id,
         )
 
     async def _log_rollback_audit(
@@ -1072,8 +1111,25 @@ class FunnelService:
             errors.append(
                 self._issue("missing_trigger", "В воронке нужен стартовый триггер.", "error")
             )
+        elif strict_config and not any(
+            not (
+                step.block_type == "generic_trigger"
+                and str(step.config_json.get("trigger_type") or "").strip()
+                == CUSTOM_COMMAND_TRIGGER_TYPE
+            )
+            for step in triggers
+        ):
+            errors.append(
+                self._issue(
+                    "missing_default_trigger",
+                    "Добавьте обычный стартовый триггер для запуска воронки через /start.",
+                    "error",
+                )
+            )
 
         seen_keys: dict[str, FunnelStepIn] = {}
+        seen_commands: dict[str, FunnelStepIn] = {}
+        custom_command_count = 0
         for step in graph.steps:
             if step.id is None:
                 errors.append(
@@ -1130,6 +1186,42 @@ class FunnelService:
                             step_id=step.id,
                         )
                     )
+                if (
+                    step.step_type == "trigger"
+                    and step.block_type == "generic_trigger"
+                    and str(step.config_json.get("trigger_type") or "").strip()
+                    == CUSTOM_COMMAND_TRIGGER_TYPE
+                ):
+                    custom_command_count += 1
+                    command = normalize_telegram_command(step.config_json.get("command"))
+                    if command:
+                        first_step = seen_commands.get(command)
+                        if first_step is not None:
+                            errors.append(
+                                self._issue(
+                                    "duplicate_custom_command",
+                                    (
+                                        f"Команда /{command} дублируется у блоков "
+                                        f"«{first_step.title}» и «{step.title}»."
+                                    ),
+                                    "error",
+                                    step_id=step.id,
+                                )
+                            )
+                        else:
+                            seen_commands[command] = step
+
+        if strict_config and custom_command_count >= MAX_TELEGRAM_COMMANDS:
+            errors.append(
+                self._issue(
+                    "too_many_custom_commands",
+                    (
+                        f"Telegram поддерживает не более {MAX_TELEGRAM_COMMANDS} команд. "
+                        "Одна команда зарезервирована под /start."
+                    ),
+                    "error",
+                )
+            )
 
         adjacency: dict[UUID, list[UUID]] = {step_id: [] for step_id in step_ids}
         for edge in graph.edges:

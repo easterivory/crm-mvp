@@ -4,6 +4,11 @@ from dataclasses import dataclass
 import re
 from typing import Any, Literal
 
+from app.core.telegram_commands import (
+    CUSTOM_COMMAND_TRIGGER_TYPE,
+    TELEGRAM_COMMAND_RE,
+    normalize_telegram_command,
+)
 from app.schemas.funnel import FunnelBlockDefinitionOut, FunnelBlockRegistryOut
 
 
@@ -367,8 +372,23 @@ class FunnelBlockRegistry:
                 "start_command",
                 "start_with_ref_code",
                 "manual_operator_start",
+                CUSTOM_COMMAND_TRIGGER_TYPE,
             }:
                 errors.append("Выберите допустимый тип триггера.")
+            if trigger_type == CUSTOM_COMMAND_TRIGGER_TYPE:
+                command = normalize_telegram_command(config.get("command"))
+                description = str(config.get("command_description") or "").strip()
+                if not TELEGRAM_COMMAND_RE.fullmatch(command):
+                    errors.append(
+                        "Команда должна содержать 1–32 символа: латинские строчные буквы, "
+                        "цифры или подчёркивание."
+                    )
+                elif command == "start":
+                    errors.append("Команда /start зарезервирована для запуска бота.")
+                if not description:
+                    errors.append("Укажите подпись команды для меню Telegram.")
+                elif len(description) > 256:
+                    errors.append("Подпись команды не должна превышать 256 символов.")
         if block_type == "generic_message":
             messages = config.get("messages")
             def has_media_payload(message: dict) -> bool:
