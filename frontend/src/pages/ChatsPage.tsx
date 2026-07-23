@@ -397,6 +397,16 @@ function sortMessagesByDate(items: Message[]) {
   })
 }
 
+function mergeById<T extends { id: string }>(...groups: T[][]) {
+  const merged = new Map<string, T>()
+  for (const group of groups) {
+    for (const item of group) {
+      merged.set(item.id, item)
+    }
+  }
+  return [...merged.values()]
+}
+
 function paramsEqual(left: URLSearchParams, right: URLSearchParams) {
   return left.toString() === right.toString()
 }
@@ -695,6 +705,8 @@ export default function ChatsPage() {
   const [isChatsLoading, setIsChatsLoading] = useState(true)
   const [isChatsLoadingMore, setIsChatsLoadingMore] = useState(false)
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
+  const [isMessagesLoadingMore, setIsMessagesLoadingMore] = useState(false)
+  const [messageTotal, setMessageTotal] = useState(0)
   const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isPreparingTranslation, setIsPreparingTranslation] = useState(false)
@@ -747,10 +759,12 @@ export default function ChatsPage() {
   const chatQueryKeyRef = useRef('')
   const chatsAbortRef = useRef<AbortController | null>(null)
   const messagesAbortRef = useRef<AbortController | null>(null)
+  const olderMessagesAbortRef = useRef<AbortController | null>(null)
   const selectedChatAbortRef = useRef<AbortController | null>(null)
   const readRequestsRef = useRef<Set<string>>(new Set())
   const shouldAutoScrollMessagesRef = useRef(true)
   const latestLoadedMessageIdRef = useRef<string | null>(null)
+  const prependScrollAnchorRef = useRef<{ messageId: string; top: number } | null>(null)
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     window.requestAnimationFrame(() => {
@@ -773,16 +787,6 @@ export default function ChatsPage() {
     scrollMessagesToBottom()
     window.setTimeout(() => scrollMessagesToBottom(), 250)
   }, [scrollMessagesToBottom])
-
-  const handleMessagesScroll = useCallback(() => {
-    const container = messagesScrollRef.current
-    if (!container) {
-      return
-    }
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight
-    shouldAutoScrollMessagesRef.current = distanceFromBottom <= 96
-  }, [])
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
@@ -1440,8 +1444,17 @@ export default function ChatsPage() {
         shouldAutoScrollMessagesRef.current = true
       }
       latestLoadedMessageIdRef.current = latestMessageId
-      setMessages(nextMessages)
-      setAuditLogs(auditResponse.data)
+      setMessageTotal(messagesResponse.data.total)
+      setMessages((current) => (
+        showLoader
+          ? nextMessages
+          : sortMessagesByDate(mergeById(current, nextMessages))
+      ))
+      setAuditLogs((current) => (
+        showLoader
+          ? auditResponse.data
+          : mergeById(current, auditResponse.data)
+      ))
       if (hasNewLatestMessage) {
         void markChatAsRead(chatId)
       }
@@ -1462,6 +1475,109 @@ export default function ChatsPage() {
       }
     }
   }, [markChatAsRead, notify, selectedProjectId])
+
+  const loadOlderMessages = useCallback(async () => {
+    if (
+      !selectedChatId
+      || isMessagesLoading
+      || isMessagesLoadingMore
+      || messages.length >= messageTotal
+    ) {
+      return
+    }
+
+    const chatId = selectedChatId
+    const offset = messages.length
+    const anchorMessage = messages[0]
+    const container = messagesScrollRef.current
+    const anchorElement = anchorMessage
+      ? document.getElementById(`message-${anchorMessage.id}`)
+      : null
+    const anchorTop = container && anchorElement
+      ? anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top
+      : null
+
+    olderMessagesAbortRef.current?.abort()
+    const controller = new AbortController()
+    olderMessagesAbortRef.current = controller
+    setIsMessagesLoadingMore(true)
+
+    try {
+      const [messagesResponse, auditResponse] = await Promise.all([
+        api.get<PaginatedResponse<Message>>(`/chats/${chatId}/messages`, {
+          params: {
+            limit: MESSAGE_LIMIT,
+            offset,
+            ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+          },
+          signal: controller.signal,
+        }),
+        api.get<ChatAuditLog[]>(`/chats/${chatId}/audit-logs`, {
+          params: {
+            limit: MESSAGE_LIMIT,
+            offset: auditLogs.length,
+            ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
+          },
+          signal: controller.signal,
+        }),
+      ])
+      if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
+        return
+      }
+
+      const olderMessages = messagesResponse.data.items
+      setMessageTotal(messagesResponse.data.total)
+      if (olderMessages.length > 0) {
+        if (anchorMessage && anchorTop !== null) {
+          prependScrollAnchorRef.current = {
+            messageId: anchorMessage.id,
+            top: anchorTop,
+          }
+        }
+        shouldAutoScrollMessagesRef.current = false
+        setMessages((current) =>
+          sortMessagesByDate(mergeById(current, olderMessages)),
+        )
+      }
+      if (auditResponse.data.length > 0) {
+        setAuditLogs((current) => mergeById(current, auditResponse.data))
+      }
+    } catch (err) {
+      if (!isRequestCanceled(err)) {
+        notify({
+          tone: 'error',
+          message: getErrorMessage(err, 'Не удалось загрузить предыдущие сообщения.'),
+        })
+      }
+    } finally {
+      if (olderMessagesAbortRef.current === controller) {
+        olderMessagesAbortRef.current = null
+        setIsMessagesLoadingMore(false)
+      }
+    }
+  }, [
+    auditLogs.length,
+    isMessagesLoading,
+    isMessagesLoadingMore,
+    messageTotal,
+    messages,
+    notify,
+    selectedChatId,
+    selectedProjectId,
+  ])
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesScrollRef.current
+    if (!container) {
+      return
+    }
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight
+    shouldAutoScrollMessagesRef.current = distanceFromBottom <= 96
+    if (container.scrollTop <= 120) {
+      void loadOlderMessages()
+    }
+  }, [loadOlderMessages])
 
   const handleLeadSidebarChanged = useCallback(() => {
     void loadChats()
@@ -1554,7 +1670,12 @@ export default function ChatsPage() {
     setSelectedPresetId('')
     selectedChatIdRef.current = null
     setSelectedChatId(null)
+    messagesAbortRef.current?.abort()
+    olderMessagesAbortRef.current?.abort()
+    prependScrollAnchorRef.current = null
     setMessages([])
+    setMessageTotal(0)
+    setIsMessagesLoadingMore(false)
     latestLoadedMessageIdRef.current = null
     setAuditLogs([])
     syncChatSearchParams(EMPTY_CHAT_FILTERS, null)
@@ -1566,7 +1687,11 @@ export default function ChatsPage() {
       shouldAutoScrollMessagesRef.current = true
       latestLoadedMessageIdRef.current = null
       messagesAbortRef.current?.abort()
+      olderMessagesAbortRef.current?.abort()
+      prependScrollAnchorRef.current = null
       setMessages([])
+      setMessageTotal(0)
+      setIsMessagesLoadingMore(false)
       setAuditLogs([])
       setScheduledMessages([])
       setIsMessagesLoading(false)
@@ -1578,7 +1703,11 @@ export default function ChatsPage() {
 
     shouldAutoScrollMessagesRef.current = true
     latestLoadedMessageIdRef.current = null
+    olderMessagesAbortRef.current?.abort()
+    prependScrollAnchorRef.current = null
     setMessages([])
+    setMessageTotal(0)
+    setIsMessagesLoadingMore(false)
     setAuditLogs([])
     setScheduledMessages([])
     void markChatAsRead(selectedChatId)
@@ -1593,6 +1722,7 @@ export default function ChatsPage() {
     return () => {
       window.clearInterval(timer)
       messagesAbortRef.current?.abort()
+      olderMessagesAbortRef.current?.abort()
     }
   }, [loadMessages, loadScheduledMessages, loadSelectedChat, markChatAsRead, selectedChat?.project_id, selectedChatId, selectedProjectId])
 
@@ -1616,6 +1746,18 @@ export default function ChatsPage() {
   }, [selectedChatId])
 
   useLayoutEffect(() => {
+    const pendingAnchor = prependScrollAnchorRef.current
+    if (pendingAnchor) {
+      prependScrollAnchorRef.current = null
+      const container = messagesScrollRef.current
+      const anchorElement = document.getElementById(`message-${pendingAnchor.messageId}`)
+      if (container && anchorElement) {
+        const nextTop =
+          anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top
+        container.scrollTop += nextTop - pendingAnchor.top
+      }
+      return
+    }
     if (shouldAutoScrollMessagesRef.current) {
       scrollMessagesToBottom()
     }
@@ -1778,6 +1920,7 @@ export default function ChatsPage() {
           )
       shouldAutoScrollMessagesRef.current = true
       latestLoadedMessageIdRef.current = data.id
+      setMessageTotal((current) => current + 1)
       setMessages((current) => sortMessagesByDate([...current, data]))
       setChats((current) => current.map((chat) => (
         chat.id === selectedChatId
@@ -2489,6 +2632,23 @@ export default function ChatsPage() {
 
           {selectedChat && !isMessagesLoading && timelineItems.length > 0 ? (
             <div className="space-y-3">
+              {messages.length < messageTotal ? (
+                <div className="flex justify-center pb-1">
+                  <button
+                    type="button"
+                    onClick={() => void loadOlderMessages()}
+                    disabled={isMessagesLoadingMore}
+                    className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-300 transition hover:border-accent-300/40 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {isMessagesLoadingMore ? (
+                      <LoaderCircle size={14} className="animate-spin" />
+                    ) : (
+                      <Clock3 size={14} />
+                    )}
+                    Предыдущие сообщения
+                  </button>
+                </div>
+              ) : null}
               {timelineItems.map((item) => {
                 if (item.kind === 'audit') {
                   return (
