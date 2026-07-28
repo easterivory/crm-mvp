@@ -9,17 +9,18 @@ import {
   YAxis,
 } from 'recharts'
 
-import type { FunnelDropOffStep } from '../types'
+import type { FunnelDropOffAnalytics } from '../types'
 
 type DropOffChartProps = {
-  data: FunnelDropOffStep[]
+  analytics: FunnelDropOffAnalytics
 }
 
 function formatPercent(value: number) {
   return `${Number(value || 0).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
 }
 
-export default function DropOffChart({ data }: DropOffChartProps) {
+export default function DropOffChart({ analytics }: DropOffChartProps) {
+  const data = analytics.steps
   if (!data || data.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-gray-400">
@@ -42,10 +43,17 @@ export default function DropOffChart({ data }: DropOffChartProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className={`grid gap-3 ${analytics.project_format === 'gambling' ? 'md:grid-cols-6' : 'md:grid-cols-3'}`}>
         <SummaryMetric label="Стартовали" value={totalEntered} />
         <SummaryMetric label="Дошли до финала" value={lastEntered} />
         <SummaryMetric label="Конверсия" value={formatPercent(finalConversion)} />
+        {analytics.project_format === 'gambling' ? (
+          <>
+            <SummaryMetric label="Регистрации" value={analytics.registrations} />
+            <SummaryMetric label="FD" value={analytics.first_deposits} />
+            <SummaryMetric label="RD" value={analytics.redeposits} />
+          </>
+        ) : null}
       </div>
 
       <div className="min-h-[320px] flex-1 rounded-xl border border-white/8 bg-white/[0.03] p-4">

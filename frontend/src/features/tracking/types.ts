@@ -126,13 +126,22 @@ export type TrackingMetricSummary = {
   leads: number
   submitted_leads: number
   deposits: number
+  registrations: number
+  first_deposits: number
+  redeposits: number
   spend: string | number
   cr_to_lead: string | number
   cr_to_submit: string | number
   cr_to_deposit: string | number
+  cr_to_registration: string | number
+  cr_registration_to_deposit: string | number
+  cr_deposit_to_redeposit: string | number
   cpl: string | number
   cpsl: string | number
   cpd: string | number
+  cpr: string | number
+  cpfd: string | number
+  cprd: string | number
 }
 
 export type TrackingDailyMetric = {
@@ -142,7 +151,17 @@ export type TrackingDailyMetric = {
   leads: number
   submitted_leads: number
   deposits: number
+  registrations: number
+  first_deposits: number
+  redeposits: number
   spend: string | number
+}
+
+export type TrackingLifecycleSourceMetric = {
+  source: string
+  registrations: number
+  first_deposits: number
+  redeposits: number
 }
 
 export type TrackingConversionStatus =
@@ -185,12 +204,14 @@ export type TrackingProjectMetricsResponse = {
   bot_id: string | null
   date_from: string
   date_to: string
+  project_format: 'submission' | 'gambling'
   tracking_lead_status_codes: string[]
   summary: TrackingMetricSummary
   unattributed_summary: TrackingMetricSummary
   unattributed_daily: TrackingDailyMetric[]
   links: TrackingLinkMetric[]
   daily: TrackingDailyMetric[]
+  lifecycle_sources: TrackingLifecycleSourceMetric[]
 }
 
 export type TrackingLinkMetricsResponse = {
@@ -204,6 +225,7 @@ export type TrackingLinkMetricsResponse = {
   conversion_status: TrackingConversionStatus
   date_from: string
   date_to: string
+  project_format: 'submission' | 'gambling'
   tracking_lead_status_codes: string[]
   summary: TrackingMetricSummary
   daily: TrackingDailyMetric[]
@@ -213,6 +235,7 @@ export type TrackingLinkMetricsResponse = {
   city_breakdown: BreakdownItem[]
   status_breakdown: BreakdownItem[]
   card_breakdown: BreakdownItem[]
+  lifecycle_sources: TrackingLifecycleSourceMetric[]
 }
 
 export type TrackingDateRangeParams = {

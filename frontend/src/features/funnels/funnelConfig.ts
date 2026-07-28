@@ -430,6 +430,14 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
     return []
   }
 
+  if (step.block_type === 'ai_response') {
+    return normalizeOutcomes(step.config_json.outcomes).map((outcome) => ({
+      key: `ai:${outcome.id}`,
+      label: outcome.label,
+      targetStepId: outcome.target_step_id,
+    }))
+  }
+
   if (step.step_type === 'condition') {
     if (step.block_type === 'generic_ab_test') {
       return normalizeAbVariants(step.config_json.variants).map((variant) => ({

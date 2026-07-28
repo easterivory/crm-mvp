@@ -63,3 +63,7 @@ class BuyerPerformanceOut(BaseModel):
     cpl: Decimal
     submitted_leads: int
     submitted_conversion_percent: Decimal
+    project_format: str = "submission"
+    registrations: int = 0
+    first_deposits: int = 0
+    redeposits: int = 0

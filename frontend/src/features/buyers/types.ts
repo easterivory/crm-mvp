@@ -38,4 +38,8 @@ export type BuyerPerformance = {
   cpl: number | string
   submitted_leads: number
   submitted_conversion_percent: number | string
+  project_format: 'submission' | 'gambling'
+  registrations: number
+  first_deposits: number
+  redeposits: number
 }

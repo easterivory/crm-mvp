@@ -1,6 +1,7 @@
 """
 TagService - project-scoped tag CRUD and lead/tag bindings.
 """
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -11,9 +12,14 @@ from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.tag_repository import TagRepository
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
-from app.models.tag import random_tag_color
+from app.models.lead import Lead
+from app.models.tag import Tag, random_tag_color
 from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.lead_event_service import LeadEventService
 from app.services.lead_scoring_service import LeadScoringService
+
+
+logger = logging.getLogger(__name__)
 
 
 class TagService:
@@ -23,6 +29,7 @@ class TagService:
         self.lead_repo = LeadRepository(db)
         self.project_repo = ProjectRepository(db)
         self.facebook_campaign = FacebookCampaignService(db)
+        self.lead_events = LeadEventService(db)
         self.scoring = LeadScoringService(db)
 
     async def list_tags(
@@ -147,7 +154,7 @@ class TagService:
         tag_id: UUID,
         project_id: UUID,
     ) -> None:
-        await self._ensure_lead_and_tag_in_project(
+        lead, tag = await self._ensure_lead_and_tag_in_project(
             lead_id=lead_id,
             tag_id=tag_id,
             project_id=project_id,
@@ -175,6 +182,41 @@ class TagService:
                 lead_id=lead_id,
                 tag_id=tag_id,
             )
+            project = await self.project_repo.get_active(project_id)
+            if project is not None:
+                lifecycle_types = {
+                    "registration": "registration",
+                    "sale": "deposit",
+                    "resale": "redeposit",
+                }
+                event_types = {
+                    lifecycle_types[source_event]
+                    for rule in (project.facebook_tag_event_rules or [])
+                    if isinstance(rule, dict)
+                    and str(rule.get("tag_id") or "") == str(tag_id)
+                    and (source_event := str(rule.get("source_event") or ""))
+                    in lifecycle_types
+                }
+                for event_type in sorted(event_types):
+                    try:
+                        async with self.db.begin_nested():
+                            await self.lead_events.record_event(
+                                lead=lead,
+                                event_type=event_type,
+                                source="tag",
+                                payload={
+                                    "tag_id": str(tag.id),
+                                    "tag_name": tag.name,
+                                },
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Lifecycle event write failed without blocking tag assignment "
+                            "lead_id=%s tag_id=%s event_type=%s",
+                            lead_id,
+                            tag_id,
+                            event_type,
+                        )
             await self.scoring.update_lead_score(lead_id)
 
     async def remove_tag_from_lead(
@@ -196,7 +238,7 @@ class TagService:
         lead_id: UUID,
         tag_id: UUID,
         project_id: UUID,
-    ) -> None:
+    ) -> tuple[Lead, Tag]:
         lead = await self.lead_repo.get_active(lead_id, project_id)
         if lead is None:
             raise HTTPException(
@@ -210,6 +252,7 @@ class TagService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Tag not found",
             )
+        return lead, tag
 
     @staticmethod
     def _normalize_name(name: str) -> str:

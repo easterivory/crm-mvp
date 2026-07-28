@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import AuditAction, EntityType, RoleName
 from app.models.audit_log import AuditLog
-from app.models.lead_event import LeadEvent
 from app.models.funnel import ChatFunnelState, FunnelRuntimeLog, FunnelStep
 from app.models.lead import Lead
 from app.models.message import Message
@@ -18,6 +17,7 @@ from app.models.project import Project
 from app.models.role import Role
 from app.models.user import User, UserProjectAccess
 from app.schemas.manager_analytics import ManagerPerformanceOut
+from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 
 
 class ManagerAnalyticsService:
@@ -172,8 +172,14 @@ class ManagerAnalyticsService:
             Lead.project_id == project_id,
             Lead.is_deleted.is_(False),
             LeadSubmission.submitted_by_user_id.is_not(None),
+            func.lower(LeadSubmission.status).in_(("success", "completed")),
         ]
-        self._append_period(submission_filters, LeadSubmission.submitted_at, start_at, end_at)
+        self._append_period(
+            submission_filters,
+            func.coalesce(LeadSubmission.completed_at, LeadSubmission.submitted_at),
+            start_at,
+            end_at,
+        )
         submission_totals = (
             select(
                 LeadSubmission.submitted_by_user_id.label("manager_id"),
@@ -232,27 +238,41 @@ class ManagerAnalyticsService:
             .subquery()
         )
 
-        event_filters = [LeadEvent.project_id == project_id]
-        self._append_period(event_filters, LeadEvent.occurred_at, start_at, end_at)
+        lifecycle_events = LifecycleMetricsRepository._eligible_events(project_id)
+        event_filters = [lifecycle_events.c.attributed_manager_id.is_not(None)]
+        self._append_period(
+            event_filters,
+            lifecycle_events.c.occurred_at,
+            start_at,
+            end_at,
+        )
         lifecycle_event_totals = (
             select(
-                LeadEvent.attributed_manager_id.label("manager_id"),
+                lifecycle_events.c.attributed_manager_id.label("manager_id"),
                 func.count(
-                    case((LeadEvent.event_type == "registration", 1), else_=None)
+                    case(
+                        (lifecycle_events.c.event_type == "registration", 1),
+                        else_=None,
+                    )
                 ).label("registrations"),
                 func.count(
-                    case((LeadEvent.event_type == "deposit", 1), else_=None)
+                    case(
+                        (lifecycle_events.c.event_type == "deposit", 1),
+                        else_=None,
+                    )
                 ).label("deposits"),
                 func.count(
-                    case((LeadEvent.event_type == "redeposit", 1), else_=None)
+                    case(
+                        (lifecycle_events.c.event_type == "redeposit", 1),
+                        else_=None,
+                    )
                 ).label("redeposits"),
             )
+            .select_from(lifecycle_events)
             .where(
                 *event_filters,
-                LeadEvent.attributed_manager_id.is_not(None),
-                LeadEvent.event_type.in_(("registration", "deposit", "redeposit")),
             )
-            .group_by(LeadEvent.attributed_manager_id)
+            .group_by(lifecycle_events.c.attributed_manager_id)
             .subquery()
         )
 

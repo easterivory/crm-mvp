@@ -2,6 +2,7 @@ import {
   BarChart3,
   BookOpen,
   Bot,
+  BrainCircuit,
   LogOut,
   Megaphone,
   Menu,
@@ -37,6 +38,7 @@ const navItems = [
   { label: t('analytics'), path: '/analytics', icon: BarChart3 },
   { label: t('tracking'), path: '/tracking', icon: MousePointerClick },
   { label: t('docs'), path: '/docs', icon: BookOpen },
+  { label: 'AI и модели', path: '/settings/ai', icon: BrainCircuit },
   { label: t('settings'), path: '/settings', icon: Settings },
 ]
 
@@ -111,7 +113,12 @@ export default function MainLayout() {
           return isSuperAdminRole(user?.role_name)
         }
 
-        return !isManagerRole(user?.role_name) || !['/bots', '/tracking', '/settings'].includes(item.path)
+        return !isManagerRole(user?.role_name) || ![
+          '/bots',
+          '/tracking',
+          '/settings',
+          '/settings/ai',
+        ].includes(item.path)
       }),
     [user?.role_name],
   )
@@ -152,7 +159,9 @@ export default function MainLayout() {
       <nav className="relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {visibleNavItems.map((item) => {
           const Icon = item.icon
-          const isActive = location.pathname.startsWith(item.path)
+          const isActive = item.path === '/settings'
+            ? location.pathname === item.path
+            : location.pathname.startsWith(item.path)
 
           return (
             <button

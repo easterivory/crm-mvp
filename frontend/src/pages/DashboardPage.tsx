@@ -149,6 +149,7 @@ export default function DashboardPage() {
     [sortedItems],
   )
   const buyerChartHeight = Math.min(520, Math.max(220, chartData.length * 52 + 48))
+  const isGambling = sortedItems.some((item) => item.project_format === 'gambling')
 
   const totals = useMemo(
     () =>
@@ -158,8 +159,19 @@ export default function DashboardPage() {
           clicks: acc.clicks + item.clicks,
           leads: acc.leads + item.leads,
           submitted: acc.submitted + item.submitted_leads,
+          registrations: acc.registrations + item.registrations,
+          firstDeposits: acc.firstDeposits + item.first_deposits,
+          redeposits: acc.redeposits + item.redeposits,
         }),
-        { spend: 0, clicks: 0, leads: 0, submitted: 0 },
+        {
+          spend: 0,
+          clicks: 0,
+          leads: 0,
+          submitted: 0,
+          registrations: 0,
+          firstDeposits: 0,
+          redeposits: 0,
+        },
       ),
     [sortedItems],
   )
@@ -278,11 +290,19 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className={`grid gap-3 ${isGambling ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
           <MetricCard label="Расход" value={money(totals.spend)} tone="cyan" />
           <MetricCard label="Клики" value={String(totals.clicks)} tone="zinc" />
           <MetricCard label="Лиды" value={String(totals.leads)} tone="emerald" />
-          <MetricCard label="Подано" value={String(totals.submitted)} tone="violet" />
+          {isGambling ? (
+            <>
+              <MetricCard label="Регистрации" value={String(totals.registrations)} tone="violet" />
+              <MetricCard label="FD" value={String(totals.firstDeposits)} tone="emerald" />
+              <MetricCard label="RD" value={String(totals.redeposits)} tone="cyan" />
+            </>
+          ) : (
+            <MetricCard label="Подано" value={String(totals.submitted)} tone="violet" />
+          )}
         </div>
 
         <div className="mt-5 overflow-x-auto rounded-xl border border-white/10 bg-white/[0.02]">
@@ -294,21 +314,31 @@ export default function DashboardPage() {
                 <th className="px-4 py-3 text-right">Клики</th>
                 <th className="px-4 py-3 text-right">Лиды</th>
                 <th className="px-4 py-3 text-right">CPL</th>
-                <th className="px-4 py-3 text-right">Подано лидов</th>
-                <th className="px-4 py-3 text-right">Конверсия в подачу</th>
+                {isGambling ? (
+                  <>
+                    <th className="px-4 py-3 text-right">Рег</th>
+                    <th className="px-4 py-3 text-right">FD</th>
+                    <th className="px-4 py-3 text-right">RD</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="px-4 py-3 text-right">Подано лидов</th>
+                    <th className="px-4 py-3 text-right">Конверсия в подачу</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-gray-500">
+                  <td colSpan={isGambling ? 8 : 7} className="px-4 py-10 text-center text-gray-500">
                     <LoaderCircle size={18} className="mr-2 inline animate-spin" />
                     Загрузка аналитики
                   </td>
                 </tr>
               ) : sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-gray-500">
+                  <td colSpan={isGambling ? 8 : 7} className="px-4 py-10 text-center text-gray-500">
                     По выбранному проекту пока нет баеров.
                   </td>
                 </tr>
@@ -331,12 +361,22 @@ export default function DashboardPage() {
                     <td className="px-4 py-3 text-right font-mono text-gray-200">
                       {money(item.cpl)}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-violet-200">
-                      {item.submitted_leads}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-amber-200">
-                      {percent(item.submitted_conversion_percent)}
-                    </td>
+                    {isGambling ? (
+                      <>
+                        <td className="px-4 py-3 text-right font-mono text-violet-200">{item.registrations}</td>
+                        <td className="px-4 py-3 text-right font-mono text-emerald-200">{item.first_deposits}</td>
+                        <td className="px-4 py-3 text-right font-mono text-cyan-200">{item.redeposits}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-4 py-3 text-right font-mono text-violet-200">
+                          {item.submitted_leads}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono text-amber-200">
+                          {percent(item.submitted_conversion_percent)}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))
               )}

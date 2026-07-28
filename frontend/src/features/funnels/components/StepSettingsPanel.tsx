@@ -15,6 +15,7 @@ import {
 } from '../funnelConfig'
 import type { FunnelStep } from '../types'
 import AbTestBlockSettings from './AbTestBlockSettings'
+import AIResponseBlockSettings from './AIResponseBlockSettings'
 import ConditionBlockSettings from './ConditionBlockSettings'
 import InputBlockSettings from './InputBlockSettings'
 import MessageBlockSettings from './MessageBlockSettings'
@@ -758,7 +759,16 @@ export default function StepSettingsPanel({
             </div>
           ) : null}
 
-          {step.step_type === 'integration' ? (
+          {step.block_type === 'ai_response' ? (
+            <AIResponseBlockSettings
+              step={step}
+              projectId={projectId}
+              steps={steps}
+              onConfigChange={patchConfig}
+            />
+          ) : null}
+
+          {step.step_type === 'integration' && step.block_type !== 'ai_response' ? (
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 URL

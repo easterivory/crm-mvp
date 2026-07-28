@@ -15,11 +15,12 @@ from app.models.chat import Chat
 from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
+from app.models.partner import LeadSubmission
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
 from app.services.tracking_cost_service import calculate_tracking_spend
 
 
-SUBMITTED_STATUS_CODES = LeadStatusCode.SUBMITTED_SET
+SUCCESSFUL_SUBMISSION_STATUSES = ("success", "completed")
 DEFAULT_TRACKING_LEAD_STATUS_CODES = LeadStatusCode.TRACKING_LEAD_DEFAULT
 
 
@@ -27,16 +28,58 @@ class TrackingMetricsRepository:
     """
     Repository-only aggregation layer.
 
-    Current source of truth:
+    Sources of truth:
     - clicks: TrackingEvent.clicks grouped by TrackingEvent.created_at.
     - starts: unique Chat rows with an incoming Telegram /start message.
-    - leads/submitted: Lead rows filtered by configured project lead statuses.
+    - leads: Lead rows filtered by configured project lead statuses.
+    - submitted: the first successful LeadSubmission for each lead.
     - demographic breakdowns: active leads grouped by fields stored on Lead.
     - funnel: current ChatBotState.current_step_id snapshot, not step history.
     """
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def aggregate_clicks_by_project(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+        *,
+        buyer_id: UUID | None = None,
+    ) -> int:
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        stmt = (
+            select(func.coalesce(func.sum(TrackingEvent.clicks), 0))
+            .join(TrackingLink, TrackingLink.id == TrackingEvent.tracking_link_id)
+            .where(
+                TrackingLink.project_id == project_id,
+                TrackingEvent.created_at >= start_at,
+                TrackingEvent.created_at < end_at,
+            )
+        )
+        if bot_id is not None:
+            stmt = stmt.where(TrackingLink.bot_id == bot_id)
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id)
+        return int((await self.db.execute(stmt)).scalar_one() or 0)
+
+    async def aggregate_clicks_by_link(
+        self,
+        link_id: UUID,
+        date_from: date,
+        date_to: date,
+    ) -> int:
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(TrackingEvent.clicks), 0)).where(
+                TrackingEvent.tracking_link_id == link_id,
+                TrackingEvent.created_at >= start_at,
+                TrackingEvent.created_at < end_at,
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def aggregate_spend_by_project(
         self,
@@ -143,6 +186,33 @@ class TrackingMetricsRepository:
         )
         return result.scalar_one()
 
+    async def aggregate_starts_unattributed_by_project(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+    ) -> int:
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        stmt = (
+            select(func.count(distinct(Chat.id)))
+            .join(Message, Message.chat_id == Chat.id)
+            .where(
+                Chat.project_id == project_id,
+                Chat.tracking_link_id.is_(None),
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+                Message.sender_type == SenderType.USER,
+                Message.message_type == MessageType.TEXT,
+                self._is_start_message(),
+                Message.created_at >= start_at,
+                Message.created_at < end_at,
+            )
+        )
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        return int((await self.db.execute(stmt)).scalar_one() or 0)
+
     async def aggregate_leads_by_project(
         self,
         project_id: UUID,
@@ -175,6 +245,24 @@ class TrackingMetricsRepository:
             lead_status_codes=lead_status_codes,
         )
 
+    async def aggregate_leads_unattributed_by_project(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+        lead_status_codes: Sequence[str] | None = None,
+    ) -> int:
+        return await self._aggregate_leads_by_project(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            submitted_only=False,
+            lead_status_codes=lead_status_codes,
+            unattributed_only=True,
+        )
+
     async def aggregate_submitted_by_project(
         self,
         project_id: UUID,
@@ -201,6 +289,22 @@ class TrackingMetricsRepository:
             date_from=date_from,
             date_to=date_to,
             submitted_only=True,
+        )
+
+    async def aggregate_submitted_unattributed_by_project(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+    ) -> int:
+        return await self._aggregate_leads_by_project(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            submitted_only=True,
+            unattributed_only=True,
         )
 
     async def aggregate_daily_by_project(
@@ -345,6 +449,9 @@ class TrackingMetricsRepository:
                 "leads": 0,
                 "submitted_leads": 0,
                 "deposits": 0,
+                "registrations": 0,
+                "first_deposits": 0,
+                "redeposits": 0,
                 "spend": Decimal("0"),
             }
             for row in link_rows
@@ -569,7 +676,17 @@ class TrackingMetricsRepository:
         date_to: date,
         submitted_only: bool,
         lead_status_codes: Sequence[str] | None = None,
+        unattributed_only: bool = False,
     ) -> int:
+        if submitted_only:
+            return await self._aggregate_successful_submissions(
+                project_id=project_id,
+                bot_id=bot_id,
+                link_id=None,
+                date_from=date_from,
+                date_to=date_to,
+                unattributed_only=unattributed_only,
+            )
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -586,9 +703,11 @@ class TrackingMetricsRepository:
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
+        if unattributed_only:
+            stmt = stmt.where(Chat.tracking_link_id.is_(None))
         stmt = self._apply_lead_status_filter(
             stmt,
-            submitted_only=submitted_only,
+            submitted_only=False,
             lead_status_codes=lead_status_codes,
         )
 
@@ -604,6 +723,14 @@ class TrackingMetricsRepository:
         submitted_only: bool,
         lead_status_codes: Sequence[str] | None = None,
     ) -> int:
+        if submitted_only:
+            return await self._aggregate_successful_submissions(
+                project_id=None,
+                bot_id=None,
+                link_id=link_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -620,7 +747,7 @@ class TrackingMetricsRepository:
         )
         stmt = self._apply_lead_status_filter(
             stmt,
-            submitted_only=submitted_only,
+            submitted_only=False,
             lead_status_codes=lead_status_codes,
         )
 
@@ -732,6 +859,15 @@ class TrackingMetricsRepository:
         submitted_only: bool,
         lead_status_codes: Sequence[str] | None = None,
     ) -> None:
+        if submitted_only:
+            await self._merge_link_successful_submissions(
+                rows_by_id=rows_by_id,
+                project_id=project_id,
+                bot_id=bot_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            return
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
         stmt = (
@@ -755,15 +891,124 @@ class TrackingMetricsRepository:
             stmt = stmt.where(Chat.bot_id == bot_id)
         stmt = self._apply_lead_status_filter(
             stmt,
-            submitted_only=submitted_only,
+            submitted_only=False,
             lead_status_codes=lead_status_codes,
         )
 
         result = await self.db.execute(stmt)
-        target_field = "submitted_leads" if submitted_only else "leads"
         for row in result.all():
             if row.link_id in rows_by_id:
-                rows_by_id[row.link_id][target_field] = row.lead_count or 0
+                rows_by_id[row.link_id]["leads"] = row.lead_count or 0
+
+    async def _aggregate_successful_submissions(
+        self,
+        *,
+        project_id: UUID | None,
+        bot_id: UUID | None,
+        link_id: UUID | None,
+        date_from: date,
+        date_to: date,
+        unattributed_only: bool = False,
+        buyer_id: UUID | None = None,
+    ) -> int:
+        submissions = self._first_successful_submissions()
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        stmt = select(func.count()).select_from(submissions).where(
+            submissions.c.success_number == 1,
+            submissions.c.occurred_at >= start_at,
+            submissions.c.occurred_at < end_at,
+        )
+        stmt = self._apply_submission_scope(
+            stmt,
+            submissions,
+            project_id=project_id,
+            bot_id=bot_id,
+            link_id=link_id,
+            unattributed_only=unattributed_only,
+            buyer_id=buyer_id,
+        )
+        return int((await self.db.execute(stmt)).scalar_one() or 0)
+
+    async def _merge_link_successful_submissions(
+        self,
+        *,
+        rows_by_id: dict[UUID, dict[str, Any]],
+        project_id: UUID,
+        bot_id: UUID | None,
+        date_from: date,
+        date_to: date,
+    ) -> None:
+        submissions = self._first_successful_submissions()
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        stmt = (
+            select(
+                submissions.c.tracking_link_id.label("link_id"),
+                func.count().label("submitted_leads"),
+            )
+            .select_from(submissions)
+            .where(
+                submissions.c.success_number == 1,
+                submissions.c.tracking_link_id.is_not(None),
+                submissions.c.occurred_at >= start_at,
+                submissions.c.occurred_at < end_at,
+            )
+            .group_by(submissions.c.tracking_link_id)
+        )
+        stmt = self._apply_submission_scope(
+            stmt,
+            submissions,
+            project_id=project_id,
+            bot_id=bot_id,
+        )
+        result = await self.db.execute(stmt)
+        for row in result.all():
+            if row.link_id in rows_by_id:
+                rows_by_id[row.link_id]["submitted_leads"] = int(
+                    row.submitted_leads or 0
+                )
+
+    async def _merge_daily_successful_submissions(
+        self,
+        *,
+        daily: dict[date, dict[str, Any]],
+        project_id: UUID | None,
+        bot_id: UUID | None,
+        link_id: UUID | None,
+        date_from: date,
+        date_to: date,
+        unattributed_only: bool,
+        buyer_id: UUID | None,
+    ) -> None:
+        submissions = self._first_successful_submissions()
+        start_at, end_at = self._date_bounds(date_from, date_to)
+        metric_date = func.date(submissions.c.occurred_at)
+        stmt = (
+            select(
+                metric_date.label("metric_date"),
+                func.count().label("submitted_leads"),
+            )
+            .select_from(submissions)
+            .where(
+                submissions.c.success_number == 1,
+                submissions.c.occurred_at >= start_at,
+                submissions.c.occurred_at < end_at,
+            )
+            .group_by(metric_date)
+        )
+        stmt = self._apply_submission_scope(
+            stmt,
+            submissions,
+            project_id=project_id,
+            bot_id=bot_id,
+            link_id=link_id,
+            unattributed_only=unattributed_only,
+            buyer_id=buyer_id,
+        )
+        result = await self.db.execute(stmt)
+        for row in result.all():
+            self._ensure_daily(daily, row.metric_date)["submitted_leads"] = int(
+                row.submitted_leads or 0
+            )
 
     async def _merge_link_spend(
         self,
@@ -886,6 +1131,18 @@ class TrackingMetricsRepository:
         unattributed_only: bool = False,
         buyer_id: UUID | None = None,
     ) -> None:
+        if submitted_only:
+            await self._merge_daily_successful_submissions(
+                daily=daily,
+                project_id=project_id,
+                bot_id=bot_id,
+                link_id=link_id,
+                date_from=date_from,
+                date_to=date_to,
+                unattributed_only=unattributed_only,
+                buyer_id=buyer_id,
+            )
+            return
         start_at, end_at = self._date_bounds(date_from, date_to)
         lifecycle_at = self._lead_lifecycle_at()
         metric_date = func.date(lifecycle_at)
@@ -918,14 +1175,13 @@ class TrackingMetricsRepository:
             )
         stmt = self._apply_lead_status_filter(
             stmt,
-            submitted_only=submitted_only,
+            submitted_only=False,
             lead_status_codes=lead_status_codes,
         )
 
         result = await self.db.execute(stmt)
-        target_field = "submitted_leads" if submitted_only else "leads"
         for row in result.all():
-            self._ensure_daily(daily, row.metric_date)[target_field] = (
+            self._ensure_daily(daily, row.metric_date)["leads"] = (
                 row.lead_count or 0
             )
 
@@ -1046,28 +1302,26 @@ class TrackingMetricsRepository:
             amount = Decimal(row.units or 0) * Decimal(row.price_per_unit or 0)
             self._ensure_daily(daily, row.metric_date)["spend"] += amount
 
-        lifecycle_at = self._lead_lifecycle_at()
-        submitted_date = func.date(lifecycle_at)
+        submissions = self._first_successful_submissions()
+        submitted_date = func.date(submissions.c.occurred_at)
         submitted_stmt = (
             select(
                 submitted_date.label("metric_date"),
                 TrackingLink.id.label("link_id"),
                 TrackingLink.price_per_unit,
-                func.count(distinct(Lead.id)).label("units"),
+                func.count().label("units"),
             )
-            .select_from(Lead)
-            .join(Chat, Chat.id == Lead.chat_id)
-            .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
-            .join(LeadStatus, LeadStatus.id == Lead.status_id)
+            .select_from(submissions)
+            .join(
+                TrackingLink,
+                TrackingLink.id == submissions.c.tracking_link_id,
+            )
             .where(
                 TrackingLink.project_id == project_id,
                 TrackingLink.cost_model == TrackingCostModel.CPA,
-                Lead.is_deleted.is_(False),
-                Chat.is_deleted.is_(False),
-                Chat.reset_at.is_(None),
-                LeadStatus.code.in_(tuple(SUBMITTED_STATUS_CODES)),
-                lifecycle_at >= start_at,
-                lifecycle_at < end_at,
+                submissions.c.success_number == 1,
+                submissions.c.occurred_at >= start_at,
+                submissions.c.occurred_at < end_at,
             )
             .group_by(submitted_date, TrackingLink.id, TrackingLink.price_per_unit)
         )
@@ -1079,6 +1333,68 @@ class TrackingMetricsRepository:
         for row in submitted_result.all():
             amount = Decimal(row.units or 0) * Decimal(row.price_per_unit or 0)
             self._ensure_daily(daily, row.metric_date)["spend"] += amount
+
+    @staticmethod
+    def _first_successful_submissions():
+        occurred_at = func.coalesce(
+            LeadSubmission.completed_at,
+            LeadSubmission.submitted_at,
+        )
+        tracking_link_id = func.coalesce(
+            LeadSubmission.tracking_link_id,
+            Chat.tracking_link_id,
+        )
+        return (
+            select(
+                LeadSubmission.id,
+                LeadSubmission.lead_id,
+                Lead.project_id,
+                Chat.bot_id,
+                tracking_link_id.label("tracking_link_id"),
+                occurred_at.label("occurred_at"),
+                func.row_number()
+                .over(
+                    partition_by=LeadSubmission.lead_id,
+                    order_by=(occurred_at.asc(), LeadSubmission.id.asc()),
+                )
+                .label("success_number"),
+            )
+            .select_from(LeadSubmission)
+            .join(Lead, Lead.id == LeadSubmission.lead_id)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .where(
+                func.lower(LeadSubmission.status).in_(
+                    SUCCESSFUL_SUBMISSION_STATUSES
+                )
+            )
+            .subquery("first_successful_submissions")
+        )
+
+    @staticmethod
+    def _apply_submission_scope(
+        stmt,
+        submissions,
+        *,
+        project_id: UUID | None = None,
+        bot_id: UUID | None = None,
+        link_id: UUID | None = None,
+        unattributed_only: bool = False,
+        buyer_id: UUID | None = None,
+    ):
+        if project_id is not None:
+            stmt = stmt.where(submissions.c.project_id == project_id)
+        if bot_id is not None:
+            stmt = stmt.where(submissions.c.bot_id == bot_id)
+        if link_id is not None:
+            stmt = stmt.where(submissions.c.tracking_link_id == link_id)
+        if unattributed_only:
+            stmt = stmt.where(submissions.c.tracking_link_id.is_(None))
+        if buyer_id is not None:
+            stmt = stmt.join(
+                TrackingLink,
+                TrackingLink.id == submissions.c.tracking_link_id,
+            ).where(TrackingLink.buyer_id == buyer_id)
+        return stmt
 
     @staticmethod
     def _apply_link_scope(
@@ -1103,11 +1419,9 @@ class TrackingMetricsRepository:
         submitted_only: bool,
         lead_status_codes: Sequence[str] | None,
     ):
-        status_codes = (
-            tuple(SUBMITTED_STATUS_CODES)
-            if submitted_only
-            else cls._normalize_lead_status_codes(lead_status_codes)
-        )
+        if submitted_only:
+            raise ValueError("Submission metrics must use lead_submissions")
+        status_codes = cls._normalize_lead_status_codes(lead_status_codes)
         stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id)
         if not status_codes:
             return stmt.where(false())

@@ -170,6 +170,11 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
         routing_decision_reason: str | None = None,
         submission_source: str = "legacy",
     ) -> LeadSubmission:
+        tracking_link_id = await self.db.scalar(
+            select(Chat.tracking_link_id)
+            .join(Lead, Lead.chat_id == Chat.id)
+            .where(Lead.id == lead_id)
+        )
         submission = LeadSubmission(
             lead_id=lead_id,
             partner_integration_id=partner_integration_id,
@@ -178,6 +183,7 @@ class PartnerIntegrationRepository(BaseRepository[PartnerIntegration]):
             submitted_manually=submitted_manually,
             routing_decision_reason=routing_decision_reason,
             submission_source=submission_source,
+            tracking_link_id=tracking_link_id,
         )
         self.db.add(submission)
         await self.db.flush()

@@ -171,6 +171,24 @@ export const universalBlocks: UniversalBlock[] = [
     defaultConfig: { integration_type: 'webhook', url: '' },
   },
   {
+    stepType: 'integration',
+    blockType: 'ai_response',
+    label: 'ИИ-ответ',
+    defaultTitle: 'ИИ-ответ',
+    description: 'Формирует ответ по контексту диалога, извлекает данные и выбирает маршрут.',
+    defaultConfig: {
+      step_goal: 'Ответить клиенту и продолжить диалог по сценарию.',
+      instructions: '',
+      split_messages: true,
+      outcomes: [
+        { id: 'continue', label: 'Далее', target_step_id: '' },
+        { id: 'fallback', label: 'Ошибка / fallback', target_step_id: '' },
+      ],
+      output_fields: [],
+      fallback_message: '',
+    },
+  },
+  {
     stepType: 'finish',
     blockType: 'generic_finish',
     label: 'Завершение',
@@ -204,6 +222,13 @@ export const blockGroups: BlockMenuGroup[] = [
       ['generic_crm_action', 'set_lead_status', 'generic_operator', 'manager_review', 'generic_finish'].includes(
         item.blockType,
       ),
+    ),
+  },
+  {
+    title: 'ИИ и интеграции',
+    accent: 'violet',
+    items: universalBlocks.filter((item) =>
+      ['ai_response', 'generic_integration'].includes(item.blockType),
     ),
   },
 ]
@@ -298,6 +323,23 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
       { stepType: 'delay', blockType: 'generic_delay', label: 'Таймер', defaultTitle: 'Ожидание' },
       { stepType: 'operator', blockType: 'generic_operator', label: 'Оператор', defaultTitle: 'Оператор' },
       { stepType: 'operator', blockType: 'manager_review', label: 'Проверка менеджером', defaultTitle: 'Проверка менеджером' },
+      {
+        stepType: 'integration',
+        blockType: 'ai_response',
+        label: 'ИИ-ответ',
+        defaultTitle: 'ИИ-ответ',
+        defaultConfig: {
+          step_goal: 'Ответить клиенту и продолжить диалог по сценарию.',
+          instructions: '',
+          split_messages: true,
+          outcomes: [
+            { id: 'continue', label: 'Далее', target_step_id: '' },
+            { id: 'fallback', label: 'Ошибка / fallback', target_step_id: '' },
+          ],
+          output_fields: [],
+          fallback_message: '',
+        },
+      },
       { stepType: 'integration', blockType: 'generic_integration', label: 'Интеграция', defaultTitle: 'Интеграция' },
       { stepType: 'finish', blockType: 'generic_finish', label: 'Завершение', defaultTitle: 'Завершение' },
     ],

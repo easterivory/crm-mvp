@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from hashlib import sha256
@@ -34,6 +35,7 @@ from app.repositories.tracking_repository import TrackingLinkRepository
 from app.schemas.message import MessageCreate
 from app.services.chat_audit_service import ChatAuditService
 from app.services.audit_service import AuditService
+from app.services.ai_response_execution_service import AIResponseExecutionService
 from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.facebook_campaign_service import FacebookCampaignService
@@ -1152,6 +1154,46 @@ class FunnelRuntimeService:
                 await self._execute_from_step(chat_id=job.chat_id, step=next_step)
             return
 
+        if job.job_type == "ai_response":
+            await self._execute_ai_response_job(
+                chat_id=job.chat_id,
+                step=step,
+            )
+            return
+
+        if job.job_type == "ai_response_delivery":
+            payload = dict(job.payload_json or {})
+            await self._deliver_ai_response_and_continue(
+                chat_id=job.chat_id,
+                step=step,
+                messages=[
+                    str(value)
+                    for value in payload.get("messages", [])
+                    if str(value).strip()
+                ],
+                route_key=str(payload.get("route_key") or "fallback"),
+                start_index=max(int(payload.get("message_index") or 0), 0),
+                typing_delay_per_char_ms=self._bounded_int_value(
+                    payload.get("typing_delay_per_char_ms"),
+                    fallback=0,
+                    minimum=0,
+                    maximum=250,
+                ),
+                min_delay_ms=self._bounded_int_value(
+                    payload.get("min_delay_ms"),
+                    fallback=0,
+                    minimum=0,
+                    maximum=30000,
+                ),
+                max_delay_ms=self._bounded_int_value(
+                    payload.get("max_delay_ms"),
+                    fallback=0,
+                    minimum=0,
+                    maximum=30000,
+                ),
+            )
+            return
+
         if job.job_type == "input_timeout":
             if not (state.waiting_for_answer or self._is_input_step(step)):
                 logger.info("Ignoring input timeout; state is no longer waiting job_id=%s", job.id)
@@ -1380,6 +1422,15 @@ class FunnelRuntimeService:
                 return None
 
             if current.step_type == "integration":
+                if current.block_type == "ai_response":
+                    await self._schedule_job(
+                        chat_id=chat_id,
+                        step=current,
+                        job_type="ai_response",
+                        delay_seconds=0,
+                        payload_json={},
+                    )
+                    return current
                 integration_ok = await self._execute_integration_step(
                     chat_id=chat_id,
                     step=current,
@@ -2582,6 +2633,245 @@ class FunnelRuntimeService:
                 runtime_json=runtime_json,
             )
         return True
+
+    async def _execute_ai_response_job(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+    ) -> None:
+        step_id = step.id
+        outcome = await AIResponseExecutionService(self.db).execute(
+            chat_id=chat_id,
+            step=step,
+        )
+        refreshed_step = await self.repo.get_step(step_id)
+        if refreshed_step is None:
+            logger.warning(
+                "AI response job step disappeared chat_id=%s step_id=%s",
+                chat_id,
+                step_id,
+            )
+            return
+
+        if not outcome.success:
+            await self._log_runtime_step(
+                chat_id=chat_id,
+                step=refreshed_step,
+                status="failed",
+                error_message=(
+                    f"{outcome.error_code or 'ai_error'}: "
+                    f"{outcome.error_message or 'AI response failed'}"
+                ),
+            )
+            logger.warning(
+                "AI response failed chat_id=%s step_id=%s code=%s error=%s",
+                chat_id,
+                step_id,
+                outcome.error_code,
+                outcome.error_message,
+            )
+        else:
+            await self._save_ai_extracted_data(
+                chat_id=chat_id,
+                step=refreshed_step,
+                extracted_data=outcome.extracted_data,
+            )
+            await self._log_runtime_step(
+                chat_id=chat_id,
+                step=refreshed_step,
+                status="success",
+            )
+
+        if self.db.in_transaction():
+            await self.db.commit()
+        refreshed_step = await self.repo.get_step(step_id)
+        if refreshed_step is None:
+            return
+        await self._deliver_ai_response_and_continue(
+            chat_id=chat_id,
+            step=refreshed_step,
+            messages=outcome.messages,
+            route_key=outcome.route_key,
+            start_index=0,
+            typing_delay_per_char_ms=outcome.typing_delay_per_char_ms,
+            min_delay_ms=outcome.min_delay_ms,
+            max_delay_ms=outcome.max_delay_ms,
+        )
+
+    async def _deliver_ai_response_and_continue(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        messages: list[str],
+        route_key: str,
+        start_index: int,
+        typing_delay_per_char_ms: int,
+        min_delay_ms: int,
+        max_delay_ms: int,
+    ) -> None:
+        step_id = step.id
+        chat = await self.chat_repo.get_by_id(chat_id)
+        if chat is None:
+            return
+        project_id = chat.project_id
+        bot_id = chat.bot_id
+        external_chat_id = chat.external_chat_id
+        normalized_messages = [
+            str(message).strip()
+            for message in messages
+            if str(message).strip()
+        ]
+        effective_max_delay = max(max_delay_ms, min_delay_ms)
+
+        for index in range(max(start_index, 0), len(normalized_messages)):
+            message = normalized_messages[index]
+            delay_ms = min(
+                max(
+                    len(message) * max(typing_delay_per_char_ms, 0),
+                    max(min_delay_ms, 0),
+                ),
+                effective_max_delay,
+            )
+            if delay_ms > 0:
+                if self.db.in_transaction():
+                    await self.db.commit()
+                await self.telegram_sender.send_chat_action(
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                    action="typing",
+                )
+                await asyncio.sleep(delay_ms / 1000)
+            try:
+                await self._create_outgoing_message(
+                    chat_id=chat_id,
+                    text=message,
+                    reply_markup=None,
+                )
+            except TelegramDeliveryError as exc:
+                raise FunnelRuntimeDeliveryError(
+                    exc,
+                    retry_step_id=step_id,
+                    retry_job_type="ai_response_delivery",
+                    retry_payload={
+                        "messages": normalized_messages,
+                        "message_index": index,
+                        "route_key": route_key,
+                        "typing_delay_per_char_ms": typing_delay_per_char_ms,
+                        "min_delay_ms": min_delay_ms,
+                        "max_delay_ms": max_delay_ms,
+                    },
+                ) from exc
+            if self.release_transaction_before_external_io and self.db.in_transaction():
+                await self.db.commit()
+
+        refreshed_step = await self.repo.get_step(step_id)
+        if refreshed_step is None:
+            return
+        next_step = await self._move_condition_outcome(
+            chat_id=chat_id,
+            step=refreshed_step,
+            outcome=route_key,
+        )
+        if next_step is not None:
+            await self._execute_from_step(
+                chat_id=chat_id,
+                step=next_step,
+                answer=route_key,
+            )
+
+    async def _save_ai_extracted_data(
+        self,
+        *,
+        chat_id: UUID,
+        step: FunnelStep,
+        extracted_data: dict[str, Any],
+    ) -> None:
+        if not extracted_data:
+            return
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if lead is None:
+            return
+        direct_values: dict[str, Any] = {}
+        custom_values: dict[str, Any] = {}
+        raw_fields = (step.config_json or {}).get("output_fields")
+        if not isinstance(raw_fields, list):
+            return
+        for item in raw_fields:
+            if not isinstance(item, dict):
+                continue
+            response_key = str(item.get("response_key") or "").strip()
+            field_key = self._normalize_field_key(item.get("lead_field_key"))
+            if (
+                not response_key
+                or not field_key
+                or response_key not in extracted_data
+                or not is_supported_lead_field_key(field_key)
+            ):
+                continue
+            value = self._coerce_ai_value(
+                extracted_data.get(response_key),
+                str(item.get("value_type") or "text"),
+                field_key=field_key,
+            )
+            if value is None or value == "":
+                continue
+            if field_key in DIRECT_LEAD_FIELDS:
+                direct_values[field_key] = value
+            else:
+                custom_values[field_key] = value
+        if not direct_values and not custom_values:
+            return
+        await self.repo.update_lead_mapped_fields(
+            lead.id,
+            direct_values,
+            custom_values,
+        )
+        await self.scoring.update_lead_score(lead.id)
+
+    def _coerce_ai_value(
+        self,
+        value: Any,
+        value_type: str,
+        *,
+        field_key: str,
+    ) -> Any:
+        if value is None:
+            return None
+        if field_key == "phone":
+            return self._normalize_phone(str(value))
+        if value_type == "number":
+            try:
+                number = Decimal(str(value).replace(",", "."))
+            except (InvalidOperation, ValueError):
+                return None
+            return int(number) if number == number.to_integral_value() else float(number)
+        if value_type == "boolean":
+            if isinstance(value, bool):
+                return value
+            normalized = str(value).strip().lower()
+            if normalized in {"true", "1", "yes", "да"}:
+                return True
+            if normalized in {"false", "0", "no", "нет"}:
+                return False
+            return None
+        return self._transform_value(field_key, value)
+
+    @staticmethod
+    def _bounded_int_value(
+        value: Any,
+        *,
+        fallback: int,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = fallback
+        return max(minimum, min(parsed, maximum))
 
     async def _save_input_answer(
         self,

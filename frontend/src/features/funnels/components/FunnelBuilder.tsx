@@ -41,7 +41,7 @@ import {
 } from '../funnelConfig'
 import type {
   Funnel,
-  FunnelDropOffStep,
+  FunnelDropOffAnalytics,
   FunnelEdge,
   FunnelFieldMapping,
   FunnelGraph,
@@ -155,6 +155,20 @@ function graphForSave(graph: FunnelGraph): FunnelGraph {
 }
 
 function setManagedTarget(step: FunnelStep, sourceKey: string, targetStepId: string): FunnelStep {
+  if (step.block_type === 'ai_response') {
+    return {
+      ...step,
+      config_json: {
+        ...step.config_json,
+        outcomes: normalizeOutcomes(step.config_json.outcomes).map((outcome) =>
+          `ai:${outcome.id}` === sourceKey
+            ? { ...outcome, target_step_id: targetStepId }
+            : outcome,
+        ),
+      },
+    }
+  }
+
   if (step.block_type === 'generic_ab_test') {
     return {
       ...step,
@@ -241,6 +255,7 @@ function clearManagedTarget(step: FunnelStep, sourceKey: string): FunnelStep {
 
 function isConfigBackedSource(sourceKey: string) {
   return (
+    sourceKey.startsWith('ai:') ||
     sourceKey.startsWith('condition:') ||
     sourceKey.startsWith('ab:') ||
     (sourceKey.startsWith('message:') && sourceKey.includes(':button:')) ||
@@ -271,7 +286,7 @@ export default function FunnelBuilder({
   const [isPublishOpen, setIsPublishOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'editor' | 'analytics' | 'versions'>('editor')
   const [compactPanel, setCompactPanel] = useState<CompactBuilderPanel>('canvas')
-  const [analyticsData, setAnalyticsData] = useState<FunnelDropOffStep[]>([])
+  const [analyticsData, setAnalyticsData] = useState<FunnelDropOffAnalytics | null>(null)
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
   const isLoadingAnalyticsRef = useRef(false)
   const hasLoadedInitialVersionRef = useRef(false)
@@ -284,10 +299,10 @@ export default function FunnelBuilder({
     setIsLoadingAnalytics(true)
     try {
       const response = await fetchDropOffAnalytics(funnelId, activeVersionId, projectId)
-      setAnalyticsData(response.steps ?? [])
+      setAnalyticsData(response)
     } catch {
       notify({ tone: 'error', message: 'Не удалось загрузить аналитику.' })
-      setAnalyticsData([])
+      setAnalyticsData(null)
     } finally {
       isLoadingAnalyticsRef.current = false
       setIsLoadingAnalytics(false)
@@ -1126,12 +1141,17 @@ export default function FunnelBuilder({
               <LoaderCircle size={18} className="mr-2 animate-spin" />
               Загрузка аналитики
             </div>
-          ) : analyticsData.length === 0 ? (
+          ) : !analyticsData || (
+            analyticsData.steps.length === 0
+            && analyticsData.registrations === 0
+            && analyticsData.first_deposits === 0
+            && analyticsData.redeposits === 0
+          ) ? (
             <div className="flex h-full items-center justify-center text-sm text-gray-400">
               Нет данных для отображения
             </div>
           ) : (
-            <DropOffChart data={analyticsData} />
+            <DropOffChart analytics={analyticsData} />
           )}
         </div>
       ) : (

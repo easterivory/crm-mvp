@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -17,10 +17,12 @@ from app.core.telegram_commands import (
     normalize_telegram_command,
 )
 from app.models.funnel import Funnel, FunnelStep, FunnelVersion
+from app.models.project import Project
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
+from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import (
     BotActiveFunnelGraphSummary,
@@ -68,6 +70,7 @@ class FunnelService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.repo = FunnelRepository(db)
+        self.lifecycle_metrics = LifecycleMetricsRepository(db)
         self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
         self.audit = AuditService(db)
@@ -825,9 +828,22 @@ class FunnelService:
                 )
             )
             previous_count = entered
+        lifecycle = await self.lifecycle_metrics.aggregate_counts(
+            project_id=project_id,
+            funnel_version_id=version_id,
+            date_from=date(1970, 1, 1),
+            date_to=date.today(),
+        )
+        project_format = await self.db.scalar(
+            select(Project.project_format).where(Project.id == project_id)
+        )
         return FunnelDropOffAnalyticsOut(
             funnel_id=funnel_id,
             version_id=version_id,
+            project_format=project_format or "submission",
+            registrations=lifecycle["registrations"],
+            first_deposits=lifecycle["first_deposits"],
+            redeposits=lifecycle["redeposits"],
             steps=steps,
         )
 

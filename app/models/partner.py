@@ -159,8 +159,14 @@ class LeadSubmission(Base, UUIDPrimaryKey):
         default="legacy",
         server_default="legacy",
     )
+    tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tracking_links.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     lead: Mapped[Lead] = relationship("Lead")
+    tracking_link: Mapped[Optional[TrackingLink]] = relationship("TrackingLink")
     submitted_by_user: Mapped[Optional[User]] = relationship("User", foreign_keys=[submitted_by_user_id])
     partner_integration: Mapped[PartnerIntegration] = relationship(
         "PartnerIntegration", back_populates="submissions"

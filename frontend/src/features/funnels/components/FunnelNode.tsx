@@ -1,6 +1,7 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import {
   Bell,
+  BrainCircuit,
   CheckCircle2,
   Clock,
   GitBranch,
@@ -75,6 +76,12 @@ const headerByType = {
 }
 
 function previewLines(step: FunnelStep) {
+  if (step.block_type === 'ai_response') {
+    const goal = textValue(step.config_json, 'step_goal') || 'Цель не настроена'
+    const model = textValue(step.config_json, 'model')
+    return model ? [goal, `Модель: ${model}`] : [goal, 'Модель проекта']
+  }
+
   if (step.step_type === 'trigger') {
     const triggerType = textValue(step.config_json, 'trigger_type') || 'new_chat'
     if (triggerType === 'custom_command') {
@@ -156,7 +163,9 @@ function previewLines(step: FunnelStep) {
 
 export default function FunnelNode({ data, selected, isConnectable }: NodeProps<FunnelFlowNode>) {
   const { step, stepNumber, onDelete } = data
-  const Icon = iconByType[step.step_type] ?? Bell
+  const Icon = step.block_type === 'ai_response'
+    ? BrainCircuit
+    : iconByType[step.step_type] ?? Bell
   const isSupported = mvpBlockTypes.has(step.block_type)
   const outputs = collectConfiguredOutputs(step)
   const headerClass = headerByType[step.step_type] ?? headerByType.integration

@@ -162,6 +162,10 @@ export type FunnelDropOffStep = {
 export type FunnelDropOffAnalytics = {
   funnel_id: string
   version_id: string
+  project_format: 'submission' | 'gambling'
+  registrations: number
+  first_deposits: number
+  redeposits: number
   steps: FunnelDropOffStep[]
 }
 

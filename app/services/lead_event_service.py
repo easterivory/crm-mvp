@@ -12,6 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ChatEventType
+from app.models.chat import Chat
+from app.models.funnel import ChatFunnelState
 from app.models.lead import Lead
 from app.models.lead_event import LeadEvent
 from app.models.partner import PartnerIntegration
@@ -21,6 +23,18 @@ from app.services.chat_audit_service import ChatAuditService
 
 
 EVENT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,99}$")
+CANONICAL_EVENT_TYPE_ALIASES = {
+    "reg": "registration",
+    "registration": "registration",
+    "fd": "deposit",
+    "first_deposit": "deposit",
+    "first-deposit": "deposit",
+    "deposit": "deposit",
+    "rd": "redeposit",
+    "re_deposit": "redeposit",
+    "re-deposit": "redeposit",
+    "redeposit": "redeposit",
+}
 
 
 class LeadEventService:
@@ -73,6 +87,19 @@ class LeadEventService:
             if existing is not None:
                 return existing, False
 
+        attribution = (
+            await self.db.execute(
+                select(
+                    Chat.tracking_link_id,
+                    ChatFunnelState.funnel_id,
+                    ChatFunnelState.funnel_version_id,
+                )
+                .select_from(Chat)
+                .outerjoin(ChatFunnelState, ChatFunnelState.chat_id == Chat.id)
+                .where(Chat.id == lead.chat_id)
+            )
+        ).one_or_none()
+
         event = LeadEvent(
             project_id=lead.project_id,
             lead_id=lead.id,
@@ -80,6 +107,9 @@ class LeadEventService:
             postback_endpoint_id=postback_endpoint_id,
             created_by_user_id=created_by_user_id,
             attributed_manager_id=lead.manager_id,
+            tracking_link_id=attribution.tracking_link_id if attribution else None,
+            funnel_id=attribution.funnel_id if attribution else None,
+            funnel_version_id=attribution.funnel_version_id if attribution else None,
             event_type=normalized_event_type,
             source=normalized_source,
             amount=amount,
@@ -155,6 +185,7 @@ class LeadEventService:
     @staticmethod
     def normalize_event_type(value: str) -> str:
         normalized = value.strip().lower()
+        normalized = CANONICAL_EVENT_TYPE_ALIASES.get(normalized, normalized)
         if not EVENT_TYPE_RE.fullmatch(normalized):
             raise ValueError(
                 "Event type must start with a letter and contain only a-z, 0-9, _, . or -"

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import spa, telegram_contact
 from app.api.v1.routers import (
     analytics,
+    ai,
     assignments,
     auth,
     bots,
@@ -99,6 +100,7 @@ app.include_router(broadcasts.router, prefix=_v1_prefix)
 app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
+app.include_router(ai.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)
 app.include_router(telegram_contact.router)
 app.include_router(postbacks.public_router)

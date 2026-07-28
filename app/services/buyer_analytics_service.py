@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink
 from app.models.user import User, UserProjectAccess
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
+from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
 
 
@@ -58,7 +59,23 @@ class BuyerAnalyticsService:
             date_to=metrics_date_to,
             lead_status_codes=tracking_lead_status_codes,
         )
+        lifecycle_by_link = await LifecycleMetricsRepository(
+            self.db
+        ).aggregate_by_link(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=metrics_date_from,
+            date_to=metrics_date_to,
+        )
+        project_format = (
+            await self.db.scalar(
+                select(Project.project_format).where(Project.id == project_id)
+            )
+            or "submission"
+        )
         modeled_spend_by_buyer: dict[UUID, Decimal] = {}
+        submitted_by_buyer: dict[UUID, int] = {}
+        lifecycle_by_buyer: dict[UUID, dict[str, int]] = {}
         for link_row in modeled_link_rows:
             buyer_id = link_row.get("buyer_id")
             if buyer_id is None:
@@ -67,6 +84,21 @@ class BuyerAnalyticsService:
                 modeled_spend_by_buyer.get(buyer_id, Decimal("0"))
                 + Decimal(link_row.get("spend") or 0)
             )
+            submitted_by_buyer[buyer_id] = (
+                submitted_by_buyer.get(buyer_id, 0)
+                + int(link_row.get("submitted_leads") or 0)
+            )
+            buyer_lifecycle = lifecycle_by_buyer.setdefault(
+                buyer_id,
+                {
+                    "registrations": 0,
+                    "first_deposits": 0,
+                    "redeposits": 0,
+                },
+            )
+            link_lifecycle = lifecycle_by_link.get(link_row["link_id"], {})
+            for key in buyer_lifecycle:
+                buyer_lifecycle[key] += int(link_lifecycle.get(key) or 0)
         link_counts_stmt = (
             select(
                 TrackingLink.buyer_id.label("buyer_id"),
@@ -125,31 +157,6 @@ class BuyerAnalyticsService:
             lead_stmt = lead_stmt.where(TrackingLink.bot_id == bot_id)
         lead_totals = lead_stmt.group_by(TrackingLink.buyer_id).subquery()
 
-        submitted_stmt = (
-            select(
-                TrackingLink.buyer_id.label("buyer_id"),
-                func.count(distinct(Lead.id)).label("submitted_leads"),
-            )
-            .join(Chat, Chat.id == Lead.chat_id)
-            .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
-            .join(LeadStatus, LeadStatus.id == Lead.status_id)
-            .where(
-                TrackingLink.project_id == project_id,
-                TrackingLink.buyer_id.is_not(None),
-                Lead.is_deleted.is_(False),
-                Chat.is_deleted.is_(False),
-                Chat.reset_at.is_(None),
-                LeadStatus.code.in_(LeadStatusCode.SUBMITTED_SET),
-            )
-        )
-        if start_at is not None:
-            submitted_stmt = submitted_stmt.where(lead_lifecycle_at >= start_at)
-        if end_at is not None:
-            submitted_stmt = submitted_stmt.where(lead_lifecycle_at < end_at)
-        if bot_id is not None:
-            submitted_stmt = submitted_stmt.where(TrackingLink.bot_id == bot_id)
-        submitted_totals = submitted_stmt.group_by(TrackingLink.buyer_id).subquery()
-
         result = await self.db.execute(
             select(
                 User.id.label("buyer_id"),
@@ -159,12 +166,10 @@ class BuyerAnalyticsService:
                 func.coalesce(link_counts.c.links_count, 0).label("links_count"),
                 func.coalesce(click_totals.c.clicks, 0).label("clicks"),
                 func.coalesce(lead_totals.c.leads, 0).label("leads"),
-                func.coalesce(submitted_totals.c.submitted_leads, 0).label("submitted_leads"),
             )
             .outerjoin(link_counts, link_counts.c.buyer_id == User.id)
             .outerjoin(click_totals, click_totals.c.buyer_id == User.id)
             .outerjoin(lead_totals, lead_totals.c.buyer_id == User.id)
-            .outerjoin(submitted_totals, submitted_totals.c.buyer_id == User.id)
             .where(
                 or_(
                     User.project_id == project_id,
@@ -185,7 +190,12 @@ class BuyerAnalyticsService:
             spend = money(modeled_spend_by_buyer.get(row["buyer_id"], Decimal("0")))
             clicks = int(row["clicks"] or 0)
             leads = int(row["leads"] or 0)
-            submitted = int(row["submitted_leads"] or 0)
+            submitted = (
+                0
+                if project_format == "gambling"
+                else submitted_by_buyer.get(row["buyer_id"], 0)
+            )
+            lifecycle = lifecycle_by_buyer.get(row["buyer_id"], {})
             items.append(
                 BuyerPerformanceOut(
                     buyer_id=row["buyer_id"],
@@ -200,6 +210,10 @@ class BuyerAnalyticsService:
                     cpl=money(spend / Decimal(leads)) if leads > 0 else Decimal("0.00"),
                     submitted_leads=submitted,
                     submitted_conversion_percent=ratio_percent(submitted, leads),
+                    project_format=project_format,
+                    registrations=int(lifecycle.get("registrations") or 0),
+                    first_deposits=int(lifecycle.get("first_deposits") or 0),
+                    redeposits=int(lifecycle.get("redeposits") or 0),
                 )
             )
         return items

@@ -26,6 +26,18 @@ class LeadEvent(Base, UUIDPrimaryKey, TimestampMixin):
         Index("ix_lead_events_project_type_occurred", "project_id", "event_type", "occurred_at"),
         Index("ix_lead_events_lead_occurred", "lead_id", "occurred_at"),
         Index("ix_lead_events_partner_integration_id", "partner_integration_id"),
+        Index(
+            "ix_lead_events_tracking_type_occurred",
+            "tracking_link_id",
+            "event_type",
+            "occurred_at",
+        ),
+        Index(
+            "ix_lead_events_funnel_version_type_occurred",
+            "funnel_version_id",
+            "event_type",
+            "occurred_at",
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -51,6 +63,21 @@ class LeadEvent(Base, UUIDPrimaryKey, TimestampMixin):
         nullable=True,
         index=True,
     )
+    tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tracking_links.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    funnel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("funnels.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    funnel_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("funnel_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
@@ -75,3 +102,6 @@ class LeadEvent(Base, UUIDPrimaryKey, TimestampMixin):
         "User",
         foreign_keys=[attributed_manager_id],
     )
+    tracking_link: Mapped[Optional[TrackingLink]] = relationship("TrackingLink")
+    funnel: Mapped[Optional[Funnel]] = relationship("Funnel")
+    funnel_version: Mapped[Optional[FunnelVersion]] = relationship("FunnelVersion")

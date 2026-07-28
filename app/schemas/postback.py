@@ -111,6 +111,9 @@ class LeadEventOut(OrmBase):
     partner_integration_id: UUID | None
     postback_endpoint_id: UUID | None
     created_by_user_id: UUID | None
+    tracking_link_id: UUID | None = None
+    funnel_id: UUID | None = None
+    funnel_version_id: UUID | None = None
     event_type: str
     source: str
     amount: Decimal | None

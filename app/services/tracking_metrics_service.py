@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import LeadStatusCode, RoleName
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
+from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.repositories.tracking_repository import TrackingLinkRepository
@@ -40,6 +41,7 @@ class TrackingMetricsService:
         self.bot_repo = BotRepository(db)
         self.link_repo = TrackingLinkRepository(db)
         self.metrics_repo = TrackingMetricsRepository(db)
+        self.lifecycle_repo = LifecycleMetricsRepository(db)
 
     async def get_project_metrics(
         self,
@@ -65,8 +67,19 @@ class TrackingMetricsService:
             lead_status_codes=lead_status_codes,
             buyer_id=buyer_id,
         )
+        lifecycle_by_link = await self.lifecycle_repo.aggregate_by_link(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            buyer_id=buyer_id,
+        )
         links: list[TrackingLinkMetric] = []
         for row in link_rows:
+            row.update(lifecycle_by_link.get(row["link_id"], {}))
+            row["deposits"] = row.get("first_deposits", 0)
+            if project.project_format == "gambling":
+                row["submitted_leads"] = 0
             summary = self._summary_from_values(row)
             links.append(
                 TrackingLinkMetric(
@@ -89,60 +102,181 @@ class TrackingMetricsService:
                     summary=summary,
                 )
             )
+        daily_rows = await self.metrics_repo.aggregate_daily_by_project(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            lead_status_codes=lead_status_codes,
+            buyer_id=buyer_id,
+        )
+        lifecycle_daily = await self.lifecycle_repo.aggregate_daily(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            buyer_id=buyer_id,
+        )
         daily = self._fill_daily_range(
-            await self.metrics_repo.aggregate_daily_by_project(
-                project_id=project_id,
-                bot_id=bot_id,
-                date_from=date_from,
-                date_to=date_to,
-                lead_status_codes=lead_status_codes,
-                buyer_id=buyer_id,
+            self._merge_lifecycle_daily(
+                daily_rows,
+                lifecycle_daily,
+                hide_submissions=project.project_format == "gambling",
             ),
             date_from,
             date_to,
         )
-        summary = self._summary_from_values(
-            {
-                "clicks": sum(item.clicks for item in daily),
-                "starts": sum(item.starts for item in daily),
-                "leads": sum(item.leads for item in daily),
-                "submitted_leads": sum(item.submitted_leads for item in daily),
-                "deposits": sum(item.deposits for item in daily),
-                "spend": sum((item.spend for item in daily), Decimal("0")),
+
+        if buyer_id is not None:
+            summary_values = {
+                "clicks": sum(item.summary.clicks for item in links),
+                "starts": sum(item.summary.starts for item in links),
+                "leads": sum(item.summary.leads for item in links),
+                "submitted_leads": sum(
+                    item.summary.submitted_leads for item in links
+                ),
+                "registrations": sum(item.summary.registrations for item in links),
+                "first_deposits": sum(
+                    item.summary.first_deposits for item in links
+                ),
+                "redeposits": sum(item.summary.redeposits for item in links),
+                "spend": sum(
+                    (item.summary.spend for item in links),
+                    Decimal("0"),
+                ),
             }
-        )
-        unattributed_rows = [] if buyer_id is not None else (
-            await self.metrics_repo.aggregate_daily_unattributed_by_project(
+        else:
+            lifecycle_totals = await self.lifecycle_repo.aggregate_counts(
+                project_id=project_id,
+                bot_id=bot_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            summary_values = {
+                "clicks": await self.metrics_repo.aggregate_clicks_by_project(
+                    project_id,
+                    bot_id,
+                    date_from,
+                    date_to,
+                ),
+                "starts": await self.metrics_repo.aggregate_starts_by_project(
+                    project_id,
+                    bot_id,
+                    date_from,
+                    date_to,
+                ),
+                "leads": await self.metrics_repo.aggregate_leads_by_project(
+                    project_id,
+                    bot_id,
+                    date_from,
+                    date_to,
+                    lead_status_codes=lead_status_codes,
+                ),
+                "submitted_leads": (
+                    0
+                    if project.project_format == "gambling"
+                    else await self.metrics_repo.aggregate_submitted_by_project(
+                        project_id,
+                        bot_id,
+                        date_from,
+                        date_to,
+                    )
+                ),
+                **lifecycle_totals,
+                "spend": await self.metrics_repo.aggregate_spend_by_project(
+                    project_id,
+                    bot_id,
+                    date_from,
+                    date_to,
+                ),
+            }
+        summary = self._summary_from_values(summary_values)
+
+        unattributed_rows: list[dict] = []
+        unattributed_lifecycle_daily: list[dict] = []
+        if buyer_id is None:
+            unattributed_rows = await self.metrics_repo.aggregate_daily_unattributed_by_project(
                 project_id=project_id,
                 bot_id=bot_id,
                 date_from=date_from,
                 date_to=date_to,
                 lead_status_codes=lead_status_codes,
             )
+            unattributed_lifecycle_daily = await self.lifecycle_repo.aggregate_daily(
+                project_id=project_id,
+                bot_id=bot_id,
+                date_from=date_from,
+                date_to=date_to,
+                unattributed_only=True,
+            )
+        unattributed_daily = self._fill_daily_range(
+            self._merge_lifecycle_daily(
+                unattributed_rows,
+                unattributed_lifecycle_daily,
+                hide_submissions=project.project_format == "gambling",
+            ),
+            date_from,
+            date_to,
         )
-        unattributed_daily = self._fill_daily_range(unattributed_rows, date_from, date_to)
-        unattributed_summary = self._summary_from_values(
-            {
+        if buyer_id is None:
+            unattributed_lifecycle = await self.lifecycle_repo.aggregate_counts(
+                project_id=project_id,
+                bot_id=bot_id,
+                date_from=date_from,
+                date_to=date_to,
+                unattributed_only=True,
+            )
+            unattributed_values = {
                 "clicks": 0,
-                "starts": sum(item.starts for item in unattributed_daily),
-                "leads": sum(item.leads for item in unattributed_daily),
-                "submitted_leads": sum(item.submitted_leads for item in unattributed_daily),
-                "deposits": sum(item.deposits for item in unattributed_daily),
+                "starts": await self.metrics_repo.aggregate_starts_unattributed_by_project(
+                    project_id,
+                    bot_id,
+                    date_from,
+                    date_to,
+                ),
+                "leads": await self.metrics_repo.aggregate_leads_unattributed_by_project(
+                    project_id,
+                    bot_id,
+                    date_from,
+                    date_to,
+                    lead_status_codes=lead_status_codes,
+                ),
+                "submitted_leads": (
+                    0
+                    if project.project_format == "gambling"
+                    else await self.metrics_repo.aggregate_submitted_unattributed_by_project(
+                        project_id,
+                        bot_id,
+                        date_from,
+                        date_to,
+                    )
+                ),
+                **unattributed_lifecycle,
                 "spend": Decimal("0"),
             }
-        )
+        else:
+            unattributed_values = {}
+        unattributed_summary = self._summary_from_values(unattributed_values)
 
         return TrackingProjectMetricsResponse(
             project_id=project_id,
             bot_id=bot_id,
             date_from=date_from,
             date_to=date_to,
+            project_format=project.project_format,
             tracking_lead_status_codes=lead_status_codes,
             summary=summary,
             unattributed_summary=unattributed_summary,
             unattributed_daily=unattributed_daily,
             links=links,
             daily=daily,
+            lifecycle_sources=await self.lifecycle_repo.aggregate_by_source(
+                project_id=project_id,
+                bot_id=bot_id,
+                date_from=date_from,
+                date_to=date_to,
+                buyer_id=buyer_id,
+            ),
         )
 
     async def get_link_metrics(
@@ -168,7 +302,11 @@ class TrackingMetricsService:
         project = await self._get_active_project_or_404(link.project_id)
         lead_status_codes = self._tracking_lead_status_codes(project)
 
-        clicks = await self._aggregate_clicks_by_link(link_id, date_from, date_to)
+        clicks = await self.metrics_repo.aggregate_clicks_by_link(
+            link_id,
+            date_from,
+            date_to,
+        )
         starts = await self.metrics_repo.aggregate_starts_by_link(
             link_id,
             date_from,
@@ -180,22 +318,43 @@ class TrackingMetricsService:
             date_to,
             lead_status_codes=lead_status_codes,
         )
-        submitted = await self.metrics_repo.aggregate_submitted_by_link(
-            link_id,
-            date_from,
-            date_to,
+        submitted = (
+            0
+            if project.project_format == "gambling"
+            else await self.metrics_repo.aggregate_submitted_by_link(
+                link_id,
+                date_from,
+                date_to,
+            )
         )
         spend = await self.metrics_repo.aggregate_spend_by_link(
             link_id,
             date_from,
             date_to,
         )
+        daily_rows = await self.metrics_repo.aggregate_daily_by_link(
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+            lead_status_codes=lead_status_codes,
+        )
+        lifecycle_counts = await self.lifecycle_repo.aggregate_counts(
+            project_id=link.project_id,
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        lifecycle_daily = await self.lifecycle_repo.aggregate_daily(
+            project_id=link.project_id,
+            link_id=link_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
         daily = self._fill_daily_range(
-            await self.metrics_repo.aggregate_daily_by_link(
-                link_id=link_id,
-                date_from=date_from,
-                date_to=date_to,
-                lead_status_codes=lead_status_codes,
+            self._merge_lifecycle_daily(
+                daily_rows,
+                lifecycle_daily,
+                hide_submissions=project.project_format == "gambling",
             ),
             date_from,
             date_to,
@@ -214,7 +373,7 @@ class TrackingMetricsService:
                 "starts": starts,
                 "leads": leads,
                 "submitted_leads": submitted,
-                "deposits": 0,
+                **lifecycle_counts,
                 "spend": spend,
             }
         )
@@ -236,6 +395,7 @@ class TrackingMetricsService:
             ),
             date_from=date_from,
             date_to=date_to,
+            project_format=project.project_format,
             tracking_lead_status_codes=lead_status_codes,
             summary=summary,
             daily=daily,
@@ -275,16 +435,13 @@ class TrackingMetricsService:
                     date_to=date_to,
                 )
             ),
+            lifecycle_sources=await self.lifecycle_repo.aggregate_by_source(
+                project_id=link.project_id,
+                link_id=link_id,
+                date_from=date_from,
+                date_to=date_to,
+            ),
         )
-
-    async def _aggregate_clicks_by_link(
-        self,
-        link_id: UUID,
-        date_from: date,
-        date_to: date,
-    ) -> int:
-        daily = await self.metrics_repo.aggregate_daily_by_link(link_id, date_from, date_to)
-        return sum(row.get("clicks", 0) for row in daily)
 
     async def _get_active_project_or_404(self, project_id: UUID):
         project = await self.project_repo.get_any_by_id(project_id)
@@ -332,21 +489,40 @@ class TrackingMetricsService:
         starts = int(values.get("starts") or 0)
         leads = int(values.get("leads") or 0)
         submitted = int(values.get("submitted_leads") or 0)
-        deposits = int(values.get("deposits") or 0)
+        registrations = int(values.get("registrations") or 0)
+        first_deposits = int(
+            values.get("first_deposits") or values.get("deposits") or 0
+        )
+        redeposits = int(values.get("redeposits") or 0)
         spend = cls._money(values.get("spend") or Decimal("0"))
         return TrackingMetricSummary(
             clicks=int(values.get("clicks") or 0),
             starts=starts,
             leads=leads,
             submitted_leads=submitted,
-            deposits=deposits,
+            deposits=first_deposits,
+            registrations=registrations,
+            first_deposits=first_deposits,
+            redeposits=redeposits,
             spend=spend,
             cr_to_lead=cls._ratio_percent(leads, starts),
             cr_to_submit=cls._ratio_percent(submitted, leads),
-            cr_to_deposit=cls._ratio_percent(deposits, submitted),
+            cr_to_deposit=cls._ratio_percent(first_deposits, registrations),
+            cr_to_registration=cls._ratio_percent(registrations, starts),
+            cr_registration_to_deposit=cls._ratio_percent(
+                first_deposits,
+                registrations,
+            ),
+            cr_deposit_to_redeposit=cls._ratio_percent(
+                redeposits,
+                first_deposits,
+            ),
             cpl=cls._cost(spend, leads),
             cpsl=cls._cost(spend, submitted),
-            cpd=cls._cost(spend, deposits),
+            cpd=cls._cost(spend, first_deposits),
+            cpr=cls._cost(spend, registrations),
+            cpfd=cls._cost(spend, first_deposits),
+            cprd=cls._cost(spend, redeposits),
         )
 
     @classmethod
@@ -402,12 +578,56 @@ class TrackingMetricsService:
                     starts=int(row.get("starts") or 0),
                     leads=int(row.get("leads") or 0),
                     submitted_leads=int(row.get("submitted_leads") or 0),
-                    deposits=int(row.get("deposits") or 0),
+                    deposits=int(
+                        row.get("first_deposits") or row.get("deposits") or 0
+                    ),
+                    registrations=int(row.get("registrations") or 0),
+                    first_deposits=int(
+                        row.get("first_deposits") or row.get("deposits") or 0
+                    ),
+                    redeposits=int(row.get("redeposits") or 0),
                     spend=cls._money(row.get("spend") or Decimal("0")),
                 )
             )
             current += timedelta(days=1)
         return daily
+
+    @staticmethod
+    def _merge_lifecycle_daily(
+        metric_rows: list[dict],
+        lifecycle_rows: list[dict],
+        *,
+        hide_submissions: bool,
+    ) -> list[dict]:
+        rows_by_date = {
+            row["date"]: {
+                **row,
+                "submitted_leads": (
+                    0 if hide_submissions else int(row.get("submitted_leads") or 0)
+                ),
+            }
+            for row in metric_rows
+        }
+        for lifecycle_row in lifecycle_rows:
+            metric_date = lifecycle_row["date"]
+            row = rows_by_date.setdefault(
+                metric_date,
+                {
+                    "date": metric_date,
+                    "clicks": 0,
+                    "starts": 0,
+                    "leads": 0,
+                    "submitted_leads": 0,
+                    "spend": Decimal("0"),
+                },
+            )
+            row["registrations"] = int(lifecycle_row.get("registrations") or 0)
+            row["first_deposits"] = int(
+                lifecycle_row.get("first_deposits") or 0
+            )
+            row["deposits"] = row["first_deposits"]
+            row["redeposits"] = int(lifecycle_row.get("redeposits") or 0)
+        return [rows_by_date[key] for key in sorted(rows_by_date)]
 
     @classmethod
     def _build_breakdown(cls, rows: list[dict]) -> list[TrackingBreakdownItem]:

@@ -119,6 +119,10 @@ class FunnelDropOffStepOut(BaseModel):
 class FunnelDropOffAnalyticsOut(BaseModel):
     funnel_id: uuid.UUID
     version_id: uuid.UUID
+    project_format: Literal["submission", "gambling"] = "submission"
+    registrations: int = 0
+    first_deposits: int = 0
+    redeposits: int = 0
     steps: list[FunnelDropOffStepOut] = Field(default_factory=list)
 
 

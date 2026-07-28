@@ -147,6 +147,52 @@ class TelegramSenderService:
             external_chat_id=external_chat_id,
         )
 
+    async def send_chat_action(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        action: str = "typing",
+    ) -> bool:
+        """Send a transient Telegram activity indicator.
+
+        Failure is intentionally non-fatal: a typing indicator must never block
+        delivery of the actual funnel message.
+        """
+
+        token = await self._get_token(project_id, bot_id)
+        if not token:
+            return False
+        normalized_action = action.strip() or "typing"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendChatAction",
+                    json={
+                        "chat_id": external_chat_id,
+                        "action": normalized_action,
+                    },
+                )
+            if response.is_success:
+                payload = response.json()
+                return isinstance(payload, dict) and payload.get("ok") is True
+            logger.info(
+                "Telegram chat action was not accepted project_id=%s bot_id=%s "
+                "chat_id=%s status=%s",
+                project_id,
+                bot_id,
+                external_chat_id,
+                response.status_code,
+            )
+        except (httpx.HTTPError, ValueError):
+            logger.info(
+                "Telegram chat action failed project_id=%s bot_id=%s chat_id=%s",
+                project_id,
+                bot_id,
+                external_chat_id,
+            )
+        return False
+
     async def send_photo(
         self,
         project_id: UUID,

@@ -142,6 +142,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
     ],
     "integration": [
         ("generic_integration", "Интеграция"),
+        ("ai_response", "ИИ-ответ"),
         ("outgoing_webhook", "Webhook"),
         ("http_request", "HTTP request"),
         ("external_crm", "Внешняя CRM"),
@@ -511,6 +512,95 @@ class FunnelBlockRegistry:
             integration_type = str(config.get("integration_type") or "webhook").strip()
             if integration_type in {"webhook", "http_request"} and not self._text(config, "url"):
                 errors.append("Для интеграции нужен URL.")
+        if block_type == "ai_response":
+            if not self._text(config, "step_goal", "goal"):
+                errors.append("Для ИИ-ответа укажите цель шага.")
+            outcomes = config.get("outcomes")
+            if not isinstance(outcomes, list) or not outcomes:
+                errors.append("Для ИИ-ответа добавьте хотя бы один маршрут.")
+            else:
+                route_ids: set[str] = set()
+                for index, outcome in enumerate(outcomes, start=1):
+                    if not isinstance(outcome, dict):
+                        errors.append(f"Маршрут ИИ #{index} должен быть объектом.")
+                        continue
+                    route_id = str(outcome.get("id") or "").strip()
+                    if not route_id:
+                        errors.append(f"Маршрут ИИ #{index}: укажите технический ключ.")
+                    elif not CUSTOM_FIELD_KEY_RE.fullmatch(route_id):
+                        errors.append(
+                            f"Маршрут ИИ #{index}: ключ должен содержать только "
+                            "a-z, 0-9 и подчёркивание."
+                        )
+                    elif route_id in route_ids:
+                        errors.append(f"Маршрут ИИ «{route_id}» дублируется.")
+                    route_ids.add(route_id)
+                    if not str(outcome.get("label") or "").strip():
+                        errors.append(f"Маршрут ИИ #{index}: укажите название.")
+                    instruction = str(
+                        outcome.get("instruction")
+                        or outcome.get("when")
+                        or ""
+                    ).strip()
+                    if len(instruction) > 1000:
+                        errors.append(
+                            f"Маршрут ИИ #{index}: правило выбора длиннее 1000 символов."
+                        )
+                if "fallback" not in route_ids:
+                    errors.append("Для ИИ-ответа нужен маршрут fallback.")
+
+            output_fields = config.get("output_fields")
+            if output_fields is not None and not isinstance(output_fields, list):
+                errors.append("Извлекаемые поля ИИ должны быть списком.")
+            elif isinstance(output_fields, list):
+                response_keys: set[str] = set()
+                for index, field in enumerate(output_fields, start=1):
+                    if not isinstance(field, dict):
+                        errors.append(f"Извлекаемое поле #{index} должно быть объектом.")
+                        continue
+                    response_key = str(field.get("response_key") or "").strip()
+                    lead_field_key = str(field.get("lead_field_key") or "").strip()
+                    if not CUSTOM_FIELD_KEY_RE.fullmatch(response_key):
+                        errors.append(
+                            f"Извлекаемое поле #{index}: неверный ключ ответа модели."
+                        )
+                    elif response_key in response_keys:
+                        errors.append(
+                            f"Извлекаемое поле «{response_key}» дублируется."
+                        )
+                    response_keys.add(response_key)
+                    if not is_supported_lead_field_key(lead_field_key):
+                        errors.append(
+                            f"Извлекаемое поле #{index}: поле лида не поддерживается."
+                        )
+                    if str(field.get("value_type") or "text") not in {
+                        "text",
+                        "number",
+                        "boolean",
+                    }:
+                        errors.append(
+                            f"Извлекаемое поле #{index}: выберите допустимый тип."
+                        )
+
+            for key, minimum, maximum, label in (
+                ("temperature", 0, 2, "temperature"),
+                ("max_output_tokens", 1, 32000, "лимит токенов"),
+                ("history_message_limit", 1, 100, "глубину истории"),
+                ("typing_delay_per_char_ms", 0, 250, "скорость печати"),
+                ("min_delay_ms", 0, 30000, "минимальную задержку"),
+                ("max_delay_ms", 0, 30000, "максимальную задержку"),
+            ):
+                if key not in config or config.get(key) in {None, ""}:
+                    continue
+                try:
+                    number = float(config[key])
+                except (TypeError, ValueError):
+                    errors.append(f"Укажите числовое значение для поля «{label}».")
+                    continue
+                if number < minimum or number > maximum:
+                    errors.append(
+                        f"Поле «{label}» должно быть от {minimum} до {maximum}."
+                    )
         if block_type == "generic_finish":
             result = str(config.get("result") or "stop").strip()
             if result not in {"success", "lost", "rejected", "stop"}:

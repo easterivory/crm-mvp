@@ -10,12 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import LeadStatusCode, MessageType, SenderType
 from app.models.chat import Chat
 from app.models.lead import Lead
-from app.models.lead_event import LeadEvent
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
-from app.models.partner import LeadSubmission
 from app.models.project import Project
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
+from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 
 
 class ProjectMetricsRepository:
@@ -67,35 +66,19 @@ class ProjectMetricsRepository:
                 Message.created_at < end_at,
             )
         )
-        submitted_result = await self.db.execute(
-            select(func.count(distinct(LeadSubmission.lead_id)))
-            .join(Lead, Lead.id == LeadSubmission.lead_id)
-            .where(
-                Lead.project_id == project_id,
-                Lead.is_deleted.is_(False),
-                LeadSubmission.status.in_(("success", "completed")),
-                LeadSubmission.completed_at >= start_at,
-                LeadSubmission.completed_at < end_at,
-            )
+        tracking_metrics = TrackingMetricsRepository(self.db)
+        submitted = await tracking_metrics.aggregate_submitted_by_project(
+            project_id=project_id,
+            bot_id=None,
+            date_from=day,
+            date_to=day,
         )
-        lifecycle_events_result = await self.db.execute(
-            select(
-                LeadEvent.event_type,
-                func.count(LeadEvent.id).label("total"),
-            )
-            .where(
-                LeadEvent.project_id == project_id,
-                LeadEvent.event_type.in_(("registration", "deposit", "redeposit")),
-                LeadEvent.occurred_at >= start_at,
-                LeadEvent.occurred_at < end_at,
-            )
-            .group_by(LeadEvent.event_type)
+        lifecycle_counts = await LifecycleMetricsRepository(self.db).aggregate_counts(
+            project_id=project_id,
+            date_from=day,
+            date_to=day,
         )
-        lifecycle_counts = {
-            str(row.event_type): int(row.total or 0)
-            for row in lifecycle_events_result
-        }
-        spend = await TrackingMetricsRepository(self.db).aggregate_spend_by_project(
+        spend = await tracking_metrics.aggregate_spend_by_project(
             project_id=project_id,
             bot_id=None,
             date_from=day,
@@ -103,7 +86,7 @@ class ProjectMetricsRepository:
         )
         leads = int(leads_result.scalar_one() or 0)
         starts = int(starts_result.scalar_one() or 0)
-        submitted = int(submitted_result.scalar_one() or 0)
+        submitted = int(submitted or 0)
         spend = Decimal(spend or 0)
         cpl = spend / Decimal(leads) if leads > 0 else Decimal("0")
         conversion = (
@@ -129,9 +112,9 @@ class ProjectMetricsRepository:
             "spend_today": spend,
             "cpl_today": cpl,
             "cost_per_submitted_today": cost_per_submitted,
-            "registrations_today": lifecycle_counts.get("registration", 0),
-            "deposits_today": lifecycle_counts.get("deposit", 0),
-            "redeposits_today": lifecycle_counts.get("redeposit", 0),
+            "registrations_today": lifecycle_counts["registrations"],
+            "deposits_today": lifecycle_counts["first_deposits"],
+            "redeposits_today": lifecycle_counts["redeposits"],
         }
 
     @staticmethod

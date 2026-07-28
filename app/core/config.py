@@ -33,6 +33,9 @@ class Settings(BaseSettings):
 
     # Security
     SECRET_KEY: str
+    # Provider credentials are encrypted at rest. Set a dedicated value in
+    # production; SECRET_KEY remains a compatible fallback for existing installs.
+    AI_CREDENTIAL_ENCRYPTION_KEY: Optional[str] = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24h
     ALGORITHM: str = "HS256"
 

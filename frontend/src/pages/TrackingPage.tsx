@@ -82,13 +82,22 @@ const zeroSummary: TrackingMetricSummary = {
   leads: 0,
   submitted_leads: 0,
   deposits: 0,
+  registrations: 0,
+  first_deposits: 0,
+  redeposits: 0,
   spend: 0,
   cr_to_lead: 0,
   cr_to_submit: 0,
   cr_to_deposit: 0,
+  cr_to_registration: 0,
+  cr_registration_to_deposit: 0,
+  cr_deposit_to_redeposit: 0,
   cpl: 0,
   cpsl: 0,
   cpd: 0,
+  cpr: 0,
+  cpfd: 0,
+  cprd: 0,
 }
 
 function todayIso() {
@@ -461,6 +470,9 @@ export default function TrackingPage() {
       starts: item.starts,
       leads: item.leads,
       submitted: item.submitted_leads,
+      registrations: item.registrations,
+      firstDeposits: item.first_deposits,
+      redeposits: item.redeposits,
     }))
   }, [metrics?.daily])
 
@@ -471,6 +483,9 @@ export default function TrackingPage() {
       starts: item.starts,
       leads: item.leads,
       submitted: item.submitted_leads,
+      registrations: item.registrations,
+      firstDeposits: item.first_deposits,
+      redeposits: item.redeposits,
     }))
   }, [detailMetrics?.daily])
 
@@ -928,17 +943,25 @@ export default function TrackingPage() {
   }
 
   const summary = metrics?.summary ?? zeroSummary
+  const isGambling = metrics?.project_format === 'gambling'
+  const detailIsGambling = detailMetrics?.project_format === 'gambling'
   const unattributedSummary = metrics?.unattributed_summary ?? zeroSummary
   const unattributedDaily = metrics?.unattributed_daily ?? []
   const activeUnattributedDays = unattributedDaily.filter((item) =>
     Number(item.starts || 0) > 0
     || Number(item.leads || 0) > 0
-    || Number(item.submitted_leads || 0) > 0,
+    || Number(item.submitted_leads || 0) > 0
+    || Number(item.registrations || 0) > 0
+    || Number(item.first_deposits || 0) > 0
+    || Number(item.redeposits || 0) > 0,
   )
   const hasUnattributedTraffic =
     Number(unattributedSummary.starts || 0) > 0 ||
     Number(unattributedSummary.leads || 0) > 0 ||
-    Number(unattributedSummary.submitted_leads || 0) > 0
+    Number(unattributedSummary.submitted_leads || 0) > 0 ||
+    Number(unattributedSummary.registrations || 0) > 0 ||
+    Number(unattributedSummary.first_deposits || 0) > 0 ||
+    Number(unattributedSummary.redeposits || 0) > 0
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-[#0B0F19]/80 text-gray-200 shadow-card">
@@ -1033,21 +1056,48 @@ export default function TrackingPage() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <div className={`grid gap-4 md:grid-cols-2 ${isGambling ? 'xl:grid-cols-8' : 'xl:grid-cols-6'}`}>
           {metricCard('Клики', formatNumber(summary.clicks))}
           {metricCard('Старты', formatNumber(summary.starts))}
           {metricCard('Лиды', formatNumber(summary.leads), `CR ${formatPercent(summary.cr_to_lead)}`)}
-          {metricCard('Отправлены', formatNumber(summary.submitted_leads), `CR ${formatPercent(summary.cr_to_submit)}`)}
+          {isGambling ? (
+            <>
+              {metricCard('Регистрации', formatNumber(summary.registrations), `CR ${formatPercent(summary.cr_to_registration)}`)}
+              {metricCard('FD', formatNumber(summary.first_deposits), `CR ${formatPercent(summary.cr_registration_to_deposit)}`)}
+              {metricCard('RD', formatNumber(summary.redeposits), `CR ${formatPercent(summary.cr_deposit_to_redeposit)}`)}
+            </>
+          ) : metricCard('Отправлены', formatNumber(summary.submitted_leads), `CR ${formatPercent(summary.cr_to_submit)}`)}
           {metricCard('Расход', formatMoney(summary.spend))}
-          {metricCard('CPL', formatMoney(summary.cpl), `CPSL ${formatMoney(summary.cpsl)}`)}
+          {metricCard('CPL', formatMoney(summary.cpl), isGambling ? `CPFD ${formatMoney(summary.cpfd)}` : `CPSL ${formatMoney(summary.cpsl)}`)}
         </div>
+
+        {isGambling && (metrics?.lifecycle_sources?.length ?? 0) > 0 ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-surface px-4 py-3 shadow-card">
+            <span className="mr-1 text-xs font-semibold uppercase tracking-[0.16em] text-gray-500">
+              Источники событий
+            </span>
+            {metrics?.lifecycle_sources.map((item) => (
+              <span
+                key={item.source}
+                className="rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-1.5 text-xs text-gray-300"
+              >
+                <span className="font-mono text-gray-500">{item.source}</span>
+                {' · '}Рег {formatNumber(item.registrations)}
+                {' · '}FD {formatNumber(item.first_deposits)}
+                {' · '}RD {formatNumber(item.redeposits)}
+              </span>
+            ))}
+          </div>
+        ) : null}
 
         <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-semibold text-white">Динамика трафика</h2>
-                <p className="text-sm text-gray-500">Клики, старты, лиды и подачи</p>
+                <p className="text-sm text-gray-500">
+                  {isGambling ? 'Клики, старты, лиды, регистрации и депозиты' : 'Клики, старты, лиды и подачи'}
+                </p>
               </div>
               <Activity size={18} className="text-accent-300" />
             </div>
@@ -1083,7 +1133,15 @@ export default function TrackingPage() {
                     <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="url(#startsGradient)" strokeWidth={2} />
                     <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="url(#leadsGradient)" strokeWidth={2} />
                     <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
-                    <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                    {isGambling ? (
+                      <>
+                        <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                        <Area type="monotone" dataKey="firstDeposits" name="FD" stroke="#fb7185" fill="transparent" strokeWidth={2} />
+                        <Area type="monotone" dataKey="redeposits" name="RD" stroke="#f97316" fill="transparent" strokeWidth={2} />
+                      </>
+                    ) : (
+                      <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                    )}
                   </AreaChart>
                 </ResponsiveContainer>
               )}
@@ -1101,7 +1159,7 @@ export default function TrackingPage() {
               </div>
             </div>
             <p className="mt-5 text-4xl font-semibold text-white">
-              {formatPercent(summary.cr_to_lead)}
+              {formatPercent(isGambling ? summary.cr_to_registration : summary.cr_to_lead)}
             </p>
             <div className="mt-5 space-y-3 text-sm">
               <div className="flex justify-between text-gray-400">
@@ -1112,10 +1170,27 @@ export default function TrackingPage() {
                 <span>Старт → лид</span>
                 <span>{formatPercent(summary.cr_to_lead)}</span>
               </div>
-              <div className="flex justify-between text-gray-400">
-                <span>Лид → подача</span>
-                <span>{formatPercent(summary.cr_to_submit)}</span>
-              </div>
+              {isGambling ? (
+                <>
+                  <div className="flex justify-between text-gray-400">
+                    <span>Старт → регистрация</span>
+                    <span>{formatPercent(summary.cr_to_registration)}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-400">
+                    <span>Регистрация → FD</span>
+                    <span>{formatPercent(summary.cr_registration_to_deposit)}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-400">
+                    <span>FD → RD</span>
+                    <span>{formatPercent(summary.cr_deposit_to_redeposit)}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-gray-400">
+                  <span>Лид → подача</span>
+                  <span>{formatPercent(summary.cr_to_submit)}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1177,10 +1252,16 @@ export default function TrackingPage() {
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-amber-300/10 bg-black/10 p-4 md:grid-cols-4">
+              <div className={`mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-amber-300/10 bg-black/10 p-4 ${isGambling ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
                 {miniMetric('Старты', formatNumber(unattributedSummary.starts))}
                 {miniMetric('Лиды', formatNumber(unattributedSummary.leads))}
-                {miniMetric('Отправлены', formatNumber(unattributedSummary.submitted_leads))}
+                {isGambling ? (
+                  <>
+                    {miniMetric('Рег', formatNumber(unattributedSummary.registrations))}
+                    {miniMetric('FD', formatNumber(unattributedSummary.first_deposits))}
+                    {miniMetric('RD', formatNumber(unattributedSummary.redeposits))}
+                  </>
+                ) : miniMetric('Отправлены', formatNumber(unattributedSummary.submitted_leads))}
                 {miniMetric('CR', formatPercent(unattributedSummary.cr_to_lead))}
               </div>
 
@@ -1198,12 +1279,20 @@ export default function TrackingPage() {
                     {activeUnattributedDays.map((item) => (
                       <div
                         key={item.date}
-                        className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs"
+                        className={`grid items-center gap-3 rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs ${isGambling ? 'grid-cols-[minmax(0,1fr)_auto_auto_auto_auto_auto]' : 'grid-cols-[minmax(0,1fr)_auto_auto_auto]'}`}
                       >
                         <span className="truncate font-medium text-white">{item.date}</span>
                         <span className="text-cyan-100">S {formatNumber(item.starts)}</span>
                         <span className="text-violet-100">L {formatNumber(item.leads)}</span>
-                        <span className="text-emerald-100">P {formatNumber(item.submitted_leads)}</span>
+                        {isGambling ? (
+                          <>
+                            <span className="text-emerald-100">R {formatNumber(item.registrations)}</span>
+                            <span className="text-rose-100">FD {formatNumber(item.first_deposits)}</span>
+                            <span className="text-orange-100">RD {formatNumber(item.redeposits)}</span>
+                          </>
+                        ) : (
+                          <span className="text-emerald-100">P {formatNumber(item.submitted_leads)}</span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1302,11 +1391,22 @@ export default function TrackingPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 md:grid-cols-4">
+                <div className={`mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 ${isGambling ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
                   {miniMetric('Старты', formatNumber(linkSummary.starts))}
                   {miniMetric('Лиды', formatNumber(linkSummary.leads))}
-                  {miniMetric('Расход', formatMoney(linkSummary.spend))}
-                  {miniMetric('CPL', formatMoney(linkSummary.cpl))}
+                  {isGambling ? (
+                    <>
+                      {miniMetric('Рег', formatNumber(linkSummary.registrations))}
+                      {miniMetric('FD', formatNumber(linkSummary.first_deposits))}
+                      {miniMetric('RD', formatNumber(linkSummary.redeposits))}
+                      {miniMetric('Расход', formatMoney(linkSummary.spend))}
+                    </>
+                  ) : (
+                    <>
+                      {miniMetric('Расход', formatMoney(linkSummary.spend))}
+                      {miniMetric('CPL', formatMoney(linkSummary.cpl))}
+                    </>
+                  )}
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
@@ -1324,10 +1424,25 @@ export default function TrackingPage() {
                         ) : null}
                         {formatPercent(linkSummary.cr_to_lead)}
                       </span>
-                      <span>· Отправлены</span>
-                      <span className="text-gray-100">
-                        {formatNumber(linkSummary.submitted_leads)}
-                      </span>
+                      {isGambling ? (
+                        <>
+                          <span>· Рег → FD</span>
+                          <span className="text-gray-100">
+                            {formatPercent(linkSummary.cr_registration_to_deposit)}
+                          </span>
+                          <span>· CPFD</span>
+                          <span className="text-gray-100">
+                            {formatMoney(linkSummary.cpfd)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span>· Отправлены</span>
+                          <span className="text-gray-100">
+                            {formatNumber(linkSummary.submitted_leads)}
+                          </span>
+                        </>
+                      )}
                     </div>
                     {conversionHelper ? (
                       <p className={`mt-1 text-xs ${conversionHelperClass(conversionStatus)}`}>
@@ -1905,13 +2020,25 @@ export default function TrackingPage() {
                 {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
                 {metricCard('Старты', formatNumber(detailMetrics.summary.starts))}
                 {metricCard('Лиды', formatNumber(detailMetrics.summary.leads))}
-                {metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
+                {detailIsGambling ? (
+                  <>
+                    {metricCard('Регистрации', formatNumber(detailMetrics.summary.registrations))}
+                    {metricCard('FD', formatNumber(detailMetrics.summary.first_deposits))}
+                    {metricCard('RD', formatNumber(detailMetrics.summary.redeposits))}
+                  </>
+                ) : metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
                 {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
                 {metricCard('CPL', formatMoney(detailMetrics.summary.cpl))}
-                {metricCard('CPSL', formatMoney(detailMetrics.summary.cpsl))}
+                {metricCard(detailIsGambling ? 'CPFD' : 'CPSL', formatMoney(detailIsGambling ? detailMetrics.summary.cpfd : detailMetrics.summary.cpsl))}
                 {metricCard('Клик → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.clicks))}
                 {metricCard('Старт → лид', formatPercent(detailMetrics.summary.cr_to_lead))}
-                {metricCard('Лид → подача', formatPercent(detailMetrics.summary.cr_to_submit))}
+                {detailIsGambling ? (
+                  <>
+                    {metricCard('Старт → рег', formatPercent(detailMetrics.summary.cr_to_registration))}
+                    {metricCard('Рег → FD', formatPercent(detailMetrics.summary.cr_registration_to_deposit))}
+                    {metricCard('FD → RD', formatPercent(detailMetrics.summary.cr_deposit_to_redeposit))}
+                  </>
+                ) : metricCard('Лид → подача', formatPercent(detailMetrics.summary.cr_to_submit))}
               </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
@@ -1967,12 +2094,46 @@ export default function TrackingPage() {
                         <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="#22d3ee22" strokeWidth={2} />
                         <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="#a855f722" strokeWidth={2} />
                         <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
-                        <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                        {detailIsGambling ? (
+                          <>
+                            <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                            <Area type="monotone" dataKey="firstDeposits" name="FD" stroke="#fb7185" fill="transparent" strokeWidth={2} />
+                            <Area type="monotone" dataKey="redeposits" name="RD" stroke="#f97316" fill="transparent" strokeWidth={2} />
+                          </>
+                        ) : (
+                          <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                        )}
                       </AreaChart>
                     </ResponsiveContainer>
                   )}
                 </div>
               </div>
+
+              {detailIsGambling && detailMetrics.lifecycle_sources.length > 0 ? (
+                <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
+                  <div className="mb-3">
+                    <h3 className="font-semibold text-white">Источники событий</h3>
+                    <p className="mt-1 text-sm text-gray-500">
+                      События объединяются независимо от источника; повторные регистрации и FD одного лида не дублируются.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {detailMetrics.lifecycle_sources.map((item) => (
+                      <div
+                        key={item.source}
+                        className="rounded-lg border border-white/5 bg-black/10 px-3 py-3"
+                      >
+                        <p className="font-mono text-xs uppercase text-gray-500">{item.source}</p>
+                        <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-200">
+                          <span>Рег {formatNumber(item.registrations)}</span>
+                          <span>FD {formatNumber(item.first_deposits)}</span>
+                          <span>RD {formatNumber(item.redeposits)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               <div>
                 <div>
