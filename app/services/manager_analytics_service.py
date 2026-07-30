@@ -66,6 +66,31 @@ class ManagerAnalyticsService:
             .subquery()
         )
 
+        completion_events = union_all(
+            select(
+                Lead.id.label("lead_id"),
+                FunnelRuntimeLog.created_at.label("completed_at"),
+            )
+            .join(FunnelRuntimeLog, FunnelRuntimeLog.chat_id == Lead.chat_id)
+            .join(FunnelStep, FunnelStep.id == FunnelRuntimeLog.step_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                FunnelRuntimeLog.status == "success",
+                FunnelStep.step_type == "finish",
+            ),
+            select(
+                Lead.id.label("lead_id"),
+                ChatFunnelState.completed_at.label("completed_at"),
+            )
+            .join(ChatFunnelState, ChatFunnelState.chat_id == Lead.chat_id)
+            .where(
+                Lead.project_id == project_id,
+                Lead.is_deleted.is_(False),
+                ChatFunnelState.completed_at.is_not(None),
+            ),
+        ).subquery()
+
         expired_filters = [
             AuditLog.project_id == project_id,
             AuditLog.action == AuditAction.LEAD_MANAGER_REMOVED,
@@ -83,24 +108,62 @@ class ManagerAnalyticsService:
             .where(*expired_filters)
             .subquery()
         )
-        expired_totals = (
+        # A later cleanup expiry is not a lost chat once the client engaged or
+        # completed the funnel during that manager's assignment.
+        latest_assignment_at = (
+            select(func.max(AuditLog.created_at))
+            .where(
+                AuditLog.project_id == project_id,
+                AuditLog.action == AuditAction.LEAD_MANAGER_ASSIGNED,
+                AuditLog.entity_type == EntityType.LEAD,
+                AuditLog.entity_id == expired_events.c.lead_id,
+                AuditLog.meta["to_manager_id"].astext == expired_events.c.manager_id,
+                AuditLog.created_at <= expired_events.c.expired_at,
+            )
+            .correlate(expired_events)
+            .scalar_subquery()
+        )
+        client_replied_before_expiry = (
+            select(Message.id)
+            .join(Lead, Lead.chat_id == Message.chat_id)
+            .where(
+                Lead.id == expired_events.c.lead_id,
+                Message.sender_type == "user",
+                Message.created_at >= latest_assignment_at,
+                Message.created_at <= expired_events.c.expired_at,
+            )
+            .correlate(expired_events)
+            .exists()
+        )
+        funnel_completed_before_expiry = (
+            select(completion_events.c.lead_id)
+            .where(
+                completion_events.c.lead_id == expired_events.c.lead_id,
+                completion_events.c.completed_at >= latest_assignment_at,
+                completion_events.c.completed_at <= expired_events.c.expired_at,
+            )
+            .correlate(expired_events)
+            .exists()
+        )
+        dropped_events = (
             select(
                 expired_events.c.manager_id,
-                func.count(distinct(expired_events.c.lead_id)).label("chats_expired"),
+                expired_events.c.lead_id,
             )
-            .group_by(expired_events.c.manager_id)
+            .where(
+                latest_assignment_at.is_not(None),
+                ~client_replied_before_expiry,
+                ~funnel_completed_before_expiry,
+            )
             .subquery()
         )
-
-        expired_after_assignment = (
-            select(expired_events.c.lead_id)
-            .where(
-                expired_events.c.lead_id == taken_events.c.lead_id,
-                expired_events.c.manager_id == cast(taken_events.c.manager_id, String),
-                expired_events.c.expired_at >= taken_events.c.assigned_at,
+        expired_totals = (
+            select(
+                dropped_events.c.manager_id,
+                func.count(distinct(dropped_events.c.lead_id)).label("chats_expired"),
             )
-            .correlate(taken_events)
-            .exists()
+            .group_by(dropped_events.c.manager_id)
+            .subquery()
         )
 
         retained_totals = (
@@ -124,7 +187,6 @@ class ManagerAnalyticsService:
                     ),
                 ),
             )
-            .where(~expired_after_assignment)
             .group_by(taken_events.c.manager_id)
             .subquery()
         )
@@ -290,31 +352,6 @@ class ManagerAnalyticsService:
             )
             .subquery()
         )
-
-        completion_events = union_all(
-            select(
-                Lead.id.label("lead_id"),
-                FunnelRuntimeLog.created_at.label("completed_at"),
-            )
-            .join(FunnelRuntimeLog, FunnelRuntimeLog.chat_id == Lead.chat_id)
-            .join(FunnelStep, FunnelStep.id == FunnelRuntimeLog.step_id)
-            .where(
-                Lead.project_id == project_id,
-                Lead.is_deleted.is_(False),
-                FunnelRuntimeLog.status == "success",
-                FunnelStep.step_type == "finish",
-            ),
-            select(
-                Lead.id.label("lead_id"),
-                ChatFunnelState.completed_at.label("completed_at"),
-            )
-            .join(ChatFunnelState, ChatFunnelState.chat_id == Lead.chat_id)
-            .where(
-                Lead.project_id == project_id,
-                Lead.is_deleted.is_(False),
-                ChatFunnelState.completed_at.is_not(None),
-            ),
-        ).subquery()
 
         pushed_filters = [
             Lead.project_id == project_id,

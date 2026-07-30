@@ -1718,7 +1718,7 @@ export default function SettingsPage() {
               </div>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-zinc-200">
-                  Пушей без ответа до «Непрочитанных»
+                  Пушей без ответа до статуса «Не прочитано лидом»
                 </span>
                 <input
                   type="number"

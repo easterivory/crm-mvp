@@ -34,7 +34,7 @@ export default function ChatQuickFilters({
   }
 
   const items = [
-    { key: 'unread', label: 'Непрочитанные' },
+    { key: 'unread', label: 'Не прочитано лидом' },
     { key: 'mine', label: 'Мои', disabled: !currentUserId },
     { key: 'all', label: 'Все' },
     { key: 'favorites', label: 'Избранные' },

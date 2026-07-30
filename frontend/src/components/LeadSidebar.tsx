@@ -116,6 +116,7 @@ type LeadSidebarProps = {
   onSetBlocked?: (isBlocked: boolean) => void
   onResetRequest?: () => void
   onLeadStatusChanged?: () => void
+  onLeadTagsChanged?: (tags: Array<{ id: string; name: string; color: string }>) => void
 }
 
 const TAG_COLOR_PALETTE = [
@@ -244,6 +245,7 @@ export default function LeadSidebar({
   onSetBlocked,
   onResetRequest,
   onLeadStatusChanged,
+  onLeadTagsChanged,
 }: LeadSidebarProps) {
   const { selectedProjectId } = useProjectBotSelection()
   const [lead, setLead] = useState<Lead | null>(null)
@@ -377,7 +379,7 @@ export default function LeadSidebar({
     }
   }, [selectedProjectId])
 
-  const loadLead = useCallback(async () => {
+  const loadLead = useCallback(async (): Promise<Lead | null> => {
     if (!activeChatId) {
       setLead(null)
       setFirstNameDraft('')
@@ -388,7 +390,7 @@ export default function LeadSidebar({
       setManagerCommentDraft('')
       setManagerCommentError('')
       setError('')
-      return
+      return null
     }
 
     setIsLoading(true)
@@ -406,6 +408,7 @@ export default function LeadSidebar({
       setPreferredCallTimeDraft(data.preferred_call_time ?? data.call_time_text ?? '')
       setManagerCommentDraft(data.manager_comment ?? '')
       setManagerCommentError('')
+      return data
     } catch (err) {
       setLead(null)
       setFirstNameDraft('')
@@ -416,6 +419,7 @@ export default function LeadSidebar({
       setManagerCommentDraft('')
       setManagerCommentError('')
       setError(getErrorMessage(err))
+      return null
     } finally {
       setIsLoading(false)
     }
@@ -670,7 +674,10 @@ export default function LeadSidebar({
       })
       setSelectedTagId('')
       setTagSearch('')
-      await loadLead()
+      const updatedLead = await loadLead()
+      if (updatedLead) {
+        onLeadTagsChanged?.(updatedLead.tags ?? [])
+      }
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -690,7 +697,10 @@ export default function LeadSidebar({
       await api.delete(`/tags/leads/${lead.id}/tags/${tagId}`, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
-      await loadLead()
+      const updatedLead = await loadLead()
+      if (updatedLead) {
+        onLeadTagsChanged?.(updatedLead.tags ?? [])
+      }
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -723,7 +733,11 @@ export default function LeadSidebar({
           : current,
       )
       setEditingTagColorId(null)
-      onLeadStatusChanged?.()
+      onLeadTagsChanged?.(
+        (lead?.tags ?? []).map((tag) =>
+          tag.id === tagId ? { ...tag, color: data.color } : tag,
+        ),
+      )
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {

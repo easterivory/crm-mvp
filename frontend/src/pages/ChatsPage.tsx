@@ -765,6 +765,7 @@ export default function ChatsPage() {
   const shouldAutoScrollMessagesRef = useRef(true)
   const latestLoadedMessageIdRef = useRef<string | null>(null)
   const prependScrollAnchorRef = useRef<{ messageId: string; top: number } | null>(null)
+  const handledSearchHitRef = useRef<string | null>(null)
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     window.requestAnimationFrame(() => {
@@ -813,6 +814,9 @@ export default function ChatsPage() {
   const canDeleteSnippets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const isBuyer = user?.role_name === 'buyer'
   const highlightedMessageId = selectedChat?.search_hit_message_id ?? null
+  const searchNavigationKey = selectedChatId && highlightedMessageId
+    ? `${selectedChatId}:${highlightedMessageId}`
+    : null
   const userById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users])
   const timelineItems = useMemo<TimelineItem[]>(
     () =>
@@ -1588,6 +1592,16 @@ export default function ChatsPage() {
     void loadSelectedChat(selectedChatId)
   }, [loadChats, loadMessages, loadSelectedChat, selectedChatId])
 
+  const handleLeadTagsChanged = useCallback((tags: Chat['tags']) => {
+    const chatId = selectedChatIdRef.current
+    if (!chatId) {
+      return
+    }
+    setChats((current) => current.map((chat) => (
+      chat.id === chatId ? { ...chat, tags } : chat
+    )))
+  }, [])
+
   const handleToggleFavorite = useCallback(async (
     chatId: string,
     isFavorite: boolean,
@@ -1791,7 +1805,11 @@ export default function ChatsPage() {
   }, [scrollMessagesToBottom, selectedChatId])
 
   useEffect(() => {
-    if (!highlightedMessageId) {
+    if (!searchNavigationKey) {
+      handledSearchHitRef.current = null
+      return undefined
+    }
+    if (handledSearchHitRef.current === searchNavigationKey) {
       return undefined
     }
     const frame = window.requestAnimationFrame(() => {
@@ -1800,6 +1818,8 @@ export default function ChatsPage() {
       if (!container || !target) {
         return
       }
+      shouldAutoScrollMessagesRef.current = false
+      handledSearchHitRef.current = searchNavigationKey
       const containerRect = container.getBoundingClientRect()
       const targetRect = target.getBoundingClientRect()
       const top =
@@ -1811,7 +1831,7 @@ export default function ChatsPage() {
       container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [highlightedMessageId, messages])
+  }, [highlightedMessageId, messages, searchNavigationKey])
 
   const prepareTranslationApproval = async (text: string) => {
     if (!selectedChatId || isPreparingTranslation) {
@@ -2594,7 +2614,9 @@ export default function ChatsPage() {
                 </button>
                 <div className="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
                   <CheckCheck size={16} />
-                  <span>{selectedChat.is_read ? 'Прочитано' : 'Не прочитано'}</span>
+                  <span>
+                    {selectedChat.is_read ? 'Прочитано лидом' : 'Не прочитано лидом'}
+                  </span>
                 </div>
               </div>
             </>
@@ -3132,6 +3154,7 @@ export default function ChatsPage() {
               }}
           onResetRequest={user?.role_name === 'manager' || isBuyer ? undefined : () => setIsResetConfirmOpen(true)}
           onLeadStatusChanged={handleLeadSidebarChanged}
+          onLeadTagsChanged={handleLeadTagsChanged}
         />
       </div>
 
@@ -3436,6 +3459,7 @@ export default function ChatsPage() {
                   }}
               onResetRequest={user?.role_name === 'manager' || isBuyer ? undefined : () => setIsResetConfirmOpen(true)}
               onLeadStatusChanged={handleLeadSidebarChanged}
+              onLeadTagsChanged={handleLeadTagsChanged}
             />
           </div>
           </aside>

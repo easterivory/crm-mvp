@@ -280,6 +280,7 @@ export default function ChatList({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
   const scrollAnchorRef = useRef<{ chatId: string; offset: number; scrollTop: number } | null>(null)
+  const lastScrollTopRef = useRef(0)
   const selectedChatIdRef = useRef(selectedChatId)
   const previousFilterIdentityRef = useRef('')
   const activeFilterCount = countActiveChatFilters(filters)
@@ -293,6 +294,7 @@ export default function ChatList({
     if (!root || root.clientHeight === 0) {
       return
     }
+    lastScrollTopRef.current = root.scrollTop
     const rootTop = root.getBoundingClientRect().top
     const items = Array.from(root.querySelectorAll<HTMLElement>('[data-chat-list-id]'))
     const visibleItems = items.filter((item) => item.getBoundingClientRect().bottom > rootTop + 1)
@@ -323,11 +325,16 @@ export default function ChatList({
     if (previousFilterIdentityRef.current !== filterIdentity) {
       previousFilterIdentityRef.current = filterIdentity
       scrollAnchorRef.current = null
+      lastScrollTopRef.current = 0
       root.scrollTop = 0
       return
     }
     const anchor = scrollAnchorRef.current
     if (!anchor?.chatId) {
+      root.scrollTop = Math.min(
+        lastScrollTopRef.current,
+        Math.max(0, root.scrollHeight - root.clientHeight),
+      )
       rememberScrollAnchor()
       return
     }
@@ -339,7 +346,7 @@ export default function ChatList({
       root.scrollTop += nextOffset - anchor.offset
     } else {
       root.scrollTop = Math.min(
-        anchor.scrollTop,
+        Math.max(anchor.scrollTop, lastScrollTopRef.current),
         Math.max(0, root.scrollHeight - root.clientHeight),
       )
     }
@@ -591,7 +598,7 @@ export default function ChatList({
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {isUnread ? (
                     <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200">
-                      Непрочитано
+                      Не прочитано лидом
                     </span>
                   ) : null}
                   {waitingForReplyMinutes !== null ? (

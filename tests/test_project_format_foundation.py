@@ -252,7 +252,7 @@ class PostbackFoundationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ManagerAnalyticsContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_retained_query_excludes_lease_expired_assignments(self) -> None:
+    async def test_dropped_query_excludes_replied_and_completed_leases(self) -> None:
         empty_mappings = SimpleNamespace(all=lambda: [])
         db = SimpleNamespace(
             execute=AsyncMock(
@@ -273,8 +273,11 @@ class ManagerAnalyticsContractTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIn("chat_lease_expired", sql)
-        self.assertIn("NOT (EXISTS", sql)
+        self.assertGreaterEqual(sql.count("NOT (EXISTS"), 2)
         self.assertIn("lead.manager_assigned", sql)
+        self.assertIn("messages.sender_type", sql)
+        self.assertIn("funnel_runtime_logs.status", sql)
+        self.assertIn("chat_funnel_states.completed_at", sql)
 
 
 if __name__ == "__main__":

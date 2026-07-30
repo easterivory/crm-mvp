@@ -49,6 +49,8 @@ export type OutcomeConfig = {
   id: string
   label: string
   target_step_id?: string
+  instruction?: string
+  when?: string
 }
 
 export type AbTestVariantConfig = {
@@ -329,10 +331,16 @@ export function normalizeOutcomes(raw: unknown): OutcomeConfig[] {
     }
     const outcome = typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {}
     return {
+      ...outcome,
       id: String(outcome.id ?? `outcome_${index + 1}`),
       label: String(outcome.label ?? outcome.id ?? `Исход ${index + 1}`),
       target_step_id: typeof outcome.target_step_id === 'string' ? outcome.target_step_id : '',
-    }
+      instruction: typeof outcome.instruction === 'string'
+        ? outcome.instruction
+        : typeof outcome.when === 'string'
+          ? outcome.when
+          : undefined,
+    } as OutcomeConfig
   })
 }
 
