@@ -34,7 +34,10 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
     async def get_link_by_id(self, link_id: UUID) -> Optional[TrackingLink]:
         result = await self.db.execute(
             select(TrackingLink)
-            .options(selectinload(TrackingLink.bot))
+            .options(
+                selectinload(TrackingLink.bot),
+                selectinload(TrackingLink.channel),
+            )
             .where(TrackingLink.id == link_id)
         )
         return result.scalar_one_or_none()
@@ -42,7 +45,10 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
     async def get_link_by_code(self, code: str) -> Optional[TrackingLink]:
         result = await self.db.execute(
             select(TrackingLink)
-            .options(selectinload(TrackingLink.bot))
+            .options(
+                selectinload(TrackingLink.bot),
+                selectinload(TrackingLink.channel),
+            )
             .where(TrackingLink.code == code)
         )
         return result.scalar_one_or_none()
@@ -54,7 +60,10 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
     ) -> Optional[TrackingLink]:
         stmt = (
             select(TrackingLink)
-            .options(selectinload(TrackingLink.bot))
+            .options(
+                selectinload(TrackingLink.bot),
+                selectinload(TrackingLink.channel),
+            )
             .where(TrackingLink.ref_code == ref_code)
         )
         if project_id is not None:
@@ -70,7 +79,10 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
     ) -> Optional[TrackingLink]:
         result = await self.db.execute(
             select(TrackingLink)
-            .options(selectinload(TrackingLink.bot))
+            .options(
+                selectinload(TrackingLink.bot),
+                selectinload(TrackingLink.channel),
+            )
             .where(
                 TrackingLink.id == tracking_link_id,
                 TrackingLink.project_id == project_id,
@@ -89,7 +101,10 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
     ) -> list[TrackingLink]:
         stmt = (
             select(TrackingLink)
-            .options(selectinload(TrackingLink.bot))
+            .options(
+                selectinload(TrackingLink.bot),
+                selectinload(TrackingLink.channel),
+            )
             .where(TrackingLink.project_id == project_id)
         )
         if bot_id is not None:

@@ -116,6 +116,82 @@ class FacebookCAPIService:
         return data
 
     @classmethod
+    async def send_external_event(
+        cls,
+        *,
+        pixel_id: str,
+        token: str,
+        event_name: str,
+        external_id: str,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        event_time: int | None = None,
+        custom_data: dict[str, Any] | None = None,
+        event_id: str | None = None,
+        proxy_url: str | None = None,
+        test_event_code: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_pixel_id = cls.validate_pixel_id(pixel_id)
+        normalized_token = cls.validate_token(token)
+        normalized_event_name = cls.validate_event_name(event_name)
+        normalized_event_time = cls.validate_event_time(event_time)
+        user_data: dict[str, Any] = {
+            "external_id": [cls.hash_data(external_id)],
+        }
+        if cls._clean_string(first_name):
+            user_data["fn"] = [cls.hash_data(str(first_name))]
+        if cls._clean_string(last_name):
+            user_data["ln"] = [cls.hash_data(str(last_name))]
+        event: dict[str, Any] = {
+            "event_name": normalized_event_name,
+            "event_time": normalized_event_time,
+            "event_id": cls.validate_event_id(
+                event_id
+                or f"external:{cls.hash_data(external_id)[:16]}:{normalized_event_name}:{normalized_event_time}"
+            ),
+            "action_source": "other",
+            "user_data": user_data,
+        }
+        cleaned_custom_data = cls.clean_custom_data(custom_data)
+        if cleaned_custom_data:
+            event["custom_data"] = cleaned_custom_data
+        payload: dict[str, Any] = {"data": [event]}
+        normalized_test_code = cls._clean_string(test_event_code)
+        if normalized_test_code:
+            payload["test_event_code"] = normalized_test_code
+
+        graph_version = cls.validate_graph_api_version(settings.FACEBOOK_GRAPH_API_VERSION)
+        url = f"https://graph.facebook.com/{graph_version}/{normalized_pixel_id}/events"
+        client_kwargs: dict[str, Any] = {
+            "timeout": settings.FACEBOOK_CAPI_TIMEOUT_SECONDS,
+        }
+        normalized_proxy = cls.validate_proxy_url(proxy_url)
+        if normalized_proxy:
+            client_kwargs["proxy"] = normalized_proxy
+        try:
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                response = await client.post(
+                    url,
+                    params={"access_token": normalized_token},
+                    json=payload,
+                )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise FacebookCAPIError(
+                f"Facebook CAPI network error: {exc}",
+                retryable=True,
+            ) from exc
+        if response.status_code >= 400:
+            raise FacebookCAPIError(
+                f"Facebook CAPI HTTP {response.status_code}: {response.text[:500]}",
+                status_code=response.status_code,
+                retryable=response.status_code == 429 or response.status_code >= 500,
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise FacebookCAPIError("Facebook CAPI returned non-JSON response") from exc
+
+    @classmethod
     def build_payload(
         cls,
         *,

@@ -35,6 +35,10 @@ from app.services.access_control import require_project_access
 from app.services.domain_dns_service import DomainDnsService
 from app.schemas.tracking import TrackingLinkCreate
 from app.services.tracking_service import TrackingService
+from app.services.channel_tracking_service import (
+    ChannelTrackingService,
+    PreparedChannelInvite,
+)
 
 
 class LanderAdminService:
@@ -139,6 +143,7 @@ class LanderAdminService:
             .options(
                 selectinload(ProjectLander.domain),
                 selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
+                selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.channel),
             )
             .where(ProjectLander.project_id == project_id)
             .order_by(ProjectLander.created_at.desc())
@@ -236,6 +241,9 @@ class LanderAdminService:
                 data=TrackingLinkCreate(
                     project_id=project_id,
                     bot_id=campaign.bot_id,
+                    destination_type=campaign.destination_type,
+                    channel_id=campaign.channel_id,
+                    channel_join_request=campaign.channel_join_request,
                     title=campaign.title,
                     code=campaign.code,
                     buyer_id=campaign.buyer_id,
@@ -301,45 +309,33 @@ class LanderAdminService:
         await self._ensure_lander_project_access(actor=actor, project_id=project_id)
         lander = await self._get_lander(lander_id=lander_id, project_id=project_id)
         self._ensure_buyer_owns_lander(actor=actor, lander=lander)
+
+        validated_slug: str | None = None
+        validated_lander_type: str | None = None
         if "domain_id" in data.model_fields_set:
             if data.domain_id is not None:
                 await self._ensure_domain_belongs_to_project(data.domain_id, project_id)
             else:
                 self._technical_domain()
-            lander.domain_id = data.domain_id
-        if "name" in data.model_fields_set and data.name is not None:
-            lander.name = data.name
         if "slug" in data.model_fields_set and data.slug is not None:
-            slug = self._validate_slug(data.slug)
-            if await self._slug_exists(slug, exclude_id=lander.id):
+            validated_slug = self._validate_slug(data.slug)
+            if await self._slug_exists(validated_slug, exclude_id=lander.id):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Lander slug already exists",
                 )
-            lander.slug = slug
-        if "description" in data.model_fields_set:
-            lander.description = data.description
-        if "button_text" in data.model_fields_set:
-            lander.button_text = data.button_text
         if "type" in data.model_fields_set and data.type is not None:
-            lander_type = self._validate_lander_type(data.type)
-            if lander_type == "custom_upload" and not lander.custom_html_path:
+            validated_lander_type = self._validate_lander_type(data.type)
+            if validated_lander_type == "custom_upload" and not lander.custom_html_path:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="Upload a ZIP archive before enabling custom_upload",
                 )
-            lander.type = lander_type
-        if "pixels" in data.model_fields_set and data.pixels is not None:
-            lander.pixels_json = [pixel.model_dump() for pixel in data.pixels]
-        if "meta_events" in data.model_fields_set and data.meta_events is not None:
-            lander.meta_events_json = [event.model_dump() for event in data.meta_events]
-        if "utm_defaults" in data.model_fields_set and data.utm_defaults is not None:
-            lander.utm_defaults_json = data.utm_defaults
-        if (
-            "auto_redirect_enabled" in data.model_fields_set
-            and data.auto_redirect_enabled is not None
-        ):
-            lander.auto_redirect_enabled = data.auto_redirect_enabled
+
+        prepared_invite: PreparedChannelInvite | None = None
+        prepared_channel_id: UUID | None = None
+        prepared_tracking_link_id: UUID | None = None
+        campaign_pixels_json: list[dict] | None = None
         if data.facebook_campaign is not None:
             if lander.tracking_link is None:
                 raise HTTPException(
@@ -353,28 +349,110 @@ class LanderAdminService:
                 project_id=project_id,
                 mappings=campaign.fb_event_mappings,
             )
+            desired_destination = (
+                campaign.destination_type
+                if "destination_type" in campaign.model_fields_set
+                and campaign.destination_type is not None
+                else link.destination_type
+            )
+            channel = None
             bot = link.bot
             bot_changed = False
-            if "bot_id" in campaign.model_fields_set and campaign.bot_id is not None:
-                bot = await tracking_service.bot_service.ensure_bot_username(
-                    bot_id=campaign.bot_id,
+            channel_changed = False
+            join_request_changed = False
+            desired_code = link.code
+            code_changed = False
+            if "code" in campaign.model_fields_set and campaign.code is not None:
+                desired_code = tracking_service._normalize_code(
+                    campaign.code,
+                    required=True,
+                )
+                if desired_code != link.code:
+                    await tracking_service._ensure_code_available(
+                        desired_code,
+                        exclude_id=link.id,
+                    )
+                    code_changed = True
+            if desired_destination == "channel":
+                channel_id = (
+                    campaign.channel_id
+                    if "channel_id" in campaign.model_fields_set
+                    else link.channel_id
+                )
+                if channel_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Choose a Telegram channel for channel traffic",
+                    )
+                channel = await tracking_service.channel_service.get_channel(
+                    channel_id=channel_id,
                     project_id=project_id,
                 )
+                bot = channel.tracker_bot
+                channel_changed = (
+                    link.destination_type != "channel" or link.channel_id != channel.id
+                )
+                desired_join_request = (
+                    campaign.channel_join_request
+                    if "channel_join_request" in campaign.model_fields_set
+                    and campaign.channel_join_request is not None
+                    else link.channel_join_request
+                )
+                join_request_changed = desired_join_request != link.channel_join_request
+                if channel_changed or join_request_changed:
+                    prepared_invite = (
+                        await tracking_service.channel_service.prepare_invite_link(
+                            channel=channel,
+                            code=desired_code,
+                            creates_join_request=desired_join_request,
+                        )
+                    )
+                    prepared_channel_id = channel.id
+                    prepared_tracking_link_id = link.id
                 bot_changed = bot.id != link.bot_id
+                link.destination_type = "channel"
+                link.channel_id = channel.id
+                link.channel = channel
+                link.channel_join_request = desired_join_request
                 link.bot_id = bot.id
                 link.bot = bot
                 link.target_step_id = None
+                link.target_funnel_id = None
+                link.target_funnel_step_key = None
+            else:
+                requested_bot_id = (
+                    campaign.bot_id
+                    if "bot_id" in campaign.model_fields_set
+                    else link.bot_id
+                )
+                if requested_bot_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Choose a Telegram bot for bot traffic",
+                    )
+                bot = await tracking_service.bot_service.ensure_bot_username(
+                    bot_id=requested_bot_id,
+                    project_id=project_id,
+                )
+                bot_changed = bot.id != link.bot_id
+                was_channel = link.destination_type == "channel"
+                link.destination_type = "bot"
+                link.channel_id = None
+                link.channel = None
+                link.channel_join_request = False
+                link.bot_id = bot.id
+                link.bot = bot
+                link.target_step_id = None
+                if was_channel:
+                    await tracking_service.channel_service.mark_invites_not_current(
+                        link.id
+                    )
+            if code_changed:
+                link.code = desired_code
+                link.ref_code = desired_code
             if "title" in campaign.model_fields_set and campaign.title is not None:
                 link.title = campaign.title
                 link.name = campaign.title
-            code_changed = False
-            if "code" in campaign.model_fields_set and campaign.code is not None:
-                code = tracking_service._normalize_code(campaign.code, required=True)
-                if code != link.code:
-                    await tracking_service._ensure_code_available(code, exclude_id=link.id)
-                    link.code = code
-                    link.ref_code = code
-                    code_changed = True
             if (
                 actor.role_name != RoleName.BUYER
                 and "buyer_name" in campaign.model_fields_set
@@ -394,7 +472,10 @@ class LanderAdminService:
                 and campaign.min_sample_size is not None
             ):
                 link.min_sample_size = campaign.min_sample_size
-            if "target_funnel_step_key" in campaign.model_fields_set:
+            if (
+                desired_destination == "bot"
+                and "target_funnel_step_key" in campaign.model_fields_set
+            ):
                 target_funnel_id, target_step_key = (
                     await tracking_service._resolve_target_funnel_step(
                         bot_id=link.bot_id,
@@ -404,14 +485,18 @@ class LanderAdminService:
                 )
                 link.target_funnel_id = target_funnel_id
                 link.target_funnel_step_key = target_step_key
-            elif bot_changed:
+            elif desired_destination == "bot" and bot_changed:
                 link.target_funnel_id = None
                 link.target_funnel_step_key = None
-            if bot is not None and (bot_changed or code_changed):
+            if desired_destination == "bot" and bot is not None and (
+                bot_changed or code_changed or link.invite_link is None
+            ):
                 link.invite_link = tracking_service._build_invite_link(
                     bot.bot_username,
                     link.code,
                 )
+            elif prepared_invite is not None and channel is not None:
+                link.invite_link = prepared_invite.invite_link
             link.fb_campaign_enabled = campaign.enabled
             link.fb_pixel_id = campaign.fb_pixel_id
             link.fb_event_mappings_json = [
@@ -426,12 +511,58 @@ class LanderAdminService:
                 link.fb_proxy_url = campaign.fb_proxy_url
             elif campaign.clear_fb_proxy_url:
                 link.fb_proxy_url = None
-            lander.pixels_json = (
+            campaign_pixels_json = (
                 [{"provider": "meta", "pixel_id": campaign.fb_pixel_id}]
                 if campaign.fb_pixel_id
                 else []
             )
-        await self.db.flush()
+
+        if "domain_id" in data.model_fields_set:
+            lander.domain_id = data.domain_id
+        if "name" in data.model_fields_set and data.name is not None:
+            lander.name = data.name
+        if validated_slug is not None:
+            lander.slug = validated_slug
+        if "description" in data.model_fields_set:
+            lander.description = data.description
+        if "button_text" in data.model_fields_set:
+            lander.button_text = data.button_text
+        if validated_lander_type is not None:
+            lander.type = validated_lander_type
+        if "pixels" in data.model_fields_set and data.pixels is not None:
+            lander.pixels_json = [pixel.model_dump() for pixel in data.pixels]
+        if campaign_pixels_json is not None:
+            lander.pixels_json = campaign_pixels_json
+        if "meta_events" in data.model_fields_set and data.meta_events is not None:
+            lander.meta_events_json = [event.model_dump() for event in data.meta_events]
+        if "utm_defaults" in data.model_fields_set and data.utm_defaults is not None:
+            lander.utm_defaults_json = data.utm_defaults
+        if (
+            "auto_redirect_enabled" in data.model_fields_set
+            and data.auto_redirect_enabled is not None
+        ):
+            lander.auto_redirect_enabled = data.auto_redirect_enabled
+
+        try:
+            if (
+                prepared_invite is not None
+                and prepared_channel_id is not None
+                and prepared_tracking_link_id is not None
+            ):
+                await ChannelTrackingService(self.db).persist_invite_link(
+                    project_id=project_id,
+                    channel_id=prepared_channel_id,
+                    tracking_link_id=prepared_tracking_link_id,
+                    prepared=prepared_invite,
+                )
+            await self.db.flush()
+        except Exception:
+            await self.db.rollback()
+            if prepared_invite is not None:
+                await ChannelTrackingService(self.db).revoke_prepared_invite(
+                    prepared=prepared_invite,
+                )
+            raise
         return self._to_lander_out(
             await self._get_lander(lander_id=lander.id, project_id=project_id)
         )
@@ -588,6 +719,7 @@ class LanderAdminService:
             .options(
                 selectinload(ProjectLander.domain),
                 selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
+                selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.channel),
             )
             .execution_options(populate_existing=True)
             .where(
@@ -634,6 +766,15 @@ class LanderAdminService:
                 "facebook_campaign_enabled": bool(
                     link is not None and link.fb_campaign_enabled
                 ),
+                "destination_type": (
+                    link.destination_type if link is not None else "bot"
+                ),
+                "channel_id": link.channel_id if link is not None else None,
+                "channel_title": (
+                    link.channel.title
+                    if link is not None and link.channel is not None
+                    else None
+                ),
                 "fb_pixel_id": link.fb_pixel_id if link is not None else None,
                 "has_fb_capi_token": bool(
                     link is not None and (link.fb_capi_token or "").strip()
@@ -652,6 +793,12 @@ class LanderAdminService:
                 "facebook_campaign": (
                     LanderFacebookCampaignOut(
                         bot_id=link.bot_id,
+                        destination_type=link.destination_type,
+                        channel_id=link.channel_id,
+                        channel_title=(
+                            link.channel.title if link.channel is not None else None
+                        ),
+                        channel_join_request=link.channel_join_request,
                         title=link.title,
                         code=link.code,
                         buyer_name=link.buyer_name,

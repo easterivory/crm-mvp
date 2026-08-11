@@ -1,9 +1,12 @@
 """
 BotService - project-scoped Telegram bot management.
 """
+import asyncio
 import csv
 import io
 import logging
+import re
+import unicodedata
 from typing import Any, Optional
 from uuid import UUID
 
@@ -37,6 +40,10 @@ DEFAULT_PROJECT_NAME = "Default Project"
 DEFAULT_PROJECT_SLUG = "default-project"
 
 logger = logging.getLogger(__name__)
+
+_TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
+_WEBHOOK_RETRY_DELAYS_SECONDS = (0.5, 1.5)
+
 
 class BotService:
     def __init__(self, db: AsyncSession) -> None:
@@ -80,7 +87,7 @@ class BotService:
         data: BotCreate,
     ) -> BotOut:
         project = await self._resolve_project_for_create(data.project_id or project_id)
-        token = self._normalize_optional(data.telegram_token)
+        token = self._normalize_telegram_token(data.telegram_token, required=False)
         identity_values: dict[str, Any] = {}
         if token is not None:
             telegram_info = await self._fetch_telegram_bot_info(token)
@@ -107,13 +114,21 @@ class BotService:
             **identity_values,
             **self._bot_profile_values(data),
         )
+        setup_warning: str | None = None
         if token is not None:
-            await self._set_webhook_for_token(token=token, bot_id=bot.id)
-            await self._sync_funnel_commands_after_commit(
+            # Persist the token already verified by getMe before doing any
+            # optional Telegram setup. This prevents a temporary setWebhook
+            # failure from trapping the bot on its revoked previous token.
+            await self.db.commit()
+            setup_warning, _ = await self._configure_saved_token(
+                token=token,
                 bot_id=bot.id,
                 project_id=project.id,
             )
-        return await self.get_bot(bot_id=bot.id, project_id=project.id)
+        result = await self.get_bot(bot_id=bot.id, project_id=project.id)
+        if setup_warning is None:
+            return result
+        return result.model_copy(update={"telegram_setup_warning": setup_warning})
 
     async def update_bot(
         self,
@@ -137,11 +152,11 @@ class BotService:
         new_token: Optional[str] = None
         old_token: Optional[str] = None
         if "telegram_token" in values:
-            new_token = self._normalize_required(values["telegram_token"], "telegram_token")
+            new_token = self._normalize_telegram_token(values["telegram_token"], required=True)
+            assert new_token is not None
             old_token = self._normalize_optional(bot.telegram_token)
             telegram_info = await self._fetch_telegram_bot_info(new_token)
             identity_values = self._identity_values_from_get_me(telegram_info)
-            await self._set_webhook_for_token(token=new_token, bot_id=bot_id)
             values["telegram_token"] = new_token
             values.update(identity_values)
             if "name" not in values:
@@ -170,16 +185,25 @@ class BotService:
                 values=values,
             )
 
+        setup_warning: str | None = None
+        webhook_ready = False
         if new_token is not None:
+            # The token has already passed Telegram getMe. Commit it before
+            # follow-up Telegram calls so a transient webhook/profile failure
+            # cannot leave the revoked token active in CRM.
+            await self.db.commit()
             await self.avatar_service.invalidate(bot_id)
-            await self._sync_funnel_commands_after_commit(
+            setup_warning, webhook_ready = await self._configure_saved_token(
+                token=new_token,
                 bot_id=bot_id,
                 project_id=project_id,
             )
 
-        if new_token and old_token and old_token != new_token:
+        if new_token and webhook_ready and old_token and old_token != new_token:
             await self._delete_webhook_safely(old_token)
-            return await self.get_bot(bot_id=bot_id, project_id=project_id)
+        if new_token is not None:
+            result = await self.get_bot(bot_id=bot_id, project_id=project_id)
+            return result.model_copy(update={"telegram_setup_warning": setup_warning})
 
         return BotOut.model_validate(updated)
 
@@ -569,35 +593,100 @@ class BotService:
 
     async def _set_webhook_for_token(self, *, token: str, bot_id: UUID) -> tuple[dict, str]:
         webhook_url = self._webhook_url_for_bot(bot_id)
-        try:
-            payload = await self.telegram_sender.set_webhook(
-                token=token,
-                webhook_url=webhook_url,
-                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
-                allowed_updates=TELEGRAM_WEBHOOK_ALLOWED_UPDATES,
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Telegram setWebhook request failed: {exc}",
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Telegram returned a non-JSON response",
-            ) from exc
-        except RuntimeError as exc:
-            if self._is_invalid_token_error(str(exc)):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Telegram token is invalid: {exc}",
-                ) from exc
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=str(exc),
-            ) from exc
+        attempt_count = len(_WEBHOOK_RETRY_DELAYS_SECONDS) + 1
+        last_error: Exception | None = None
 
-        return payload, webhook_url
+        for attempt in range(attempt_count):
+            try:
+                payload = await self.telegram_sender.set_webhook(
+                    token=token,
+                    webhook_url=webhook_url,
+                    secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
+                    allowed_updates=TELEGRAM_WEBHOOK_ALLOWED_UPDATES,
+                )
+                return payload, webhook_url
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+            except RuntimeError as exc:
+                last_error = exc
+                if self._is_invalid_token_error(str(exc)):
+                    # A freshly rotated token can be accepted by getMe while a
+                    # subsequent Telegram edge still has stale auth state.
+                    # Recheck it before deciding whether this is really a bad
+                    # token or a transient setWebhook failure.
+                    try:
+                        await self.telegram_sender.get_me(token)
+                    except (httpx.HTTPError, ValueError, RuntimeError) as validation_exc:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=(
+                                "Telegram отклонил токен при повторной проверке getMe: "
+                                f"{validation_exc}"
+                            ),
+                        ) from validation_exc
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Telegram не принял setWebhook: {exc}",
+                    ) from exc
+
+            if attempt < len(_WEBHOOK_RETRY_DELAYS_SECONDS):
+                await asyncio.sleep(_WEBHOOK_RETRY_DELAYS_SECONDS[attempt])
+
+        if isinstance(last_error, httpx.HTTPError):
+            detail = f"сетевая ошибка {last_error.__class__.__name__}"
+        elif isinstance(last_error, ValueError):
+            detail = "Telegram вернул ответ не в JSON"
+        else:
+            detail = str(last_error or "неизвестная ошибка")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Токен подтверждён через getMe, но Telegram не зарегистрировал webhook "
+                f"после {attempt_count} попыток: {detail}"
+            ),
+        ) from last_error
+
+    async def _configure_saved_token(
+        self,
+        *,
+        token: str,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> tuple[str | None, bool]:
+        warning: str | None = None
+        webhook_ready = False
+        try:
+            await self._set_webhook_for_token(token=token, bot_id=bot_id)
+            webhook_ready = True
+        except HTTPException as exc:
+            detail = str(exc.detail)
+            warning = (
+                "Telegram token сохранён и подтверждён через getMe, но webhook пока "
+                f"не зарегистрирован: {detail}"
+            )
+            logger.warning(
+                "Telegram token saved but webhook setup failed bot_id=%s project_id=%s detail=%s",
+                bot_id,
+                project_id,
+                detail,
+            )
+        except Exception as exc:
+            warning = (
+                "Telegram token сохранён и подтверждён через getMe, но webhook пока "
+                "не зарегистрирован из-за внутренней ошибки. Повторите регистрацию webhook."
+            )
+            logger.exception(
+                "Telegram token saved but webhook setup crashed bot_id=%s project_id=%s",
+                bot_id,
+                project_id,
+            )
+
+        await self._sync_funnel_commands_after_commit(
+            bot_id=bot_id,
+            project_id=project_id,
+        )
+        return warning, webhook_ready
 
     def _webhook_url_for_bot(self, bot_id: UUID) -> str:
         base_url = self._normalize_optional(settings.BASE_URL)
@@ -737,6 +826,44 @@ class BotService:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"{field_name} must not be empty",
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_telegram_token(value: str | None, *, required: bool) -> str | None:
+        if value is None:
+            if required:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="telegram_token must not be empty",
+                )
+            return None
+
+        normalized = unicodedata.normalize("NFKC", str(value))
+        normalized = "".join(
+            character
+            for character in normalized
+            if not character.isspace() and unicodedata.category(character) != "Cf"
+        )
+        if normalized.lower().startswith("bot"):
+            without_prefix = normalized[3:]
+            if _TELEGRAM_TOKEN_PATTERN.fullmatch(without_prefix):
+                normalized = without_prefix
+
+        if not normalized:
+            if required:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="telegram_token must not be empty",
+                )
+            return None
+        if not _TELEGRAM_TOKEN_PATTERN.fullmatch(normalized):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Telegram token имеет неверный формат. Вставьте только token из BotFather "
+                    "без URL, кавычек и подписи."
+                ),
             )
         return normalized
 

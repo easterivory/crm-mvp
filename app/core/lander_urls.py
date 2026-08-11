@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 
 UTM_KEYS = (
@@ -47,3 +47,13 @@ def build_lander_public_url(
     ]
     query = urlencode(pairs)
     return f"{base_url}?{query}" if query else base_url
+
+
+def build_channel_tracking_url(*, host: str, code: str) -> str:
+    """Return the public click-tracking hop for a Telegram channel link."""
+
+    normalized_host = host.strip().lower().rstrip(".")
+    normalized_code = code.strip()
+    if not normalized_host or not normalized_code:
+        return ""
+    return f"https://{normalized_host}/join/{quote(normalized_code, safe='')}"

@@ -11,6 +11,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Radio,
   RotateCcw,
   Search,
   Trash2,
@@ -34,8 +35,8 @@ import { fetchBots } from '../features/bots/api'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
 import type { BuyerUser } from '../features/buyers'
-import { fetchProjectLanders } from '../features/landers/api'
-import type { ProjectLander } from '../features/landers/types'
+import { fetchProjectLanders, fetchTelegramChannels } from '../features/landers/api'
+import type { ProjectLander, TelegramChannel } from '../features/landers/types'
 import { useAuthStore } from '../store/authStore'
 import {
   archiveTrackingLink,
@@ -85,6 +86,11 @@ const zeroSummary: TrackingMetricSummary = {
   registrations: 0,
   first_deposits: 0,
   redeposits: 0,
+  channel_join_requests: 0,
+  channel_joins: 0,
+  channel_leaves: 0,
+  channel_active_subscribers: 0,
+  cr_click_to_channel_join: 0,
   spend: 0,
   cr_to_lead: 0,
   cr_to_submit: 0,
@@ -163,6 +169,10 @@ function formatPercent(value: string | number | null | undefined) {
 
 function ratioPercent(numerator: number, denominator: number) {
   return denominator > 0 ? `${((numerator / denominator) * 100).toFixed(1)}%` : '0.0%'
+}
+
+function unitCost(spend: string | number | null | undefined, units: number) {
+  return units > 0 ? toNumber(spend) / units : 0
 }
 
 function formatBenchmarkPercent(value: string | number | null | undefined) {
@@ -356,6 +366,7 @@ export default function TrackingPage() {
   const isBuyer = currentRole === 'buyer'
   const canManageFacebookCampaigns = ['super_admin', 'admin', 'buyer'].includes(currentRole)
   const [bots, setBots] = useState<Bot[]>([])
+  const [channels, setChannels] = useState<TelegramChannel[]>([])
   const [links, setLinks] = useState<TrackingLink[]>([])
   const [campaignLanders, setCampaignLanders] = useState<ProjectLander[]>([])
   const [metrics, setMetrics] = useState<TrackingProjectMetricsResponse | null>(null)
@@ -369,7 +380,10 @@ export default function TrackingPage() {
   const [notice, setNotice] = useState('')
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [createTitle, setCreateTitle] = useState('')
+  const [createDestinationType, setCreateDestinationType] = useState<'bot' | 'channel'>('bot')
   const [createBotId, setCreateBotId] = useState('')
+  const [createChannelId, setCreateChannelId] = useState('')
+  const [createChannelJoinRequest, setCreateChannelJoinRequest] = useState(false)
   const [createCode, setCreateCode] = useState('')
   const [createBuyerSelection, setCreateBuyerSelection] = useState<BuyerSelection>('')
   const [createBuyerName, setCreateBuyerName] = useState('')
@@ -400,6 +414,7 @@ export default function TrackingPage() {
   )
   const [editPricePerUnit, setEditPricePerUnit] = useState('')
   const [editInviteLink, setEditInviteLink] = useState('')
+  const [editChannelJoinRequest, setEditChannelJoinRequest] = useState(false)
   const [editFbPixelId, setEditFbPixelId] = useState('')
   const [editFbCapiToken, setEditFbCapiToken] = useState('')
   const [editBaseConversionRate, setEditBaseConversionRate] = useState(
@@ -448,6 +463,7 @@ export default function TrackingPage() {
         .map((lander) => [lander.tracking_link_id as string, lander]),
     )
   }, [campaignLanders])
+  const hasChannelTraffic = links.some((link) => link.destination_type === 'channel')
 
   const filteredLinks = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -473,6 +489,7 @@ export default function TrackingPage() {
       registrations: item.registrations,
       firstDeposits: item.first_deposits,
       redeposits: item.redeposits,
+      channelJoins: item.channel_joins,
     }))
   }, [metrics?.daily])
 
@@ -486,12 +503,14 @@ export default function TrackingPage() {
       registrations: item.registrations,
       firstDeposits: item.first_deposits,
       redeposits: item.redeposits,
+      channelJoins: item.channel_joins,
     }))
   }, [detailMetrics?.daily])
 
   const loadPageData = useCallback(async () => {
     if (!selectedProjectId) {
       setBots([])
+      setChannels([])
       setLinks([])
       setCampaignLanders([])
       setMetrics(null)
@@ -517,6 +536,7 @@ export default function TrackingPage() {
         projectMetrics,
         buyerUsers,
         landerItems,
+        channelItems,
       ] = await Promise.all([
         fetchBots(selectedProjectId),
         fetchTrackingLinks({
@@ -531,9 +551,11 @@ export default function TrackingPage() {
         canManageFacebookCampaigns
           ? fetchProjectLanders(selectedProjectId)
           : Promise.resolve([]),
+        fetchTelegramChannels(selectedProjectId),
       ])
 
       setBots(botItems)
+      setChannels(channelItems)
       setLinks(linkResponse.items)
       setCampaignLanders(landerItems)
       setMetrics(projectMetrics)
@@ -615,7 +637,10 @@ export default function TrackingPage() {
         ? selectedBotIds[0]
         : bots[0]?.id ?? ''
     setCreateTitle('')
+    setCreateDestinationType('bot')
     setCreateBotId(defaultBotId)
+    setCreateChannelId(channels[0]?.id ?? '')
+    setCreateChannelJoinRequest(false)
     setCreateCode('')
     setCreateBuyerSelection('')
     setCreateBuyerName('')
@@ -643,7 +668,10 @@ export default function TrackingPage() {
 
   const handleCreateLink = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!selectedProjectId || !createTitle.trim() || !createBotId || isCreatingLink) {
+    const hasDestination = createDestinationType === 'channel'
+      ? Boolean(createChannelId)
+      : Boolean(createBotId)
+    if (!selectedProjectId || !createTitle.trim() || !hasDestination || isCreatingLink) {
       return
     }
     const baseConversionRate = parseBaseConversionRate(createBaseConversionRate)
@@ -674,7 +702,12 @@ export default function TrackingPage() {
     try {
       await createTrackingLink({
         project_id: selectedProjectId,
-        bot_id: createBotId,
+        destination_type: createDestinationType,
+        bot_id: createDestinationType === 'bot' ? createBotId : null,
+        channel_id: createDestinationType === 'channel' ? createChannelId : null,
+        channel_join_request: createDestinationType === 'channel'
+          ? createChannelJoinRequest
+          : false,
         title: createTitle.trim(),
         code: createCode.trim() || undefined,
         buyer_id: isBuyer ? undefined :
@@ -688,10 +721,14 @@ export default function TrackingPage() {
         cost_model: createCostModel,
         price_per_unit: createCostModel === 'cpm' ? 0 : pricePerUnit,
         spend: createCostModel === 'cpm' ? manualSpend : 0,
-        invite_link: createInviteLink.trim() || null,
+        invite_link: createDestinationType === 'bot'
+          ? createInviteLink.trim() || null
+          : null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
-        target_funnel_step_key: createTargetStepKey || null,
+        target_funnel_step_key: createDestinationType === 'bot'
+          ? createTargetStepKey || null
+          : null,
       })
       setIsCreateOpen(false)
       setNotice('Tracking link создан.')
@@ -712,13 +749,16 @@ export default function TrackingPage() {
     setEditCostModel(link.cost_model ?? DEFAULT_COST_MODEL)
     setEditPricePerUnit(String(link.price_per_unit ?? ''))
     setEditInviteLink(link.invite_link ?? '')
+    setEditChannelJoinRequest(link.channel_join_request)
     setEditFbPixelId(link.fb_pixel_id ?? '')
     setEditFbCapiToken('')
     setEditBaseConversionRate(String(link.base_conversion_rate ?? 10))
     setEditMinSampleSize(String(link.min_sample_size ?? 500))
     setEditTargetStepKey(link.target_funnel_step_key ?? '')
     setEditError('')
-    void loadTargetSteps(link.bot_id)
+    if (link.destination_type === 'bot') {
+      void loadTargetSteps(link.bot_id)
+    }
   }
 
   const closeEditLink = () => {
@@ -771,11 +811,15 @@ export default function TrackingPage() {
         payment_type: editCostModel,
         cost_model: editCostModel,
         price_per_unit: editCostModel === 'cpm' ? 0 : pricePerUnit,
-        invite_link: editInviteLink.trim() || null,
+        ...(editingLink.destination_type === 'bot'
+          ? {
+              invite_link: editInviteLink.trim() || null,
+              target_funnel_step_key: editTargetStepKey || null,
+            }
+          : { channel_join_request: editChannelJoinRequest }),
         fb_pixel_id: editFbPixelId.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
-        target_funnel_step_key: editTargetStepKey || null,
       }
       const token = editFbCapiToken.trim()
       const updatedLink = await updateTrackingLink(editingLink.id, {
@@ -798,13 +842,15 @@ export default function TrackingPage() {
 
   const handleCopy = async (link: TrackingLink) => {
     const campaignUrl = campaignLanderByTrackingLinkId.get(link.id)?.public_url
-    const value = campaignUrl || link.invite_link || link.code
+    const value = campaignUrl || link.tracking_url || link.invite_link || link.code
     await navigator.clipboard.writeText(value)
     setNotice(
       campaignUrl
         ? 'Ссылка FB-лендинга скопирована.'
-        : link.invite_link
-          ? 'Invite link скопирован.'
+        : link.tracking_url
+          ? link.destination_type === 'channel'
+            ? 'Трекинговая ссылка на канал скопирована.'
+            : 'Invite link скопирован.'
           : 'Код скопирован.',
     )
   }
@@ -945,6 +991,7 @@ export default function TrackingPage() {
   const summary = metrics?.summary ?? zeroSummary
   const isGambling = metrics?.project_format === 'gambling'
   const detailIsGambling = detailMetrics?.project_format === 'gambling'
+  const detailIsChannel = detailMetrics?.destination_type === 'channel'
   const unattributedSummary = metrics?.unattributed_summary ?? zeroSummary
   const unattributedDaily = metrics?.unattributed_daily ?? []
   const activeUnattributedDays = unattributedDaily.filter((item) =>
@@ -1071,6 +1118,16 @@ export default function TrackingPage() {
           {metricCard('CPL', formatMoney(summary.cpl), isGambling ? `CPFD ${formatMoney(summary.cpfd)}` : `CPSL ${formatMoney(summary.cpsl)}`)}
         </div>
 
+        {hasChannelTraffic ? (
+          <div className="mt-4 grid gap-3 rounded-xl border border-cyan-300/15 bg-cyan-400/[0.045] p-4 sm:grid-cols-2 lg:grid-cols-5">
+            {miniMetric('Заявки в каналы', formatNumber(summary.channel_join_requests))}
+            {miniMetric('Подписки', formatNumber(summary.channel_joins))}
+            {miniMetric('Активные', formatNumber(summary.channel_active_subscribers))}
+            {miniMetric('Отписки', formatNumber(summary.channel_leaves))}
+            {miniMetric('Клик → подписка', formatPercent(summary.cr_click_to_channel_join))}
+          </div>
+        ) : null}
+
         {isGambling && (metrics?.lifecycle_sources?.length ?? 0) > 0 ? (
           <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-surface px-4 py-3 shadow-card">
             <span className="mr-1 text-xs font-semibold uppercase tracking-[0.16em] text-gray-500">
@@ -1096,7 +1153,11 @@ export default function TrackingPage() {
               <div>
                 <h2 className="font-semibold text-white">Динамика трафика</h2>
                 <p className="text-sm text-gray-500">
-                  {isGambling ? 'Клики, старты, лиды, регистрации и депозиты' : 'Клики, старты, лиды и подачи'}
+                  {hasChannelTraffic
+                    ? 'Клики, подписки на каналы и показатели ботов'
+                    : isGambling
+                      ? 'Клики, старты, лиды, регистрации и депозиты'
+                      : 'Клики, старты, лиды и подачи'}
                 </p>
               </div>
               <Activity size={18} className="text-accent-300" />
@@ -1133,6 +1194,9 @@ export default function TrackingPage() {
                     <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="url(#startsGradient)" strokeWidth={2} />
                     <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="url(#leadsGradient)" strokeWidth={2} />
                     <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
+                    {hasChannelTraffic ? (
+                      <Area type="monotone" dataKey="channelJoins" name="Подписки в каналы" stroke="#2dd4bf" fill="transparent" strokeWidth={2} />
+                    ) : null}
                     {isGambling ? (
                       <>
                         <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
@@ -1304,6 +1368,7 @@ export default function TrackingPage() {
           {filteredLinks.map((link) => {
             const linkMetric = linkMetricsById.get(link.id)
             const linkSummary = linkMetric?.summary ?? zeroSummary
+            const isChannelLink = link.destination_type === 'channel'
             const botLabel = botNameById.get(link.bot_id) ?? `Bot ${link.bot_id.slice(0, 8)}`
             const conversionStatus = linkMetric?.conversion_status
             const baseConversionRate =
@@ -1351,8 +1416,15 @@ export default function TrackingPage() {
                       {link.title}
                     </h3>
                     <p className="mt-1 truncate text-sm text-gray-500">
-                      {botLabel} · {link.buyer_name || 'баер не указан'} · {link.ad_type || 'тип рекламы не указан'} · {costModelLabel(link.cost_model)}
+                      {isChannelLink ? `Канал · ${link.channel_title ?? 'без названия'}` : botLabel}
+                      {' · '}{link.buyer_name || 'баер не указан'} · {link.ad_type || 'тип рекламы не указан'} · {costModelLabel(link.cost_model)}
                     </p>
+                    {isChannelLink ? (
+                      <span className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-cyan-300/20 bg-cyan-400/10 px-2 py-1 text-xs text-cyan-100">
+                        <Radio size={13} />
+                        {link.channel_join_request ? 'Заявки на вступление' : 'Прямая подписка'}
+                      </span>
+                    ) : null}
                     {campaignLander ? (
                       <a
                         href={campaignLander.public_url}
@@ -1391,11 +1463,22 @@ export default function TrackingPage() {
                   </div>
                 </div>
 
-                <div className={`mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 ${isGambling ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
-                  {miniMetric('Старты', formatNumber(linkSummary.starts))}
-                  {miniMetric('Лиды', formatNumber(linkSummary.leads))}
-                  {isGambling ? (
+                <div className={`mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 ${isChannelLink ? 'md:grid-cols-4 xl:grid-cols-8' : isGambling ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
+                  {isChannelLink ? (
                     <>
+                      {miniMetric('Клики', formatNumber(linkSummary.clicks))}
+                      {miniMetric('Подписки', formatNumber(linkSummary.channel_joins))}
+                      {miniMetric('Старты', formatNumber(linkSummary.starts))}
+                      {miniMetric('Рег', formatNumber(linkSummary.registrations))}
+                      {miniMetric('FD', formatNumber(linkSummary.first_deposits))}
+                      {miniMetric('RD', formatNumber(linkSummary.redeposits))}
+                      {miniMetric('Активные', formatNumber(linkSummary.channel_active_subscribers))}
+                      {miniMetric('Расход', formatMoney(linkSummary.spend))}
+                    </>
+                  ) : isGambling ? (
+                    <>
+                      {miniMetric('Старты', formatNumber(linkSummary.starts))}
+                      {miniMetric('Лиды', formatNumber(linkSummary.leads))}
                       {miniMetric('Рег', formatNumber(linkSummary.registrations))}
                       {miniMetric('FD', formatNumber(linkSummary.first_deposits))}
                       {miniMetric('RD', formatNumber(linkSummary.redeposits))}
@@ -1403,6 +1486,8 @@ export default function TrackingPage() {
                     </>
                   ) : (
                     <>
+                      {miniMetric('Старты', formatNumber(linkSummary.starts))}
+                      {miniMetric('Лиды', formatNumber(linkSummary.leads))}
                       {miniMetric('Расход', formatMoney(linkSummary.spend))}
                       {miniMetric('CPL', formatMoney(linkSummary.cpl))}
                     </>
@@ -1412,7 +1497,7 @@ export default function TrackingPage() {
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-gray-500">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span>CR в лид</span>
+                      <span>{isChannelLink ? 'Клик → подписка' : 'CR в лид'}</span>
                       <span
                         className={`inline-flex items-center gap-1 font-semibold ${conversionTextClass(conversionStatus)}`}
                       >
@@ -1422,9 +1507,16 @@ export default function TrackingPage() {
                             className="animate-pulse fill-orange-300 text-orange-300 drop-shadow-[0_0_10px_rgba(251,146,60,0.8)]"
                           />
                         ) : null}
-                        {formatPercent(linkSummary.cr_to_lead)}
+                        {formatPercent(isChannelLink ? linkSummary.cr_click_to_channel_join : linkSummary.cr_to_lead)}
                       </span>
-                      {isGambling ? (
+                      {isChannelLink ? (
+                        <>
+                          <span>· Цена подписки</span>
+                          <span className="text-gray-100">
+                            {formatMoney(unitCost(linkSummary.spend, linkSummary.channel_joins))}
+                          </span>
+                        </>
+                      ) : isGambling ? (
                         <>
                           <span>· Рег → FD</span>
                           <span className="text-gray-100">
@@ -1495,7 +1587,7 @@ export default function TrackingPage() {
       {isCreateOpen ? (
         <Modal
           title="Создать прямую Telegram-ссылку"
-          description="Ссылка ведёт сразу в выбранного бота. Для домена, лендинга, Pixel и CAPI используйте отдельную FB-кампанию."
+          description="Ссылка может вести в бота или в канал. Для домена, лендинга, Pixel и CAPI используйте FB-кампанию."
           onClose={closeCreateLink}
           maxWidthClassName="max-w-2xl"
         >
@@ -1518,54 +1610,118 @@ export default function TrackingPage() {
                 placeholder="Таргет Инста"
               />
             </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Бот
-              </span>
-              <select
-                value={createBotId}
-                onChange={(event) => {
-                  const botId = event.target.value
-                  setCreateBotId(botId)
-                  setCreateTargetStepKey('')
-                  void loadTargetSteps(botId)
-                }}
-                required
-                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
-              >
-                <option value="" disabled>
-                  Выберите бота
-                </option>
-                {bots.map((bot) => (
-                  <option key={bot.id} value={bot.id}>
-                    {bot.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                Точка входа в воронку
-              </span>
-              <select
-                value={createTargetStepKey}
-                onChange={(event) => setCreateTargetStepKey(event.target.value)}
-                disabled={!createBotId || targetStepsLoadingBotId === createBotId}
-                className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
-              >
-                <option value="">Обычный старт воронки</option>
-                {(targetStepsByBot[createBotId] ?? []).map((step) => (
-                  <option key={step.key} value={step.key}>
-                    #{step.number} · {step.title} · {step.block_type}
-                  </option>
-                ))}
-              </select>
-              <span className="mt-1 block text-xs text-gray-500">
-                {targetStepsLoadingBotId === createBotId
-                  ? 'Загружаем шаги активной воронки...'
-                  : 'Выберите шаг, если трафик должен заходить не через стартовый триггер.'}
-              </span>
-            </label>
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-white/[0.025] p-1">
+              {([
+                ['bot', 'В бота'],
+                ['channel', 'В канал'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setCreateDestinationType(value)
+                    if (value === 'channel') {
+                      setCreateTargetStepKey('')
+                      setCreateInviteLink('')
+                      setCreateCostModel((current) => current === 'cpa' ? 'fix_pdp' : current)
+                    }
+                  }}
+                  className={`min-h-10 rounded-lg px-3 text-sm font-semibold transition ${
+                    createDestinationType === value
+                      ? 'bg-cyan-500/15 text-cyan-100 ring-1 ring-cyan-400/40'
+                      : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {createDestinationType === 'bot' ? (
+              <>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Бот
+                  </span>
+                  <select
+                    value={createBotId}
+                    onChange={(event) => {
+                      const botId = event.target.value
+                      setCreateBotId(botId)
+                      setCreateTargetStepKey('')
+                      void loadTargetSteps(botId)
+                    }}
+                    required
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+                  >
+                    <option value="" disabled>Выберите бота</option>
+                    {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Точка входа в воронку
+                  </span>
+                  <select
+                    value={createTargetStepKey}
+                    onChange={(event) => setCreateTargetStepKey(event.target.value)}
+                    disabled={!createBotId || targetStepsLoadingBotId === createBotId}
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+                  >
+                    <option value="">Обычный старт воронки</option>
+                    {(targetStepsByBot[createBotId] ?? []).map((step) => (
+                      <option key={step.key} value={step.key}>
+                        #{step.number} · {step.title} · {step.block_type}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs text-gray-500">
+                    {targetStepsLoadingBotId === createBotId
+                      ? 'Загружаем шаги активной воронки...'
+                      : 'Выберите шаг, если трафик должен заходить не через стартовый триггер.'}
+                  </span>
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Telegram-канал
+                  </span>
+                  <select
+                    value={createChannelId}
+                    onChange={(event) => setCreateChannelId(event.target.value)}
+                    required
+                    className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
+                  >
+                    <option value="">Выберите подключенный канал</option>
+                    {channels.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.title}{channel.username ? ` · @${channel.username.replace(/^@/, '')}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {channels.length === 0 ? (
+                    <span className="mt-1 block text-xs text-amber-200">
+                      Сначала подключите канал на странице FB-кампаний.
+                    </span>
+                  ) : null}
+                </label>
+                <label className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.025] px-3 py-2.5">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-gray-100">Заявка на вступление</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-gray-500">
+                      Подписка будет засчитана после одобрения заявки в Telegram.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={createChannelJoinRequest}
+                    onChange={(event) => setCreateChannelJoinRequest(event.target.checked)}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+                  />
+                </label>
+              </>
+            )}
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -1636,11 +1792,13 @@ export default function TrackingPage() {
               <div className="grid gap-2 md:grid-cols-3">
                 {(
                   [
-                    ['fix_pdp', 'Фикс', 'Цена за уникальный старт бота'],
+                    ['fix_pdp', 'Фикс', createDestinationType === 'channel' ? 'Цена за подтвержденную подписку' : 'Цена за уникальный старт бота'],
                     ['cpa', 'CPL', 'Цена за поданного лида'],
                     ['cpm', 'Бюджет', 'Ручная сумма расходов'],
                   ] as const
-                ).map(([value, label, hint]) => (
+                )
+                  .filter(([value]) => createDestinationType === 'bot' || value !== 'cpa')
+                  .map(([value, label, hint]) => (
                   <button
                     key={value}
                     type="button"
@@ -1716,7 +1874,7 @@ export default function TrackingPage() {
                 />
               </label>
             </div>
-            <label className="block">
+            {createDestinationType === 'bot' ? <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 Invite link
               </span>
@@ -1726,7 +1884,11 @@ export default function TrackingPage() {
                 className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
                 placeholder="Готовый URL, необязательно"
               />
-            </label>
+            </label> : (
+              <div className="rounded-xl border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-2 text-xs leading-5 text-cyan-100/80">
+                Invite link создаст бот-трекер. Одна ссылка соответствует одной tracking-кампании, поэтому вступления и выходы атрибутируются без смешивания источников.
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1737,7 +1899,7 @@ export default function TrackingPage() {
               </button>
               <button
                 type="submit"
-                disabled={!createTitle.trim() || !createBotId || isCreatingLink}
+                disabled={!createTitle.trim() || (createDestinationType === 'channel' ? !createChannelId : !createBotId) || isCreatingLink}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isCreatingLink ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -1825,7 +1987,7 @@ export default function TrackingPage() {
                 />
               </label>
             ) : null}
-            <div className="grid gap-3 md:grid-cols-2">
+            {editingLink.destination_type === 'bot' ? (
               <label className="block">
                 <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                   Invite link
@@ -1837,7 +1999,33 @@ export default function TrackingPage() {
                   placeholder="Готовый URL, необязательно"
                 />
               </label>
-            </div>
+            ) : (
+              <div className="rounded-xl border border-cyan-400/20 bg-cyan-500/[0.06] p-3">
+                <div className="flex items-start justify-between gap-4">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-cyan-100">
+                      {editingLink.channel_title ?? 'Telegram-канал'}
+                    </span>
+                    <span className="mt-1 block break-all font-mono text-xs text-cyan-100/65">
+                      {editingLink.invite_link}
+                    </span>
+                    <span className="mt-2 block text-xs leading-5 text-gray-500">
+                      При смене режима CRM создаст новую invite link; старая останется в истории для корректной атрибуции уже пришедших подписчиков.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={editChannelJoinRequest}
+                    onChange={(event) => setEditChannelJoinRequest(event.target.checked)}
+                    title="Заявка на вступление"
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+                  />
+                </div>
+                <div className="mt-2 text-xs text-cyan-100/75">
+                  {editChannelJoinRequest ? 'Вступление после одобрения заявки' : 'Мгновенное вступление по ссылке'}
+                </div>
+              </div>
+            )}
             <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
               <span className="mb-2 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 Модель расходов
@@ -1850,7 +2038,9 @@ export default function TrackingPage() {
                 className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 md:text-sm"
               >
                 <option value="fix_pdp">Фикс за подписчика</option>
-                <option value="cpa">CPL за поданного лида</option>
+                {editingLink.destination_type === 'bot' ? (
+                  <option value="cpa">CPL за поданного лида</option>
+                ) : null}
                 <option value="cpm">Ручной рекламный бюджет</option>
               </select>
               {editCostModel === 'cpm' ? (
@@ -1876,7 +2066,7 @@ export default function TrackingPage() {
                 </label>
               )}
             </div>
-            <label className="block">
+            {editingLink.destination_type === 'bot' ? <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 Точка входа в активную воронку
               </span>
@@ -1898,7 +2088,7 @@ export default function TrackingPage() {
                   ? 'Загружаем шаги активной воронки...'
                   : 'Ссылка зайдет прямо на выбранный шаг, если активная воронка этого бота не изменилась.'}
               </span>
-            </label>
+            </label> : null}
             {(editingLink.fb_pixel_id || editingLink.has_fb_capi_token) && !editingLink.fb_campaign_enabled ? (
             <div className="rounded-xl border border-amber-300/20 bg-amber-400/5 p-3">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-200">
@@ -2017,28 +2207,48 @@ export default function TrackingPage() {
           {detailMetrics ? (
             <div className="space-y-5">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-                {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
-                {metricCard('Старты', formatNumber(detailMetrics.summary.starts))}
-                {metricCard('Лиды', formatNumber(detailMetrics.summary.leads))}
-                {detailIsGambling ? (
+                {detailIsChannel ? (
                   <>
+                    {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
+                    {metricCard('Заявки', formatNumber(detailMetrics.summary.channel_join_requests))}
+                    {metricCard('Подписки', formatNumber(detailMetrics.summary.channel_joins))}
+                    {metricCard('Старты бота', formatNumber(detailMetrics.summary.starts))}
                     {metricCard('Регистрации', formatNumber(detailMetrics.summary.registrations))}
                     {metricCard('FD', formatNumber(detailMetrics.summary.first_deposits))}
                     {metricCard('RD', formatNumber(detailMetrics.summary.redeposits))}
+                    {metricCard('Активные', formatNumber(detailMetrics.summary.channel_active_subscribers))}
+                    {metricCard('Отписки', formatNumber(detailMetrics.summary.channel_leaves))}
+                    {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
+                    {metricCard('Цена подписки', formatMoney(unitCost(detailMetrics.summary.spend, detailMetrics.summary.channel_joins)))}
+                    {metricCard('Клик → подписка', formatPercent(detailMetrics.summary.cr_click_to_channel_join))}
+                    {metricCard('Подписка → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.channel_joins))}
                   </>
-                ) : metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
-                {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
-                {metricCard('CPL', formatMoney(detailMetrics.summary.cpl))}
-                {metricCard(detailIsGambling ? 'CPFD' : 'CPSL', formatMoney(detailIsGambling ? detailMetrics.summary.cpfd : detailMetrics.summary.cpsl))}
-                {metricCard('Клик → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.clicks))}
-                {metricCard('Старт → лид', formatPercent(detailMetrics.summary.cr_to_lead))}
-                {detailIsGambling ? (
+                ) : (
                   <>
-                    {metricCard('Старт → рег', formatPercent(detailMetrics.summary.cr_to_registration))}
-                    {metricCard('Рег → FD', formatPercent(detailMetrics.summary.cr_registration_to_deposit))}
-                    {metricCard('FD → RD', formatPercent(detailMetrics.summary.cr_deposit_to_redeposit))}
+                    {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
+                    {metricCard('Старты', formatNumber(detailMetrics.summary.starts))}
+                    {metricCard('Лиды', formatNumber(detailMetrics.summary.leads))}
+                    {detailIsGambling ? (
+                      <>
+                        {metricCard('Регистрации', formatNumber(detailMetrics.summary.registrations))}
+                        {metricCard('FD', formatNumber(detailMetrics.summary.first_deposits))}
+                        {metricCard('RD', formatNumber(detailMetrics.summary.redeposits))}
+                      </>
+                    ) : metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
+                    {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
+                    {metricCard('CPL', formatMoney(detailMetrics.summary.cpl))}
+                    {metricCard(detailIsGambling ? 'CPFD' : 'CPSL', formatMoney(detailIsGambling ? detailMetrics.summary.cpfd : detailMetrics.summary.cpsl))}
+                    {metricCard('Клик → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.clicks))}
+                    {metricCard('Старт → лид', formatPercent(detailMetrics.summary.cr_to_lead))}
+                    {detailIsGambling ? (
+                      <>
+                        {metricCard('Старт → рег', formatPercent(detailMetrics.summary.cr_to_registration))}
+                        {metricCard('Рег → FD', formatPercent(detailMetrics.summary.cr_registration_to_deposit))}
+                        {metricCard('FD → RD', formatPercent(detailMetrics.summary.cr_deposit_to_redeposit))}
+                      </>
+                    ) : metricCard('Лид → подача', formatPercent(detailMetrics.summary.cr_to_submit))}
                   </>
-                ) : metricCard('Лид → подача', formatPercent(detailMetrics.summary.cr_to_submit))}
+                )}
               </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
@@ -2091,17 +2301,23 @@ export default function TrackingPage() {
                             color: '#e5e7eb',
                           }}
                         />
-                        <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="#22d3ee22" strokeWidth={2} />
-                        <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="#a855f722" strokeWidth={2} />
                         <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
-                        {detailIsGambling ? (
-                          <>
-                            <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
-                            <Area type="monotone" dataKey="firstDeposits" name="FD" stroke="#fb7185" fill="transparent" strokeWidth={2} />
-                            <Area type="monotone" dataKey="redeposits" name="RD" stroke="#f97316" fill="transparent" strokeWidth={2} />
-                          </>
+                        {detailIsChannel ? (
+                          <Area type="monotone" dataKey="channelJoins" name="Подписки" stroke="#2dd4bf" fill="#2dd4bf22" strokeWidth={2} />
                         ) : (
-                          <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                          <>
+                            <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="#22d3ee22" strokeWidth={2} />
+                            <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="#a855f722" strokeWidth={2} />
+                            {detailIsGambling ? (
+                              <>
+                                <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                                <Area type="monotone" dataKey="firstDeposits" name="FD" stroke="#fb7185" fill="transparent" strokeWidth={2} />
+                                <Area type="monotone" dataKey="redeposits" name="RD" stroke="#f97316" fill="transparent" strokeWidth={2} />
+                              </>
+                            ) : (
+                              <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
+                            )}
+                          </>
                         )}
                       </AreaChart>
                     </ResponsiveContainer>
@@ -2109,7 +2325,7 @@ export default function TrackingPage() {
                 </div>
               </div>
 
-              {detailIsGambling && detailMetrics.lifecycle_sources.length > 0 ? (
+              {!detailIsChannel && detailIsGambling && detailMetrics.lifecycle_sources.length > 0 ? (
                 <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                   <div className="mb-3">
                     <h3 className="font-semibold text-white">Источники событий</h3>
@@ -2135,14 +2351,14 @@ export default function TrackingPage() {
                 </div>
               ) : null}
 
-              <div>
+              {!detailIsChannel ? <div>
                 <div>
                   <h3 className="mb-3 font-semibold text-white">Шаги воронки</h3>
                   {funnelList(detailMetrics.funnel_steps)}
                 </div>
-              </div>
+              </div> : null}
 
-              <div>
+              {!detailIsChannel ? <div>
                 <div className="mb-3">
                   <h3 className="font-semibold text-white">Аудитория ссылки</h3>
                   <p className="mt-1 text-sm text-gray-500">
@@ -2171,7 +2387,7 @@ export default function TrackingPage() {
                     {breakdownList(detailMetrics.card_breakdown ?? [], 'Данных о карте пока нет.')}
                   </div>
                 </div>
-              </div>
+              </div> : null}
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">

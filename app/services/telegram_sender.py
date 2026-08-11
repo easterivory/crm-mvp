@@ -729,6 +729,79 @@ class TelegramSenderService:
             raise RuntimeError("Telegram getMe response does not contain bot identity")
         return result
 
+    async def get_chat(self, token: str, chat_id: str | int) -> dict:
+        payload = await self._post_bot_api(
+            token=token,
+            method="getChat",
+            json_payload={"chat_id": chat_id},
+        )
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Telegram getChat response does not contain chat data")
+        return result
+
+    async def get_chat_member(
+        self,
+        token: str,
+        *,
+        chat_id: str | int,
+        user_id: int,
+    ) -> dict:
+        payload = await self._post_bot_api(
+            token=token,
+            method="getChatMember",
+            json_payload={"chat_id": chat_id, "user_id": user_id},
+        )
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Telegram getChatMember response does not contain membership data"
+            )
+        return result
+
+    async def create_chat_invite_link(
+        self,
+        token: str,
+        *,
+        chat_id: str | int,
+        name: str,
+        creates_join_request: bool = False,
+    ) -> dict:
+        payload = await self._post_bot_api(
+            token=token,
+            method="createChatInviteLink",
+            json_payload={
+                "chat_id": chat_id,
+                "name": name[:32],
+                "creates_join_request": creates_join_request,
+            },
+        )
+        result = payload.get("result")
+        if not isinstance(result, dict) or not str(result.get("invite_link") or "").strip():
+            raise RuntimeError(
+                "Telegram createChatInviteLink response does not contain an invite link"
+            )
+        return result
+
+    async def revoke_chat_invite_link(
+        self,
+        token: str,
+        *,
+        chat_id: str | int,
+        invite_link: str,
+    ) -> dict:
+        payload = await self._post_bot_api(
+            token=token,
+            method="revokeChatInviteLink",
+            json_payload={"chat_id": chat_id, "invite_link": invite_link},
+        )
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Telegram revokeChatInviteLink response does not contain invite data"
+            )
+        return result
+
     async def get_file(self, token: str, file_id: str) -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(

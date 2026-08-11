@@ -14,6 +14,7 @@ class MessageCreate(BaseModel):
     sender_type: str = Field(..., max_length=20)
     sender_id: Optional[uuid.UUID] = None
     operator_id: Optional[uuid.UUID] = None
+    tracking_link_id: Optional[uuid.UUID] = None
     body: Optional[str] = None
     translated_text: Optional[str] = None
     original_text: Optional[str] = None
@@ -48,6 +49,7 @@ class MessageOut(OrmBase):
     sender_type: str
     sender_id: Optional[uuid.UUID]
     operator_id: Optional[uuid.UUID] = None
+    tracking_link_id: Optional[uuid.UUID] = None
     body: Optional[str]
     translated_text: Optional[str] = None
     original_text: Optional[str] = None

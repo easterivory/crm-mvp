@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
+  Radio,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -23,15 +24,20 @@ import { useAuthStore } from '../../../store/authStore'
 import {
   createProjectDomain,
   createProjectLander,
+  createTelegramChannel,
   deleteProjectDomain,
   deleteProjectLander,
+  deleteTelegramChannel,
   fetchActiveTrackingLinks,
   fetchLanderTargetSteps,
   fetchLanderRuntimeConfig,
   fetchProjectDomains,
   fetchProjectLanders,
+  fetchTelegramChannelAvatar,
+  fetchTelegramChannels,
   updateProjectLander,
   uploadProjectLanderZip,
+  verifyTelegramChannel,
 } from '../api'
 import type {
   LanderType,
@@ -48,6 +54,7 @@ import type {
   ProjectDomain,
   ProjectLander,
   TrackingLinkOption,
+  TelegramChannel,
 } from '../types'
 
 type LandersSettingsProps = {
@@ -69,7 +76,10 @@ type LanderForm = {
   buttonText: string
   trackingMode: 'campaign' | 'existing'
   trackingLinkId: string
+  campaignDestinationType: 'bot' | 'channel'
   campaignBotId: string
+  campaignChannelId: string
+  campaignChannelJoinRequest: boolean
   campaignTitle: string
   campaignCode: string
   campaignBuyerName: string
@@ -100,7 +110,10 @@ type LanderEditForm = {
   description: string
   buttonText: string
   type: LanderType
+  destinationType: 'bot' | 'channel'
   botId: string
+  channelId: string
+  channelJoinRequest: boolean
   campaignTitle: string
   campaignCode: string
   buyerName: string
@@ -135,7 +148,10 @@ const emptyLanderForm: LanderForm = {
   buttonText: 'Open in Telegram',
   trackingMode: 'campaign',
   trackingLinkId: '',
+  campaignDestinationType: 'bot',
   campaignBotId: '',
+  campaignChannelId: '',
+  campaignChannelJoinRequest: false,
   campaignTitle: '',
   campaignCode: '',
   campaignBuyerName: '',
@@ -182,6 +198,7 @@ function landerTypeLabel(type: LanderType) {
 type TelegramLanderAppearanceEditorProps = {
   projectId: string
   bot?: Bot
+  channel?: TelegramChannel
   description: string
   buttonText: string
   onDescriptionChange: (value: string) => void
@@ -201,6 +218,7 @@ function botFallbackDescription(bot?: Bot) {
 function TelegramLanderAppearanceEditor({
   projectId,
   bot,
+  channel,
   description,
   buttonText,
   onDescriptionChange,
@@ -212,10 +230,13 @@ function TelegramLanderAppearanceEditor({
     let isMounted = true
     let objectUrl: string | null = null
     setAvatarUrl(null)
-    if (!bot) {
+    if (!bot && !channel) {
       return () => undefined
     }
-    void fetchBotAvatar(bot.id, projectId)
+    const avatarRequest = channel
+      ? fetchTelegramChannelAvatar(projectId, channel.id)
+      : fetchBotAvatar((bot as Bot).id, projectId)
+    void avatarRequest
       .then((blob) => {
         if (!isMounted) {
           return
@@ -234,11 +255,15 @@ function TelegramLanderAppearanceEditor({
         URL.revokeObjectURL(objectUrl)
       }
     }
-  }, [bot, projectId])
+  }, [bot, channel, projectId])
 
-  const title = botDisplayName(bot)
-  const previewDescription = description.trim() || botFallbackDescription(bot)
-  const previewButtonText = buttonText.trim() || 'Open in Telegram'
+  const title = channel?.title || botDisplayName(bot)
+  const previewDescription = description.trim()
+    || channel?.description?.trim()
+    || (channel ? 'Подпишитесь на канал, чтобы получать новые публикации.' : botFallbackDescription(bot))
+  const previewButtonText = buttonText.trim()
+    || (channel ? 'Подписаться на канал' : 'Open in Telegram')
+  const username = channel?.username || bot?.bot_username
   const initial = Array.from(title).find((character) => /[\p{L}\p{N}]/u.test(character))?.toUpperCase() || 'T'
 
   return (
@@ -286,8 +311,13 @@ function TelegramLanderAppearanceEditor({
               ) : null}
             </div>
             <div className="mt-4 break-words text-xl font-bold text-zinc-950">{title}</div>
-            {bot?.bot_username ? (
-              <div className="mt-1 text-sm text-[#229ed9]">@{bot.bot_username.replace(/^@/, '')}</div>
+            {username ? (
+              <div className="mt-1 text-sm text-[#229ed9]">@{username.replace(/^@/, '')}</div>
+            ) : null}
+            {channel ? (
+              <div className="mt-2 inline-flex rounded-full bg-[#e8f5fc] px-2.5 py-1 text-xs font-semibold text-[#1679aa]">
+                Telegram-канал
+              </div>
             ) : null}
             <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-500">
               {previewDescription}
@@ -351,6 +381,7 @@ type FacebookEventMappingsEditorProps = {
   sourceEvents: FacebookSourceEvent[]
   statuses: FacebookLeadStatusTrigger[]
   tags: FacebookTagTrigger[]
+  destinationType: 'bot' | 'channel'
   onChange: (mappings: FacebookEventMapping[]) => void
 }
 
@@ -359,6 +390,7 @@ function FacebookEventMappingsEditor({
   sourceEvents,
   statuses,
   tags,
+  destinationType,
   onChange,
 }: FacebookEventMappingsEditorProps) {
   const sourceByKey = useMemo(
@@ -439,7 +471,9 @@ function FacebookEventMappingsEditor({
     <div className="divide-y divide-white/10 rounded-lg border border-white/10 bg-zinc-950/40">
       {mappings.map((mapping, index) => {
         const source = sourceByKey.get(mapping.source_event)
-        const isAutomatic = source?.trigger === 'automatic'
+        const isChannelMembershipEvent = destinationType === 'channel'
+          && ['channel_subscribe', 'channel_unsubscribe'].includes(mapping.source_event)
+        const isAutomatic = source?.trigger === 'automatic' || isChannelMembershipEvent
         const triggers = mapping.triggers ?? []
         const hasValueParameters =
           mapping.event_name.toLowerCase() === 'purchase' ||
@@ -466,7 +500,11 @@ function FacebookEventMappingsEditor({
                 </span>
                 <span className="mt-0.5 block text-xs text-zinc-500">
                   {source?.delivery === 'browser' ? 'Pixel · браузер' : 'CAPI · сервер'}
-                  {' · '}{source?.trigger_description ?? (isAutomatic ? 'Автоматически' : 'По правилу CRM')}
+                  {' · '}{isChannelMembershipEvent
+                    ? mapping.source_event === 'channel_subscribe'
+                      ? 'Фактическое вступление по инвайту кампании'
+                      : 'Фактический выход подписчика из канала'
+                    : source?.trigger_description ?? (isAutomatic ? 'Автоматически' : 'По правилу CRM')}
                 </span>
               </span>
             </label>
@@ -662,13 +700,18 @@ export default function LandersSettings({
   const [trackingLinks, setTrackingLinks] = useState<TrackingLinkOption[]>([])
   const [runtimeConfig, setRuntimeConfig] = useState<LanderRuntimeConfig | null>(null)
   const [bots, setBots] = useState<Bot[]>([])
+  const [channels, setChannels] = useState<TelegramChannel[]>([])
   const [targetSteps, setTargetSteps] = useState<LanderTargetStep[]>([])
   const [isTargetStepsLoading, setIsTargetStepsLoading] = useState(false)
   const [editingTargetSteps, setEditingTargetSteps] = useState<LanderTargetStep[]>([])
   const [isEditingTargetStepsLoading, setIsEditingTargetStepsLoading] = useState(false)
   const [newDomainName, setNewDomainName] = useState('')
+  const [newChannelReference, setNewChannelReference] = useState('')
+  const [newChannelBotId, setNewChannelBotId] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isAddingDomain, setIsAddingDomain] = useState(false)
+  const [isAddingChannel, setIsAddingChannel] = useState(false)
+  const [mutatingChannelId, setMutatingChannelId] = useState<string | null>(null)
   const [deletingDomainId, setDeletingDomainId] = useState<string | null>(null)
   const [deletingLanderId, setDeletingLanderId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -691,14 +734,29 @@ export default function LandersSettings({
     [campaignOnly, landers],
   )
   const selectedCreateBot = useMemo(() => {
+    if (form.trackingMode === 'campaign' && form.campaignDestinationType === 'channel') {
+      return undefined
+    }
     const botId = form.trackingMode === 'campaign'
       ? form.campaignBotId
       : trackingLinkById.get(form.trackingLinkId)?.bot_id
     return bots.find((bot) => bot.id === botId)
-  }, [bots, form.campaignBotId, form.trackingLinkId, form.trackingMode, trackingLinkById])
+  }, [bots, form.campaignBotId, form.campaignDestinationType, form.trackingLinkId, form.trackingMode, trackingLinkById])
+  const selectedCreateChannel = useMemo(() => {
+    const channelId = form.trackingMode === 'campaign'
+      ? form.campaignChannelId
+      : trackingLinkById.get(form.trackingLinkId)?.channel_id
+    return channels.find((channel) => channel.id === channelId)
+  }, [channels, form.campaignChannelId, form.trackingLinkId, form.trackingMode, trackingLinkById])
   const selectedEditBot = useMemo(
-    () => bots.find((bot) => bot.id === editForm?.botId),
-    [bots, editForm?.botId],
+    () => editForm?.destinationType === 'bot'
+      ? bots.find((bot) => bot.id === editForm.botId)
+      : undefined,
+    [bots, editForm?.botId, editForm?.destinationType],
+  )
+  const selectedEditChannel = useMemo(
+    () => channels.find((channel) => channel.id === editForm?.channelId),
+    [channels, editForm?.channelId],
   )
 
   const loadData = useCallback(async () => {
@@ -707,6 +765,7 @@ export default function LandersSettings({
       setLanders([])
       setTrackingLinks([])
       setBots([])
+      setChannels([])
       setRuntimeConfig(null)
       return
     }
@@ -714,18 +773,21 @@ export default function LandersSettings({
     setIsLoading(true)
     setBanner(null)
     try {
-      const [domainItems, landerItems, linkItems, botItems, config] = await Promise.all([
+      const [domainItems, landerItems, linkItems, botItems, config, channelItems] = await Promise.all([
         fetchProjectDomains(projectId),
         fetchProjectLanders(projectId),
         fetchActiveTrackingLinks(projectId),
         fetchBots(projectId),
         fetchLanderRuntimeConfig(projectId),
+        fetchTelegramChannels(projectId),
       ])
       setDomains(domainItems)
       setLanders(landerItems)
       setTrackingLinks(linkItems)
       setBots(botItems)
+      setChannels(channelItems)
       setRuntimeConfig(config)
+      setNewChannelBotId((current) => current || botItems[0]?.id || '')
     } catch (err) {
       setBanner({
         tone: 'error',
@@ -746,14 +808,23 @@ export default function LandersSettings({
       domainId: '',
       trackingLinkId: trackingLinks[0]?.id ?? '',
       campaignBotId: bots[0]?.id ?? '',
+      campaignDestinationType: 'bot',
+      campaignChannelId: channels[0]?.id ?? '',
+      campaignChannelJoinRequest: false,
       slug: generateSlug(),
       campaignEventMappings: cloneEventMappings(runtimeConfig?.default_event_mappings ?? []),
       trackingMode: campaignOnly ? 'campaign' : emptyLanderForm.trackingMode,
     })
-  }, [bots, campaignOnly, runtimeConfig, trackingLinks])
+  }, [bots, campaignOnly, channels, runtimeConfig, trackingLinks])
 
   useEffect(() => {
-    if (!isModalOpen || !projectId || form.trackingMode !== 'campaign' || !form.campaignBotId) {
+    if (
+      !isModalOpen
+      || !projectId
+      || form.trackingMode !== 'campaign'
+      || form.campaignDestinationType !== 'bot'
+      || !form.campaignBotId
+    ) {
       setTargetSteps([])
       setIsTargetStepsLoading(false)
       return
@@ -787,11 +858,11 @@ export default function LandersSettings({
     return () => {
       isMounted = false
     }
-  }, [form.campaignBotId, form.trackingMode, isModalOpen, projectId])
+  }, [form.campaignBotId, form.campaignDestinationType, form.trackingMode, isModalOpen, projectId])
 
   useEffect(() => {
     const botId = editForm?.botId
-    if (!editingLander || !projectId || !botId) {
+    if (!editingLander || !projectId || editForm?.destinationType !== 'bot' || !botId) {
       setEditingTargetSteps([])
       setIsEditingTargetStepsLoading(false)
       return
@@ -826,7 +897,7 @@ export default function LandersSettings({
     return () => {
       isMounted = false
     }
-  }, [editForm?.botId, editingLander, projectId])
+  }, [editForm?.botId, editForm?.destinationType, editingLander, projectId])
 
   const openCreateModal = () => {
     resetForm()
@@ -844,9 +915,15 @@ export default function LandersSettings({
       domainId: lander.domain_id ?? '',
       slug: lander.slug,
       description: lander.description ?? '',
-      buttonText: lander.button_text ?? 'Open in Telegram',
+      buttonText: lander.button_text
+        ?? ((campaign?.destination_type ?? lander.destination_type) === 'channel'
+          ? 'Подписаться на канал'
+          : 'Open in Telegram'),
       type: lander.type,
+      destinationType: campaign?.destination_type ?? lander.destination_type ?? 'bot',
       botId: campaign?.bot_id ?? link?.bot_id ?? bots[0]?.id ?? '',
+      channelId: campaign?.channel_id ?? lander.channel_id ?? link?.channel_id ?? '',
+      channelJoinRequest: campaign?.channel_join_request ?? link?.channel_join_request ?? false,
       campaignTitle: campaign?.title ?? link?.title ?? lander.name,
       campaignCode: campaign?.code ?? link?.code ?? '',
       buyerName: campaign?.buyer_name ?? '',
@@ -890,8 +967,11 @@ export default function LandersSettings({
     const slug = editForm.slug.trim()
     const baseConversionRate = Number(editForm.baseConversionRate)
     const minSampleSize = Number(editForm.minSampleSize)
-    if (!name || !title || !code || !editForm.botId || !isValidLanderSlug(slug)) {
-      setBanner({ tone: 'error', message: 'Заполните название, бота, код и корректный slug.' })
+    const hasDestination = editForm.destinationType === 'channel'
+      ? Boolean(editForm.channelId)
+      : Boolean(editForm.botId)
+    if (!name || !title || !code || !hasDestination || !isValidLanderSlug(slug)) {
+      setBanner({ tone: 'error', message: 'Заполните название, назначение, код и корректный slug.' })
       return
     }
     if (!Number.isFinite(baseConversionRate) || baseConversionRate < 0 || baseConversionRate > 100) {
@@ -937,7 +1017,12 @@ export default function LandersSettings({
         auto_redirect_enabled: editForm.autoRedirectEnabled,
         facebook_campaign: {
           enabled: editForm.fbCampaignEnabled,
-          bot_id: editForm.botId,
+          destination_type: editForm.destinationType,
+          bot_id: editForm.destinationType === 'bot' ? editForm.botId : null,
+          channel_id: editForm.destinationType === 'channel' ? editForm.channelId : null,
+          channel_join_request: editForm.destinationType === 'channel'
+            ? editForm.channelJoinRequest
+            : false,
           title,
           code,
           buyer_name: editForm.buyerName.trim() || null,
@@ -945,7 +1030,9 @@ export default function LandersSettings({
           payment_type: editForm.paymentType.trim() || null,
           base_conversion_rate: baseConversionRate,
           min_sample_size: minSampleSize,
-          target_funnel_step_key: editForm.targetStepKey || null,
+          target_funnel_step_key: editForm.destinationType === 'bot'
+            ? editForm.targetStepKey || null
+            : null,
           fb_pixel_id: editForm.metaPixelId.trim() || null,
           ...(editForm.capiToken.trim() ? { fb_capi_token: editForm.capiToken.trim() } : {}),
           clear_fb_capi_token: editForm.clearCapiToken,
@@ -997,6 +1084,68 @@ export default function LandersSettings({
       })
     } finally {
       setIsAddingDomain(false)
+    }
+  }
+
+  const handleAddChannel = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!projectId || isAddingChannel || !newChannelBotId || !newChannelReference.trim()) {
+      return
+    }
+    setIsAddingChannel(true)
+    setBanner(null)
+    try {
+      await createTelegramChannel(projectId, {
+        tracker_bot_id: newChannelBotId,
+        telegram_chat_id: newChannelReference.trim(),
+      })
+      setNewChannelReference('')
+      await loadData()
+      setBanner({ tone: 'success', message: 'Канал проверен и подключён к трекингу.' })
+    } catch (err) {
+      setBanner({
+        tone: 'error',
+        message: getErrorMessage(err, 'Не удалось подключить Telegram-канал.'),
+      })
+    } finally {
+      setIsAddingChannel(false)
+    }
+  }
+
+  const handleVerifyChannel = async (channel: TelegramChannel) => {
+    if (!projectId || mutatingChannelId) {
+      return
+    }
+    setMutatingChannelId(channel.id)
+    setBanner(null)
+    try {
+      await verifyTelegramChannel(projectId, channel.id)
+      await loadData()
+      setBanner({ tone: 'success', message: `Права трекера для «${channel.title}» подтверждены.` })
+    } catch (err) {
+      setBanner({ tone: 'error', message: getErrorMessage(err, 'Не удалось проверить канал.') })
+    } finally {
+      setMutatingChannelId(null)
+    }
+  }
+
+  const handleDeleteChannel = async (channel: TelegramChannel) => {
+    if (!projectId || mutatingChannelId) {
+      return
+    }
+    if (!window.confirm(`Отключить канал «${channel.title}» от новых кампаний?`)) {
+      return
+    }
+    setMutatingChannelId(channel.id)
+    setBanner(null)
+    try {
+      await deleteTelegramChannel(projectId, channel.id)
+      await loadData()
+      setBanner({ tone: 'success', message: 'Канал отключён.' })
+    } catch (err) {
+      setBanner({ tone: 'error', message: getErrorMessage(err, 'Не удалось отключить канал.') })
+    } finally {
+      setMutatingChannelId(null)
     }
   }
 
@@ -1061,8 +1210,20 @@ export default function LandersSettings({
       setBanner({ tone: 'error', message: 'Выберите существующую tracking link.' })
       return
     }
-    if (form.trackingMode === 'campaign' && !form.campaignBotId) {
+    if (
+      form.trackingMode === 'campaign'
+      && form.campaignDestinationType === 'bot'
+      && !form.campaignBotId
+    ) {
       setBanner({ tone: 'error', message: 'Выберите бота для кампании.' })
+      return
+    }
+    if (
+      form.trackingMode === 'campaign'
+      && form.campaignDestinationType === 'channel'
+      && !form.campaignChannelId
+    ) {
+      setBanner({ tone: 'error', message: 'Выберите подключённый Telegram-канал.' })
       return
     }
     const slug = normalizeSlugInput(form.slug)
@@ -1092,7 +1253,14 @@ export default function LandersSettings({
         tracking_link_id: !campaignOnly && form.trackingMode === 'existing' ? form.trackingLinkId : null,
         campaign: campaignOnly || form.trackingMode === 'campaign'
           ? {
-              bot_id: form.campaignBotId,
+              destination_type: form.campaignDestinationType,
+              bot_id: form.campaignDestinationType === 'bot' ? form.campaignBotId : null,
+              channel_id: form.campaignDestinationType === 'channel'
+                ? form.campaignChannelId
+                : null,
+              channel_join_request: form.campaignDestinationType === 'channel'
+                ? form.campaignChannelJoinRequest
+                : false,
               title: form.campaignTitle.trim() || form.name.trim() || `Landing ${slug}`,
               code: form.campaignCode.trim() || null,
               buyer_name: form.campaignBuyerName.trim() || null,
@@ -1103,7 +1271,9 @@ export default function LandersSettings({
               fb_proxy_url: form.campaignFbProxyUrl.trim() || null,
               fb_test_event_code: form.campaignFbTestEventCode.trim() || null,
               fb_event_mappings: form.campaignEventMappings,
-              target_funnel_step_key: form.campaignTargetStepKey || null,
+              target_funnel_step_key: form.campaignDestinationType === 'bot'
+                ? form.campaignTargetStepKey || null
+                : null,
             }
           : null,
         pixels: buildPixels(form),
@@ -1334,6 +1504,146 @@ export default function LandersSettings({
       </section>
 
       <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
+              <Radio size={17} className="shrink-0 text-cyan-300" />
+              Каналы для залива
+            </h3>
+            <p className="mt-1 text-sm leading-5 text-zinc-500">
+              Бот-трекер создаёт отдельную Telegram invite link для каждой кампании и фиксирует заявки, подписки и выходы.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadData()}
+            disabled={isLoading}
+            title="Обновить каналы"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/5 text-zinc-400 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {!isBuyer ? (
+          <form className="mt-4 grid gap-3 md:grid-cols-[minmax(180px,0.8fr)_minmax(220px,1fr)_auto] md:items-end" onSubmit={handleAddChannel}>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-zinc-300">Бот-трекер</span>
+              <select
+                value={newChannelBotId}
+                onChange={(event) => setNewChannelBotId(event.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-cyan-500 transition focus:ring-2 md:text-sm"
+              >
+                <option value="">Выберите бота</option>
+                {bots.map((bot) => (
+                  <option key={bot.id} value={bot.id}>
+                    {bot.name}{bot.bot_username ? ` · @${bot.bot_username.replace(/^@/, '')}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-zinc-300">Канал</span>
+              <input
+                value={newChannelReference}
+                onChange={(event) => setNewChannelReference(event.target.value)}
+                placeholder="@channel или -1001234567890"
+                maxLength={255}
+                className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-cyan-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={isAddingChannel || !newChannelBotId || !newChannelReference.trim()}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isAddingChannel ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
+              Подключить
+            </button>
+          </form>
+        ) : (
+          <p className="mt-4 rounded-lg border border-white/5 bg-zinc-950/40 px-3 py-2 text-xs leading-5 text-zinc-500">
+            Каналы и права бота-трекера настраивает администратор. Вы можете выбрать любой готовый канал проекта в своей кампании.
+          </p>
+        )}
+
+        <div className="mt-4 overflow-x-auto rounded-lg border border-white/5">
+          <table className="w-full min-w-[720px] text-left text-sm">
+            <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="px-4 py-3">Канал</th>
+                <th className="px-4 py-3">Бот-трекер</th>
+                <th className="px-4 py-3">Готовность</th>
+                <th className="w-[104px] px-4 py-3 text-right">Действия</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {channels.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-center text-zinc-500">
+                    Каналы пока не подключены.
+                  </td>
+                </tr>
+              ) : channels.map((channel) => {
+                const trackerBot = bots.find((bot) => bot.id === channel.tracker_bot_id)
+                const ready = channel.bot_is_admin && channel.can_invite_users
+                return (
+                  <tr key={channel.id} className="bg-white/[0.01]">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-zinc-100">{channel.title}</div>
+                      <div className="mt-1 font-mono text-xs text-zinc-500">
+                        {channel.username ? `@${channel.username.replace(/^@/, '')}` : channel.telegram_chat_id}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-300">
+                      {trackerBot?.name ?? channel.tracker_bot_id.slice(0, 8)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${
+                        ready
+                          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                          : 'border-red-500/25 bg-red-500/10 text-red-200'
+                      }`}>
+                        {ready ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                        {ready ? 'Готов к трекингу' : 'Нет прав приглашения'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {!isBuyer ? (
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            title="Перепроверить права"
+                            onClick={() => void handleVerifyChannel(channel)}
+                            disabled={mutatingChannelId === channel.id}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/5 text-zinc-400 transition hover:border-cyan-500/50 hover:text-cyan-200 disabled:opacity-50"
+                          >
+                            <RefreshCw size={14} className={mutatingChannelId === channel.id ? 'animate-spin' : ''} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Отключить канал"
+                            onClick={() => void handleDeleteChannel(channel)}
+                            disabled={mutatingChannelId === channel.id}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/5 text-zinc-400 transition hover:border-red-500/50 hover:text-red-300 disabled:opacity-50"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-3 text-xs leading-5 text-zinc-500">
+          В Telegram добавьте выбранного бота администратором канала и включите право приглашать пользователей. После этого нажмите проверку.
+        </p>
+      </section>
+
+      <section className="rounded-lg border border-white/5 bg-white/[0.02] p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-zinc-100">
@@ -1426,6 +1736,11 @@ export default function LandersSettings({
                             <span className="text-zinc-500">Не найдена</span>
                           )}
                           <div className="flex flex-wrap gap-1.5 text-xs">
+                            {lander.destination_type === 'channel' ? (
+                              <span className="rounded-md border border-sky-400/20 bg-sky-400/10 px-2 py-0.5 text-sky-100">
+                                Канал · {lander.channel_title || 'Telegram'}
+                              </span>
+                            ) : null}
                             {lander.facebook_campaign_enabled ? (
                               <span className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">
                                 Facebook campaign
@@ -1638,27 +1953,76 @@ export default function LandersSettings({
 
               {campaignOnly || form.trackingMode === 'campaign' ? (
                 <div className="mt-4 space-y-3">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-1 block text-sm font-medium text-zinc-300">Бот кампании</span>
-                      <select
-                        value={form.campaignBotId}
-                        onChange={(event) =>
-                          setForm((current) => ({
+                  <div>
+                    <span className="mb-1.5 block text-sm font-medium text-zinc-300">Куда вести трафик</span>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {([
+                        ['bot', 'В бота', 'Старт, лид и прохождение воронки'],
+                        ['channel', 'В канал', 'Подписки и отписки по персональной invite link'],
+                      ] as const).map(([value, label, helper]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setForm((current) => ({
                             ...current,
-                            campaignBotId: event.target.value,
-                            campaignTargetStepKey: '',
-                          }))
-                        }
-                        required
-                        className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
-                      >
-                        <option value="">Выберите бота</option>
-                        {bots.map((bot) => (
-                          <option key={bot.id} value={bot.id}>{bot.name}</option>
-                        ))}
-                      </select>
-                    </label>
+                            campaignDestinationType: value,
+                            campaignTargetStepKey: value === 'bot' ? current.campaignTargetStepKey : '',
+                            buttonText: value === 'channel'
+                              ? (!current.buttonText || current.buttonText === 'Open in Telegram' ? 'Подписаться на канал' : current.buttonText)
+                              : (current.buttonText === 'Подписаться на канал' ? 'Open in Telegram' : current.buttonText),
+                          }))}
+                          className={`min-h-12 rounded-lg border px-3 py-2 text-left transition ${
+                            form.campaignDestinationType === value
+                              ? 'border-cyan-400/50 bg-cyan-500/10 text-cyan-100'
+                              : 'border-white/10 text-zinc-400 hover:border-white/20'
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold">{label}</span>
+                          <span className="mt-0.5 block text-xs opacity-75">{helper}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {form.campaignDestinationType === 'bot' ? (
+                      <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-zinc-300">Бот кампании</span>
+                        <select
+                          value={form.campaignBotId}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              campaignBotId: event.target.value,
+                              campaignTargetStepKey: '',
+                            }))
+                          }
+                          required
+                          className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
+                        >
+                          <option value="">Выберите бота</option>
+                          {bots.map((bot) => (
+                            <option key={bot.id} value={bot.id}>{bot.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-zinc-300">Telegram-канал</span>
+                        <select
+                          value={form.campaignChannelId}
+                          onChange={(event) => setForm((current) => ({ ...current, campaignChannelId: event.target.value }))}
+                          required
+                          className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-cyan-500 transition focus:ring-2 md:text-sm"
+                        >
+                          <option value="">Выберите подключённый канал</option>
+                          {channels.map((channel) => (
+                            <option key={channel.id} value={channel.id}>
+                              {channel.title}{channel.username ? ` · @${channel.username.replace(/^@/, '')}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <label className="block">
                       <span className="mb-1 block text-sm font-medium text-zinc-300">Название кампании</span>
                       <input
@@ -1670,6 +2034,22 @@ export default function LandersSettings({
                       />
                     </label>
                   </div>
+                  {form.campaignDestinationType === 'channel' ? (
+                    <label className="flex min-h-11 items-start justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5">
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-zinc-100">Заявка на вступление</span>
+                        <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
+                          Выключено: пользователь вступает сразу. Включено: Telegram создаёт заявку, а подписка считается только после одобрения.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={form.campaignChannelJoinRequest}
+                        onChange={(event) => setForm((current) => ({ ...current, campaignChannelJoinRequest: event.target.checked }))}
+                        className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+                      />
+                    </label>
+                  ) : null}
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="block">
                       <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">Код</span>
@@ -1769,10 +2149,11 @@ export default function LandersSettings({
                       sourceEvents={runtimeConfig?.source_events ?? []}
                       statuses={runtimeConfig?.lead_statuses ?? []}
                       tags={runtimeConfig?.tags ?? []}
+                      destinationType={form.campaignDestinationType}
                       onChange={(campaignEventMappings) => setForm((current) => ({ ...current, campaignEventMappings }))}
                     />
                   </div>
-                  <label className="block">
+                  {form.campaignDestinationType === 'bot' ? <label className="block">
                     <span className="mb-1 block text-sm font-medium text-zinc-300">Точка входа в активную воронку</span>
                     <select
                       value={form.campaignTargetStepKey}
@@ -1792,7 +2173,11 @@ export default function LandersSettings({
                         ? 'Загружаем шаги опубликованной воронки...'
                         : 'Шаги доступны только у активной опубликованной воронки выбранного бота.'}
                     </span>
-                  </label>
+                  </label> : (
+                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/[0.06] px-3 py-2 text-xs leading-5 text-cyan-100/75">
+                      Для канала CRM создаст уникальную invite link. Клики, заявки, вступления, выходы и активные подписчики будут считаться отдельно от стартов и лидов бота.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <label className="mt-4 block">
@@ -1816,6 +2201,7 @@ export default function LandersSettings({
               <TelegramLanderAppearanceEditor
                 projectId={projectId}
                 bot={selectedCreateBot}
+                channel={selectedCreateChannel}
                 description={form.description}
                 buttonText={form.buttonText}
                 onDescriptionChange={(description) => setForm((current) => ({ ...current, description }))}
@@ -1971,21 +2357,90 @@ export default function LandersSettings({
                   Facebook активен
                 </label>
               </div>
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-zinc-950/50 p-1">
+                {([
+                  ['bot', 'В бота'],
+                  ['channel', 'В канал'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setEditForm((current) => {
+                      if (!current) {
+                        return current
+                      }
+                      const previousDefault = current.destinationType === 'channel'
+                        ? 'Подписаться на канал'
+                        : 'Open in Telegram'
+                      const nextDefault = value === 'channel'
+                        ? 'Подписаться на канал'
+                        : 'Open in Telegram'
+                      return {
+                        ...current,
+                        destinationType: value,
+                        targetStepKey: value === 'channel' ? '' : current.targetStepKey,
+                        buttonText: !current.buttonText.trim() || current.buttonText === previousDefault
+                          ? nextDefault
+                          : current.buttonText,
+                      }
+                    })}
+                    className={`min-h-10 rounded-md px-3 text-sm font-semibold transition ${
+                      editForm.destinationType === value
+                        ? 'bg-cyan-500/15 text-cyan-100 ring-1 ring-cyan-400/40'
+                        : 'text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Бот</span>
-                  <select value={editForm.botId} onChange={(event) => setEditForm((current) => current ? { ...current, botId: event.target.value, targetStepKey: '' } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm">
-                    <option value="">Выберите бота</option>
-                    {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}{bot.bot_username ? ` · @${bot.bot_username.replace(/^@/, '')}` : ''}</option>)}
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="mb-1.5 block text-sm font-medium text-zinc-200">Стартовый шаг</span>
-                  <select value={editForm.targetStepKey} disabled={!editForm.botId || isEditingTargetStepsLoading} onChange={(event) => setEditForm((current) => current ? { ...current, targetStepKey: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:opacity-50 md:text-sm">
-                    <option value="">Старт активной воронки</option>
-                    {editingTargetSteps.map((step) => <option key={step.key} value={step.key}>{step.title} · {step.key}</option>)}
-                  </select>
-                </label>
+                {editForm.destinationType === 'bot' ? (
+                  <>
+                    <label className="block">
+                      <span className="mb-1.5 block text-sm font-medium text-zinc-200">Бот</span>
+                      <select value={editForm.botId} onChange={(event) => setEditForm((current) => current ? { ...current, botId: event.target.value, targetStepKey: '' } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm">
+                        <option value="">Выберите бота</option>
+                        {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}{bot.bot_username ? ` · @${bot.bot_username.replace(/^@/, '')}` : ''}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 block text-sm font-medium text-zinc-200">Стартовый шаг</span>
+                      <select value={editForm.targetStepKey} disabled={!editForm.botId || isEditingTargetStepsLoading} onChange={(event) => setEditForm((current) => current ? { ...current, targetStepKey: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 disabled:opacity-50 md:text-sm">
+                        <option value="">Старт активной воронки</option>
+                        {editingTargetSteps.map((step) => <option key={step.key} value={step.key}>{step.title} · {step.key}</option>)}
+                      </select>
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <label className="block md:col-span-2">
+                      <span className="mb-1.5 block text-sm font-medium text-zinc-200">Telegram-канал</span>
+                      <select value={editForm.channelId} onChange={(event) => setEditForm((current) => current ? { ...current, channelId: event.target.value } : current)} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm">
+                        <option value="">Выберите подключенный канал</option>
+                        {channels.map((channel) => (
+                          <option key={channel.id} value={channel.id}>
+                            {channel.title}{channel.username ? ` · @${channel.username.replace(/^@/, '')}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-start justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5 md:col-span-2">
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-zinc-100">Заявка на вступление</span>
+                        <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
+                          При изменении CRM безопасно заменит invite link. Вступление считается только после одобрения заявки.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={editForm.channelJoinRequest}
+                        onChange={(event) => setEditForm((current) => current ? { ...current, channelJoinRequest: event.target.checked } : current)}
+                        className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+                      />
+                    </label>
+                  </>
+                )}
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium text-zinc-200">Название кампании</span>
                   <input value={editForm.campaignTitle} onChange={(event) => setEditForm((current) => current ? { ...current, campaignTitle: event.target.value } : current)} maxLength={255} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm" />
@@ -2021,6 +2476,7 @@ export default function LandersSettings({
               <TelegramLanderAppearanceEditor
                 projectId={projectId}
                 bot={selectedEditBot}
+                channel={selectedEditChannel}
                 description={editForm.description}
                 buttonText={editForm.buttonText}
                 onDescriptionChange={(description) => setEditForm((current) => current ? { ...current, description } : current)}
@@ -2068,6 +2524,7 @@ export default function LandersSettings({
                 sourceEvents={runtimeConfig?.source_events ?? []}
                 statuses={runtimeConfig?.lead_statuses ?? []}
                 tags={runtimeConfig?.tags ?? []}
+                destinationType={editForm.destinationType}
                 onChange={(eventMappings) => setEditForm((current) => current ? { ...current, eventMappings } : current)}
               />
             </div>

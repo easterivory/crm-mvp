@@ -74,7 +74,10 @@ export type LanderRuntimeConfig = {
 }
 
 export type LanderTrackingCampaign = {
-  bot_id: string
+  bot_id?: string | null
+  destination_type?: 'bot' | 'channel'
+  channel_id?: string | null
+  channel_join_request?: boolean
   title: string
   code?: string | null
   buyer_id?: string | null
@@ -117,6 +120,9 @@ export type ProjectLander = {
   auto_redirect_enabled: boolean
   is_active: boolean
   facebook_campaign_enabled: boolean
+  destination_type: 'bot' | 'channel'
+  channel_id: string | null
+  channel_title: string | null
   fb_pixel_id: string | null
   has_fb_capi_token: boolean
   has_fb_proxy: boolean
@@ -124,6 +130,10 @@ export type ProjectLander = {
   fb_event_mappings_json: FacebookEventMapping[]
   facebook_campaign: {
     bot_id: string
+    destination_type: 'bot' | 'channel'
+    channel_id: string | null
+    channel_title: string | null
+    channel_join_request: boolean
     title: string
     code: string
     buyer_name: string | null
@@ -165,7 +175,10 @@ export type ProjectLanderUpdatePayload = {
   auto_redirect_enabled?: boolean
   facebook_campaign?: {
     enabled: boolean
-    bot_id?: string
+    bot_id?: string | null
+    destination_type?: 'bot' | 'channel'
+    channel_id?: string | null
+    channel_join_request?: boolean
     title?: string
     code?: string
     buyer_name?: string | null
@@ -193,8 +206,33 @@ export type TrackingLinkOption = {
   id: string
   project_id: string
   bot_id: string
+  destination_type: 'bot' | 'channel'
+  channel_id: string | null
+  channel_title: string | null
+  channel_join_request: boolean
   code: string
   title: string
   buyer_name: string | null
   is_active: boolean
+}
+
+export type TelegramChannel = {
+  id: string
+  project_id: string
+  tracker_bot_id: string
+  telegram_chat_id: number
+  title: string
+  username: string | null
+  description: string | null
+  is_active: boolean
+  bot_is_admin: boolean
+  can_invite_users: boolean
+  verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type TelegramChannelCreatePayload = {
+  tracker_bot_id: string
+  telegram_chat_id: string
 }

@@ -12,6 +12,7 @@ export type Bot = {
   created_at: string
   updated_at: string
   is_deleted: boolean
+  telegram_setup_warning?: string | null
 }
 
 export type BotLeadImportStatus = 'created' | 'validated' | 'completed' | 'failed'

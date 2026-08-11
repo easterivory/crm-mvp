@@ -33,6 +33,17 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
         Index("ix_tracking_links_target_funnel_step_key", "target_funnel_step_key"),
         Index("ix_tracking_links_buyer_id", "buyer_id"),
         Index("ix_tracking_links_fb_campaign_enabled", "fb_campaign_enabled"),
+        Index("ix_tracking_links_channel_id", "channel_id"),
+        Index("ix_tracking_links_destination_type", "destination_type"),
+        CheckConstraint(
+            "destination_type IN ('bot', 'channel')",
+            name="ck_tracking_links_destination_type",
+        ),
+        CheckConstraint(
+            "(destination_type = 'bot' AND channel_id IS NULL) OR "
+            "(destination_type = 'channel' AND channel_id IS NOT NULL)",
+            name="ck_tracking_links_channel_destination",
+        ),
         CheckConstraint(
             "base_conversion_rate >= 0 AND base_conversion_rate <= 100",
             name="ck_tracking_links_base_conversion_rate_percent",
@@ -48,6 +59,17 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     )
     bot_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("bots.id"), nullable=False
+    )
+    destination_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="bot", server_default="bot"
+    )
+    channel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("telegram_channels.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    channel_join_request: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     # name/ref_code are the legacy API fields used by current Telegram /start
     # attribution. code/title are the v1 canonical names and stay synchronized
@@ -133,6 +155,14 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
 
     project: Mapped[Project] = relationship("Project")
     bot: Mapped[Bot] = relationship("Bot", back_populates="tracking_links")
+    channel: Mapped[Optional[TelegramChannel]] = relationship(
+        "TelegramChannel", back_populates="tracking_links"
+    )
+    channel_invite_links: Mapped[list[TelegramChannelInviteLink]] = relationship(
+        "TelegramChannelInviteLink",
+        back_populates="tracking_link",
+        cascade="all, delete-orphan",
+    )
     target_step: Mapped[Optional[BotStep]] = relationship(
         "BotStep",
         foreign_keys=[target_step_id],

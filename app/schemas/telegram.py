@@ -27,6 +27,9 @@ class TelegramChat(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: int
+    type: Optional[str] = None
+    title: Optional[str] = None
+    username: Optional[str] = None
 
 
 class TelegramFile(BaseModel):
@@ -106,6 +109,16 @@ class TelegramChatMember(BaseModel):
 
     status: str
     user: TelegramUser
+    is_member: Optional[bool] = None
+    can_invite_users: Optional[bool] = None
+
+
+class TelegramChatInviteLink(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    invite_link: str
+    name: Optional[str] = None
+    creates_join_request: Optional[bool] = None
 
 
 class TelegramChatMemberUpdated(BaseModel):
@@ -116,6 +129,18 @@ class TelegramChatMemberUpdated(BaseModel):
     date: Optional[int] = None
     old_chat_member: TelegramChatMember
     new_chat_member: TelegramChatMember
+    invite_link: Optional[TelegramChatInviteLink] = None
+
+
+class TelegramChatJoinRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    chat: TelegramChat
+    from_user: TelegramUser = Field(alias="from")
+    user_chat_id: int
+    date: int
+    bio: Optional[str] = None
+    invite_link: Optional[TelegramChatInviteLink] = None
 
 
 class TelegramUpdate(BaseModel):
@@ -132,3 +157,5 @@ class TelegramUpdate(BaseModel):
     message: Optional[TelegramMessage] = None
     callback_query: Optional[TelegramCallbackQuery] = None
     my_chat_member: Optional[TelegramChatMemberUpdated] = None
+    chat_member: Optional[TelegramChatMemberUpdated] = None
+    chat_join_request: Optional[TelegramChatJoinRequest] = None

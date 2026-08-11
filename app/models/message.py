@@ -25,6 +25,13 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     that have no text content.
     """
     __tablename__ = "messages"
+    __table_args__ = (
+        Index(
+            "ix_messages_tracking_link_created_at",
+            "tracking_link_id",
+            "created_at",
+        ),
+    )
 
     chat_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("chats.id"), nullable=False, index=True
@@ -42,6 +49,11 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     )
     operator_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tracking_links.id", ondelete="SET NULL"),
+        nullable=True,
     )
     # NULL for media messages without a caption
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

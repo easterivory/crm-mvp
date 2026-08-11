@@ -39,7 +39,10 @@ def normalize_event_mapping_models(
 
 class TrackingLinkCreate(BaseModel):
     project_id: Optional[uuid.UUID] = None
-    bot_id: uuid.UUID
+    bot_id: Optional[uuid.UUID] = None
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[uuid.UUID] = None
+    channel_join_request: bool = False
     title: Optional[str] = Field(None, max_length=255)
     name: Optional[str] = Field(None, max_length=255)
     code: Optional[str] = Field(None, max_length=100)
@@ -67,6 +70,12 @@ class TrackingLinkCreate(BaseModel):
     def require_title_or_name(self) -> "TrackingLinkCreate":
         if not (self.title or self.name):
             raise ValueError("title is required")
+        if self.destination_type == "bot" and self.bot_id is None:
+            raise ValueError("bot_id is required for bot tracking links")
+        if self.destination_type == "channel" and self.channel_id is None:
+            raise ValueError("channel_id is required for channel tracking links")
+        if self.destination_type == "bot" and self.channel_id is not None:
+            raise ValueError("channel_id is only available for channel tracking links")
         return self
 
     @field_validator("fb_pixel_id")
@@ -125,6 +134,7 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     min_sample_size: Optional[int] = Field(None, ge=1)
     target_step_id: Optional[uuid.UUID] = None
     target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
+    channel_join_request: Optional[bool] = None
 
     @field_validator("fb_pixel_id")
     @classmethod
@@ -159,6 +169,10 @@ class TrackingLinkOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
     bot_id: uuid.UUID
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[uuid.UUID] = None
+    channel_title: Optional[str] = None
+    channel_join_request: bool = False
     name: str
     ref_code: str
     cost_model: TrackingCostModel
@@ -181,6 +195,10 @@ class TrackingLinkRead(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
     bot_id: uuid.UUID
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[uuid.UUID] = None
+    channel_title: Optional[str] = None
+    channel_join_request: bool = False
     code: str
     title: str
     buyer_id: Optional[uuid.UUID] = None
@@ -188,6 +206,7 @@ class TrackingLinkRead(OrmBase):
     ad_type: Optional[str] = None
     payment_type: Optional[str] = None
     invite_link: Optional[str] = None
+    tracking_url: Optional[str] = None
     is_active: bool
     created_by_user_id: Optional[uuid.UUID] = None
     created_at: datetime

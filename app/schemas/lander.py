@@ -83,7 +83,10 @@ class LanderMetaEvent(BaseModel):
 
 
 class LanderTrackingCampaignCreate(BaseModel):
-    bot_id: UUID
+    bot_id: Optional[UUID] = None
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[UUID] = None
+    channel_join_request: bool = False
     title: str = Field(..., min_length=1, max_length=255)
     code: Optional[str] = Field(default=None, max_length=64)
     buyer_id: Optional[UUID] = None
@@ -104,6 +107,16 @@ class LanderTrackingCampaignCreate(BaseModel):
     base_conversion_rate: float = Field(default=10.0, ge=0, le=100)
     min_sample_size: int = Field(default=500, ge=1)
     target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_destination(self) -> "LanderTrackingCampaignCreate":
+        if self.destination_type == "bot" and self.bot_id is None:
+            raise ValueError("bot_id is required for bot traffic")
+        if self.destination_type == "channel" and self.channel_id is None:
+            raise ValueError("channel_id is required for channel traffic")
+        if self.destination_type == "channel" and self.target_funnel_step_key:
+            raise ValueError("Funnel entry step is unavailable for channel traffic")
+        return self
 
     @field_validator("fb_pixel_id")
     @classmethod
@@ -234,7 +247,10 @@ class ProjectLanderUpdate(BaseModel):
 
 class LanderFacebookCampaignUpdate(BaseModel):
     enabled: bool = True
+    destination_type: Optional[Literal["bot", "channel"]] = None
     bot_id: Optional[UUID] = None
+    channel_id: Optional[UUID] = None
+    channel_join_request: Optional[bool] = None
     title: Optional[str] = Field(default=None, min_length=1, max_length=255)
     code: Optional[str] = Field(default=None, min_length=1, max_length=64)
     buyer_name: Optional[str] = Field(default=None, max_length=255)
@@ -307,6 +323,10 @@ ProjectLanderUpdate.model_rebuild()
 
 class LanderFacebookCampaignOut(BaseModel):
     bot_id: UUID
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[UUID] = None
+    channel_title: Optional[str] = None
+    channel_join_request: bool = False
     title: str
     code: str
     buyer_name: Optional[str] = None
@@ -336,6 +356,9 @@ class ProjectLanderOut(OrmBase):
     auto_redirect_enabled: bool
     is_active: bool
     facebook_campaign_enabled: bool = False
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[UUID] = None
+    channel_title: Optional[str] = None
     fb_pixel_id: Optional[str] = None
     has_fb_capi_token: bool = False
     has_fb_proxy: bool = False

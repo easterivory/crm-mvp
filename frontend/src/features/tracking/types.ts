@@ -15,6 +15,10 @@ export type TrackingLink = {
   id: string
   project_id: string
   bot_id: string
+  destination_type: 'bot' | 'channel'
+  channel_id: string | null
+  channel_title: string | null
+  channel_join_request: boolean
   code: string
   title: string
   buyer_id: string | null
@@ -22,6 +26,7 @@ export type TrackingLink = {
   ad_type: string | null
   payment_type: string | null
   invite_link: string | null
+  tracking_url: string | null
   is_active: boolean
   created_by_user_id: string | null
   created_at: string
@@ -45,7 +50,10 @@ export type TrackingLink = {
 
 export type TrackingLinkCreatePayload = {
   project_id: string
-  bot_id: string
+  bot_id?: string | null
+  destination_type?: 'bot' | 'channel'
+  channel_id?: string | null
+  channel_join_request?: boolean
   title: string
   code?: string
   buyer_id?: string | null
@@ -88,6 +96,7 @@ export type TrackingLinkUpdatePayload = Partial<{
   cost_model: TrackingCostModel
   price_per_unit: number
   spend: number
+  channel_join_request: boolean
 }>
 
 export type TrackingFunnelStepOption = {
@@ -129,6 +138,11 @@ export type TrackingMetricSummary = {
   registrations: number
   first_deposits: number
   redeposits: number
+  channel_join_requests: number
+  channel_joins: number
+  channel_leaves: number
+  channel_active_subscribers: number
+  cr_click_to_channel_join: string | number
   spend: string | number
   cr_to_lead: string | number
   cr_to_submit: string | number
@@ -154,6 +168,9 @@ export type TrackingDailyMetric = {
   registrations: number
   first_deposits: number
   redeposits: number
+  channel_join_requests: number
+  channel_joins: number
+  channel_leaves: number
   spend: string | number
 }
 
@@ -178,6 +195,9 @@ export type TrackingLinkMetric = {
   ad_type: string | null
   payment_type: string | null
   is_active: boolean
+  destination_type: 'bot' | 'channel'
+  channel_id: string | null
+  channel_join_request: boolean
   base_conversion_rate: number
   min_sample_size: number
   conversion_status: TrackingConversionStatus
@@ -218,6 +238,9 @@ export type TrackingLinkMetricsResponse = {
   link_id: string
   project_id: string
   bot_id: string
+  destination_type: 'bot' | 'channel'
+  channel_id: string | null
+  channel_join_request: boolean
   code: string
   title: string
   base_conversion_rate: number

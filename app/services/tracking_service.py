@@ -7,6 +7,7 @@ import string
 import unicodedata
 from datetime import date
 from decimal import Decimal
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import RoleName, TrackingCostModel, TrackingSpendSource
 from app.core.facebook_events import normalize_facebook_event_mappings
+from app.core.lander_urls import build_channel_tracking_url
 from app.core.telegram_links import (
     build_telegram_bot_start_link,
     canonicalize_telegram_web_link,
@@ -43,6 +45,10 @@ from app.schemas.tracking import (
 from app.services.bot_service import BotService
 from app.services.access_control import require_project_access
 from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.channel_tracking_service import (
+    ChannelTrackingService,
+    PreparedChannelInvite,
+)
 
 
 class TrackingService:
@@ -54,6 +60,7 @@ class TrackingService:
         self.bot_repo = BotRepository(db)
         self.bot_service = BotService(db)
         self.project_repo = ProjectRepository(db)
+        self.channel_service = ChannelTrackingService(db)
 
     async def list_links(
         self,
@@ -91,7 +98,20 @@ class TrackingService:
         project_id: UUID,
         data: TrackingLinkCreate,
     ) -> TrackingLinkOut:
+        if data.destination_type != "bot" or data.bot_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The legacy tracking endpoint supports bot links only",
+            )
         self._validate_cost_configuration(data.cost_model, data.price_per_unit)
+        if (
+            data.destination_type == "channel"
+            and data.cost_model == TrackingCostModel.CPA
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="CPA by submitted lead is not available for channel traffic",
+            )
         await self._validate_facebook_event_mappings(
             project_id=project_id,
             mappings=data.fb_event_mappings,
@@ -218,6 +238,14 @@ class TrackingService:
 
         values = self._build_link_update_values(data, link=link, allow_code_update=True)
         if {"cost_model", "price_per_unit"} & values.keys():
+            if (
+                link.destination_type == "channel"
+                and values.get("cost_model", link.cost_model) == TrackingCostModel.CPA
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="CPA by submitted lead is not available for channel traffic",
+                )
             self._validate_cost_configuration(
                 values.get("cost_model", link.cost_model),
                 values.get("price_per_unit", link.price_per_unit),
@@ -359,16 +387,42 @@ class TrackingService:
             )
 
         self._validate_cost_configuration(data.cost_model, data.price_per_unit)
+        if (
+            data.destination_type == "channel"
+            and data.cost_model == TrackingCostModel.CPA
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="CPA by submitted lead is not available for channel traffic",
+            )
         await self._ensure_project_access(actor, data.project_id)
         project = await self._get_active_project_or_404(data.project_id)
         await self._validate_facebook_event_mappings(
             project_id=project.id,
             mappings=data.fb_event_mappings,
         )
-        bot = await self.bot_service.ensure_bot_username(
-            bot_id=data.bot_id,
-            project_id=project.id,
-        )
+        channel = None
+        if data.destination_type == "channel":
+            if data.channel_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="channel_id is required for channel tracking links",
+                )
+            channel = await self.channel_service.get_channel(
+                channel_id=data.channel_id,
+                project_id=project.id,
+            )
+            bot = channel.tracker_bot
+        else:
+            if data.bot_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="bot_id is required for bot tracking links",
+                )
+            bot = await self.bot_service.ensure_bot_username(
+                bot_id=data.bot_id,
+                project_id=project.id,
+            )
 
         title = self._normalize_required(data.title or data.name, "title")
         code = self._normalize_code(data.code or data.ref_code)
@@ -376,17 +430,26 @@ class TrackingService:
         await self._ensure_code_available(code)
 
         target_step_id = data.target_step_id
+        if channel is not None and (
+            target_step_id is not None or data.target_funnel_step_key is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Funnel entry steps are not available for channel traffic",
+            )
         if target_step_id is not None:
             await self._ensure_step_belongs_to_bot(target_step_id, bot.id, project.id)
-        target_funnel_id, target_funnel_step_key = await self._resolve_target_funnel_step(
-            bot_id=bot.id,
-            project_id=project.id,
-            target_funnel_step_key=data.target_funnel_step_key,
-        )
+        if channel is None:
+            target_funnel_id, target_funnel_step_key = (
+                await self._resolve_target_funnel_step(
+                    bot_id=bot.id,
+                    project_id=project.id,
+                    target_funnel_step_key=data.target_funnel_step_key,
+                )
+            )
+        else:
+            target_funnel_id, target_funnel_step_key = None, None
 
-        invite_link = canonicalize_telegram_web_link(
-            self._normalize_optional(data.invite_link)
-        ) or self._build_invite_link(bot.bot_username, code)
         if actor.role_name == RoleName.BUYER:
             buyer_id, buyer_name = actor.id, actor.name
         else:
@@ -396,10 +459,32 @@ class TrackingService:
                 buyer_name=data.buyer_name,
             )
 
+        prepared_invite: PreparedChannelInvite | None = None
+        if channel is not None:
+            if self._normalize_optional(data.invite_link):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Channel invite links are generated by the tracker bot",
+                )
+            prepared_invite = await self.channel_service.prepare_invite_link(
+                channel=channel,
+                code=code,
+                creates_join_request=data.channel_join_request,
+            )
+            invite_link = prepared_invite.invite_link
+        else:
+            invite_link = canonicalize_telegram_web_link(
+                self._normalize_optional(data.invite_link)
+            ) or self._build_invite_link(bot.bot_username, code)
         try:
             link = await self.link_repo.create_link(
                 project_id=project.id,
                 bot_id=bot.id,
+                destination_type=data.destination_type,
+                channel_id=channel.id if channel is not None else None,
+                channel_join_request=(
+                    data.channel_join_request if channel is not None else False
+                ),
                 name=title,
                 title=title,
                 ref_code=code,
@@ -427,14 +512,29 @@ class TrackingService:
                 target_funnel_step_key=target_funnel_step_key,
                 created_by_user_id=actor.id,
             )
-        except IntegrityError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Tracking code already exists",
-            ) from exc
-
-        link.bot = bot
-        await self._create_initial_manual_spend(link, data, actor_id=actor.id)
+            link.bot = bot
+            link.channel = channel
+            if channel is not None and prepared_invite is not None:
+                await self.channel_service.persist_invite_link(
+                    project_id=project.id,
+                    channel_id=channel.id,
+                    tracking_link_id=link.id,
+                    prepared=prepared_invite,
+                )
+            await self._create_initial_manual_spend(link, data, actor_id=actor.id)
+            await self.db.flush()
+        except Exception as exc:
+            await self.db.rollback()
+            if prepared_invite is not None:
+                await self.channel_service.revoke_prepared_invite(
+                    prepared=prepared_invite,
+                )
+            if isinstance(exc, IntegrityError):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Tracking code already exists",
+                ) from exc
+            raise
         return await self._to_read(link, include_total_spend=True)
 
     async def update_tracking_link(
@@ -444,6 +544,8 @@ class TrackingService:
         actor: User,
     ) -> TrackingLinkRead:
         link = await self._get_link_for_actor(link_id, actor)
+        prepared_invite: PreparedChannelInvite | None = None
+        channel = None
         if (
             "fb_event_mappings" in data.model_fields_set
             and data.fb_event_mappings is not None
@@ -453,10 +555,36 @@ class TrackingService:
                 mappings=data.fb_event_mappings,
             )
         values = self._build_link_update_values(data, link=link, allow_code_update=False)
+        if link.destination_type == "channel":
+            values.pop("invite_link", None)
+            values.pop("target_step_id", None)
+            values.pop("target_funnel_step_key", None)
+            desired_join_request = values.get(
+                "channel_join_request",
+                link.channel_join_request,
+            )
+            if desired_join_request != link.channel_join_request:
+                if link.channel_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Channel tracking link has no channel",
+                    )
+                channel = await self.channel_service.get_channel(
+                    channel_id=link.channel_id,
+                    project_id=link.project_id,
+                )
         if actor.role_name == RoleName.BUYER:
             values.pop("buyer_id", None)
             values.pop("buyer_name", None)
         if {"cost_model", "price_per_unit"} & values.keys():
+            if (
+                link.destination_type == "channel"
+                and values.get("cost_model", link.cost_model) == TrackingCostModel.CPA
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="CPA by submitted lead is not available for channel traffic",
+                )
             self._validate_cost_configuration(
                 values.get("cost_model", link.cost_model),
                 values.get("price_per_unit", link.price_per_unit),
@@ -484,10 +612,36 @@ class TrackingService:
             values["target_funnel_id"] = target_funnel_id
             values["target_funnel_step_key"] = target_funnel_step_key
 
+        if channel is not None:
+            prepared_invite = await self.channel_service.prepare_invite_link(
+                channel=channel,
+                code=link.code,
+                creates_join_request=bool(
+                    values.get("channel_join_request", link.channel_join_request)
+                ),
+            )
+            values["invite_link"] = prepared_invite.invite_link
+
         if not values:
             return await self._to_read(link, include_total_spend=True)
 
-        updated = await self.link_repo.update_link(link.id, **values)
+        try:
+            updated = await self.link_repo.update_link(link.id, **values)
+            if updated is not None and prepared_invite is not None and channel is not None:
+                await self.channel_service.persist_invite_link(
+                    project_id=link.project_id,
+                    channel_id=channel.id,
+                    tracking_link_id=link.id,
+                    prepared=prepared_invite,
+                )
+            await self.db.flush()
+        except Exception:
+            await self.db.rollback()
+            if prepared_invite is not None:
+                await self.channel_service.revoke_prepared_invite(
+                    prepared=prepared_invite,
+                )
+            raise
         if updated is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -975,12 +1129,20 @@ class TrackingService:
         username = (link.bot.bot_username or "").removeprefix("@")
         ref_code = link.ref_code or link.code
         invite_link = canonicalize_telegram_web_link(link.invite_link)
-        if not invite_link:
+        if not invite_link and link.destination_type == "bot":
             invite_link = cls._build_invite_link(username, ref_code)
         return TrackingLinkOut.model_validate(link).model_copy(
             update={
                 "invite_link": invite_link,
-                "tracking_url": build_telegram_bot_start_link(username, ref_code),
+                "tracking_url": cls._public_tracking_url(
+                    destination_type=link.destination_type,
+                    code=ref_code,
+                    bot_username=username,
+                    invite_link=invite_link,
+                ),
+                "channel_title": (
+                    link.channel.title if link.channel is not None else None
+                ),
                 "has_fb_capi_token": bool((link.fb_capi_token or "").strip()),
                 "has_fb_proxy": bool((link.fb_proxy_url or "").strip()),
                 "fb_event_mappings_json": normalize_facebook_event_mappings(
@@ -999,10 +1161,12 @@ class TrackingService:
         title = link.title or link.name
         invite_link = canonicalize_telegram_web_link(
             link.invite_link
-        ) or self._build_invite_link(
-            getattr(link.bot, "bot_username", None),
-            code,
         )
+        if not invite_link and link.destination_type == "bot":
+            invite_link = self._build_invite_link(
+                getattr(link.bot, "bot_username", None),
+                code,
+            )
         total_spend: Decimal | None = None
         if include_total_spend:
             total_spend = await TrackingMetricsRepository(
@@ -1017,6 +1181,10 @@ class TrackingService:
             id=link.id,
             project_id=link.project_id,
             bot_id=link.bot_id,
+            destination_type=link.destination_type,
+            channel_id=link.channel_id,
+            channel_title=(link.channel.title if link.channel is not None else None),
+            channel_join_request=link.channel_join_request,
             code=code,
             title=title,
             buyer_id=link.buyer_id,
@@ -1024,6 +1192,12 @@ class TrackingService:
             ad_type=link.ad_type,
             payment_type=link.payment_type,
             invite_link=invite_link,
+            tracking_url=self._public_tracking_url(
+                destination_type=link.destination_type,
+                code=code,
+                bot_username=getattr(link.bot, "bot_username", None),
+                invite_link=invite_link,
+            ),
             is_active=link.is_active,
             created_by_user_id=link.created_by_user_id,
             created_at=link.created_at,
@@ -1046,3 +1220,20 @@ class TrackingService:
             fb_test_event_code=link.fb_test_event_code,
             total_spend=total_spend,
         )
+
+    @staticmethod
+    def _public_tracking_url(
+        *,
+        destination_type: str,
+        code: str,
+        bot_username: str | None,
+        invite_link: str | None,
+    ) -> str | None:
+        if destination_type == "channel":
+            technical_host = str(settings.LANDER_TECH_DOMAIN or "").strip()
+            if technical_host:
+                return build_channel_tracking_url(host=technical_host, code=code)
+            base_url = str(settings.BASE_URL or "").strip().rstrip("/")
+            return f"{base_url}/join/{quote(code, safe='')}" if base_url else invite_link
+        username = str(bot_username or "").removeprefix("@").strip()
+        return build_telegram_bot_start_link(username, code) if username else invite_link

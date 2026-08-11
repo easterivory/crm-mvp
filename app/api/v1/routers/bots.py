@@ -187,14 +187,39 @@ async def update_bot(
 ) -> BotOut:
     _ensure_bot_management_access(current_user)
     service = BotService(db)
+    telegram_profile_fields = {"telegram_description", "telegram_about"}
+    profile_update_required = False
+    if telegram_profile_fields & data.model_fields_set:
+        current = await service.get_bot(bot_id=bot_id, project_id=project_id)
+        for field_name in telegram_profile_fields & data.model_fields_set:
+            requested = getattr(data, field_name)
+            normalized_requested = requested.strip() if requested and requested.strip() else None
+            if normalized_requested != getattr(current, field_name):
+                profile_update_required = True
+                break
+
     updated = await service.update_bot(
         bot_id=bot_id,
         project_id=project_id,
         data=data,
         actor=current_user,
     )
-    if {"telegram_description", "telegram_about"} & data.model_fields_set:
-        await service.update_bot_profile_on_telegram(bot_id, actor=current_user)
+    if profile_update_required:
+        try:
+            await service.update_bot_profile_on_telegram(bot_id, actor=current_user)
+        except HTTPException as exc:
+            if "telegram_token" not in data.model_fields_set:
+                raise
+            profile_warning = (
+                "Token сохранён, но описание профиля Telegram не синхронизировано: "
+                f"{exc.detail}"
+            )
+            combined_warning = " ".join(
+                part for part in (updated.telegram_setup_warning, profile_warning) if part
+            )
+            return updated.model_copy(
+                update={"telegram_setup_warning": combined_warning}
+            )
     return updated
 
 

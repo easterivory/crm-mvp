@@ -71,6 +71,7 @@ from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
 from app.services.chat_user_block_service import ChatUserBlockService
+from app.services.channel_subscription_service import ChannelSubscriptionService
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_lease_service import ChatLeaseService
 from app.services.funnel_runtime_service import FunnelRuntimeService
@@ -186,10 +187,33 @@ class TelegramService:
         owns the commit.
         """
         if update.my_chat_member is not None:
+            if await ChannelSubscriptionService(self.db).handle_tracker_membership(
+                bot_id=bot_id,
+                event=update.my_chat_member,
+            ):
+                return
             await self._handle_my_chat_member(
                 update.my_chat_member,
                 project_id=project_id,
                 bot_id=bot_id,
+            )
+            return
+
+        chat_member_update = getattr(update, "chat_member", None)
+        if chat_member_update is not None:
+            await ChannelSubscriptionService(self.db).handle_chat_member_update(
+                update_id=update.update_id,
+                bot_id=bot_id,
+                event=chat_member_update,
+            )
+            return
+
+        join_request_update = getattr(update, "chat_join_request", None)
+        if join_request_update is not None:
+            await ChannelSubscriptionService(self.db).handle_join_request(
+                update_id=update.update_id,
+                bot_id=bot_id,
+                event=join_request_update,
             )
             return
 
@@ -206,16 +230,31 @@ class TelegramService:
             return
 
         start_payload = await self._hydrate_start_payload(self._extract_start_payload(message.text))
-        tracking_link_id = await self._resolve_tracking_link_id(
+        has_explicit_start_attribution = self._has_explicit_start_attribution(
+            start_payload
+        )
+        explicit_tracking_link_id = await self._resolve_tracking_link_id(
             start_payload,
             project_id,
             bot_id,
         )
+        tracking_link_id = explicit_tracking_link_id
+        if (
+            tracking_link_id is None
+            and not has_explicit_start_attribution
+            and message.from_user is not None
+            and self._is_start_command(message.text)
+        ):
+            tracking_link_id = await self._resolve_channel_tracking_link_id(
+                project_id=project_id,
+                telegram_user_id=message.from_user.id,
+            )
         chat, should_start_runtime, is_reactivated_cycle = await self._find_or_create_chat(
             message,
             project_id,
             bot_id=bot_id,
             tracking_link_id=tracking_link_id,
+            replace_existing_channel_attribution=tracking_link_id is not None,
         )
         chat_lease = getattr(self, "chat_lease", None)
         if chat_lease is not None:
@@ -229,7 +268,19 @@ class TelegramService:
         chat_id = chat.id
         external_chat_id = chat.external_chat_id
         chat_is_blocked = chat.is_blocked
-        msg = await self._create_message(chat_id, project_id, message)
+        start_tracking_link_id: UUID | None = None
+        if self._is_start_command(message.text):
+            start_tracking_link_id = (
+                explicit_tracking_link_id
+                if has_explicit_start_attribution
+                else getattr(chat, "tracking_link_id", None)
+            )
+        msg = await self._create_message(
+            chat_id,
+            project_id,
+            message,
+            tracking_link_id=start_tracking_link_id,
+        )
         message_id = msg.id
         event_reference = msg.external_message_id or str(message_id)
         persisted_message = await self.message_repo.get_by_id(msg.id)
@@ -626,6 +677,7 @@ class TelegramService:
         project_id: UUID,
         bot_id: UUID,
         tracking_link_id: Optional[UUID] = None,
+        replace_existing_channel_attribution: bool = False,
     ) -> tuple[Chat, bool, bool]:
         """
         Return the Chat for this external_chat_id, creating it if absent.
@@ -659,6 +711,19 @@ class TelegramService:
             if is_imported and identity_pending:
                 updates["external_user_id"] = external_user_id
                 updates["import_identity_pending"] = False
+            current_tracking_link_id = getattr(chat, "tracking_link_id", None)
+            should_replace_channel_attribution = (
+                replace_existing_channel_attribution
+                and tracking_link_id is not None
+                and current_tracking_link_id is not None
+                and current_tracking_link_id != tracking_link_id
+                and await self._is_channel_tracking_link(current_tracking_link_id)
+            )
+            if tracking_link_id is not None and (
+                current_tracking_link_id is None
+                or should_replace_channel_attribution
+            ):
+                updates["tracking_link_id"] = tracking_link_id
             if updates:
                 updated_chat = await self.chat_repo.update_by_id(
                     chat.id,
@@ -763,6 +828,16 @@ class TelegramService:
             return chat, False, False
 
         return chat, True, False
+
+    async def _is_channel_tracking_link(self, tracking_link_id: UUID) -> bool:
+        tracking_repo = getattr(self, "tracking_repo", None)
+        if tracking_repo is None:
+            return False
+        link = await tracking_repo.get_link_by_id(tracking_link_id)
+        return bool(
+            link is not None
+            and getattr(link, "destination_type", "bot") == "channel"
+        )
 
     async def _process_runtime_or_legacy(
         self,
@@ -1447,6 +1522,12 @@ class TelegramService:
                 project_id,
             )
             return None
+        if getattr(link, "destination_type", "bot") != "bot":
+            logger.info(
+                "Telegram /start %s points to a non-bot destination",
+                source,
+            )
+            return None
         if link.bot_id != bot_id:
             logger.info(
                 "Telegram /start %s belongs to bot_id=%s, "
@@ -1457,6 +1538,29 @@ class TelegramService:
             )
             return None
         return link.id
+
+    async def _resolve_channel_tracking_link_id(
+        self,
+        *,
+        project_id: UUID,
+        telegram_user_id: int,
+    ) -> UUID | None:
+        db = getattr(self, "db", None)
+        if db is None or not hasattr(db, "execute"):
+            return None
+        return await ChannelSubscriptionService(db).resolve_latest_tracking_link(
+            project_id=project_id,
+            telegram_user_id=telegram_user_id,
+        )
+
+    @staticmethod
+    def _has_explicit_start_attribution(payload: TelegramStartPayload) -> bool:
+        return bool(
+            getattr(payload, "tracking_link_id", None) is not None
+            or getattr(payload, "ref_code", None) is not None
+            or getattr(payload, "start_key", None) is not None
+            or getattr(payload, "utm_key", None) is not None
+        )
 
     @staticmethod
     def _extract_start_ref_code(text: Optional[str]) -> Optional[str]:
@@ -1526,6 +1630,8 @@ class TelegramService:
         chat_id: UUID,
         project_id: UUID,
         message: TelegramMessage,
+        *,
+        tracking_link_id: UUID | None = None,
     ) -> MessageOut:
         """
         Persist the Telegram message via MessageService (includes idempotency,
@@ -1534,7 +1640,9 @@ class TelegramService:
         message.text may be None for stickers, photos, etc. Media metadata is
         stored for lazy proxy access; files are not downloaded here.
         """
-        data = self._telegram_message_to_create(message)
+        data = self._telegram_message_to_create(message).model_copy(
+            update={"tracking_link_id": tracking_link_id}
+        )
         return await self.message_service.create_message(
             chat_id=chat_id,
             project_id=project_id,

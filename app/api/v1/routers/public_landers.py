@@ -3,11 +3,16 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_db
 from app.services.lander_service import LanderNotFoundError, LanderService
+from app.repositories.tracking_repository import (
+    TrackingEventRepository,
+    TrackingLinkRepository,
+)
+from app.core.telegram_links import canonicalize_telegram_web_link
 from app.services.telegram_bot_avatar_service import BotAvatarUnavailableError
 
 router = APIRouter(tags=["public-landers"])
@@ -29,6 +34,7 @@ SYSTEM_ROOT_PATHS = frozenset(
         "landers",
         "leads",
         "login",
+        "join",
         "openapi.json",
         "partners",
         "profile",
@@ -42,6 +48,45 @@ SYSTEM_ROOT_PATHS = frozenset(
     }
 )
 LANDER_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@router.get("/join/{code}", response_class=RedirectResponse, include_in_schema=False)
+async def redirect_channel_tracking_link(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    normalized_code = code.strip()
+    if len(normalized_code) > 100 or not LANDER_SLUG_RE.fullmatch(normalized_code):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    links = TrackingLinkRepository(db)
+    link = await links.get_link_by_code(normalized_code)
+    if link is None:
+        link = await links.get_by_ref_code(normalized_code)
+    invite_link = canonicalize_telegram_web_link(
+        link.invite_link if link is not None else None
+    )
+    if (
+        link is None
+        or not link.is_active
+        or link.destination_type != "channel"
+        or not invite_link
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    await TrackingEventRepository(db).increment_lander_click(
+        project_id=link.project_id,
+        tracking_link_id=link.id,
+    )
+    return RedirectResponse(
+        url=invite_link,
+        status_code=status.HTTP_302_FOUND,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "CDN-Cache-Control": "no-store",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+        },
+    )
 
 
 @router.get("/l/{slug}/bot-avatar", response_class=Response, include_in_schema=False)

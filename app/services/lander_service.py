@@ -21,7 +21,11 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.facebook_events import normalize_facebook_event_mappings
 from app.core.lander_urls import effective_campaign_utm_defaults
-from app.core.telegram_links import build_telegram_bot_start_link
+from app.core.telegram_links import (
+    build_telegram_bot_start_link,
+    canonicalize_telegram_web_link,
+)
+from app.models.channel_tracking import TelegramChannel
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.repositories.tracking_repository import TrackingEventRepository
@@ -63,8 +67,9 @@ class LanderService:
         self.storage_root = Path(storage_root or settings.LANDER_STORAGE_PATH)
         self.utm_bridge = utm_bridge or UtmBridgeService()
         self.tracking_event_repo = TrackingEventRepository(db)
+        self.telegram_sender = TelegramSenderService(db)
         self.avatar_service = TelegramBotAvatarService(
-            sender=TelegramSenderService(db),
+            sender=self.telegram_sender,
             storage_root=self.storage_root,
         )
 
@@ -104,6 +109,9 @@ class LanderService:
         stmt = select(ProjectLander).options(
             selectinload(ProjectLander.domain),
             selectinload(ProjectLander.tracking_link).selectinload(TrackingLink.bot),
+            selectinload(ProjectLander.tracking_link)
+            .selectinload(TrackingLink.channel)
+            .selectinload(TelegramChannel.tracker_bot),
         )
         technical_domain = self.normalize_host(settings.LANDER_TECH_DOMAIN)
         if technical_domain and normalized_host == technical_domain:
@@ -176,6 +184,37 @@ class LanderService:
         slug: str,
     ) -> tuple[bytes, str]:
         lander = await self.resolve_lander_request(host=host, slug=slug)
+        tracking_link = lander.tracking_link
+        if (
+            tracking_link is not None
+            and tracking_link.destination_type == "channel"
+            and tracking_link.channel is not None
+        ):
+            channel = tracking_link.channel
+            bot = channel.tracker_bot
+            token = str(bot.telegram_token or "").strip()
+            if not token:
+                raise BotAvatarUnavailableError("Channel tracker token is unavailable")
+            if self.db.in_transaction():
+                await self.db.commit()
+            chat_data = await self.telegram_sender.get_chat(
+                token,
+                channel.telegram_chat_id,
+            )
+            photo = chat_data.get("photo")
+            file_id = photo.get("big_file_id") if isinstance(photo, dict) else None
+            if not file_id:
+                raise BotAvatarUnavailableError("Channel profile photo is unavailable")
+            file_data = await self.telegram_sender.get_file(token, str(file_id))
+            file_path = str(file_data.get("file_path") or "").strip()
+            if not file_path:
+                raise BotAvatarUnavailableError("Channel profile photo is unavailable")
+            content = await self.telegram_sender.download_file(
+                token,
+                file_path,
+                max_bytes=5 * 1024 * 1024,
+            )
+            return content, mimetypes.guess_type(file_path)[0] or "image/jpeg"
         bot = lander.tracking_link.bot if lander.tracking_link is not None else None
         token = (bot.telegram_token or "").strip() if bot is not None else ""
         telegram_bot_id = bot.telegram_bot_id if bot is not None else None
@@ -254,10 +293,6 @@ class LanderService:
         if tracking_link is None:
             raise ValueError("Лендинг должен быть привязан к tracking link")
 
-        username = self._bot_username(lander)
-        if not username:
-            raise ValueError("CLIENT_BOT_USERNAME не настроен")
-
         code = (tracking_link.code or tracking_link.ref_code or "").strip()
         if not code:
             raise ValueError("Tracking link не содержит code")
@@ -273,6 +308,15 @@ class LanderService:
             query_params=utm_params,
             browser_context=browser_context,
         )
+        if tracking_link.destination_type == "channel":
+            invite_link = canonicalize_telegram_web_link(tracking_link.invite_link)
+            if not invite_link:
+                raise ValueError("Channel invite link is not configured")
+            return invite_link, start_key
+
+        username = self._bot_username(lander)
+        if not username:
+            raise ValueError("CLIENT_BOT_USERNAME не настроен")
         start_payload = self.utm_bridge.build_lander_start_payload(
             tracking_link.id,
             start_key,
@@ -663,33 +707,61 @@ class LanderService:
     ) -> str:
         tracking_link = lander.tracking_link
         bot = tracking_link.bot if tracking_link is not None else None
-        bot_title = (
-            (getattr(bot, "telegram_first_name", None) or "").strip()
-            or (getattr(bot, "name", None) or "").strip()
-            or (getattr(bot, "bot_username", None) or "").removeprefix("@").strip()
-            or "Telegram bot"
+        channel = (
+            getattr(tracking_link, "channel", None)
+            if tracking_link is not None
+            and getattr(tracking_link, "destination_type", "bot") == "channel"
+            else None
         )
-        username = (getattr(bot, "bot_username", None) or "").removeprefix("@").strip()
-        description = (
-            (getattr(lander, "description", None) or "").strip()
-            or (getattr(bot, "telegram_description", None) or "").strip()
-            or (getattr(bot, "telegram_about", None) or "").strip()
-            or "Open this bot in Telegram to continue."
+        is_channel = channel is not None
+        if is_channel:
+            destination_title = (channel.title or "").strip() or "Telegram channel"
+            username = (channel.username or "").removeprefix("@").strip()
+            description = (
+                (getattr(lander, "description", None) or "").strip()
+                or (channel.description or "").strip()
+                or "Подпишитесь на канал, чтобы получать новые публикации."
+            )
+            button_text = (
+                (getattr(lander, "button_text", None) or "").strip()
+                or "Подписаться на канал"
+            )
+        else:
+            destination_title = (
+                (getattr(bot, "telegram_first_name", None) or "").strip()
+                or (getattr(bot, "name", None) or "").strip()
+                or (getattr(bot, "bot_username", None) or "").removeprefix("@").strip()
+                or "Telegram bot"
+            )
+            username = (getattr(bot, "bot_username", None) or "").removeprefix("@").strip()
+            description = (
+                (getattr(lander, "description", None) or "").strip()
+                or (getattr(bot, "telegram_description", None) or "").strip()
+                or (getattr(bot, "telegram_about", None) or "").strip()
+                or "Open this bot in Telegram to continue."
+            )
+            button_text = (
+                (getattr(lander, "button_text", None) or "").strip()
+                or "Open in Telegram"
+            )
+        initial = next(
+            (char.upper() for char in destination_title if char.isalnum()),
+            "T",
         )
-        button_text = (
-            (getattr(lander, "button_text", None) or "").strip()
-            or "Open in Telegram"
-        )
-        initial = next((char.upper() for char in bot_title if char.isalnum()), "T")
         safe_url = html.escape(telegram_url, quote=True)
         safe_url_json = json.dumps(telegram_url).replace("<", "\\u003c")
-        safe_title = html.escape(bot_title)
-        safe_title_attr = html.escape(bot_title, quote=True)
+        safe_title = html.escape(destination_title)
+        safe_title_attr = html.escape(destination_title, quote=True)
         safe_description = html.escape(description)
         safe_description_attr = html.escape(description.replace("\n", " "), quote=True)
         safe_button_text = html.escape(button_text)
         safe_username = html.escape(f"@{username}") if username else ""
         safe_initial = html.escape(initial)
+        destination_badge = (
+            '<div class="destination-kind">Telegram-канал</div>'
+            if is_channel
+            else ""
+        )
         avatar_url = f"/l/{lander.slug}/bot-avatar"
         auto_redirect_script = "window.setTimeout(openTelegram, 650);" if lander.auto_redirect_enabled else ""
         return f"""<!doctype html>
@@ -793,6 +865,19 @@ class LanderService:
       font-size: 15px;
       line-height: 1.35;
     }}
+    .destination-kind {{
+      display: inline-flex;
+      min-height: 28px;
+      margin-top: 12px;
+      align-items: center;
+      border-radius: 999px;
+      padding: 5px 11px;
+      color: #1679aa;
+      background: #e8f5fc;
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1;
+    }}
     .description {{
       max-width: 390px;
       margin: 20px auto 28px;
@@ -844,13 +929,14 @@ class LanderService:
     </div>
   </header>
   <main class="stage">
-    <section class="profile" aria-labelledby="bot-title">
+    <section class="profile" aria-labelledby="destination-title">
       <div class="avatar">
         <span aria-hidden="true">{safe_initial}</span>
         <img src="{avatar_url}" alt="{safe_title_attr}" onerror="this.remove()">
       </div>
-      <h1 id="bot-title">{safe_title}</h1>
+      <h1 id="destination-title">{safe_title}</h1>
       {f'<div class="username">{safe_username}</div>' if safe_username else ''}
+      {destination_badge}
       <div class="description">{safe_description}</div>
       <a class="open-button" id="open-telegram" data-crm-telegram-link href="{safe_url}" rel="noopener noreferrer">{safe_button_text}</a>
     </section>

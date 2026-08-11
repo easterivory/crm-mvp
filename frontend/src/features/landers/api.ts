@@ -10,6 +10,8 @@ import type {
   LanderTargetStep,
   LanderRuntimeConfig,
   TrackingLinkOption,
+  TelegramChannel,
+  TelegramChannelCreatePayload,
 } from './types'
 
 export async function fetchProjectDomains(projectId: string): Promise<ProjectDomain[]> {
@@ -116,5 +118,53 @@ export async function fetchLanderTargetSteps(
   const { data } = await api.get<LanderTargetStep[]>('/tracking/links/target-steps', {
     params: { project_id: projectId, bot_id: botId },
   })
+  return data
+}
+
+export async function fetchTelegramChannels(
+  projectId: string,
+): Promise<TelegramChannel[]> {
+  const { data } = await api.get<TelegramChannel[]>(
+    `/projects/${projectId}/telegram-channels`,
+  )
+  return data
+}
+
+export async function createTelegramChannel(
+  projectId: string,
+  payload: TelegramChannelCreatePayload,
+): Promise<TelegramChannel> {
+  const { data } = await api.post<TelegramChannel>(
+    `/projects/${projectId}/telegram-channels`,
+    payload,
+  )
+  return data
+}
+
+export async function verifyTelegramChannel(
+  projectId: string,
+  channelId: string,
+): Promise<TelegramChannel> {
+  const { data } = await api.post<TelegramChannel>(
+    `/projects/${projectId}/telegram-channels/${channelId}/verify`,
+  )
+  return data
+}
+
+export async function deleteTelegramChannel(
+  projectId: string,
+  channelId: string,
+): Promise<void> {
+  await api.delete(`/projects/${projectId}/telegram-channels/${channelId}`)
+}
+
+export async function fetchTelegramChannelAvatar(
+  projectId: string,
+  channelId: string,
+): Promise<Blob> {
+  const { data } = await api.get<Blob>(
+    `/projects/${projectId}/telegram-channels/${channelId}/avatar`,
+    { responseType: 'blob' },
+  )
   return data
 }

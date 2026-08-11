@@ -82,3 +82,52 @@ async def enqueue_facebook_capi_event(
     finally:
         if redis is not None:
             await redis.close()
+
+
+async def enqueue_facebook_channel_event(
+    *,
+    tracking_link_id: UUID,
+    telegram_user_id: int,
+    event_name: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    custom_data: dict[str, Any] | None = None,
+    event_time: int | None = None,
+    event_id: str,
+) -> str | None:
+    if create_pool is None:
+        logger.warning(
+            "ARQ is not installed; Facebook channel event was not queued link_id=%s",
+            tracking_link_id,
+        )
+        return None
+
+    redis = None
+    try:
+        redis = await create_pool(_redis_settings_from_url())
+        job_suffix = hashlib.sha256(event_id.encode("utf-8")).hexdigest()[:40]
+        job = await redis.enqueue_job(
+            "send_fb_capi_channel_event_task",
+            str(tracking_link_id),
+            str(telegram_user_id),
+            event_name,
+            first_name,
+            last_name,
+            custom_data or {},
+            event_time,
+            event_id,
+            _job_id=f"facebook-channel-capi:{job_suffix}",
+            _queue_name=JOBS_QUEUE_NAME,
+            _defer_by=1,
+        )
+        return job.job_id if job is not None else None
+    except Exception:
+        logger.exception(
+            "Could not enqueue Facebook channel event link_id=%s event_name=%s",
+            tracking_link_id,
+            event_name,
+        )
+        return None
+    finally:
+        if redis is not None:
+            await redis.close()

@@ -50,6 +50,13 @@ function normalizeOptionalText(value: string) {
   return trimmed.length > 0 ? trimmed : null
 }
 
+function normalizeTelegramToken(value: string) {
+  return value
+    .normalize('NFKC')
+    .replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/^bot(?=\d+:)/i, '')
+}
+
 function BotDescriptionRow({ label, value }: { label: string; value: string | null }) {
   if (!value) {
     return null
@@ -128,7 +135,7 @@ export default function BotsPage() {
       return
     }
     const name = botName.trim()
-    const token = botToken.trim()
+    const token = normalizeTelegramToken(botToken)
     if (!name && !token) {
       setError('Укажите название черновика или Telegram token.')
       return
@@ -139,7 +146,7 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await api.post<BotRecord>('/bots', {
+      const { data: createdBot } = await api.post<BotRecord>('/bots', {
         name: name || undefined,
         ...(token ? { telegram_token: token } : {}),
       }, {
@@ -148,6 +155,10 @@ export default function BotsPage() {
       setBotName('')
       setBotToken('')
       await loadBots()
+      if (createdBot.telegram_setup_warning) {
+        setError(createdBot.telegram_setup_warning)
+        return
+      }
       setNotice(
         token
           ? 'Бот добавлен: имя подтянуто из Telegram, webhook зарегистрирован.'
@@ -224,15 +235,20 @@ export default function BotsPage() {
     setNotice('')
 
     try {
-      await updateBot(botId, {
+      const token = normalizeTelegramToken(editingBotToken)
+      const updatedBot = await updateBot(botId, {
         name: editingBotName.trim(),
         crm_description: normalizeOptionalText(editingCrmDescription),
         telegram_about: normalizeOptionalText(editingTelegramAbout),
         telegram_description: normalizeOptionalText(editingTelegramDescription),
-        ...(editingBotToken.trim() ? { telegram_token: editingBotToken.trim() } : {}),
+        ...(token ? { telegram_token: token } : {}),
       }, activeProjectId)
       cancelEditBot()
       await loadBots()
+      if (updatedBot.telegram_setup_warning) {
+        setError(updatedBot.telegram_setup_warning)
+        return
+      }
       setNotice('Бот обновлён, профиль Telegram синхронизирован.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось обновить бота.'))
@@ -359,6 +375,12 @@ export default function BotsPage() {
             onChange={(event) => setBotToken(event.target.value)}
             placeholder="Telegram token (можно добавить позже)"
             type="password"
+            autoComplete="new-password"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            data-1p-ignore="true"
+            data-lpignore="true"
             maxLength={255}
             className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
           />
@@ -408,6 +430,12 @@ export default function BotsPage() {
                       onChange={(event) => setEditingBotToken(event.target.value)}
                       maxLength={255}
                       type="password"
+                      autoComplete="new-password"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      data-1p-ignore="true"
+                      data-lpignore="true"
                       placeholder="Новый token, необязательно"
                       className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                     />

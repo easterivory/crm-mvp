@@ -399,6 +399,7 @@ class MessageService:
                     sender_type=data.sender_type,
                     sender_id=data.sender_id,
                     operator_id=data.operator_id,
+                    tracking_link_id=data.tracking_link_id,
                     body=data.body,
                     translated_text=data.translated_text,
                     original_text=data.original_text,

@@ -12,6 +12,7 @@ from app.core.constants import LeadStatusCode, RoleName
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
+from app.repositories.channel_metrics_repository import ChannelMetricsRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.repositories.tracking_repository import TrackingLinkRepository
@@ -42,6 +43,7 @@ class TrackingMetricsService:
         self.link_repo = TrackingLinkRepository(db)
         self.metrics_repo = TrackingMetricsRepository(db)
         self.lifecycle_repo = LifecycleMetricsRepository(db)
+        self.channel_metrics_repo = ChannelMetricsRepository(db)
 
     async def get_project_metrics(
         self,
@@ -74,9 +76,24 @@ class TrackingMetricsService:
             date_to=date_to,
             buyer_id=buyer_id,
         )
+        channel_by_link = await self.channel_metrics_repo.aggregate_by_link_ids(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            buyer_id=buyer_id,
+        )
         links: list[TrackingLinkMetric] = []
         for row in link_rows:
             row.update(lifecycle_by_link.get(row["link_id"], {}))
+            row.update(channel_by_link.get(row["link_id"], {}))
+            if (
+                row.get("destination_type") == "channel"
+                and row.get("cost_model") == "fix_pdp"
+            ):
+                row["spend"] = Decimal(row.get("price_per_unit") or 0) * Decimal(
+                    int(row.get("channel_joins") or 0)
+                )
             row["deposits"] = row.get("first_deposits", 0)
             if project.project_format == "gambling":
                 row["submitted_leads"] = 0
@@ -90,12 +107,23 @@ class TrackingMetricsService:
                     ad_type=row["ad_type"],
                     payment_type=row["payment_type"],
                     is_active=row["is_active"],
+                    destination_type=row.get("destination_type") or "bot",
+                    channel_id=row.get("channel_id"),
+                    channel_join_request=bool(row.get("channel_join_request")),
                     base_conversion_rate=row["base_conversion_rate"],
                     min_sample_size=row["min_sample_size"],
                     conversion_status=calculate_conversion_status(
                         clicks=summary.clicks,
-                        starts=summary.starts,
-                        leads=summary.leads,
+                        starts=(
+                            summary.clicks
+                            if row.get("destination_type") == "channel"
+                            else summary.starts
+                        ),
+                        leads=(
+                            summary.channel_joins
+                            if row.get("destination_type") == "channel"
+                            else summary.leads
+                        ),
                         base_conversion_rate=row["base_conversion_rate"],
                         min_sample_size=row["min_sample_size"],
                     ),
@@ -117,11 +145,21 @@ class TrackingMetricsService:
             date_to=date_to,
             buyer_id=buyer_id,
         )
+        channel_daily = await self.channel_metrics_repo.aggregate_daily(
+            project_id=project_id,
+            bot_id=bot_id,
+            date_from=date_from,
+            date_to=date_to,
+            buyer_id=buyer_id,
+        )
         daily = self._fill_daily_range(
-            self._merge_lifecycle_daily(
-                daily_rows,
-                lifecycle_daily,
-                hide_submissions=project.project_format == "gambling",
+            self._merge_channel_daily(
+                self._merge_lifecycle_daily(
+                    daily_rows,
+                    lifecycle_daily,
+                    hide_submissions=project.project_format == "gambling",
+                ),
+                channel_daily,
             ),
             date_from,
             date_to,
@@ -140,6 +178,19 @@ class TrackingMetricsService:
                     item.summary.first_deposits for item in links
                 ),
                 "redeposits": sum(item.summary.redeposits for item in links),
+                "channel_join_requests": sum(
+                    item.summary.channel_join_requests for item in links
+                ),
+                "channel_joins": sum(item.summary.channel_joins for item in links),
+                "channel_leaves": sum(item.summary.channel_leaves for item in links),
+                "channel_active_subscribers": sum(
+                    item.summary.channel_active_subscribers for item in links
+                ),
+                "channel_clicks": sum(
+                    item.summary.clicks
+                    for item in links
+                    if item.destination_type == "channel"
+                ),
                 "spend": sum(
                     (item.summary.spend for item in links),
                     Decimal("0"),
@@ -183,11 +234,22 @@ class TrackingMetricsService:
                     )
                 ),
                 **lifecycle_totals,
-                "spend": await self.metrics_repo.aggregate_spend_by_project(
-                    project_id,
-                    bot_id,
-                    date_from,
-                    date_to,
+                "channel_join_requests": sum(
+                    item.summary.channel_join_requests for item in links
+                ),
+                "channel_joins": sum(item.summary.channel_joins for item in links),
+                "channel_leaves": sum(item.summary.channel_leaves for item in links),
+                "channel_active_subscribers": sum(
+                    item.summary.channel_active_subscribers for item in links
+                ),
+                "channel_clicks": sum(
+                    item.summary.clicks
+                    for item in links
+                    if item.destination_type == "channel"
+                ),
+                "spend": sum(
+                    (item.summary.spend for item in links),
+                    Decimal("0"),
                 ),
             }
         summary = self._summary_from_values(summary_values)
@@ -344,17 +406,36 @@ class TrackingMetricsService:
             date_from=date_from,
             date_to=date_to,
         )
+        channel_counts = await self.channel_metrics_repo.aggregate_by_link(
+            link_id=link.id,
+            project_id=link.project_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if link.destination_type == "channel" and link.cost_model == "fix_pdp":
+            spend = Decimal(link.price_per_unit or 0) * Decimal(
+                int(channel_counts.get("channel_joins") or 0)
+            )
         lifecycle_daily = await self.lifecycle_repo.aggregate_daily(
             project_id=link.project_id,
             link_id=link_id,
             date_from=date_from,
             date_to=date_to,
         )
+        channel_daily = await self.channel_metrics_repo.aggregate_daily(
+            project_id=link.project_id,
+            link_id=link.id,
+            date_from=date_from,
+            date_to=date_to,
+        )
         daily = self._fill_daily_range(
-            self._merge_lifecycle_daily(
-                daily_rows,
-                lifecycle_daily,
-                hide_submissions=project.project_format == "gambling",
+            self._merge_channel_daily(
+                self._merge_lifecycle_daily(
+                    daily_rows,
+                    lifecycle_daily,
+                    hide_submissions=project.project_format == "gambling",
+                ),
+                channel_daily,
             ),
             date_from,
             date_to,
@@ -374,6 +455,7 @@ class TrackingMetricsService:
                 "leads": leads,
                 "submitted_leads": submitted,
                 **lifecycle_counts,
+                **channel_counts,
                 "spend": spend,
             }
         )
@@ -382,14 +464,21 @@ class TrackingMetricsService:
             link_id=link.id,
             project_id=link.project_id,
             bot_id=link.bot_id,
+            destination_type=link.destination_type,
+            channel_id=link.channel_id,
+            channel_join_request=link.channel_join_request,
             code=link.code,
             title=link.title,
             base_conversion_rate=link.base_conversion_rate,
             min_sample_size=link.min_sample_size,
             conversion_status=calculate_conversion_status(
                 clicks=summary.clicks,
-                starts=summary.starts,
-                leads=summary.leads,
+                starts=(summary.clicks if link.destination_type == "channel" else summary.starts),
+                leads=(
+                    summary.channel_joins
+                    if link.destination_type == "channel"
+                    else summary.leads
+                ),
                 base_conversion_rate=link.base_conversion_rate,
                 min_sample_size=link.min_sample_size,
             ),
@@ -494,9 +583,17 @@ class TrackingMetricsService:
             values.get("first_deposits") or values.get("deposits") or 0
         )
         redeposits = int(values.get("redeposits") or 0)
+        channel_join_requests = int(values.get("channel_join_requests") or 0)
+        channel_joins = int(values.get("channel_joins") or 0)
+        channel_leaves = int(values.get("channel_leaves") or 0)
+        channel_active_subscribers = int(
+            values.get("channel_active_subscribers") or 0
+        )
+        clicks = int(values.get("clicks") or 0)
+        channel_clicks = int(values.get("channel_clicks", clicks) or 0)
         spend = cls._money(values.get("spend") or Decimal("0"))
         return TrackingMetricSummary(
-            clicks=int(values.get("clicks") or 0),
+            clicks=clicks,
             starts=starts,
             leads=leads,
             submitted_leads=submitted,
@@ -504,6 +601,14 @@ class TrackingMetricsService:
             registrations=registrations,
             first_deposits=first_deposits,
             redeposits=redeposits,
+            channel_join_requests=channel_join_requests,
+            channel_joins=channel_joins,
+            channel_leaves=channel_leaves,
+            channel_active_subscribers=channel_active_subscribers,
+            cr_click_to_channel_join=cls._ratio_percent(
+                channel_joins,
+                channel_clicks,
+            ),
             spend=spend,
             cr_to_lead=cls._ratio_percent(leads, starts),
             cr_to_submit=cls._ratio_percent(submitted, leads),
@@ -586,6 +691,11 @@ class TrackingMetricsService:
                         row.get("first_deposits") or row.get("deposits") or 0
                     ),
                     redeposits=int(row.get("redeposits") or 0),
+                    channel_join_requests=int(
+                        row.get("channel_join_requests") or 0
+                    ),
+                    channel_joins=int(row.get("channel_joins") or 0),
+                    channel_leaves=int(row.get("channel_leaves") or 0),
                     spend=cls._money(row.get("spend") or Decimal("0")),
                 )
             )
@@ -627,6 +737,35 @@ class TrackingMetricsService:
             )
             row["deposits"] = row["first_deposits"]
             row["redeposits"] = int(lifecycle_row.get("redeposits") or 0)
+        return [rows_by_date[key] for key in sorted(rows_by_date)]
+
+    @staticmethod
+    def _merge_channel_daily(
+        metric_rows: list[dict],
+        channel_rows: list[dict],
+    ) -> list[dict]:
+        rows_by_date = {row["date"]: dict(row) for row in metric_rows}
+        for channel_row in channel_rows:
+            metric_date = channel_row["date"]
+            row = rows_by_date.setdefault(
+                metric_date,
+                {
+                    "date": metric_date,
+                    "clicks": 0,
+                    "starts": 0,
+                    "leads": 0,
+                    "submitted_leads": 0,
+                    "spend": Decimal("0"),
+                },
+            )
+            row["channel_join_requests"] = int(
+                channel_row.get("channel_join_requests") or 0
+            )
+            row["channel_joins"] = int(channel_row.get("channel_joins") or 0)
+            row["channel_leaves"] = int(channel_row.get("channel_leaves") or 0)
+            row["spend"] = Decimal(row.get("spend") or 0) + Decimal(
+                channel_row.get("channel_fixed_spend") or 0
+            )
         return [rows_by_date[key] for key in sorted(rows_by_date)]
 
     @classmethod

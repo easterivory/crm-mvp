@@ -17,6 +17,11 @@ class TrackingMetricSummary(BaseModel):
     registrations: int = 0
     first_deposits: int = 0
     redeposits: int = 0
+    channel_join_requests: int = 0
+    channel_joins: int = 0
+    channel_leaves: int = 0
+    channel_active_subscribers: int = 0
+    cr_click_to_channel_join: Decimal = Decimal("0")
     spend: Decimal = Decimal("0")
     cr_to_lead: Decimal = Decimal("0")
     cr_to_submit: Decimal = Decimal("0")
@@ -42,6 +47,9 @@ class TrackingDailyMetric(BaseModel):
     registrations: int = 0
     first_deposits: int = 0
     redeposits: int = 0
+    channel_join_requests: int = 0
+    channel_joins: int = 0
+    channel_leaves: int = 0
     spend: Decimal = Decimal("0")
 
 
@@ -60,6 +68,9 @@ class TrackingLinkMetric(BaseModel):
     ad_type: Optional[str] = None
     payment_type: Optional[str] = None
     is_active: bool
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[uuid.UUID] = None
+    channel_join_request: bool = False
     base_conversion_rate: float
     min_sample_size: int
     conversion_status: TrackingConversionStatus
@@ -100,6 +111,9 @@ class TrackingLinkMetricsResponse(BaseModel):
     link_id: uuid.UUID
     project_id: uuid.UUID
     bot_id: uuid.UUID
+    destination_type: Literal["bot", "channel"] = "bot"
+    channel_id: Optional[uuid.UUID] = None
+    channel_join_request: bool = False
     code: str
     title: str
     base_conversion_rate: float

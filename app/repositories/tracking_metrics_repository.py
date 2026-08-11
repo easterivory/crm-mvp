@@ -174,7 +174,7 @@ class TrackingMetricsRepository:
             select(func.count(distinct(Chat.id)))
             .join(Message, Message.chat_id == Chat.id)
             .where(
-                Chat.tracking_link_id == link_id,
+                Message.tracking_link_id == link_id,
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
@@ -199,7 +199,7 @@ class TrackingMetricsRepository:
             .join(Message, Message.chat_id == Chat.id)
             .where(
                 Chat.project_id == project_id,
-                Chat.tracking_link_id.is_(None),
+                Message.tracking_link_id.is_(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
@@ -773,6 +773,9 @@ class TrackingMetricsRepository:
             TrackingLink.price_per_unit,
             TrackingLink.base_conversion_rate,
             TrackingLink.min_sample_size,
+            TrackingLink.destination_type,
+            TrackingLink.channel_id,
+            TrackingLink.channel_join_request,
         ).where(TrackingLink.project_id == project_id)
         if bot_id is not None:
             stmt = stmt.where(TrackingLink.bot_id == bot_id)
@@ -823,13 +826,13 @@ class TrackingMetricsRepository:
         start_at, end_at = self._date_bounds(date_from, date_to)
         stmt = (
             select(
-                Chat.tracking_link_id.label("link_id"),
+                Message.tracking_link_id.label("link_id"),
                 func.count(distinct(Chat.id)).label("starts"),
             )
             .join(Message, Message.chat_id == Chat.id)
             .where(
                 Chat.project_id == project_id,
-                Chat.tracking_link_id.is_not(None),
+                Message.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
@@ -838,7 +841,7 @@ class TrackingMetricsRepository:
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
-            .group_by(Chat.tracking_link_id)
+            .group_by(Message.tracking_link_id)
         )
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
@@ -1105,11 +1108,11 @@ class TrackingMetricsRepository:
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
         if link_id is not None:
-            stmt = stmt.where(Chat.tracking_link_id == link_id)
+            stmt = stmt.where(Message.tracking_link_id == link_id)
         if unattributed_only:
-            stmt = stmt.where(Chat.tracking_link_id.is_(None))
+            stmt = stmt.where(Message.tracking_link_id.is_(None))
         if buyer_id is not None:
-            stmt = stmt.join(TrackingLink, TrackingLink.id == Chat.tracking_link_id).where(
+            stmt = stmt.join(TrackingLink, TrackingLink.id == Message.tracking_link_id).where(
                 TrackingLink.buyer_id == buyer_id
             )
 
@@ -1279,10 +1282,11 @@ class TrackingMetricsRepository:
             )
             .select_from(Chat)
             .join(Message, Message.chat_id == Chat.id)
-            .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+            .join(TrackingLink, TrackingLink.id == Message.tracking_link_id)
             .where(
                 TrackingLink.project_id == project_id,
                 TrackingLink.cost_model == TrackingCostModel.FIX_PDP,
+                TrackingLink.destination_type == "bot",
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,

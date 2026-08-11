@@ -59,14 +59,18 @@ FACEBOOK_SOURCE_EVENT_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "label": "Подписка на канал",
         "delivery": "server",
         "trigger": "funnel",
-        "trigger_description": "CRM-действие, переход в статус или добавление тега",
+        "trigger_description": (
+            "Фактическое вступление в канал; для bot-трафика — правило CRM"
+        ),
     },
     {
         "key": "channel_unsubscribe",
         "label": "Отписка от канала",
         "delivery": "server",
         "trigger": "funnel",
-        "trigger_description": "CRM-действие, переход в статус или добавление тега",
+        "trigger_description": (
+            "Фактический выход из канала; для bot-трафика — правило CRM"
+        ),
     },
     {
         "key": "sale",

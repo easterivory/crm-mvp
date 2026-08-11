@@ -46,6 +46,9 @@ class BotOut(OrmBase):
     created_at: datetime
     updated_at: datetime
     is_deleted: bool
+    # Present only on create/update when Telegram accepted getMe but a
+    # follow-up setup call (normally setWebhook) still needs attention.
+    telegram_setup_warning: Optional[str] = None
 
 
 class BotWebhookOut(BaseModel):

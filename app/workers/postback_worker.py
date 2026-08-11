@@ -289,6 +289,64 @@ async def send_fb_capi_event_task(
         return {"status": "failed", "error": str(exc)[:1000]}
 
 
+async def send_fb_capi_channel_event_task(
+    ctx: dict,
+    tracking_link_id: str,
+    telegram_user_id: str,
+    event_name: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    custom_data: dict | None = None,
+    event_time: int | None = None,
+    event_id: str | None = None,
+) -> dict:
+    try:
+        tracking_link_uuid = UUID(tracking_link_id)
+        normalized_user_id = str(int(telegram_user_id))
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+    try:
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(TrackingLink).where(TrackingLink.id == tracking_link_uuid)
+            )
+            link = result.scalar_one_or_none()
+            if link is None:
+                return {"status": "failed", "error": "Tracking link not found"}
+            if link.destination_type != "channel":
+                return {"status": "skipped", "error": "Not a channel tracking link"}
+            if not link.fb_pixel_id or not link.fb_capi_token:
+                return {"status": "skipped", "error": "Facebook CAPI is not configured"}
+            response = await FacebookCAPIService.send_external_event(
+                pixel_id=link.fb_pixel_id,
+                token=link.fb_capi_token,
+                event_name=event_name,
+                external_id=normalized_user_id,
+                first_name=first_name,
+                last_name=last_name,
+                event_time=event_time,
+                custom_data=custom_data or {},
+                event_id=event_id,
+                proxy_url=link.fb_proxy_url,
+                test_event_code=link.fb_test_event_code,
+            )
+            return {
+                "status": "completed",
+                "tracking_link_id": str(tracking_link_uuid),
+                "response": response,
+            }
+    except FacebookCAPIError as exc:
+        job_try = int(ctx.get("job_try") or 1)
+        if exc.retryable and job_try < 3 and Retry is not None:
+            raise Retry(defer=min(30 * job_try, 90)) from exc
+        return {"status": "failed", "error": str(exc)[:1000]}
+    except Exception as exc:
+        logger.exception(
+            "Facebook channel CAPI task crashed tracking_link_id=%s event_name=%s",
+            tracking_link_id,
+            event_name,
+        )
+        return {"status": "failed", "error": str(exc)[:1000]}
 async def process_user_input_task(
     ctx: dict,
     chat_id: str,
@@ -387,6 +445,7 @@ class WorkerSettings:
         auto_submit_lead_task,
         export_lead_to_sheets_task,
         send_fb_capi_event_task,
+        send_fb_capi_channel_event_task,
         process_user_input_task,
         process_funnel_start_task,
         recover_missed_funnel_starts_task,
