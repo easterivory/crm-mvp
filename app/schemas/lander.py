@@ -13,11 +13,14 @@ from app.core.facebook_events import (
 )
 from app.schemas.tracking import (
     FacebookEventMapping,
+    TELEGRAM_MESSAGE_MAX_LENGTH,
     normalize_event_mapping_models,
+    normalize_channel_request_message,
     normalize_fb_capi_token,
     normalize_fb_pixel_id,
     normalize_fb_proxy_url,
     normalize_fb_test_event_code,
+    validate_channel_request_options,
 )
 
 
@@ -87,6 +90,12 @@ class LanderTrackingCampaignCreate(BaseModel):
     destination_type: Literal["bot", "channel"] = "bot"
     channel_id: Optional[UUID] = None
     channel_join_request: bool = False
+    channel_request_message_enabled: bool = False
+    channel_request_message: Optional[str] = Field(
+        default=None,
+        max_length=TELEGRAM_MESSAGE_MAX_LENGTH,
+    )
+    channel_auto_approve: bool = False
     title: str = Field(..., min_length=1, max_length=255)
     code: Optional[str] = Field(default=None, max_length=64)
     buyer_id: Optional[UUID] = None
@@ -116,7 +125,19 @@ class LanderTrackingCampaignCreate(BaseModel):
             raise ValueError("channel_id is required for channel traffic")
         if self.destination_type == "channel" and self.target_funnel_step_key:
             raise ValueError("Funnel entry step is unavailable for channel traffic")
+        validate_channel_request_options(
+            destination_type=self.destination_type,
+            channel_join_request=self.channel_join_request,
+            message_enabled=self.channel_request_message_enabled,
+            message=self.channel_request_message,
+            auto_approve=self.channel_auto_approve,
+        )
         return self
+
+    @field_validator("channel_request_message")
+    @classmethod
+    def normalize_request_message(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_channel_request_message(value)
 
     @field_validator("fb_pixel_id")
     @classmethod
@@ -154,6 +175,7 @@ class ProjectLanderBase(BaseModel):
     slug: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = Field(default=None, max_length=1000)
     button_text: Optional[str] = Field(default=None, max_length=80)
+    badge_text: Optional[str] = Field(default=None, max_length=80)
     tracking_link_id: Optional[UUID] = None
     campaign: Optional[LanderTrackingCampaignCreate] = None
     pixels: list[LanderPixel] = Field(default_factory=list, max_length=1)
@@ -175,6 +197,13 @@ class ProjectLanderBase(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+    @field_validator("badge_text")
+    @classmethod
+    def normalize_badge_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip()
 
     @field_validator("utm_defaults")
     @classmethod
@@ -213,6 +242,7 @@ class ProjectLanderUpdate(BaseModel):
     slug: Optional[str] = Field(default=None, min_length=1, max_length=100)
     description: Optional[str] = Field(default=None, max_length=1000)
     button_text: Optional[str] = Field(default=None, max_length=80)
+    badge_text: Optional[str] = Field(default=None, max_length=80)
     pixels: Optional[list[LanderPixel]] = Field(default=None, max_length=1)
     meta_events: Optional[list[LanderMetaEvent]] = Field(default=None, max_length=10)
     utm_defaults: Optional[dict[str, str]] = None
@@ -234,6 +264,11 @@ class ProjectLanderUpdate(BaseModel):
     def normalize_optional_lander_text(cls, value: Optional[str]) -> Optional[str]:
         return ProjectLanderBase.normalize_optional_lander_text(value)
 
+    @field_validator("badge_text")
+    @classmethod
+    def normalize_badge_text(cls, value: Optional[str]) -> Optional[str]:
+        return ProjectLanderBase.normalize_badge_text(value)
+
     @field_validator("utm_defaults")
     @classmethod
     def normalize_utm_defaults(
@@ -251,6 +286,12 @@ class LanderFacebookCampaignUpdate(BaseModel):
     bot_id: Optional[UUID] = None
     channel_id: Optional[UUID] = None
     channel_join_request: Optional[bool] = None
+    channel_request_message_enabled: Optional[bool] = None
+    channel_request_message: Optional[str] = Field(
+        default=None,
+        max_length=TELEGRAM_MESSAGE_MAX_LENGTH,
+    )
+    channel_auto_approve: Optional[bool] = None
     title: Optional[str] = Field(default=None, min_length=1, max_length=255)
     code: Optional[str] = Field(default=None, min_length=1, max_length=64)
     buyer_name: Optional[str] = Field(default=None, max_length=255)
@@ -271,6 +312,11 @@ class LanderFacebookCampaignUpdate(BaseModel):
     @classmethod
     def normalize_fb_pixel_id(cls, value: Optional[str]) -> Optional[str]:
         return normalize_fb_pixel_id(value)
+
+    @field_validator("channel_request_message")
+    @classmethod
+    def normalize_request_message(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_channel_request_message(value)
 
     @field_validator("fb_capi_token")
     @classmethod
@@ -327,6 +373,9 @@ class LanderFacebookCampaignOut(BaseModel):
     channel_id: Optional[UUID] = None
     channel_title: Optional[str] = None
     channel_join_request: bool = False
+    channel_request_message_enabled: bool = False
+    channel_request_message: Optional[str] = None
+    channel_auto_approve: bool = False
     title: str
     code: str
     buyer_name: Optional[str] = None
@@ -348,6 +397,7 @@ class ProjectLanderOut(OrmBase):
     slug: str
     description: Optional[str] = None
     button_text: Optional[str] = None
+    badge_text: Optional[str] = None
     tracking_link_id: Optional[UUID] = None
     pixels_json: list[dict] = Field(default_factory=list)
     meta_events_json: list[dict] = Field(default_factory=list)

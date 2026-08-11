@@ -783,6 +783,44 @@ class TelegramSenderService:
             )
         return result
 
+    async def send_join_request_message(
+        self,
+        token: str,
+        *,
+        user_chat_id: int,
+        text: str,
+    ) -> dict:
+        message_text = text.strip()
+        if not message_text:
+            raise RuntimeError("Telegram join-request message is empty")
+        if len(message_text) > 4096:
+            raise RuntimeError("Telegram join-request message exceeds 4096 characters")
+        payload = await self._post_bot_api(
+            token=token,
+            method="sendMessage",
+            json_payload={"chat_id": user_chat_id, "text": message_text},
+        )
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Telegram sendMessage response does not contain message data"
+            )
+        return result
+
+    async def approve_chat_join_request(
+        self,
+        token: str,
+        *,
+        chat_id: str | int,
+        user_id: int,
+    ) -> bool:
+        payload = await self._post_bot_api(
+            token=token,
+            method="approveChatJoinRequest",
+            json_payload={"chat_id": chat_id, "user_id": user_id},
+        )
+        return payload.get("result") is True
+
     async def revoke_chat_invite_link(
         self,
         token: str,

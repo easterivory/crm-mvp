@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -25,6 +26,11 @@ from app.schemas.telegram import (
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ChannelJoinRequestAction:
+    event_id: UUID
 
 
 class ChannelSubscriptionService:
@@ -114,18 +120,21 @@ class ChannelSubscriptionService:
         update_id: int,
         bot_id: UUID,
         event: TelegramChatJoinRequest,
-    ) -> bool:
+    ) -> ChannelJoinRequestAction | None:
         channel = await self._find_channel(
             bot_id=bot_id,
             telegram_chat_id=event.chat.id,
         )
         if channel is None:
-            return False
+            return None
         if await self._already_processed(bot_id=bot_id, update_id=update_id):
-            return True
+            return None
 
         invite_link = self._invite_url(event.invite_link)
         invite = await self._resolve_invite(channel.id, invite_link)
+        request_message_text, auto_approve = await self._join_request_options(
+            invite.tracking_link_id if invite is not None else None
+        )
         occurred_at = self._from_unix(event.date)
         inserted = await self._insert_event(
             channel=channel,
@@ -139,9 +148,11 @@ class ChannelSubscriptionService:
             new_status="pending",
             occurred_at=occurred_at,
             raw_payload=event.model_dump(mode="json", by_alias=True),
+            request_message_text=request_message_text,
+            auto_approve_requested=auto_approve,
         )
         if not inserted:
-            return True
+            return None
         await self._upsert_subscription(
             channel=channel,
             bot_id=bot_id,
@@ -151,7 +162,9 @@ class ChannelSubscriptionService:
             occurred_at=occurred_at,
             update_id=update_id,
         )
-        return True
+        if request_message_text or auto_approve:
+            return ChannelJoinRequestAction(event_id=inserted.id)
+        return None
 
     async def handle_tracker_membership(
         self,
@@ -238,6 +251,30 @@ class ChannelSubscriptionService:
         )
         return result.scalar_one_or_none()
 
+    async def _join_request_options(
+        self,
+        tracking_link_id: UUID | None,
+    ) -> tuple[str | None, bool]:
+        if tracking_link_id is None:
+            return None, False
+        result = await self.db.execute(
+            select(
+                TrackingLink.channel_join_request,
+                TrackingLink.channel_request_message_enabled,
+                TrackingLink.channel_request_message,
+                TrackingLink.channel_auto_approve,
+            ).where(TrackingLink.id == tracking_link_id)
+        )
+        row = result.one_or_none()
+        if row is None or not bool(row.channel_join_request):
+            return None, False
+        message = (
+            str(row.channel_request_message or "").strip()
+            if bool(row.channel_request_message_enabled)
+            else ""
+        )
+        return message or None, bool(row.channel_auto_approve)
+
     async def _get_subscription(
         self,
         channel_id: UUID,
@@ -274,7 +311,9 @@ class ChannelSubscriptionService:
         new_status: str | None,
         occurred_at: datetime,
         raw_payload: dict,
-    ) -> bool:
+        request_message_text: str | None = None,
+        auto_approve_requested: bool = False,
+    ) -> TelegramChannelSubscriptionEvent | None:
         item = TelegramChannelSubscriptionEvent(
             project_id=channel.project_id,
             channel_id=channel.id,
@@ -290,6 +329,8 @@ class ChannelSubscriptionService:
             first_name=self._clean(user.first_name),
             last_name=self._clean(user.last_name),
             raw_payload=raw_payload,
+            request_message_text=request_message_text,
+            auto_approve_requested=auto_approve_requested,
             occurred_at=occurred_at,
         )
         try:
@@ -303,8 +344,8 @@ class ChannelSubscriptionService:
                 bot_id,
                 update_id,
             )
-            return False
-        return True
+            return None
+        return item
 
     async def _upsert_subscription(
         self,

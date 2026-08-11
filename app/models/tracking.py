@@ -71,6 +71,15 @@ class TrackingLink(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     channel_join_request: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    channel_request_message_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    channel_request_message: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    channel_auto_approve: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # name/ref_code are the legacy API fields used by current Telegram /start
     # attribution. code/title are the v1 canonical names and stay synchronized
     # in TrackingService.

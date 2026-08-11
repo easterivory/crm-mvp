@@ -757,9 +757,16 @@ class LanderService:
         safe_button_text = html.escape(button_text)
         safe_username = html.escape(f"@{username}") if username else ""
         safe_initial = html.escape(initial)
+        configured_badge = getattr(lander, "badge_text", None)
+        badge_text = (
+            "Telegram-канал"
+            if configured_badge is None and is_channel
+            else str(configured_badge or "").strip()
+        )
+        safe_badge_text = html.escape(badge_text)
         destination_badge = (
-            '<div class="destination-kind">Telegram-канал</div>'
-            if is_channel
+            f'<div class="destination-kind">{safe_badge_text}</div>'
+            if safe_badge_text
             else ""
         )
         avatar_url = f"/l/{lander.slug}/bot-avatar"

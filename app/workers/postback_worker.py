@@ -2,12 +2,12 @@
 import asyncio
 import logging
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.core.arq_queues import JOBS_QUEUE_NAME
@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.database import get_db_session
 from app.core.logging_config import configure_file_logging
 from app.models.lead import Lead
+from app.models.channel_tracking import TelegramChannelSubscriptionEvent
 from app.models.partner import PartnerIntegration
 from app.models.tracking import TrackingLink
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
@@ -24,6 +25,8 @@ from app.services.lead_confidence_service import LeadConfidenceService
 from app.services.operational_alert_service import prime_operational_alert_config
 from app.services.postback_service import PostbackService
 from app.services.telegram_service import TelegramService
+from app.services.telegram_sender import TelegramSenderService
+from app.repositories.bot_repository import BotRepository
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
 from app.workers.funnel_scheduled_worker import process_funnel_scheduled_job_task
 
@@ -347,6 +350,165 @@ async def send_fb_capi_channel_event_task(
             event_name,
         )
         return {"status": "failed", "error": str(exc)[:1000]}
+
+
+async def process_channel_join_request_action_task(
+    ctx: dict,
+    event_id: str,
+) -> dict:
+    try:
+        event_uuid = UUID(event_id)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    job_try = int(ctx.get("job_try") or 1)
+    async with get_db_session() as db:
+        result = await db.execute(
+            select(TelegramChannelSubscriptionEvent)
+            .options(selectinload(TelegramChannelSubscriptionEvent.channel))
+            .where(TelegramChannelSubscriptionEvent.id == event_uuid)
+        )
+        event = result.scalar_one_or_none()
+        if event is None or event.event_type != "join_request":
+            return {"status": "skipped", "error": "Join-request event not found"}
+
+        message_pending = bool(
+            event.request_message_text and event.request_message_sent_at is None
+        )
+        approval_pending = bool(
+            event.auto_approve_requested and event.request_approved_at is None
+        )
+        if not message_pending and not approval_pending:
+            return {"status": "completed", "event_id": str(event.id)}
+
+        raw_payload = event.raw_payload if isinstance(event.raw_payload, dict) else {}
+        try:
+            user_chat_id = int(raw_payload.get("user_chat_id"))
+        except (TypeError, ValueError):
+            event.request_action_error = "Telegram update has no valid user_chat_id"
+            await db.commit()
+            return {"status": "failed", "error": event.request_action_error}
+
+        token = await BotRepository(db).get_bot_token_by_id(
+            event.tracker_bot_id,
+            event.project_id,
+        )
+        if not token:
+            event.request_action_error = "Tracker bot token is not configured"
+            await db.commit()
+            return {"status": "failed", "error": event.request_action_error}
+
+        channel_chat_id = event.channel.telegram_chat_id
+        telegram_user_id = event.telegram_user_id
+        message_text = event.request_message_text
+        await db.commit()
+        sender = TelegramSenderService(db)
+
+        message_error: str | None = None
+        if message_pending and message_text:
+            try:
+                await sender.send_join_request_message(
+                    token,
+                    user_chat_id=user_chat_id,
+                    text=message_text,
+                )
+                event.request_message_sent_at = datetime.now(timezone.utc)
+                event.request_action_error = None
+                await db.commit()
+            except Exception as exc:
+                message_error = str(exc)[:1000]
+                event.request_action_error = message_error
+                await db.commit()
+                if job_try < 3 and Retry is not None:
+                    raise Retry(defer=min(5 * job_try, 15)) from exc
+
+        if approval_pending:
+            try:
+                await sender.approve_chat_join_request(
+                    token,
+                    chat_id=channel_chat_id,
+                    user_id=telegram_user_id,
+                )
+                event.request_approved_at = datetime.now(timezone.utc)
+                event.request_action_error = message_error
+                await db.commit()
+            except Exception as exc:
+                approval_error = str(exc)[:1000]
+                if "USER_ALREADY_PARTICIPANT" in approval_error.upper():
+                    event.request_approved_at = datetime.now(timezone.utc)
+                    event.request_action_error = message_error
+                    await db.commit()
+                else:
+                    event.request_action_error = approval_error
+                    await db.commit()
+                    if job_try < 3 and Retry is not None:
+                        raise Retry(defer=min(5 * job_try, 15)) from exc
+                    return {
+                        "status": "failed",
+                        "event_id": str(event.id),
+                        "error": approval_error,
+                    }
+
+        return {
+            "status": "partial" if message_error else "completed",
+            "event_id": str(event.id),
+            "message_sent": event.request_message_sent_at is not None,
+            "approved": event.request_approved_at is not None,
+            "error": message_error,
+        }
+
+
+async def recover_channel_join_request_actions_task(ctx: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    message_cutoff = now - timedelta(minutes=5)
+    async with get_db_session() as db:
+        result = await db.execute(
+            select(
+                TelegramChannelSubscriptionEvent.id,
+                TelegramChannelSubscriptionEvent.occurred_at,
+            )
+            .where(
+                TelegramChannelSubscriptionEvent.event_type == "join_request",
+                TelegramChannelSubscriptionEvent.occurred_at >= message_cutoff,
+                or_(
+                    and_(
+                        TelegramChannelSubscriptionEvent.request_message_text.is_not(None),
+                        TelegramChannelSubscriptionEvent.request_message_sent_at.is_(None),
+                    ),
+                    and_(
+                        TelegramChannelSubscriptionEvent.auto_approve_requested.is_(True),
+                        TelegramChannelSubscriptionEvent.request_approved_at.is_(None),
+                    ),
+                ),
+            )
+            .order_by(TelegramChannelSubscriptionEvent.occurred_at.asc())
+            .limit(100)
+        )
+        pending = list(result.all())
+
+    completed = 0
+    for event_id, occurred_at in pending:
+        age = now - occurred_at
+        recovery_ctx = {
+            **ctx,
+            "job_try": 3 if age >= timedelta(minutes=4) else 1,
+        }
+        try:
+            result = await process_channel_join_request_action_task(
+                recovery_ctx,
+                str(event_id),
+            )
+            if result.get("status") in {"completed", "partial"}:
+                completed += 1
+        except Exception:
+            logger.warning(
+                "Deferred channel join-request recovery will retry event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+    return {"status": "completed", "processed": completed, "pending": len(pending)}
+
+
 async def process_user_input_task(
     ctx: dict,
     chat_id: str,
@@ -446,6 +608,8 @@ class WorkerSettings:
         export_lead_to_sheets_task,
         send_fb_capi_event_task,
         send_fb_capi_channel_event_task,
+        process_channel_join_request_action_task,
+        recover_channel_join_request_actions_task,
         process_user_input_task,
         process_funnel_start_task,
         recover_missed_funnel_starts_task,
@@ -457,7 +621,14 @@ class WorkerSettings:
     queue_name = JOBS_QUEUE_NAME
     on_startup = _on_worker_startup
     cron_jobs = (
-        [cron(recover_missed_funnel_starts_task, second=20, run_at_startup=True)]
+        [
+            cron(recover_missed_funnel_starts_task, second=20, run_at_startup=True),
+            cron(
+                recover_channel_join_request_actions_task,
+                second=40,
+                run_at_startup=True,
+            ),
+        ]
         if cron is not None
         else []
     )

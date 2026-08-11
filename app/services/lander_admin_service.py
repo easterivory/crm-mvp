@@ -229,14 +229,6 @@ class LanderAdminService:
             if actor.role_name == RoleName.BUYER:
                 fb_pixel_id = fb_pixel_id or actor.buyer_fb_pixel_id
                 fb_capi_token = fb_capi_token or actor.buyer_fb_capi_token
-                if not fb_pixel_id or not fb_capi_token:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=(
-                            "Configure Facebook Pixel ID and CAPI token in the buyer bot "
-                            "or enter them in the campaign form"
-                        ),
-                    )
             tracking_link = await TrackingService(self.db).create_tracking_link(
                 data=TrackingLinkCreate(
                     project_id=project_id,
@@ -244,6 +236,11 @@ class LanderAdminService:
                     destination_type=campaign.destination_type,
                     channel_id=campaign.channel_id,
                     channel_join_request=campaign.channel_join_request,
+                    channel_request_message_enabled=(
+                        campaign.channel_request_message_enabled
+                    ),
+                    channel_request_message=campaign.channel_request_message,
+                    channel_auto_approve=campaign.channel_auto_approve,
                     title=campaign.title,
                     code=campaign.code,
                     buyer_id=campaign.buyer_id,
@@ -282,6 +279,7 @@ class LanderAdminService:
             slug=slug,
             description=data.description,
             button_text=data.button_text,
+            badge_text=data.badge_text,
             tracking_link_id=tracking_link_id,
             pixels_json=pixels_json,
             meta_events_json=[event.model_dump() for event in data.meta_events],
@@ -398,6 +396,36 @@ class LanderAdminService:
                     and campaign.channel_join_request is not None
                     else link.channel_join_request
                 )
+                desired_message_enabled = (
+                    campaign.channel_request_message_enabled
+                    if "channel_request_message_enabled" in campaign.model_fields_set
+                    and campaign.channel_request_message_enabled is not None
+                    else link.channel_request_message_enabled
+                )
+                desired_message = (
+                    tracking_service._normalize_optional(
+                        campaign.channel_request_message
+                    )
+                    if "channel_request_message" in campaign.model_fields_set
+                    else link.channel_request_message
+                )
+                desired_auto_approve = (
+                    campaign.channel_auto_approve
+                    if "channel_auto_approve" in campaign.model_fields_set
+                    and campaign.channel_auto_approve is not None
+                    else link.channel_auto_approve
+                )
+                if not desired_join_request:
+                    desired_message_enabled = False
+                    desired_message = None
+                    desired_auto_approve = False
+                elif desired_message_enabled and not desired_message:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            "Set a join-request message before enabling automatic messaging"
+                        ),
+                    )
                 join_request_changed = desired_join_request != link.channel_join_request
                 if channel_changed or join_request_changed:
                     prepared_invite = (
@@ -414,6 +442,9 @@ class LanderAdminService:
                 link.channel_id = channel.id
                 link.channel = channel
                 link.channel_join_request = desired_join_request
+                link.channel_request_message_enabled = desired_message_enabled
+                link.channel_request_message = desired_message
+                link.channel_auto_approve = desired_auto_approve
                 link.bot_id = bot.id
                 link.bot = bot
                 link.target_step_id = None
@@ -440,6 +471,9 @@ class LanderAdminService:
                 link.channel_id = None
                 link.channel = None
                 link.channel_join_request = False
+                link.channel_request_message_enabled = False
+                link.channel_request_message = None
+                link.channel_auto_approve = False
                 link.bot_id = bot.id
                 link.bot = bot
                 link.target_step_id = None
@@ -527,6 +561,8 @@ class LanderAdminService:
             lander.description = data.description
         if "button_text" in data.model_fields_set:
             lander.button_text = data.button_text
+        if "badge_text" in data.model_fields_set:
+            lander.badge_text = data.badge_text
         if validated_lander_type is not None:
             lander.type = validated_lander_type
         if "pixels" in data.model_fields_set and data.pixels is not None:
@@ -799,6 +835,11 @@ class LanderAdminService:
                             link.channel.title if link.channel is not None else None
                         ),
                         channel_join_request=link.channel_join_request,
+                        channel_request_message_enabled=(
+                            link.channel_request_message_enabled
+                        ),
+                        channel_request_message=link.channel_request_message,
+                        channel_auto_approve=link.channel_auto_approve,
                         title=link.title,
                         code=link.code,
                         buyer_name=link.buyer_name,

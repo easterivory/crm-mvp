@@ -13,6 +13,34 @@ from app.core.facebook_events import normalize_facebook_event_mappings
 from app.schemas.common import OrmBase
 
 
+TELEGRAM_MESSAGE_MAX_LENGTH = 4096
+
+
+def normalize_channel_request_message(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip()
+    return normalized or None
+
+
+def validate_channel_request_options(
+    *,
+    destination_type: str,
+    channel_join_request: bool,
+    message_enabled: bool,
+    message: Optional[str],
+    auto_approve: bool,
+) -> None:
+    if destination_type != "channel":
+        if channel_join_request or message_enabled or message or auto_approve:
+            raise ValueError("Channel request options require a channel destination")
+        return
+    if (message_enabled or auto_approve) and not channel_join_request:
+        raise ValueError(
+            "Join-request message and auto-approval require channel_join_request"
+        )
+    if message_enabled and not message:
+        raise ValueError("channel_request_message is required when messaging is enabled")
+
+
 class FacebookEventTrigger(BaseModel):
     type: Literal["funnel_action", "lead_status", "lead_tag"]
     value: Optional[str] = None
@@ -43,6 +71,12 @@ class TrackingLinkCreate(BaseModel):
     destination_type: Literal["bot", "channel"] = "bot"
     channel_id: Optional[uuid.UUID] = None
     channel_join_request: bool = False
+    channel_request_message_enabled: bool = False
+    channel_request_message: Optional[str] = Field(
+        default=None,
+        max_length=TELEGRAM_MESSAGE_MAX_LENGTH,
+    )
+    channel_auto_approve: bool = False
     title: Optional[str] = Field(None, max_length=255)
     name: Optional[str] = Field(None, max_length=255)
     code: Optional[str] = Field(None, max_length=100)
@@ -76,7 +110,19 @@ class TrackingLinkCreate(BaseModel):
             raise ValueError("channel_id is required for channel tracking links")
         if self.destination_type == "bot" and self.channel_id is not None:
             raise ValueError("channel_id is only available for channel tracking links")
+        validate_channel_request_options(
+            destination_type=self.destination_type,
+            channel_join_request=self.channel_join_request,
+            message_enabled=self.channel_request_message_enabled,
+            message=self.channel_request_message,
+            auto_approve=self.channel_auto_approve,
+        )
         return self
+
+    @field_validator("channel_request_message")
+    @classmethod
+    def normalize_request_message(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_channel_request_message(value)
 
     @field_validator("fb_pixel_id")
     @classmethod
@@ -135,6 +181,17 @@ class TrackingLinkUpdate(TrackingLinkCostUpdate):
     target_step_id: Optional[uuid.UUID] = None
     target_funnel_step_key: Optional[str] = Field(default=None, max_length=100)
     channel_join_request: Optional[bool] = None
+    channel_request_message_enabled: Optional[bool] = None
+    channel_request_message: Optional[str] = Field(
+        default=None,
+        max_length=TELEGRAM_MESSAGE_MAX_LENGTH,
+    )
+    channel_auto_approve: Optional[bool] = None
+
+    @field_validator("channel_request_message")
+    @classmethod
+    def normalize_request_message(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_channel_request_message(value)
 
     @field_validator("fb_pixel_id")
     @classmethod
@@ -173,6 +230,9 @@ class TrackingLinkOut(OrmBase):
     channel_id: Optional[uuid.UUID] = None
     channel_title: Optional[str] = None
     channel_join_request: bool = False
+    channel_request_message_enabled: bool = False
+    channel_request_message: Optional[str] = None
+    channel_auto_approve: bool = False
     name: str
     ref_code: str
     cost_model: TrackingCostModel
@@ -199,6 +259,9 @@ class TrackingLinkRead(OrmBase):
     channel_id: Optional[uuid.UUID] = None
     channel_title: Optional[str] = None
     channel_join_request: bool = False
+    channel_request_message_enabled: bool = False
+    channel_request_message: Optional[str] = None
+    channel_auto_approve: bool = False
     code: str
     title: str
     buyer_id: Optional[uuid.UUID] = None

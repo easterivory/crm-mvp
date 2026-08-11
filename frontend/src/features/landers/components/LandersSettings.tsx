@@ -56,6 +56,7 @@ import type {
   TrackingLinkOption,
   TelegramChannel,
 } from '../types'
+import ChannelJoinRequestOptions from '../../tracking/components/ChannelJoinRequestOptions'
 
 type LandersSettingsProps = {
   projectId: string | null
@@ -74,12 +75,16 @@ type LanderForm = {
   slug: string
   description: string
   buttonText: string
+  badgeText: string
   trackingMode: 'campaign' | 'existing'
   trackingLinkId: string
   campaignDestinationType: 'bot' | 'channel'
   campaignBotId: string
   campaignChannelId: string
   campaignChannelJoinRequest: boolean
+  campaignChannelRequestMessageEnabled: boolean
+  campaignChannelRequestMessage: string
+  campaignChannelAutoApprove: boolean
   campaignTitle: string
   campaignCode: string
   campaignBuyerName: string
@@ -109,11 +114,15 @@ type LanderEditForm = {
   slug: string
   description: string
   buttonText: string
+  badgeText: string
   type: LanderType
   destinationType: 'bot' | 'channel'
   botId: string
   channelId: string
   channelJoinRequest: boolean
+  channelRequestMessageEnabled: boolean
+  channelRequestMessage: string
+  channelAutoApprove: boolean
   campaignTitle: string
   campaignCode: string
   buyerName: string
@@ -146,12 +155,16 @@ const emptyLanderForm: LanderForm = {
   slug: '',
   description: '',
   buttonText: 'Open in Telegram',
+  badgeText: '',
   trackingMode: 'campaign',
   trackingLinkId: '',
   campaignDestinationType: 'bot',
   campaignBotId: '',
   campaignChannelId: '',
   campaignChannelJoinRequest: false,
+  campaignChannelRequestMessageEnabled: false,
+  campaignChannelRequestMessage: '',
+  campaignChannelAutoApprove: false,
   campaignTitle: '',
   campaignCode: '',
   campaignBuyerName: '',
@@ -184,6 +197,21 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
       }
       return detail
     }
+    if (Array.isArray(detail)) {
+      const messages = detail.flatMap((item) => {
+        if (!item || typeof item !== 'object') {
+          return []
+        }
+        const message = 'msg' in item ? String(item.msg ?? '').trim() : ''
+        const location = 'loc' in item && Array.isArray(item.loc)
+          ? item.loc.filter((part: unknown) => part !== 'body').join('.')
+          : ''
+        return message ? [`${location ? `${location}: ` : ''}${message}`] : []
+      })
+      if (messages.length > 0) {
+        return messages.join('; ')
+      }
+    }
     if (err.code === 'ERR_NETWORK') {
       return 'API недоступен.'
     }
@@ -201,8 +229,10 @@ type TelegramLanderAppearanceEditorProps = {
   channel?: TelegramChannel
   description: string
   buttonText: string
+  badgeText: string
   onDescriptionChange: (value: string) => void
   onButtonTextChange: (value: string) => void
+  onBadgeTextChange: (value: string) => void
 }
 
 function botDisplayName(bot?: Bot) {
@@ -221,8 +251,10 @@ function TelegramLanderAppearanceEditor({
   channel,
   description,
   buttonText,
+  badgeText,
   onDescriptionChange,
   onButtonTextChange,
+  onBadgeTextChange,
 }: TelegramLanderAppearanceEditorProps) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
@@ -263,6 +295,7 @@ function TelegramLanderAppearanceEditor({
     || (channel ? 'Подпишитесь на канал, чтобы получать новые публикации.' : botFallbackDescription(bot))
   const previewButtonText = buttonText.trim()
     || (channel ? 'Подписаться на канал' : 'Open in Telegram')
+  const previewBadgeText = badgeText.trim()
   const username = channel?.username || bot?.bot_username
   const initial = Array.from(title).find((character) => /[\p{L}\p{N}]/u.test(character))?.toUpperCase() || 'T'
 
@@ -272,7 +305,7 @@ function TelegramLanderAppearanceEditor({
         Оформление Telegram-лендинга
       </legend>
       <div className="mt-2 grid gap-3 md:grid-cols-[minmax(0,1.4fr)_minmax(220px,0.6fr)]">
-        <label className="block">
+        <label className="block md:row-span-2">
           <span className="mb-1.5 block text-sm font-medium text-zinc-200">Описание</span>
           <textarea
             value={description}
@@ -283,16 +316,28 @@ function TelegramLanderAppearanceEditor({
             className="min-h-28 w-full resize-y rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base leading-6 text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-200">Текст кнопки</span>
-          <input
-            value={buttonText}
-            onChange={(event) => onButtonTextChange(event.target.value)}
-            maxLength={80}
-            placeholder="Open in Telegram"
-            className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
-          />
-        </label>
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-zinc-200">Подпись под названием</span>
+            <input
+              value={badgeText}
+              onChange={(event) => onBadgeTextChange(event.target.value)}
+              maxLength={80}
+              placeholder={channel ? 'Telegram-канал' : 'Без подписи'}
+              className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-zinc-200">Текст кнопки</span>
+            <input
+              value={buttonText}
+              onChange={(event) => onButtonTextChange(event.target.value)}
+              maxLength={80}
+              placeholder="Open in Telegram"
+              className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
+            />
+          </label>
+        </div>
       </div>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-[#dcebe4]">
@@ -314,9 +359,9 @@ function TelegramLanderAppearanceEditor({
             {username ? (
               <div className="mt-1 text-sm text-[#229ed9]">@{username.replace(/^@/, '')}</div>
             ) : null}
-            {channel ? (
+            {previewBadgeText ? (
               <div className="mt-2 inline-flex rounded-full bg-[#e8f5fc] px-2.5 py-1 text-xs font-semibold text-[#1679aa]">
-                Telegram-канал
+                {previewBadgeText}
               </div>
             ) : null}
             <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-500">
@@ -919,11 +964,24 @@ export default function LandersSettings({
         ?? ((campaign?.destination_type ?? lander.destination_type) === 'channel'
           ? 'Подписаться на канал'
           : 'Open in Telegram'),
+      badgeText: lander.badge_text
+        ?? ((campaign?.destination_type ?? lander.destination_type) === 'channel'
+          ? 'Telegram-канал'
+          : ''),
       type: lander.type,
       destinationType: campaign?.destination_type ?? lander.destination_type ?? 'bot',
       botId: campaign?.bot_id ?? link?.bot_id ?? bots[0]?.id ?? '',
       channelId: campaign?.channel_id ?? lander.channel_id ?? link?.channel_id ?? '',
       channelJoinRequest: campaign?.channel_join_request ?? link?.channel_join_request ?? false,
+      channelRequestMessageEnabled: campaign?.channel_request_message_enabled
+        ?? link?.channel_request_message_enabled
+        ?? false,
+      channelRequestMessage: campaign?.channel_request_message
+        ?? link?.channel_request_message
+        ?? '',
+      channelAutoApprove: campaign?.channel_auto_approve
+        ?? link?.channel_auto_approve
+        ?? false,
       campaignTitle: campaign?.title ?? link?.title ?? lander.name,
       campaignCode: campaign?.code ?? link?.code ?? '',
       buyerName: campaign?.buyer_name ?? '',
@@ -990,6 +1048,15 @@ export default function LandersSettings({
       setBanner({ tone: 'error', message: 'Для кастомного лендинга загрузите ZIP-архив.' })
       return
     }
+    if (
+      editForm.destinationType === 'channel'
+      && editForm.channelJoinRequest
+      && editForm.channelRequestMessageEnabled
+      && !editForm.channelRequestMessage.trim()
+    ) {
+      setBanner({ tone: 'error', message: 'Напишите сообщение, которое бот отправит после заявки.' })
+      return
+    }
     setIsUpdatingLander(true)
     setBanner(null)
     try {
@@ -1003,6 +1070,7 @@ export default function LandersSettings({
         slug,
         description: editForm.description.trim() || null,
         button_text: editForm.buttonText.trim() || null,
+        badge_text: editForm.badgeText.trim(),
         pixels: editForm.metaPixelId.trim()
           ? [{ provider: 'meta', pixel_id: editForm.metaPixelId.trim() }]
           : [],
@@ -1022,6 +1090,15 @@ export default function LandersSettings({
           channel_id: editForm.destinationType === 'channel' ? editForm.channelId : null,
           channel_join_request: editForm.destinationType === 'channel'
             ? editForm.channelJoinRequest
+            : false,
+          channel_request_message_enabled: editForm.destinationType === 'channel'
+            ? editForm.channelRequestMessageEnabled
+            : false,
+          channel_request_message: editForm.destinationType === 'channel'
+            ? editForm.channelRequestMessage.trim() || null
+            : null,
+          channel_auto_approve: editForm.destinationType === 'channel'
+            ? editForm.channelAutoApprove
             : false,
           title,
           code,
@@ -1238,6 +1315,16 @@ export default function LandersSettings({
       setBanner({ tone: 'error', message: 'Выберите ZIP-архив для кастомного лендинга.' })
       return
     }
+    if (
+      form.trackingMode === 'campaign'
+      && form.campaignDestinationType === 'channel'
+      && form.campaignChannelJoinRequest
+      && form.campaignChannelRequestMessageEnabled
+      && !form.campaignChannelRequestMessage.trim()
+    ) {
+      setBanner({ tone: 'error', message: 'Напишите сообщение, которое бот отправит после заявки.' })
+      return
+    }
 
     setIsSavingLander(true)
     setBanner(null)
@@ -1250,6 +1337,7 @@ export default function LandersSettings({
         slug,
         description: form.description.trim() || null,
         button_text: form.buttonText.trim() || null,
+        badge_text: form.badgeText.trim(),
         tracking_link_id: !campaignOnly && form.trackingMode === 'existing' ? form.trackingLinkId : null,
         campaign: campaignOnly || form.trackingMode === 'campaign'
           ? {
@@ -1260,6 +1348,15 @@ export default function LandersSettings({
                 : null,
               channel_join_request: form.campaignDestinationType === 'channel'
                 ? form.campaignChannelJoinRequest
+                : false,
+              channel_request_message_enabled: form.campaignDestinationType === 'channel'
+                ? form.campaignChannelRequestMessageEnabled
+                : false,
+              channel_request_message: form.campaignDestinationType === 'channel'
+                ? form.campaignChannelRequestMessage.trim() || null
+                : null,
+              channel_auto_approve: form.campaignDestinationType === 'channel'
+                ? form.campaignChannelAutoApprove
                 : false,
               title: form.campaignTitle.trim() || form.name.trim() || `Landing ${slug}`,
               code: form.campaignCode.trim() || null,
@@ -1935,7 +2032,21 @@ export default function LandersSettings({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setForm((current) => ({ ...current, trackingMode: 'existing' }))}
+                  onClick={() => setForm((current) => {
+                    const trackingLinkId = current.trackingLinkId || trackingLinks[0]?.id || ''
+                    const isChannel = trackingLinkById.get(trackingLinkId)?.destination_type === 'channel'
+                    return {
+                      ...current,
+                      trackingMode: 'existing',
+                      trackingLinkId,
+                      buttonText: isChannel && current.buttonText === 'Open in Telegram'
+                        ? 'Подписаться на канал'
+                        : current.buttonText,
+                      badgeText: isChannel && !current.badgeText
+                        ? 'Telegram-канал'
+                        : current.badgeText,
+                    }
+                  })}
                   className={`min-h-11 rounded-lg border px-3 text-left text-sm transition ${
                     form.trackingMode === 'existing'
                       ? 'border-cyan-400/50 bg-cyan-500/10 text-cyan-100'
@@ -1970,6 +2081,9 @@ export default function LandersSettings({
                             buttonText: value === 'channel'
                               ? (!current.buttonText || current.buttonText === 'Open in Telegram' ? 'Подписаться на канал' : current.buttonText)
                               : (current.buttonText === 'Подписаться на канал' ? 'Open in Telegram' : current.buttonText),
+                            badgeText: value === 'channel'
+                              ? (current.badgeText || 'Telegram-канал')
+                              : (current.badgeText === 'Telegram-канал' ? '' : current.badgeText),
                           }))}
                           className={`min-h-12 rounded-lg border px-3 py-2 text-left transition ${
                             form.campaignDestinationType === value
@@ -2035,20 +2149,16 @@ export default function LandersSettings({
                     </label>
                   </div>
                   {form.campaignDestinationType === 'channel' ? (
-                    <label className="flex min-h-11 items-start justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5">
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium text-zinc-100">Заявка на вступление</span>
-                        <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
-                          Выключено: пользователь вступает сразу. Включено: Telegram создаёт заявку, а подписка считается только после одобрения.
-                        </span>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={form.campaignChannelJoinRequest}
-                        onChange={(event) => setForm((current) => ({ ...current, campaignChannelJoinRequest: event.target.checked }))}
-                        className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
-                      />
-                    </label>
+                    <ChannelJoinRequestOptions
+                      joinRequest={form.campaignChannelJoinRequest}
+                      onJoinRequestChange={(campaignChannelJoinRequest) => setForm((current) => ({ ...current, campaignChannelJoinRequest }))}
+                      autoApprove={form.campaignChannelAutoApprove}
+                      onAutoApproveChange={(campaignChannelAutoApprove) => setForm((current) => ({ ...current, campaignChannelAutoApprove }))}
+                      messageEnabled={form.campaignChannelRequestMessageEnabled}
+                      onMessageEnabledChange={(campaignChannelRequestMessageEnabled) => setForm((current) => ({ ...current, campaignChannelRequestMessageEnabled }))}
+                      message={form.campaignChannelRequestMessage}
+                      onMessageChange={(campaignChannelRequestMessage) => setForm((current) => ({ ...current, campaignChannelRequestMessage }))}
+                    />
                   ) : null}
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="block">
@@ -2134,9 +2244,9 @@ export default function LandersSettings({
                     </div>
                     <p className="mt-2 text-xs leading-5 text-zinc-500">
                       {isBuyer
-                        ? 'Пустые Pixel ID и token будут взяты из настроек баер-бота. Введённые здесь значения применятся только к этой кампании. '
+                        ? 'Пустые Pixel ID и token будут взяты из настроек баер-бота, если они там заданы. Введённые здесь значения применятся только к этой кампании. '
                         : ''}
-                      Токен и proxy никогда не возвращаются из API. Test event code отправляет CAPI-события в режим проверки Meta Events Manager.
+                      Кампанию можно сохранить без реквизитов Meta; события начнут отправляться после их настройки. Токен и proxy никогда не возвращаются из API.
                     </p>
                   </div>
                   <div className="border-t border-white/10 pt-4">
@@ -2184,7 +2294,20 @@ export default function LandersSettings({
                   <span className="mb-1 block text-sm font-medium text-zinc-300">Существующая tracking link</span>
                   <select
                     value={form.trackingLinkId}
-                    onChange={(event) => setForm((current) => ({ ...current, trackingLinkId: event.target.value }))}
+                    onChange={(event) => {
+                      const trackingLinkId = event.target.value
+                      const isChannel = trackingLinkById.get(trackingLinkId)?.destination_type === 'channel'
+                      setForm((current) => ({
+                        ...current,
+                        trackingLinkId,
+                        buttonText: isChannel
+                          ? (current.buttonText === 'Open in Telegram' ? 'Подписаться на канал' : current.buttonText)
+                          : (current.buttonText === 'Подписаться на канал' ? 'Open in Telegram' : current.buttonText),
+                        badgeText: isChannel
+                          ? (current.badgeText || 'Telegram-канал')
+                          : (current.badgeText === 'Telegram-канал' ? '' : current.badgeText),
+                      }))
+                    }}
                     required
                     className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition focus:ring-2 md:text-sm"
                   >
@@ -2204,8 +2327,10 @@ export default function LandersSettings({
                 channel={selectedCreateChannel}
                 description={form.description}
                 buttonText={form.buttonText}
+                badgeText={form.badgeText}
                 onDescriptionChange={(description) => setForm((current) => ({ ...current, description }))}
                 onButtonTextChange={(buttonText) => setForm((current) => ({ ...current, buttonText }))}
+                onBadgeTextChange={(badgeText) => setForm((current) => ({ ...current, badgeText }))}
               />
             ) : null}
 
@@ -2382,6 +2507,9 @@ export default function LandersSettings({
                         buttonText: !current.buttonText.trim() || current.buttonText === previousDefault
                           ? nextDefault
                           : current.buttonText,
+                        badgeText: value === 'channel'
+                          ? (current.badgeText || 'Telegram-канал')
+                          : (current.badgeText === 'Telegram-канал' ? '' : current.badgeText),
                       }
                     })}
                     className={`min-h-10 rounded-md px-3 text-sm font-semibold transition ${
@@ -2425,20 +2553,18 @@ export default function LandersSettings({
                         ))}
                       </select>
                     </label>
-                    <label className="flex items-start justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5 md:col-span-2">
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium text-zinc-100">Заявка на вступление</span>
-                        <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
-                          При изменении CRM безопасно заменит invite link. Вступление считается только после одобрения заявки.
-                        </span>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={editForm.channelJoinRequest}
-                        onChange={(event) => setEditForm((current) => current ? { ...current, channelJoinRequest: event.target.checked } : current)}
-                        className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+                    <div className="md:col-span-2">
+                      <ChannelJoinRequestOptions
+                        joinRequest={editForm.channelJoinRequest}
+                        onJoinRequestChange={(channelJoinRequest) => setEditForm((current) => current ? { ...current, channelJoinRequest } : current)}
+                        autoApprove={editForm.channelAutoApprove}
+                        onAutoApproveChange={(channelAutoApprove) => setEditForm((current) => current ? { ...current, channelAutoApprove } : current)}
+                        messageEnabled={editForm.channelRequestMessageEnabled}
+                        onMessageEnabledChange={(channelRequestMessageEnabled) => setEditForm((current) => current ? { ...current, channelRequestMessageEnabled } : current)}
+                        message={editForm.channelRequestMessage}
+                        onMessageChange={(channelRequestMessage) => setEditForm((current) => current ? { ...current, channelRequestMessage } : current)}
                       />
-                    </label>
+                    </div>
                   </>
                 )}
                 <label className="block">
@@ -2479,8 +2605,10 @@ export default function LandersSettings({
                 channel={selectedEditChannel}
                 description={editForm.description}
                 buttonText={editForm.buttonText}
+                badgeText={editForm.badgeText}
                 onDescriptionChange={(description) => setEditForm((current) => current ? { ...current, description } : current)}
                 onButtonTextChange={(buttonText) => setEditForm((current) => current ? { ...current, buttonText } : current)}
+                onBadgeTextChange={(badgeText) => setEditForm((current) => current ? { ...current, badgeText } : current)}
               />
             ) : null}
 

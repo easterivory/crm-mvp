@@ -64,6 +64,7 @@ import type {
   TrackingFunnelStepOption,
   TrackingSpend,
 } from '../features/tracking/types'
+import ChannelJoinRequestOptions from '../features/tracking/components/ChannelJoinRequestOptions'
 import { useProjectBotSelection } from '../shared/lib'
 import { Modal } from '../shared/ui'
 
@@ -384,6 +385,9 @@ export default function TrackingPage() {
   const [createBotId, setCreateBotId] = useState('')
   const [createChannelId, setCreateChannelId] = useState('')
   const [createChannelJoinRequest, setCreateChannelJoinRequest] = useState(false)
+  const [createChannelRequestMessageEnabled, setCreateChannelRequestMessageEnabled] = useState(false)
+  const [createChannelRequestMessage, setCreateChannelRequestMessage] = useState('')
+  const [createChannelAutoApprove, setCreateChannelAutoApprove] = useState(false)
   const [createCode, setCreateCode] = useState('')
   const [createBuyerSelection, setCreateBuyerSelection] = useState<BuyerSelection>('')
   const [createBuyerName, setCreateBuyerName] = useState('')
@@ -415,6 +419,9 @@ export default function TrackingPage() {
   const [editPricePerUnit, setEditPricePerUnit] = useState('')
   const [editInviteLink, setEditInviteLink] = useState('')
   const [editChannelJoinRequest, setEditChannelJoinRequest] = useState(false)
+  const [editChannelRequestMessageEnabled, setEditChannelRequestMessageEnabled] = useState(false)
+  const [editChannelRequestMessage, setEditChannelRequestMessage] = useState('')
+  const [editChannelAutoApprove, setEditChannelAutoApprove] = useState(false)
   const [editFbPixelId, setEditFbPixelId] = useState('')
   const [editFbCapiToken, setEditFbCapiToken] = useState('')
   const [editBaseConversionRate, setEditBaseConversionRate] = useState(
@@ -641,6 +648,9 @@ export default function TrackingPage() {
     setCreateBotId(defaultBotId)
     setCreateChannelId(channels[0]?.id ?? '')
     setCreateChannelJoinRequest(false)
+    setCreateChannelRequestMessageEnabled(false)
+    setCreateChannelRequestMessage('')
+    setCreateChannelAutoApprove(false)
     setCreateCode('')
     setCreateBuyerSelection('')
     setCreateBuyerName('')
@@ -694,6 +704,15 @@ export default function TrackingPage() {
       setCreateError('Укажите стоимость единицы для выбранной модели.')
       return
     }
+    if (
+      createDestinationType === 'channel'
+      && createChannelJoinRequest
+      && createChannelRequestMessageEnabled
+      && !createChannelRequestMessage.trim()
+    ) {
+      setCreateError('Напишите сообщение, которое бот отправит после заявки.')
+      return
+    }
 
     setIsCreatingLink(true)
     setCreateError('')
@@ -707,6 +726,15 @@ export default function TrackingPage() {
         channel_id: createDestinationType === 'channel' ? createChannelId : null,
         channel_join_request: createDestinationType === 'channel'
           ? createChannelJoinRequest
+          : false,
+        channel_request_message_enabled: createDestinationType === 'channel'
+          ? createChannelRequestMessageEnabled
+          : false,
+        channel_request_message: createDestinationType === 'channel'
+          ? createChannelRequestMessage.trim() || null
+          : null,
+        channel_auto_approve: createDestinationType === 'channel'
+          ? createChannelAutoApprove
           : false,
         title: createTitle.trim(),
         code: createCode.trim() || undefined,
@@ -750,6 +778,9 @@ export default function TrackingPage() {
     setEditPricePerUnit(String(link.price_per_unit ?? ''))
     setEditInviteLink(link.invite_link ?? '')
     setEditChannelJoinRequest(link.channel_join_request)
+    setEditChannelRequestMessageEnabled(link.channel_request_message_enabled)
+    setEditChannelRequestMessage(link.channel_request_message ?? '')
+    setEditChannelAutoApprove(link.channel_auto_approve)
     setEditFbPixelId(link.fb_pixel_id ?? '')
     setEditFbCapiToken('')
     setEditBaseConversionRate(String(link.base_conversion_rate ?? 10))
@@ -793,6 +824,15 @@ export default function TrackingPage() {
       setEditError('Укажите стоимость единицы для выбранной модели.')
       return
     }
+    if (
+      editingLink.destination_type === 'channel'
+      && editChannelJoinRequest
+      && editChannelRequestMessageEnabled
+      && !editChannelRequestMessage.trim()
+    ) {
+      setEditError('Напишите сообщение, которое бот отправит после заявки.')
+      return
+    }
 
     setIsUpdatingLink(true)
     setEditError('')
@@ -816,7 +856,12 @@ export default function TrackingPage() {
               invite_link: editInviteLink.trim() || null,
               target_funnel_step_key: editTargetStepKey || null,
             }
-          : { channel_join_request: editChannelJoinRequest }),
+          : {
+              channel_join_request: editChannelJoinRequest,
+              channel_request_message_enabled: editChannelRequestMessageEnabled,
+              channel_request_message: editChannelRequestMessage.trim() || null,
+              channel_auto_approve: editChannelAutoApprove,
+            }),
         fb_pixel_id: editFbPixelId.trim() || null,
         base_conversion_rate: baseConversionRate,
         min_sample_size: minSampleSize,
@@ -1706,20 +1751,16 @@ export default function TrackingPage() {
                     </span>
                   ) : null}
                 </label>
-                <label className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.025] px-3 py-2.5">
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium text-gray-100">Заявка на вступление</span>
-                    <span className="mt-0.5 block text-xs leading-5 text-gray-500">
-                      Подписка будет засчитана после одобрения заявки в Telegram.
-                    </span>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={createChannelJoinRequest}
-                    onChange={(event) => setCreateChannelJoinRequest(event.target.checked)}
-                    className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
-                  />
-                </label>
+                <ChannelJoinRequestOptions
+                  joinRequest={createChannelJoinRequest}
+                  onJoinRequestChange={setCreateChannelJoinRequest}
+                  autoApprove={createChannelAutoApprove}
+                  onAutoApproveChange={setCreateChannelAutoApprove}
+                  messageEnabled={createChannelRequestMessageEnabled}
+                  onMessageEnabledChange={setCreateChannelRequestMessageEnabled}
+                  message={createChannelRequestMessage}
+                  onMessageChange={setCreateChannelRequestMessage}
+                />
               </>
             )}
             <div className="grid gap-3 md:grid-cols-2">
@@ -2000,8 +2041,8 @@ export default function TrackingPage() {
                 />
               </label>
             ) : (
-              <div className="rounded-xl border border-cyan-400/20 bg-cyan-500/[0.06] p-3">
-                <div className="flex items-start justify-between gap-4">
+              <div className="space-y-3">
+                <div className="rounded-xl border border-cyan-400/20 bg-cyan-500/[0.06] p-3">
                   <span className="min-w-0">
                     <span className="block text-sm font-medium text-cyan-100">
                       {editingLink.channel_title ?? 'Telegram-канал'}
@@ -2013,17 +2054,17 @@ export default function TrackingPage() {
                       При смене режима CRM создаст новую invite link; старая останется в истории для корректной атрибуции уже пришедших подписчиков.
                     </span>
                   </span>
-                  <input
-                    type="checkbox"
-                    checked={editChannelJoinRequest}
-                    onChange={(event) => setEditChannelJoinRequest(event.target.checked)}
-                    title="Заявка на вступление"
-                    className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
-                  />
                 </div>
-                <div className="mt-2 text-xs text-cyan-100/75">
-                  {editChannelJoinRequest ? 'Вступление после одобрения заявки' : 'Мгновенное вступление по ссылке'}
-                </div>
+                <ChannelJoinRequestOptions
+                  joinRequest={editChannelJoinRequest}
+                  onJoinRequestChange={setEditChannelJoinRequest}
+                  autoApprove={editChannelAutoApprove}
+                  onAutoApproveChange={setEditChannelAutoApprove}
+                  messageEnabled={editChannelRequestMessageEnabled}
+                  onMessageEnabledChange={setEditChannelRequestMessageEnabled}
+                  message={editChannelRequestMessage}
+                  onMessageChange={setEditChannelRequestMessage}
+                />
               </div>
             )}
             <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">

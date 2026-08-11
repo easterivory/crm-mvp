@@ -72,6 +72,7 @@ class ProjectLander(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     slug: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     button_text: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    badge_text: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     tracking_link_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tracking_links.id", ondelete="SET NULL"),

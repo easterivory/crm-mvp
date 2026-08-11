@@ -237,6 +237,7 @@ class TrackingService:
             )
 
         values = self._build_link_update_values(data, link=link, allow_code_update=True)
+        values = self._normalize_channel_request_update(link=link, values=values)
         if {"cost_model", "price_per_unit"} & values.keys():
             if (
                 link.destination_type == "channel"
@@ -485,6 +486,21 @@ class TrackingService:
                 channel_join_request=(
                     data.channel_join_request if channel is not None else False
                 ),
+                channel_request_message_enabled=(
+                    data.channel_request_message_enabled
+                    if channel is not None and data.channel_join_request
+                    else False
+                ),
+                channel_request_message=(
+                    self._normalize_optional(data.channel_request_message)
+                    if channel is not None and data.channel_join_request
+                    else None
+                ),
+                channel_auto_approve=(
+                    data.channel_auto_approve
+                    if channel is not None and data.channel_join_request
+                    else False
+                ),
                 name=title,
                 title=title,
                 ref_code=code,
@@ -555,6 +571,7 @@ class TrackingService:
                 mappings=data.fb_event_mappings,
             )
         values = self._build_link_update_values(data, link=link, allow_code_update=False)
+        values = self._normalize_channel_request_update(link=link, values=values)
         if link.destination_type == "channel":
             values.pop("invite_link", None)
             values.pop("target_step_id", None)
@@ -956,6 +973,59 @@ class TrackingService:
 
         return values
 
+    def _normalize_channel_request_update(
+        self,
+        *,
+        link: TrackingLink,
+        values: dict,
+    ) -> dict:
+        fields = {
+            "channel_join_request",
+            "channel_request_message_enabled",
+            "channel_request_message",
+            "channel_auto_approve",
+        }
+        if link.destination_type != "channel":
+            if any(values.get(field) for field in fields):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Channel request options require a channel tracking link",
+                )
+            for field in fields:
+                values.pop(field, None)
+            return values
+
+        join_request = bool(
+            values.get("channel_join_request", link.channel_join_request)
+        )
+        message_enabled = bool(
+            values.get(
+                "channel_request_message_enabled",
+                link.channel_request_message_enabled,
+            )
+        )
+        message = self._normalize_optional(
+            values.get(
+                "channel_request_message",
+                link.channel_request_message,
+            )
+        )
+        if not join_request:
+            values["channel_request_message_enabled"] = False
+            values["channel_request_message"] = None
+            values["channel_auto_approve"] = False
+            return values
+        if message_enabled and not message:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Set a join-request message before enabling automatic messaging"
+                ),
+            )
+        if "channel_request_message" in values:
+            values["channel_request_message"] = message
+        return values
+
     async def _resolve_buyer(
         self,
         *,
@@ -1185,6 +1255,9 @@ class TrackingService:
             channel_id=link.channel_id,
             channel_title=(link.channel.title if link.channel is not None else None),
             channel_join_request=link.channel_join_request,
+            channel_request_message_enabled=link.channel_request_message_enabled,
+            channel_request_message=link.channel_request_message,
+            channel_auto_approve=link.channel_auto_approve,
             code=code,
             title=title,
             buyer_id=link.buyer_id,

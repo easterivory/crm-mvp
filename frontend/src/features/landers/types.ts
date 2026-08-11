@@ -78,6 +78,9 @@ export type LanderTrackingCampaign = {
   destination_type?: 'bot' | 'channel'
   channel_id?: string | null
   channel_join_request?: boolean
+  channel_request_message_enabled?: boolean
+  channel_request_message?: string | null
+  channel_auto_approve?: boolean
   title: string
   code?: string | null
   buyer_id?: string | null
@@ -112,6 +115,7 @@ export type ProjectLander = {
   slug: string
   description: string | null
   button_text: string | null
+  badge_text: string | null
   tracking_link_id: string | null
   pixels_json: LanderPixel[]
   meta_events_json: LanderMetaEvent[]
@@ -134,6 +138,9 @@ export type ProjectLander = {
     channel_id: string | null
     channel_title: string | null
     channel_join_request: boolean
+    channel_request_message_enabled: boolean
+    channel_request_message: string | null
+    channel_auto_approve: boolean
     title: string
     code: string
     buyer_name: string | null
@@ -154,6 +161,7 @@ export type ProjectLanderCreatePayload = {
   slug: string
   description?: string | null
   button_text?: string | null
+  badge_text?: string | null
   tracking_link_id: string | null
   campaign?: LanderTrackingCampaign | null
   pixels?: LanderPixel[]
@@ -169,6 +177,7 @@ export type ProjectLanderUpdatePayload = {
   slug?: string
   description?: string | null
   button_text?: string | null
+  badge_text?: string | null
   pixels?: LanderPixel[]
   meta_events?: LanderMetaEvent[]
   utm_defaults?: Record<string, string>
@@ -179,6 +188,9 @@ export type ProjectLanderUpdatePayload = {
     destination_type?: 'bot' | 'channel'
     channel_id?: string | null
     channel_join_request?: boolean
+    channel_request_message_enabled?: boolean
+    channel_request_message?: string | null
+    channel_auto_approve?: boolean
     title?: string
     code?: string
     buyer_name?: string | null
@@ -210,6 +222,9 @@ export type TrackingLinkOption = {
   channel_id: string | null
   channel_title: string | null
   channel_join_request: boolean
+  channel_request_message_enabled: boolean
+  channel_request_message: string | null
+  channel_auto_approve: boolean
   code: string
   title: string
   buyer_name: string | null

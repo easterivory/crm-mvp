@@ -19,6 +19,9 @@ export type TrackingLink = {
   channel_id: string | null
   channel_title: string | null
   channel_join_request: boolean
+  channel_request_message_enabled: boolean
+  channel_request_message: string | null
+  channel_auto_approve: boolean
   code: string
   title: string
   buyer_id: string | null
@@ -54,6 +57,9 @@ export type TrackingLinkCreatePayload = {
   destination_type?: 'bot' | 'channel'
   channel_id?: string | null
   channel_join_request?: boolean
+  channel_request_message_enabled?: boolean
+  channel_request_message?: string | null
+  channel_auto_approve?: boolean
   title: string
   code?: string
   buyer_id?: string | null
@@ -97,6 +103,9 @@ export type TrackingLinkUpdatePayload = Partial<{
   price_per_unit: number
   spend: number
   channel_join_request: boolean
+  channel_request_message_enabled: boolean
+  channel_request_message: string | null
+  channel_auto_approve: boolean
 }>
 
 export type TrackingFunnelStepOption = {

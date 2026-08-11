@@ -85,11 +85,13 @@ async def telegram_webhook(
     try:
         async with get_db_session() as db:
             try:
-                await TelegramService(db).handle_webhook_update(
+                service = TelegramService(db)
+                await service.handle_webhook_update(
                     update=update,
                     bot_id=bot_id,
                 )
                 await db.commit()
+                await service.dispatch_post_commit_actions()
             except Exception:
                 await db.rollback()
                 raise

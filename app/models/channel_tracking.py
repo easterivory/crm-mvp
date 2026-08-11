@@ -229,6 +229,17 @@ class TelegramChannelSubscriptionEvent(Base, UUIDPrimaryKey, TimestampMixin):
     raw_payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
+    request_message_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auto_approve_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    request_message_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    request_approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    request_action_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

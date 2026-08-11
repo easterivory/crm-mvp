@@ -72,6 +72,9 @@ from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
 from app.services.chat_user_block_service import ChatUserBlockService
 from app.services.channel_subscription_service import ChannelSubscriptionService
+from app.services.channel_join_request_queue import (
+    enqueue_channel_join_request_action,
+)
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_lease_service import ChatLeaseService
 from app.services.funnel_runtime_service import FunnelRuntimeService
@@ -114,6 +117,7 @@ class TelegramService:
         self.chat_audit = ChatAuditService(db)
         self.chat_lease = ChatLeaseService(db)
         self.utm_bridge = UtmBridgeService()
+        self._pending_channel_join_request_actions: list[UUID] = []
 
     # ── Parsing ────────────────────────────────────────────────────────────────
 
@@ -210,11 +214,13 @@ class TelegramService:
 
         join_request_update = getattr(update, "chat_join_request", None)
         if join_request_update is not None:
-            await ChannelSubscriptionService(self.db).handle_join_request(
+            action = await ChannelSubscriptionService(self.db).handle_join_request(
                 update_id=update.update_id,
                 bot_id=bot_id,
                 event=join_request_update,
             )
+            if action is not None:
+                self._pending_channel_join_request_actions.append(action.event_id)
             return
 
         message = self.extract_message(update)
@@ -494,6 +500,17 @@ class TelegramService:
             start_requested=False,
             fresh_lifecycle=False,
         )
+
+    async def dispatch_post_commit_actions(self) -> None:
+        pending = tuple(self._pending_channel_join_request_actions)
+        self._pending_channel_join_request_actions.clear()
+        for event_id in pending:
+            job_id = await enqueue_channel_join_request_action(event_id)
+            if job_id is None:
+                logger.error(
+                    "Channel join-request action was persisted but not queued event_id=%s",
+                    event_id,
+                )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
