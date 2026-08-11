@@ -296,7 +296,7 @@ function TelegramLanderAppearanceEditor({
   const previewButtonText = buttonText.trim()
     || (channel ? 'Подписаться на канал' : 'Open in Telegram')
   const previewBadgeText = badgeText.trim()
-  const username = channel?.username || bot?.bot_username
+  const username = channel ? channel.username : bot?.bot_username
   const initial = Array.from(title).find((character) => /[\p{L}\p{N}]/u.test(character))?.toUpperCase() || 'T'
 
   return (

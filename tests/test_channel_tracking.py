@@ -316,7 +316,7 @@ def test_default_channel_lander_identifies_channel_and_uses_channel_copy() -> No
         tracking_link=SimpleNamespace(
             destination_type="channel",
             channel=channel,
-            bot=None,
+            bot=SimpleNamespace(bot_username="tracker_bot"),
         ),
     )
 
@@ -328,6 +328,7 @@ def test_default_channel_lander_identifies_channel_and_uses_channel_copy() -> No
 
     assert "Market News - Telegram" in rendered
     assert "@market_news" in rendered
+    assert "@tracker_bot" not in rendered
     assert "Telegram-канал" in rendered
     assert "Fresh market updates" in rendered
     assert ">Подписаться на канал</a>" in rendered
