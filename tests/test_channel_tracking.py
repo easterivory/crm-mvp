@@ -13,6 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.core.lander_urls import build_channel_tracking_url
 from app.core.constants import RoleName
+from app.repositories.message_repository import MessageRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.schemas.lander import LanderTrackingCampaignCreate, ProjectLanderCreate
 from app.schemas.system_setting import SystemGlobalConfigOut, SystemGlobalConfigUpdate
@@ -785,6 +786,40 @@ def test_start_message_snapshots_resolved_tracking_link() -> None:
         assert result is expected
         data = service.message_service.create_message.await_args.kwargs["data"]
         assert data.tracking_link_id == tracking_link_id
+
+    asyncio.run(run())
+
+
+def test_message_repository_persists_start_tracking_link_snapshot() -> None:
+    async def run() -> None:
+        tracking_link_id = uuid4()
+        expected = SimpleNamespace(id=uuid4())
+        repository = MessageRepository(SimpleNamespace())
+        repository.create = AsyncMock(return_value=expected)  # type: ignore[method-assign]
+
+        result = await repository.create_message(
+            chat_id=uuid4(),
+            external_message_id="42",
+            message_type="text",
+            sender_type="user",
+            sender_id=None,
+            operator_id=None,
+            tracking_link_id=tracking_link_id,
+            body="/start",
+            translated_text=None,
+            original_text=None,
+            caption=None,
+            telegram_file_id=None,
+            file_unique_id=None,
+            file_name=None,
+            mime_type=None,
+            file_size=None,
+            media_group_id=None,
+            raw_payload_json=None,
+        )
+
+        assert result is expected
+        assert repository.create.await_args.kwargs["tracking_link_id"] == tracking_link_id
 
     asyncio.run(run())
 
