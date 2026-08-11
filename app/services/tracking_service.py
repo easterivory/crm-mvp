@@ -540,6 +540,7 @@ class TrackingService:
                 )
             await self._create_initial_manual_spend(link, data, actor_id=actor.id)
             await self.db.flush()
+            return await self._to_read(link, include_total_spend=True)
         except Exception as exc:
             await self.db.rollback()
             if prepared_invite is not None:
@@ -552,7 +553,6 @@ class TrackingService:
                     detail="Tracking code already exists",
                 ) from exc
             raise
-        return await self._to_read(link, include_total_spend=True)
 
     async def update_tracking_link(
         self,
@@ -653,6 +653,12 @@ class TrackingService:
                     prepared=prepared_invite,
                 )
             await self.db.flush()
+            if updated is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Tracking link not found",
+                )
+            return await self._to_read(updated, include_total_spend=True)
         except Exception:
             await self.db.rollback()
             if prepared_invite is not None:
@@ -660,12 +666,6 @@ class TrackingService:
                     prepared=prepared_invite,
                 )
             raise
-        if updated is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Tracking link not found",
-            )
-        return await self._to_read(updated, include_total_spend=True)
 
     async def set_tracking_link_active(
         self,
