@@ -130,6 +130,8 @@ type SystemGlobalSettings = {
   tg_backup_channel_id: string | null
   is_tg_backup_enabled: boolean
   admin_bot_token: string | null
+  channel_join_auto_start: boolean
+  channel_join_auto_approve: boolean
 }
 
 type FunnelStartRecoveryResult = {
@@ -422,6 +424,8 @@ export default function SettingsPage() {
   const [tgBackupChannelId, setTgBackupChannelId] = useState('')
   const [isTgBackupEnabled, setIsTgBackupEnabled] = useState(false)
   const [adminBotToken, setAdminBotToken] = useState('')
+  const [channelJoinAutoStart, setChannelJoinAutoStart] = useState(true)
+  const [channelJoinAutoApprove, setChannelJoinAutoApprove] = useState(true)
   const [funnelRecoveryHours, setFunnelRecoveryHours] = useState('24')
   const [newUserEmail, setNewUserEmail] = useState('')
   const [newUserName, setNewUserName] = useState('')
@@ -764,6 +768,8 @@ export default function SettingsPage() {
     setTgBackupChannelId(data.tg_backup_channel_id ?? '')
     setIsTgBackupEnabled(data.is_tg_backup_enabled)
     setAdminBotToken(data.admin_bot_token ?? '')
+    setChannelJoinAutoStart(data.channel_join_auto_start)
+    setChannelJoinAutoApprove(data.channel_join_auto_approve)
   }, [currentRoleName])
 
   const loadAll = useCallback(async () => {
@@ -949,11 +955,15 @@ export default function SettingsPage() {
         tg_backup_channel_id: tgBackupChannelId.trim() || null,
         is_tg_backup_enabled: isTgBackupEnabled,
         admin_bot_token: adminBotToken.trim() || null,
+        channel_join_auto_start: channelJoinAutoStart,
+        channel_join_auto_approve: channelJoinAutoApprove,
       })
       setTgBackupBotToken(data.tg_backup_bot_token ?? '')
       setTgBackupChannelId(data.tg_backup_channel_id ?? '')
       setIsTgBackupEnabled(data.is_tg_backup_enabled)
       setAdminBotToken(data.admin_bot_token ?? '')
+      setChannelJoinAutoStart(data.channel_join_auto_start)
+      setChannelJoinAutoApprove(data.channel_join_auto_approve)
       setNotice('Глобальные настройки сохранены.')
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось сохранить глобальные настройки.'))
@@ -1519,8 +1529,46 @@ export default function SettingsPage() {
             <div>
               <h2 className="text-xl font-semibold text-zinc-100">Глобальные настройки</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Системные Telegram-боты и ежедневные резервные копии.
+                Системные Telegram-боты, автоматизация каналов и резервные копии.
               </p>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-100">Залив на Telegram-канал</h3>
+                <p className="mt-1 text-sm leading-6 text-zinc-500">
+                  Настройки действуют для всех ссылок-заявок на каналы. Воронка запускается у
+                  бота-трекера выбранного канала до автоматического принятия заявки.
+                </p>
+              </div>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-3">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-zinc-200">Автозапуск активной воронки</span>
+                  <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                    Создаёт чат и лида, затем запускает активную опубликованную воронку бота-трекера.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={channelJoinAutoStart}
+                  onChange={(event) => setChannelJoinAutoStart(event.target.checked)}
+                  className="h-5 w-5 shrink-0 accent-emerald-500"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-3">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-zinc-200">Автоматически принимать заявки</span>
+                  <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                    Бот-трекер принимает заявку после запуска воронки. При выключении решение остаётся администратору канала.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={channelJoinAutoApprove}
+                  onChange={(event) => setChannelJoinAutoApprove(event.target.checked)}
+                  className="h-5 w-5 shrink-0 accent-emerald-500"
+                />
+              </label>
             </div>
 
             <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">

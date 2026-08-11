@@ -390,24 +390,21 @@ class LanderAdminService:
                 channel_changed = (
                     link.destination_type != "channel" or link.channel_id != channel.id
                 )
-                desired_join_request = (
-                    campaign.channel_join_request
-                    if "channel_join_request" in campaign.model_fields_set
-                    and campaign.channel_join_request is not None
-                    else link.channel_join_request
-                )
-                desired_message_enabled = (
-                    campaign.channel_request_message_enabled
-                    if "channel_request_message_enabled" in campaign.model_fields_set
-                    and campaign.channel_request_message_enabled is not None
-                    else link.channel_request_message_enabled
-                )
+                desired_join_request = True
                 desired_message = (
                     tracking_service._normalize_optional(
                         campaign.channel_request_message
                     )
                     if "channel_request_message" in campaign.model_fields_set
-                    else link.channel_request_message
+                    else tracking_service._normalize_optional(
+                        link.channel_request_message
+                    )
+                )
+                desired_message_enabled = (
+                    campaign.channel_request_message_enabled
+                    if "channel_request_message_enabled" in campaign.model_fields_set
+                    and campaign.channel_request_message_enabled is not None
+                    else bool(link.channel_request_message_enabled and desired_message)
                 )
                 desired_auto_approve = (
                     campaign.channel_auto_approve

@@ -23,6 +23,7 @@ from app.schemas.telegram import (
     TelegramChatMemberUpdated,
     TelegramUser,
 )
+from app.services.system_setting_service import SystemSettingService
 
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ class ChannelSubscriptionService:
 
         invite_link = self._invite_url(event.invite_link)
         invite = await self._resolve_invite(channel.id, invite_link)
-        request_message_text, auto_approve = await self._join_request_options(
+        request_message_text, auto_approve, auto_start = await self._join_request_options(
             invite.tracking_link_id if invite is not None else None
         )
         occurred_at = self._from_unix(event.date)
@@ -150,6 +151,7 @@ class ChannelSubscriptionService:
             raw_payload=event.model_dump(mode="json", by_alias=True),
             request_message_text=request_message_text,
             auto_approve_requested=auto_approve,
+            auto_start_requested=auto_start,
         )
         if not inserted:
             return None
@@ -162,7 +164,7 @@ class ChannelSubscriptionService:
             occurred_at=occurred_at,
             update_id=update_id,
         )
-        if request_message_text or auto_approve:
+        if request_message_text or auto_approve or auto_start:
             return ChannelJoinRequestAction(event_id=inserted.id)
         return None
 
@@ -254,26 +256,30 @@ class ChannelSubscriptionService:
     async def _join_request_options(
         self,
         tracking_link_id: UUID | None,
-    ) -> tuple[str | None, bool]:
+    ) -> tuple[str | None, bool, bool]:
         if tracking_link_id is None:
-            return None, False
+            return None, False, False
         result = await self.db.execute(
             select(
                 TrackingLink.channel_join_request,
                 TrackingLink.channel_request_message_enabled,
                 TrackingLink.channel_request_message,
-                TrackingLink.channel_auto_approve,
             ).where(TrackingLink.id == tracking_link_id)
         )
         row = result.one_or_none()
         if row is None or not bool(row.channel_join_request):
-            return None, False
+            return None, False, False
         message = (
             str(row.channel_request_message or "").strip()
             if bool(row.channel_request_message_enabled)
             else ""
         )
-        return message or None, bool(row.channel_auto_approve)
+        global_config = await SystemSettingService(self.db).get_global_config()
+        return (
+            message or None,
+            global_config.channel_join_auto_approve,
+            global_config.channel_join_auto_start,
+        )
 
     async def _get_subscription(
         self,
@@ -313,6 +319,7 @@ class ChannelSubscriptionService:
         raw_payload: dict,
         request_message_text: str | None = None,
         auto_approve_requested: bool = False,
+        auto_start_requested: bool = False,
     ) -> TelegramChannelSubscriptionEvent | None:
         item = TelegramChannelSubscriptionEvent(
             project_id=channel.project_id,
@@ -331,6 +338,7 @@ class ChannelSubscriptionService:
             raw_payload=raw_payload,
             request_message_text=request_message_text,
             auto_approve_requested=auto_approve_requested,
+            auto_start_requested=auto_start_requested,
             occurred_at=occurred_at,
         )
         try:

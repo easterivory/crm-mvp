@@ -56,7 +56,6 @@ import type {
   TrackingLinkOption,
   TelegramChannel,
 } from '../types'
-import ChannelJoinRequestOptions from '../../tracking/components/ChannelJoinRequestOptions'
 
 type LandersSettingsProps = {
   projectId: string | null
@@ -81,10 +80,6 @@ type LanderForm = {
   campaignDestinationType: 'bot' | 'channel'
   campaignBotId: string
   campaignChannelId: string
-  campaignChannelJoinRequest: boolean
-  campaignChannelRequestMessageEnabled: boolean
-  campaignChannelRequestMessage: string
-  campaignChannelAutoApprove: boolean
   campaignTitle: string
   campaignCode: string
   campaignBuyerName: string
@@ -119,10 +114,6 @@ type LanderEditForm = {
   destinationType: 'bot' | 'channel'
   botId: string
   channelId: string
-  channelJoinRequest: boolean
-  channelRequestMessageEnabled: boolean
-  channelRequestMessage: string
-  channelAutoApprove: boolean
   campaignTitle: string
   campaignCode: string
   buyerName: string
@@ -161,10 +152,6 @@ const emptyLanderForm: LanderForm = {
   campaignDestinationType: 'bot',
   campaignBotId: '',
   campaignChannelId: '',
-  campaignChannelJoinRequest: false,
-  campaignChannelRequestMessageEnabled: false,
-  campaignChannelRequestMessage: '',
-  campaignChannelAutoApprove: false,
   campaignTitle: '',
   campaignCode: '',
   campaignBuyerName: '',
@@ -855,7 +842,6 @@ export default function LandersSettings({
       campaignBotId: bots[0]?.id ?? '',
       campaignDestinationType: 'bot',
       campaignChannelId: channels[0]?.id ?? '',
-      campaignChannelJoinRequest: false,
       slug: generateSlug(),
       campaignEventMappings: cloneEventMappings(runtimeConfig?.default_event_mappings ?? []),
       trackingMode: campaignOnly ? 'campaign' : emptyLanderForm.trackingMode,
@@ -972,16 +958,6 @@ export default function LandersSettings({
       destinationType: campaign?.destination_type ?? lander.destination_type ?? 'bot',
       botId: campaign?.bot_id ?? link?.bot_id ?? bots[0]?.id ?? '',
       channelId: campaign?.channel_id ?? lander.channel_id ?? link?.channel_id ?? '',
-      channelJoinRequest: campaign?.channel_join_request ?? link?.channel_join_request ?? false,
-      channelRequestMessageEnabled: campaign?.channel_request_message_enabled
-        ?? link?.channel_request_message_enabled
-        ?? false,
-      channelRequestMessage: campaign?.channel_request_message
-        ?? link?.channel_request_message
-        ?? '',
-      channelAutoApprove: campaign?.channel_auto_approve
-        ?? link?.channel_auto_approve
-        ?? false,
       campaignTitle: campaign?.title ?? link?.title ?? lander.name,
       campaignCode: campaign?.code ?? link?.code ?? '',
       buyerName: campaign?.buyer_name ?? '',
@@ -1048,15 +1024,6 @@ export default function LandersSettings({
       setBanner({ tone: 'error', message: 'Для кастомного лендинга загрузите ZIP-архив.' })
       return
     }
-    if (
-      editForm.destinationType === 'channel'
-      && editForm.channelJoinRequest
-      && editForm.channelRequestMessageEnabled
-      && !editForm.channelRequestMessage.trim()
-    ) {
-      setBanner({ tone: 'error', message: 'Напишите сообщение, которое бот отправит после заявки.' })
-      return
-    }
     setIsUpdatingLander(true)
     setBanner(null)
     try {
@@ -1088,18 +1055,6 @@ export default function LandersSettings({
           destination_type: editForm.destinationType,
           bot_id: editForm.destinationType === 'bot' ? editForm.botId : null,
           channel_id: editForm.destinationType === 'channel' ? editForm.channelId : null,
-          channel_join_request: editForm.destinationType === 'channel'
-            ? editForm.channelJoinRequest
-            : false,
-          channel_request_message_enabled: editForm.destinationType === 'channel'
-            ? editForm.channelRequestMessageEnabled
-            : false,
-          channel_request_message: editForm.destinationType === 'channel'
-            ? editForm.channelRequestMessage.trim() || null
-            : null,
-          channel_auto_approve: editForm.destinationType === 'channel'
-            ? editForm.channelAutoApprove
-            : false,
           title,
           code,
           buyer_name: editForm.buyerName.trim() || null,
@@ -1315,17 +1270,6 @@ export default function LandersSettings({
       setBanner({ tone: 'error', message: 'Выберите ZIP-архив для кастомного лендинга.' })
       return
     }
-    if (
-      form.trackingMode === 'campaign'
-      && form.campaignDestinationType === 'channel'
-      && form.campaignChannelJoinRequest
-      && form.campaignChannelRequestMessageEnabled
-      && !form.campaignChannelRequestMessage.trim()
-    ) {
-      setBanner({ tone: 'error', message: 'Напишите сообщение, которое бот отправит после заявки.' })
-      return
-    }
-
     setIsSavingLander(true)
     setBanner(null)
     let createdLander: ProjectLander | null = null
@@ -1346,18 +1290,6 @@ export default function LandersSettings({
               channel_id: form.campaignDestinationType === 'channel'
                 ? form.campaignChannelId
                 : null,
-              channel_join_request: form.campaignDestinationType === 'channel'
-                ? form.campaignChannelJoinRequest
-                : false,
-              channel_request_message_enabled: form.campaignDestinationType === 'channel'
-                ? form.campaignChannelRequestMessageEnabled
-                : false,
-              channel_request_message: form.campaignDestinationType === 'channel'
-                ? form.campaignChannelRequestMessage.trim() || null
-                : null,
-              channel_auto_approve: form.campaignDestinationType === 'channel'
-                ? form.campaignChannelAutoApprove
-                : false,
               title: form.campaignTitle.trim() || form.name.trim() || `Landing ${slug}`,
               code: form.campaignCode.trim() || null,
               buyer_name: form.campaignBuyerName.trim() || null,
@@ -2149,16 +2081,10 @@ export default function LandersSettings({
                     </label>
                   </div>
                   {form.campaignDestinationType === 'channel' ? (
-                    <ChannelJoinRequestOptions
-                      joinRequest={form.campaignChannelJoinRequest}
-                      onJoinRequestChange={(campaignChannelJoinRequest) => setForm((current) => ({ ...current, campaignChannelJoinRequest }))}
-                      autoApprove={form.campaignChannelAutoApprove}
-                      onAutoApproveChange={(campaignChannelAutoApprove) => setForm((current) => ({ ...current, campaignChannelAutoApprove }))}
-                      messageEnabled={form.campaignChannelRequestMessageEnabled}
-                      onMessageEnabledChange={(campaignChannelRequestMessageEnabled) => setForm((current) => ({ ...current, campaignChannelRequestMessageEnabled }))}
-                      message={form.campaignChannelRequestMessage}
-                      onMessageChange={(campaignChannelRequestMessage) => setForm((current) => ({ ...current, campaignChannelRequestMessage }))}
-                    />
+                    <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-3 text-sm leading-6 text-cyan-100/80">
+                      CRM создаст ссылку-заявку. Автозапуск воронки и автоприём
+                      настраивает суперадмин в разделе «Настройки → Система».
+                    </div>
                   ) : null}
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="block">
@@ -2554,16 +2480,10 @@ export default function LandersSettings({
                       </select>
                     </label>
                     <div className="md:col-span-2">
-                      <ChannelJoinRequestOptions
-                        joinRequest={editForm.channelJoinRequest}
-                        onJoinRequestChange={(channelJoinRequest) => setEditForm((current) => current ? { ...current, channelJoinRequest } : current)}
-                        autoApprove={editForm.channelAutoApprove}
-                        onAutoApproveChange={(channelAutoApprove) => setEditForm((current) => current ? { ...current, channelAutoApprove } : current)}
-                        messageEnabled={editForm.channelRequestMessageEnabled}
-                        onMessageEnabledChange={(channelRequestMessageEnabled) => setEditForm((current) => current ? { ...current, channelRequestMessageEnabled } : current)}
-                        message={editForm.channelRequestMessage}
-                        onMessageChange={(channelRequestMessage) => setEditForm((current) => current ? { ...current, channelRequestMessage } : current)}
-                      />
+                      <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-3 text-sm leading-6 text-cyan-100/80">
+                        Автозапуск воронки и автоприём заявок управляются суперадмином
+                        в разделе «Настройки → Система».
+                      </div>
                     </div>
                   </>
                 )}

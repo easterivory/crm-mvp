@@ -125,6 +125,8 @@ class LanderTrackingCampaignCreate(BaseModel):
             raise ValueError("channel_id is required for channel traffic")
         if self.destination_type == "channel" and self.target_funnel_step_key:
             raise ValueError("Funnel entry step is unavailable for channel traffic")
+        if self.destination_type == "channel":
+            self.channel_join_request = True
         validate_channel_request_options(
             destination_type=self.destination_type,
             channel_join_request=self.channel_join_request,

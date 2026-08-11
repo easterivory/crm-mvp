@@ -15,6 +15,8 @@ TG_BACKUP_BOT_TOKEN_KEY = "tg_backup_bot_token"
 TG_BACKUP_CHANNEL_ID_KEY = "tg_backup_channel_id"
 TG_BACKUP_ENABLED_KEY = "is_tg_backup_enabled"
 ADMIN_BOT_TOKEN_KEY = "admin_bot_token"
+CHANNEL_JOIN_AUTO_START_KEY = "channel_join_auto_start"
+CHANNEL_JOIN_AUTO_APPROVE_KEY = "channel_join_auto_approve"
 TRANSLATION_PROVIDER_KEY = "translation_provider"
 TRANSLATION_API_KEY = "translation_api_key"
 TRANSLATION_BASE_URL_KEY = "translation_base_url"
@@ -39,6 +41,8 @@ class SystemGlobalConfig:
     tg_backup_channel_id: Optional[str]
     is_tg_backup_enabled: bool
     admin_bot_token: Optional[str]
+    channel_join_auto_start: bool
+    channel_join_auto_approve: bool
 
 
 class SystemSettingService:
@@ -92,11 +96,21 @@ class SystemSettingService:
         channel_id = await self.get_value(TG_BACKUP_CHANNEL_ID_KEY)
         backup_enabled = await self.get_value(TG_BACKUP_ENABLED_KEY)
         admin_bot_token = await self.get_value(ADMIN_BOT_TOKEN_KEY)
+        channel_join_auto_start = await self.get_value(
+            CHANNEL_JOIN_AUTO_START_KEY,
+            default="true",
+        )
+        channel_join_auto_approve = await self.get_value(
+            CHANNEL_JOIN_AUTO_APPROVE_KEY,
+            default="true",
+        )
         return SystemGlobalConfig(
             tg_backup_bot_token=self._normalize_optional_value(backup_token),
             tg_backup_channel_id=self._normalize_optional_value(channel_id),
             is_tg_backup_enabled=self._parse_bool(backup_enabled),
             admin_bot_token=self._normalize_optional_value(admin_bot_token),
+            channel_join_auto_start=self._parse_bool(channel_join_auto_start),
+            channel_join_auto_approve=self._parse_bool(channel_join_auto_approve),
         )
 
     async def get_effective_global_config(self) -> SystemGlobalConfig:
@@ -115,6 +129,8 @@ class SystemSettingService:
                 config.admin_bot_token
                 or self._normalize_optional_value(settings.ADMIN_BOT_TOKEN)
             ),
+            channel_join_auto_start=config.channel_join_auto_start,
+            channel_join_auto_approve=config.channel_join_auto_approve,
         )
 
     async def set_global_config(
@@ -124,6 +140,8 @@ class SystemSettingService:
         tg_backup_channel_id: Optional[str],
         is_tg_backup_enabled: bool,
         admin_bot_token: Optional[str],
+        channel_join_auto_start: bool,
+        channel_join_auto_approve: bool,
     ) -> SystemGlobalConfig:
         await self.set_value(
             TG_BACKUP_BOT_TOKEN_KEY,
@@ -137,6 +155,14 @@ class SystemSettingService:
         await self.set_value(
             ADMIN_BOT_TOKEN_KEY,
             self._normalize_optional_value(admin_bot_token),
+        )
+        await self.set_value(
+            CHANNEL_JOIN_AUTO_START_KEY,
+            "true" if channel_join_auto_start else "false",
+        )
+        await self.set_value(
+            CHANNEL_JOIN_AUTO_APPROVE_KEY,
+            "true" if channel_join_auto_approve else "false",
         )
         return await self.get_global_config()
 

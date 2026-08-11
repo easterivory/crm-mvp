@@ -15,6 +15,7 @@ from app.core.lander_urls import build_channel_tracking_url
 from app.core.constants import RoleName
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.schemas.lander import LanderTrackingCampaignCreate, ProjectLanderCreate
+from app.schemas.system_setting import SystemGlobalConfigOut, SystemGlobalConfigUpdate
 from app.schemas.telegram import (
     TelegramChatJoinRequest,
     TelegramChatMember,
@@ -24,6 +25,7 @@ from app.schemas.telegram import (
 )
 from app.schemas.tracking import TrackingLinkCreate
 from app.services.channel_subscription_service import ChannelSubscriptionService
+from app.services.channel_join_funnel_service import ChannelJoinFunnelService
 from app.services.facebook_channel_event_service import FacebookChannelEventService
 from app.services.lander_service import LanderService
 from app.services.lander_admin_service import LanderAdminService
@@ -48,6 +50,17 @@ def test_existing_tracking_payload_keeps_bot_destination_by_default() -> None:
     assert payload.channel_auto_approve is False
 
 
+def test_global_channel_join_actions_default_to_enabled() -> None:
+    current = SystemGlobalConfigOut()
+    legacy_update = SystemGlobalConfigUpdate.model_validate({})
+
+    assert current.channel_join_auto_start is True
+    assert current.channel_join_auto_approve is True
+    assert legacy_update.channel_join_auto_start is True
+    assert legacy_update.channel_join_auto_approve is True
+    assert legacy_update.model_dump(exclude_unset=True) == {}
+
+
 def test_channel_tracking_payload_requires_channel_and_does_not_require_bot() -> None:
     channel_id = uuid4()
 
@@ -61,6 +74,7 @@ def test_channel_tracking_payload_requires_channel_and_does_not_require_bot() ->
 
     assert payload.bot_id is None
     assert payload.channel_id == channel_id
+    assert payload.channel_join_request is True
     with pytest.raises(ValidationError):
         TrackingLinkCreate.model_validate(
             {"destination_type": "channel", "title": "Missing channel"}
@@ -94,15 +108,15 @@ def test_channel_join_request_actions_are_explicit_and_validated() -> None:
                 "title": "Missing message",
             }
         )
-    with pytest.raises(ValidationError):
-        TrackingLinkCreate.model_validate(
-            {
-                "destination_type": "channel",
-                "channel_id": channel_id,
-                "channel_auto_approve": True,
-                "title": "No request mode",
-            }
-        )
+    globally_managed = TrackingLinkCreate.model_validate(
+        {
+            "destination_type": "channel",
+            "channel_id": channel_id,
+            "channel_auto_approve": True,
+            "title": "Global request mode",
+        }
+    )
+    assert globally_managed.channel_join_request is True
 
 
 def test_facebook_channel_campaign_has_no_funnel_entry_requirement() -> None:
@@ -113,6 +127,8 @@ def test_facebook_channel_campaign_has_no_funnel_entry_requirement() -> None:
             "title": "Channel campaign",
         }
     )
+
+    assert payload.channel_join_request is True
 
     assert payload.bot_id is None
     assert payload.target_funnel_step_key is None
@@ -179,7 +195,7 @@ def test_join_request_snapshots_optional_actions() -> None:
             return_value=SimpleNamespace(tracking_link_id=tracking_link_id)
         )
         service._join_request_options = AsyncMock(  # type: ignore[method-assign]
-            return_value=("Привет!", True)
+            return_value=("Привет!", True, True)
         )
         service._insert_event = AsyncMock(return_value=inserted)  # type: ignore[method-assign]
         service._upsert_subscription = AsyncMock()  # type: ignore[method-assign]
@@ -207,6 +223,89 @@ def test_join_request_snapshots_optional_actions() -> None:
         insert_kwargs = service._insert_event.await_args.kwargs
         assert insert_kwargs["request_message_text"] == "Привет!"
         assert insert_kwargs["auto_approve_requested"] is True
+        assert insert_kwargs["auto_start_requested"] is True
+
+    asyncio.run(run())
+
+
+def test_channel_join_funnel_start_is_idempotent() -> None:
+    async def run() -> None:
+        chat_id = uuid4()
+        project_id = uuid4()
+        bot_id = uuid4()
+        funnel_id = uuid4()
+        version_id = uuid4()
+        service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
+        service.db = SimpleNamespace(commit=AsyncMock())
+        service._ensure_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id))
+        service._ensure_lead = AsyncMock()
+        service.runtime = SimpleNamespace(
+            get_active_published_funnel_for_bot=AsyncMock(
+                return_value=(
+                    SimpleNamespace(id=funnel_id),
+                    SimpleNamespace(id=version_id),
+                )
+            ),
+            repo=SimpleNamespace(
+                get_chat_funnel_state=AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+            ),
+            start_funnel_for_chat=AsyncMock(),
+        )
+        event = SimpleNamespace(project_id=project_id, tracker_bot_id=bot_id)
+
+        result = await service.start_for_join_request(
+            event=event,
+            user_chat_id=9876543210,
+        )
+
+        assert result.chat_id == chat_id
+        assert result.started is False
+        assert result.already_started is True
+        service.runtime.start_funnel_for_chat.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_channel_join_funnel_starts_active_tracker_funnel() -> None:
+    async def run() -> None:
+        chat_id = uuid4()
+        project_id = uuid4()
+        bot_id = uuid4()
+        funnel_id = uuid4()
+        version_id = uuid4()
+        service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
+        service.db = SimpleNamespace(commit=AsyncMock())
+        service._ensure_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id))
+        service._ensure_lead = AsyncMock()
+        service.runtime = SimpleNamespace(
+            get_active_published_funnel_for_bot=AsyncMock(
+                return_value=(
+                    SimpleNamespace(id=funnel_id),
+                    SimpleNamespace(id=version_id),
+                )
+            ),
+            repo=SimpleNamespace(
+                get_chat_funnel_state=AsyncMock(
+                    side_effect=[None, SimpleNamespace(id=uuid4())]
+                )
+            ),
+            start_funnel_for_chat=AsyncMock(return_value=None),
+        )
+        event = SimpleNamespace(project_id=project_id, tracker_bot_id=bot_id)
+
+        result = await service.start_for_join_request(
+            event=event,
+            user_chat_id=9876543210,
+        )
+
+        assert result.chat_id == chat_id
+        assert result.started is True
+        assert result.error is None
+        service.runtime.start_funnel_for_chat.assert_awaited_once_with(
+            chat_id=chat_id,
+            funnel_id=funnel_id,
+            funnel_version_id=version_id,
+        )
 
     asyncio.run(run())
 

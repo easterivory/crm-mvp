@@ -470,7 +470,7 @@ class TrackingService:
             prepared_invite = await self.channel_service.prepare_invite_link(
                 channel=channel,
                 code=code,
-                creates_join_request=data.channel_join_request,
+                creates_join_request=True,
             )
             invite_link = prepared_invite.invite_link
         else:
@@ -484,7 +484,7 @@ class TrackingService:
                 destination_type=data.destination_type,
                 channel_id=channel.id if channel is not None else None,
                 channel_join_request=(
-                    data.channel_join_request if channel is not None else False
+                    True if channel is not None else False
                 ),
                 channel_request_message_enabled=(
                     data.channel_request_message_enabled

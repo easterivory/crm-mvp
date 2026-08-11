@@ -113,6 +113,8 @@ async def get_global_settings(
         tg_backup_channel_id=config.tg_backup_channel_id,
         is_tg_backup_enabled=config.is_tg_backup_enabled,
         admin_bot_token=config.admin_bot_token,
+        channel_join_auto_start=config.channel_join_auto_start,
+        channel_join_auto_approve=config.channel_join_auto_approve,
     )
 
 
@@ -139,6 +141,14 @@ async def update_global_settings(
         tg_backup_channel_id=backup_channel_id,
         is_tg_backup_enabled=backup_enabled,
         admin_bot_token=values.get("admin_bot_token", current.admin_bot_token),
+        channel_join_auto_start=values.get(
+            "channel_join_auto_start",
+            current.channel_join_auto_start,
+        ),
+        channel_join_auto_approve=values.get(
+            "channel_join_auto_approve",
+            current.channel_join_auto_approve,
+        ),
     )
     await db.commit()
     return SystemGlobalConfigOut(
@@ -146,6 +156,8 @@ async def update_global_settings(
         tg_backup_channel_id=config.tg_backup_channel_id,
         is_tg_backup_enabled=config.is_tg_backup_enabled,
         admin_bot_token=config.admin_bot_token,
+        channel_join_auto_start=config.channel_join_auto_start,
+        channel_join_auto_approve=config.channel_join_auto_approve,
     )
 
 

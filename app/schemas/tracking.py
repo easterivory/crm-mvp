@@ -110,6 +110,10 @@ class TrackingLinkCreate(BaseModel):
             raise ValueError("channel_id is required for channel tracking links")
         if self.destination_type == "bot" and self.channel_id is not None:
             raise ValueError("channel_id is only available for channel tracking links")
+        if self.destination_type == "channel":
+            # Exact subscriber attribution and proactive funnel delivery require
+            # a Telegram join request. Runtime actions are controlled globally.
+            self.channel_join_request = True
         validate_channel_request_options(
             destination_type=self.destination_type,
             channel_join_request=self.channel_join_request,

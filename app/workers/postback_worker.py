@@ -19,10 +19,14 @@ from app.models.channel_tracking import TelegramChannelSubscriptionEvent
 from app.models.partner import PartnerIntegration
 from app.models.tracking import TrackingLink
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
+from app.services.channel_join_funnel_service import ChannelJoinFunnelService
 from app.services.funnel_start_recovery_service import FunnelStartRecoveryService
 from app.services.google_sheets_service import GoogleSheetsService
 from app.services.lead_confidence_service import LeadConfidenceService
-from app.services.operational_alert_service import prime_operational_alert_config
+from app.services.operational_alert_service import (
+    prime_operational_alert_config,
+    send_operational_alert,
+)
 from app.services.postback_service import PostbackService
 from app.services.telegram_service import TelegramService
 from app.services.telegram_sender import TelegramSenderService
@@ -375,10 +379,23 @@ async def process_channel_join_request_action_task(
         message_pending = bool(
             event.request_message_text and event.request_message_sent_at is None
         )
-        approval_pending = bool(
+        approval_requested = bool(
             event.auto_approve_requested and event.request_approved_at is None
         )
-        if not message_pending and not approval_pending:
+        approval_pending = bool(
+            approval_requested
+            and (
+                not event.auto_start_requested
+                or (
+                    event.funnel_start_processed_at is not None
+                    and not event.funnel_start_error
+                )
+            )
+        )
+        funnel_start_pending = bool(
+            event.auto_start_requested and event.funnel_start_processed_at is None
+        )
+        if not message_pending and not approval_pending and not funnel_start_pending:
             return {"status": "completed", "event_id": str(event.id)}
 
         raw_payload = event.raw_payload if isinstance(event.raw_payload, dict) else {}
@@ -405,6 +422,7 @@ async def process_channel_join_request_action_task(
         sender = TelegramSenderService(db)
 
         message_error: str | None = None
+        funnel_error: str | None = None
         if message_pending and message_text:
             try:
                 await sender.send_join_request_message(
@@ -422,6 +440,76 @@ async def process_channel_join_request_action_task(
                 if job_try < 3 and Retry is not None:
                     raise Retry(defer=min(5 * job_try, 15)) from exc
 
+        if funnel_start_pending:
+            try:
+                start_result = await ChannelJoinFunnelService(db).start_for_join_request(
+                    event=event,
+                    user_chat_id=user_chat_id,
+                )
+                event.funnel_start_processed_at = datetime.now(timezone.utc)
+                event.funnel_start_chat_id = start_result.chat_id
+                event.funnel_started_at = (
+                    datetime.now(timezone.utc) if start_result.started else None
+                )
+                event.funnel_start_error = start_result.error
+                funnel_error = start_result.error
+                event.request_action_error = funnel_error or message_error
+                await db.commit()
+                if funnel_error:
+                    await send_operational_alert(
+                        component="channel_join_funnel",
+                        title="Channel join funnel did not start",
+                        details={
+                            "event_id": event.id,
+                            "project_id": event.project_id,
+                            "tracker_bot_id": event.tracker_bot_id,
+                            "error": funnel_error,
+                        },
+                        dedupe_key=(
+                            f"channel-join-funnel:{event.tracker_bot_id}:{funnel_error}"
+                        ),
+                    )
+            except Exception as exc:
+                await db.rollback()
+                event = await db.get(TelegramChannelSubscriptionEvent, event_uuid)
+                if event is None:
+                    return {"status": "failed", "error": "Join-request event disappeared"}
+                funnel_error = str(exc)[:1000]
+                event.funnel_start_error = funnel_error
+                event.request_action_error = funnel_error
+                if job_try >= 3 or Retry is None:
+                    event.funnel_start_processed_at = datetime.now(timezone.utc)
+                await db.commit()
+                if job_try < 3 and Retry is not None:
+                    raise Retry(defer=min(5 * job_try, 15)) from exc
+                logger.exception(
+                    "Channel join funnel failed after retries event_id=%s",
+                    event_id,
+                )
+                await send_operational_alert(
+                    component="channel_join_funnel",
+                    title="Channel join funnel failed after retries",
+                    details={
+                        "event_id": event_id,
+                        "project_id": event.project_id,
+                        "tracker_bot_id": event.tracker_bot_id,
+                        "error": funnel_error,
+                    },
+                    dedupe_key=(
+                        f"channel-join-funnel:{event.tracker_bot_id}:{type(exc).__name__}"
+                    ),
+                )
+
+        approval_pending = bool(
+            approval_requested
+            and (
+                not event.auto_start_requested
+                or (
+                    event.funnel_start_processed_at is not None
+                    and not event.funnel_start_error
+                )
+            )
+        )
         if approval_pending:
             try:
                 await sender.approve_chat_join_request(
@@ -430,13 +518,13 @@ async def process_channel_join_request_action_task(
                     user_id=telegram_user_id,
                 )
                 event.request_approved_at = datetime.now(timezone.utc)
-                event.request_action_error = message_error
+                event.request_action_error = funnel_error or message_error
                 await db.commit()
             except Exception as exc:
                 approval_error = str(exc)[:1000]
                 if "USER_ALREADY_PARTICIPANT" in approval_error.upper():
                     event.request_approved_at = datetime.now(timezone.utc)
-                    event.request_action_error = message_error
+                    event.request_action_error = funnel_error or message_error
                     await db.commit()
                 else:
                     event.request_action_error = approval_error
@@ -450,11 +538,12 @@ async def process_channel_join_request_action_task(
                     }
 
         return {
-            "status": "partial" if message_error else "completed",
+            "status": "partial" if message_error or funnel_error else "completed",
             "event_id": str(event.id),
             "message_sent": event.request_message_sent_at is not None,
+            "funnel_started": event.funnel_started_at is not None,
             "approved": event.request_approved_at is not None,
-            "error": message_error,
+            "error": funnel_error or message_error,
         }
 
 
@@ -478,6 +567,17 @@ async def recover_channel_join_request_actions_task(ctx: dict) -> dict:
                     and_(
                         TelegramChannelSubscriptionEvent.auto_approve_requested.is_(True),
                         TelegramChannelSubscriptionEvent.request_approved_at.is_(None),
+                        or_(
+                            TelegramChannelSubscriptionEvent.auto_start_requested.is_(False),
+                            and_(
+                                TelegramChannelSubscriptionEvent.funnel_start_processed_at.is_not(None),
+                                TelegramChannelSubscriptionEvent.funnel_start_error.is_(None),
+                            ),
+                        ),
+                    ),
+                    and_(
+                        TelegramChannelSubscriptionEvent.auto_start_requested.is_(True),
+                        TelegramChannelSubscriptionEvent.funnel_start_processed_at.is_(None),
                     ),
                 ),
             )

@@ -563,6 +563,27 @@ class ChatRepository(BaseRepository[Chat]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_external_user(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID,
+        external_user_id: str,
+    ) -> Optional[Chat]:
+        result = await self.db.execute(
+            select(Chat)
+            .where(
+                Chat.project_id == project_id,
+                Chat.bot_id == bot_id,
+                Chat.external_user_id == external_user_id,
+                Chat.is_deleted.is_(False),
+                Chat.reset_at.is_(None),
+            )
+            .order_by(Chat.updated_at.desc(), Chat.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_active_by_telegram_identity(
         self,
         *,

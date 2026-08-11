@@ -54,6 +54,8 @@ class SystemGlobalConfigOut(BaseModel):
     tg_backup_channel_id: Optional[str] = None
     is_tg_backup_enabled: bool = False
     admin_bot_token: Optional[str] = None
+    channel_join_auto_start: bool = True
+    channel_join_auto_approve: bool = True
 
 
 class SystemGlobalConfigUpdate(BaseModel):
@@ -61,6 +63,8 @@ class SystemGlobalConfigUpdate(BaseModel):
     tg_backup_channel_id: Optional[str] = Field(default=None, max_length=100)
     is_tg_backup_enabled: bool = False
     admin_bot_token: Optional[str] = Field(default=None, max_length=255)
+    channel_join_auto_start: bool = True
+    channel_join_auto_approve: bool = True
 
     @field_validator(
         "tg_backup_bot_token",

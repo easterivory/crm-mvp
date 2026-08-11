@@ -161,6 +161,7 @@ def test_username_only_import_is_claimed_without_starting_funnel() -> None:
     service.db = SimpleNamespace(begin_nested=nested_transaction)
     service.chat_repo = SimpleNamespace(
         get_by_external=AsyncMock(return_value=None),
+        get_by_external_user=AsyncMock(return_value=None),
         claim_pending_import_identity=AsyncMock(return_value=claimed_chat),
     )
 

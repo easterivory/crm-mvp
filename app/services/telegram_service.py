@@ -750,6 +750,24 @@ class TelegramService:
                     chat = updated_chat
             return chat, False, False
 
+        # A join-request bot may create the CRM chat through Telegram's
+        # temporary user_chat_id before the user's first private message. Match
+        # that row by the stable Telegram user id and bind the real chat id.
+        identity_chat = await self.chat_repo.get_by_external_user(
+            project_id=project_id,
+            bot_id=bot_id,
+            external_user_id=external_user_id,
+        )
+        if identity_chat is not None:
+            contact_name = self._contact_name_from_message(message)
+            updates = {"external_chat_id": external_chat_id}
+            if contact_name and not identity_chat.contact_name:
+                updates["contact_name"] = contact_name
+            if tracking_link_id is not None and identity_chat.tracking_link_id is None:
+                updates["tracking_link_id"] = tracking_link_id
+            rebound = await self.chat_repo.update_by_id(identity_chat.id, **updates)
+            return rebound or identity_chat, False, False
+
         username_key = self._telegram_username_key(message)
         if username_key:
             try:

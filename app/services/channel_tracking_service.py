@@ -271,15 +271,10 @@ class ChannelTrackingService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Tracker bot token is not configured",
             )
-        if not channel.bot_is_admin or not channel.can_invite_users:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    "Tracker bot must be a channel administrator with permission "
-                    "to invite users"
-                ),
-            )
-        await self._release_read_transaction()
+        chat_data, membership = await self._inspect_channel(
+            bot=bot,
+            chat_reference=str(channel.telegram_chat_id),
+        )
         telegram_name = f"crm-{code}"[:32]
         try:
             result = await self.sender.create_chat_invite_link(
@@ -293,6 +288,10 @@ class ChannelTrackingService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Telegram did not create the channel invite link: {exc}",
             ) from exc
+        channel.title = self._channel_title(chat_data)
+        channel.username = self._optional_text(chat_data.get("username"))
+        channel.description = self._optional_text(chat_data.get("description"))
+        self._apply_membership(channel, membership)
         return PreparedChannelInvite(
             invite_link=str(result["invite_link"]),
             telegram_name=self._optional_text(result.get("name")) or telegram_name,
