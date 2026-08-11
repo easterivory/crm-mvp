@@ -199,8 +199,21 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
         return messages.join('; ')
       }
     }
+    const responseBody = err.response?.data
+    if (typeof responseBody === 'string' && responseBody.trim()) {
+      const normalized = responseBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      if (normalized && normalized !== 'Internal Server Error') {
+        return normalized.slice(0, 500)
+      }
+    }
     if (err.code === 'ERR_NETWORK') {
       return 'API недоступен.'
+    }
+    if (err.response?.status) {
+      return `${fallback} HTTP ${err.response.status}. Ошибка записана в серверный лог.`
+    }
+    if (err.message) {
+      return `${fallback} ${err.message}`
     }
   }
   return fallback

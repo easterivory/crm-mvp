@@ -1,8 +1,10 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 
 from app.api import spa, telegram_contact
 from app.api.v1.routers import (
@@ -40,6 +42,7 @@ from app.services.telegram_webhook_sync_service import sync_telegram_webhook_sub
 
 
 configure_file_logging()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -60,6 +63,22 @@ app = FastAPI(
     redoc_url="/api/redoc",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def log_unhandled_request_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        # Uvicorn's error logger does not propagate into the bounded application
+        # log file used by the super-admin export. Keep request bodies and query
+        # strings out of this record because they can contain credentials.
+        logger.exception(
+            "Unhandled API request error method=%s path=%s",
+            request.method,
+            request.url.path,
+        )
+        raise
 
 app.add_middleware(
     CORSMiddleware,

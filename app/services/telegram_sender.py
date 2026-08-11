@@ -1006,14 +1006,26 @@ class TelegramSenderService:
         files: dict[str, tuple[str, bytes, str]] | None = None,
         timeout: float = 10.0,
     ) -> dict:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"https://api.telegram.org/bot{token}/{method}",
-                json=json_payload,
-                data=data,
-                files=files,
-            )
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{token}/{method}",
+                    json=json_payload,
+                    data=data,
+                    files=files,
+                )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Telegram {method} request failed: {type(exc).__name__}"
+            ) from exc
+
+        try:
             payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Telegram {method} returned a non-JSON response "
+                f"(HTTP {response.status_code})"
+            ) from exc
 
         if response.status_code >= 400 or payload.get("ok") is not True:
             raise RuntimeError(payload.get("description") or f"Telegram rejected {method}")

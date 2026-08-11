@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
@@ -33,6 +34,29 @@ from app.services.lander_admin_service import LanderAdminService
 from app.services.telegram_service import TelegramService, TelegramStartPayload
 from app.services.telegram_sender import TelegramSenderService
 from app.services.tracking_metrics_service import TrackingMetricsService
+
+
+class _TelegramHTTPClientStub:
+    def __init__(
+        self,
+        *,
+        response: httpx.Response | None = None,
+        error: Exception | None = None,
+    ):
+        self.response = response
+        self.error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+    async def post(self, *args, **kwargs) -> httpx.Response:
+        if self.error is not None:
+            raise self.error
+        assert self.response is not None
+        return self.response
 
 
 def test_existing_tracking_payload_keeps_bot_destination_by_default() -> None:
@@ -335,6 +359,64 @@ def test_join_request_sender_uses_temporary_chat_before_approval() -> None:
         assert approved is True
         assert sender._post_bot_api.await_args_list[0].kwargs["method"] == "sendMessage"
         assert sender._post_bot_api.await_args_list[1].kwargs["method"] == "approveChatJoinRequest"
+
+    asyncio.run(run())
+
+
+def test_telegram_management_request_reports_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        request = httpx.Request("POST", "https://api.telegram.org")
+        client = _TelegramHTTPClientStub(
+            error=httpx.ConnectError("connection failed", request=request)
+        )
+        monkeypatch.setattr(
+            "app.services.telegram_sender.httpx.AsyncClient",
+            lambda **_kwargs: client,
+        )
+
+        sender = TelegramSenderService(SimpleNamespace())
+        with pytest.raises(
+            RuntimeError,
+            match=r"Telegram createChatInviteLink request failed: ConnectError",
+        ):
+            await sender.create_chat_invite_link(
+                "secret-token",
+                chat_id=-1001234567890,
+                name="diagnostic",
+                creates_join_request=True,
+            )
+
+    asyncio.run(run())
+
+
+def test_telegram_management_request_reports_non_json_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        response = httpx.Response(
+            502,
+            text="Bad gateway",
+            request=httpx.Request("POST", "https://api.telegram.org"),
+        )
+        client = _TelegramHTTPClientStub(response=response)
+        monkeypatch.setattr(
+            "app.services.telegram_sender.httpx.AsyncClient",
+            lambda **_kwargs: client,
+        )
+
+        sender = TelegramSenderService(SimpleNamespace())
+        with pytest.raises(
+            RuntimeError,
+            match=r"Telegram createChatInviteLink returned a non-JSON response \(HTTP 502\)",
+        ):
+            await sender.create_chat_invite_link(
+                "secret-token",
+                chat_id=-1001234567890,
+                name="diagnostic",
+                creates_join_request=True,
+            )
 
     asyncio.run(run())
 
