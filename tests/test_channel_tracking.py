@@ -34,6 +34,7 @@ from app.services.lander_admin_service import LanderAdminService
 from app.services.telegram_service import TelegramService, TelegramStartPayload
 from app.services.telegram_sender import TelegramSenderService
 from app.services.tracking_metrics_service import TrackingMetricsService
+from app.services.tracking_service import TrackingService
 
 
 class _TelegramHTTPClientStub:
@@ -73,6 +74,22 @@ def test_existing_tracking_payload_keeps_bot_destination_by_default() -> None:
     assert payload.channel_request_message_enabled is False
     assert payload.channel_request_message is None
     assert payload.channel_auto_approve is False
+
+
+def test_channel_tracking_url_uses_configured_technical_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.tracking_service.settings.LANDER_TECH_DOMAIN",
+        "LP.SFERA.CYOU.",
+    )
+
+    assert TrackingService._public_tracking_url(
+        destination_type="channel",
+        code="channel_01",
+        bot_username=None,
+        invite_link="https://telegram.me/+private-invite",
+    ) == "https://lp.sfera.cyou/join/channel_01"
 
 
 def test_global_channel_join_actions_default_to_enabled() -> None:

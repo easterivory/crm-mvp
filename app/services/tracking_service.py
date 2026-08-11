@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.constants import RoleName, TrackingCostModel, TrackingSpendSource
 from app.core.facebook_events import normalize_facebook_event_mappings
 from app.core.lander_urls import build_channel_tracking_url
