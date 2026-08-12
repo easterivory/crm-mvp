@@ -254,8 +254,14 @@ class UtmBridgeService:
 
         fbp = cls._clean_context_value(browser_context.get("fbp") or browser_context.get("_fbp"), 500)
         fbc = cls._clean_context_value(browser_context.get("fbc") or browser_context.get("_fbc"), 500)
-        fbclid = cls._clean_context_value(query_payload.get("fbclid"), 500)
-        if fbc is None and fbclid is not None:
+        raw_fbclid = query_payload.get("fbclid")
+        if isinstance(raw_fbclid, list):
+            raw_fbclid = next(
+                (item for item in reversed(raw_fbclid) if str(item or "").strip()),
+                None,
+            )
+        fbclid = cls._clean_context_value(raw_fbclid, 500)
+        if fbclid is not None and (fbc is None or not fbc.endswith(f".{fbclid}")):
             fbc = f"fb.1.{int(time.time() * 1000)}.{fbclid}"
 
         context: dict[str, str] = {}

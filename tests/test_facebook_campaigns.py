@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -715,6 +716,61 @@ class FacebookCAPIPayloadTests(unittest.TestCase):
         )
         self.assertNotEqual(event["user_data"]["em"][0], "Anna@example.com")
 
+    def test_channel_payload_uses_browser_click_context_for_ad_attribution(self) -> None:
+        event_time = int(time.time())
+        payload = FacebookCAPIService.build_external_payload(
+            event_name="Subscribe",
+            external_id="8053174284",
+            first_name="Viktor",
+            last_name=None,
+            event_time=event_time,
+            custom_data={"tracking_code": "channel-facebook"},
+            event_id="channel:event:42",
+            browser_context={
+                "fbc": "fb.1.1800000000000.click-id",
+                "fbp": "fb.1.1800000000000.browser-id",
+                "client_ip_address": "203.0.113.20",
+                "client_user_agent": "Browser/1.0",
+                "event_source_url": (
+                    "https://ads.example/l/channel-facebook?fbclid=click-id"
+                ),
+            },
+        )
+
+        event = payload["data"][0]
+        self.assertEqual(event["action_source"], "website")
+        self.assertEqual(
+            event["event_source_url"],
+            "https://ads.example/l/channel-facebook?fbclid=click-id",
+        )
+        self.assertEqual(event["user_data"]["fbc"], "fb.1.1800000000000.click-id")
+        self.assertEqual(event["user_data"]["fbp"], "fb.1.1800000000000.browser-id")
+        self.assertEqual(event["user_data"]["client_ip_address"], "203.0.113.20")
+
+    def test_legacy_channel_payload_without_browser_context_keeps_other_source(self) -> None:
+        payload = FacebookCAPIService.build_external_payload(
+            event_name="Subscribe",
+            external_id="42",
+            first_name=None,
+            last_name=None,
+            event_time=int(time.time()),
+            custom_data=None,
+        )
+
+        event = payload["data"][0]
+        self.assertEqual(event["action_source"], "other")
+        self.assertNotIn("event_source_url", event)
+
+    def test_channel_worker_keeps_queue_contract_compatible(self) -> None:
+        from inspect import signature
+
+        from app.workers.postback_worker import send_fb_capi_channel_event_task
+
+        self.assertNotIn(
+            "attribution_data",
+            signature(send_fb_capi_channel_event_task).parameters,
+        )
+
 
 class FacebookLanderMarkupTests(unittest.TestCase):
     def test_campaign_markup_uses_mapping_and_browser_context_bridge(self) -> None:
@@ -731,6 +787,7 @@ class FacebookLanderMarkupTests(unittest.TestCase):
             tracking_link=link,
             browser_event_seed="seed123",
             bridge_url="/l/example/bridge/start_1234567890",
+            channel_invite_url="/l/example/channel-invite/start_1234567890",
         )
 
         self.assertIn("ViewContent", markup)
@@ -738,6 +795,8 @@ class FacebookLanderMarkupTests(unittest.TestCase):
         self.assertIn("/l/example/bridge/start_1234567890", markup)
         self.assertIn("eventID", markup)
         self.assertIn("_fbp", markup)
+        self.assertIn("__crmResolveTelegramTarget", markup)
+        self.assertIn("/l/example/channel-invite/start_1234567890", markup)
 
 
 if __name__ == "__main__":

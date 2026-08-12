@@ -35,6 +35,7 @@ from app.services.telegram_service import TelegramService, TelegramStartPayload
 from app.services.telegram_sender import TelegramSenderService
 from app.services.tracking_metrics_service import TrackingMetricsService
 from app.services.tracking_service import TrackingService
+from app.services.utm_bridge_service import UtmBridgeService
 
 
 class _TelegramHTTPClientStub:
@@ -58,6 +59,14 @@ class _TelegramHTTPClientStub:
             raise self.error
         assert self.response is not None
         return self.response
+
+
+class _AsyncContext:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
 
 
 def test_existing_tracking_payload_keeps_bot_destination_by_default() -> None:
@@ -191,6 +200,129 @@ def test_channel_click_url_uses_public_tracking_hop() -> None:
     )
 
 
+def test_current_fbclid_replaces_stale_fbc_cookie() -> None:
+    context = UtmBridgeService.normalize_facebook_context(
+        {"fbc": "fb.1.1700000000000.previous-click"},
+        {"fbclid": "current-click"},
+    )
+
+    assert context["fbc"].endswith(".current-click")
+    assert "previous-click" not in context["fbc"]
+
+
+def test_custom_channel_lander_marks_existing_invite_for_click_bridge() -> None:
+    service = LanderService(SimpleNamespace())
+    lander = SimpleNamespace(
+        tracking_link=SimpleNamespace(
+            invite_link="https://t.me/+campaign-invite",
+            bot=None,
+        )
+    )
+
+    rendered = service.replace_bot_links(
+        '<a class="join" href="https://t.me/+campaign-invite">Join</a>',
+        "https://telegram.me/+campaign-invite",
+        lander,
+    )
+
+    assert 'data-crm-telegram-link' in rendered
+    assert 'href="https://telegram.me/+campaign-invite"' in rendered
+
+
+def test_channel_facebook_click_creates_per_visit_invite_with_context() -> None:
+    async def run() -> None:
+        project_id = uuid4()
+        tracking_link_id = uuid4()
+        channel_id = uuid4()
+        db = SimpleNamespace(
+            in_transaction=lambda: True,
+            commit=AsyncMock(),
+            begin_nested=lambda: _AsyncContext(),
+            add=Mock(),
+            flush=AsyncMock(),
+        )
+        bridge = SimpleNamespace(
+            load_lander_start=AsyncMock(
+                return_value=(
+                    "channel-facebook",
+                    {
+                        "fbclid": "click-id",
+                        "fbc": "fb.1.1786406400000.click-id",
+                        "fbp": "fb.1.1786406400000.browser-id",
+                        "client_ip_address": "203.0.113.10",
+                        "client_user_agent": "Browser/1.0",
+                        "event_source_url": (
+                            "https://ads.example/l/channel-facebook?fbclid=click-id"
+                        ),
+                    },
+                )
+            ),
+            update_lander_start_context=AsyncMock(return_value=True),
+            normalize_start_key=lambda value: value,
+        )
+        service = LanderService(db, utm_bridge=bridge)
+        service.resolve_lander_request = AsyncMock(  # type: ignore[method-assign]
+            return_value=SimpleNamespace(
+                tracking_link=SimpleNamespace(
+                    id=tracking_link_id,
+                    project_id=project_id,
+                    code="channel-facebook",
+                    ref_code="channel-facebook",
+                    destination_type="channel",
+                    is_active=True,
+                    invite_link="https://t.me/+campaign-fallback",
+                    fb_campaign_enabled=True,
+                    fb_pixel_id="123456789",
+                    fb_capi_token="token",
+                    channel_join_request=False,
+                    channel=SimpleNamespace(
+                        id=channel_id,
+                        is_active=True,
+                        can_invite_users=True,
+                        telegram_chat_id=-1001234567890,
+                        tracker_bot=SimpleNamespace(telegram_token="tracker-token"),
+                    ),
+                )
+            )
+        )
+        service._get_attribution_invite = AsyncMock(  # type: ignore[method-assign]
+            return_value=None
+        )
+        service._maybe_cleanup_attribution_invites = AsyncMock()  # type: ignore[method-assign]
+        service.telegram_sender.create_chat_invite_link = AsyncMock(
+            return_value={
+                "invite_link": "https://t.me/+visitor-specific",
+                "name": "fb-1234567890",
+                "creates_join_request": False,
+            }
+        )
+
+        result = await service.resolve_channel_click_target(
+            host="ads.example",
+            slug="channel-facebook",
+            start_key="start_1234567890",
+            browser_context={
+                "fbp": "fb.1.1786406400000.browser-id",
+                "fbc": "fb.1.1786406400000.click-id",
+            },
+        )
+
+        assert result == "https://telegram.me/+visitor-specific"
+        service.telegram_sender.create_chat_invite_link.assert_awaited_once()
+        create_kwargs = service.telegram_sender.create_chat_invite_link.await_args.kwargs
+        assert create_kwargs["member_limit"] == 1
+        stored = db.add.call_args.args[0]
+        assert stored.tracking_link_id == tracking_link_id
+        assert stored.lander_start_key == "start_1234567890"
+        assert stored.attribution_data_json["fbc"] == "fb.1.1786406400000.click-id"
+        assert stored.attribution_data_json["event_source_url"].startswith(
+            "https://ads.example/l/channel-facebook"
+        )
+        assert db.commit.await_count == 2
+
+    asyncio.run(run())
+
+
 def test_telegram_channel_membership_updates_are_parsed() -> None:
     update = TelegramUpdate.model_validate(
         {
@@ -266,6 +398,214 @@ def test_join_request_snapshots_optional_actions() -> None:
         assert insert_kwargs["request_message_text"] == "Привет!"
         assert insert_kwargs["auto_approve_requested"] is True
         assert insert_kwargs["auto_start_requested"] is True
+
+    asyncio.run(run())
+
+
+def test_join_request_copies_click_attribution_from_exact_invite() -> None:
+    async def run() -> None:
+        event_id = uuid4()
+        tracking_link_id = uuid4()
+        attribution = {
+            "fbc": "fb.1.1786406400000.click-id",
+            "fbp": "fb.1.1786406400000.browser-id",
+            "event_source_url": "https://ads.example/l/channel?fbclid=click-id",
+        }
+        channel = SimpleNamespace(id=uuid4(), project_id=uuid4())
+        inserted = SimpleNamespace(id=event_id)
+        service = ChannelSubscriptionService(SimpleNamespace())
+        service._find_channel = AsyncMock(return_value=channel)  # type: ignore[method-assign]
+        service._already_processed = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        service._resolve_invite = AsyncMock(  # type: ignore[method-assign]
+            return_value=SimpleNamespace(
+                tracking_link_id=tracking_link_id,
+                attribution_data_json=attribution,
+            )
+        )
+        service._join_request_options = AsyncMock(  # type: ignore[method-assign]
+            return_value=(None, False, False)
+        )
+        service._insert_event = AsyncMock(return_value=inserted)  # type: ignore[method-assign]
+        service._upsert_subscription = AsyncMock()  # type: ignore[method-assign]
+        request = TelegramChatJoinRequest.model_validate(
+            {
+                "chat": {"id": -1001234567890, "type": "channel", "title": "News"},
+                "from": {"id": 42, "is_bot": False, "first_name": "Lead"},
+                "user_chat_id": 9876543210,
+                "date": 1786406400,
+                "invite_link": {
+                    "invite_link": "https://t.me/+one-visitor-invite",
+                    "creates_join_request": True,
+                },
+            }
+        )
+
+        await service.handle_join_request(
+            update_id=903,
+            bot_id=uuid4(),
+            event=request,
+        )
+
+        assert service._insert_event.await_args.kwargs["attribution_data"] == attribution
+        assert (
+            service._upsert_subscription.await_args.kwargs["attribution_data"]
+            == attribution
+        )
+
+    asyncio.run(run())
+
+
+def test_attribution_invite_context_is_not_shared_with_another_user() -> None:
+    async def run() -> None:
+        attribution = {
+            "fbc": "fb.1.1786406400000.click-id",
+            "fbp": "fb.1.1786406400000.browser-id",
+        }
+        service = ChannelSubscriptionService(SimpleNamespace())
+        invite = SimpleNamespace(
+            is_attribution_session=True,
+            claimed_by_telegram_user_id=42,
+            attribution_data_json=attribution,
+        )
+
+        assert await service._claim_invite_attribution(invite, 42) == attribution
+        assert await service._claim_invite_attribution(invite, 43) == {}
+
+    asyncio.run(run())
+
+
+def test_forwarded_attribution_invite_does_not_reuse_old_subscription_context() -> None:
+    async def run() -> None:
+        channel = SimpleNamespace(id=uuid4(), project_id=uuid4())
+        invite = SimpleNamespace(
+            tracking_link_id=uuid4(),
+            is_attribution_session=True,
+            claimed_by_telegram_user_id=41,
+            attribution_data_json={"fbc": "fb.1.original.click"},
+        )
+        old_subscription = SimpleNamespace(
+            tracking_link_id=uuid4(),
+            attribution_data_json={"fbc": "fb.1.old.click"},
+        )
+        service = ChannelSubscriptionService(SimpleNamespace())
+        service._find_channel = AsyncMock(return_value=channel)  # type: ignore[method-assign]
+        service._already_processed = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        service._resolve_invite = AsyncMock(return_value=invite)  # type: ignore[method-assign]
+        service._get_subscription = AsyncMock(  # type: ignore[method-assign]
+            return_value=old_subscription
+        )
+        service._insert_event = AsyncMock(  # type: ignore[method-assign]
+            return_value=SimpleNamespace(id=uuid4())
+        )
+        service._upsert_subscription = AsyncMock()  # type: ignore[method-assign]
+        service._queue_facebook_event = AsyncMock()  # type: ignore[method-assign]
+        update = TelegramUpdate.model_validate(
+            {
+                "update_id": 904,
+                "chat_member": {
+                    "chat": {
+                        "id": -1001234567890,
+                        "type": "channel",
+                        "title": "News",
+                    },
+                    "from": {"id": 1, "is_bot": False, "first_name": "Admin"},
+                    "date": 1786406400,
+                    "old_chat_member": {
+                        "status": "left",
+                        "user": {"id": 42, "is_bot": False, "first_name": "Lead"},
+                    },
+                    "new_chat_member": {
+                        "status": "member",
+                        "user": {"id": 42, "is_bot": False, "first_name": "Lead"},
+                    },
+                    "invite_link": {
+                        "invite_link": "https://t.me/+forwarded",
+                        "creates_join_request": False,
+                    },
+                },
+            }
+        ).chat_member
+        assert update is not None
+
+        await service.handle_chat_member_update(
+            update_id=904,
+            bot_id=uuid4(),
+            event=update,
+        )
+
+        assert service._insert_event.await_args.kwargs["attribution_data"] == {}
+
+    asyncio.run(run())
+
+
+def test_channel_join_click_attribution_replaces_an_older_channel_campaign() -> None:
+    async def run() -> None:
+        old_tracking_link_id = uuid4()
+        new_tracking_link_id = uuid4()
+        chat = SimpleNamespace(
+            id=uuid4(),
+            external_chat_id="9876543210",
+            tracking_link_id=old_tracking_link_id,
+            contact_name="Lead",
+        )
+        updated_chat = SimpleNamespace(**vars(chat))
+        updated_chat.tracking_link_id = new_tracking_link_id
+        service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
+        service.chat_repo = SimpleNamespace(
+            get_by_external=AsyncMock(return_value=chat),
+            get_by_external_user=AsyncMock(),
+            update_by_id=AsyncMock(return_value=updated_chat),
+        )
+        event = SimpleNamespace(
+            project_id=uuid4(),
+            tracker_bot_id=uuid4(),
+            telegram_user_id=42,
+            tracking_link_id=new_tracking_link_id,
+            first_name="Lead",
+            last_name=None,
+            attribution_data_json={"fbc": "fb.1.current-click"},
+        )
+
+        result = await service._ensure_chat(event=event, user_chat_id=9876543210)
+
+        assert result.tracking_link_id == new_tracking_link_id
+        service.chat_repo.update_by_id.assert_awaited_once_with(
+            chat.id,
+            tracking_link_id=new_tracking_link_id,
+        )
+
+    asyncio.run(run())
+
+
+def test_legacy_channel_join_without_click_context_keeps_existing_campaign() -> None:
+    async def run() -> None:
+        old_tracking_link_id = uuid4()
+        chat = SimpleNamespace(
+            id=uuid4(),
+            external_chat_id="9876543210",
+            tracking_link_id=old_tracking_link_id,
+            contact_name="Lead",
+        )
+        service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
+        service.chat_repo = SimpleNamespace(
+            get_by_external=AsyncMock(return_value=chat),
+            get_by_external_user=AsyncMock(),
+            update_by_id=AsyncMock(),
+        )
+        event = SimpleNamespace(
+            project_id=uuid4(),
+            tracker_bot_id=uuid4(),
+            telegram_user_id=42,
+            tracking_link_id=uuid4(),
+            first_name="Lead",
+            last_name=None,
+            attribution_data_json={},
+        )
+
+        result = await service._ensure_chat(event=event, user_chat_id=9876543210)
+
+        assert result.tracking_link_id == old_tracking_link_id
+        service.chat_repo.update_by_id.assert_not_awaited()
 
     asyncio.run(run())
 
@@ -434,6 +774,36 @@ def test_telegram_management_request_reports_non_json_response(
                 name="diagnostic",
                 creates_join_request=True,
             )
+
+    asyncio.run(run())
+
+
+def test_attribution_invite_is_short_lived_and_single_use() -> None:
+    async def run() -> None:
+        sender = TelegramSenderService(SimpleNamespace())
+        sender._post_bot_api = AsyncMock(  # type: ignore[method-assign]
+            return_value={
+                "ok": True,
+                "result": {
+                    "invite_link": "https://t.me/+single-use",
+                    "name": "fb-start",
+                    "creates_join_request": False,
+                },
+            }
+        )
+
+        await sender.create_chat_invite_link(
+            "token",
+            chat_id=-1001234567890,
+            name="fb-start",
+            creates_join_request=False,
+            expire_date=1_800_086_400,
+            member_limit=1,
+        )
+
+        payload = sender._post_bot_api.await_args.kwargs["json_payload"]
+        assert payload["expire_date"] == 1_800_086_400
+        assert payload["member_limit"] == 1
 
     asyncio.run(run())
 
@@ -710,6 +1080,75 @@ def test_channel_facebook_event_commits_membership_before_queue(
 
         assert result == "job-id"
         assert calls == ["commit", "queue"]
+
+    asyncio.run(run())
+
+
+def test_channel_capi_worker_loads_persisted_browser_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        from app.workers import postback_worker
+
+        tracking_link_id = uuid4()
+        link = SimpleNamespace(
+            id=tracking_link_id,
+            destination_type="channel",
+            fb_pixel_id="123456789",
+            fb_capi_token="token",
+            fb_proxy_url=None,
+            fb_test_event_code=None,
+        )
+        attribution = {
+            "fbc": "fb.1.1786406400000.click-id",
+            "fbp": "fb.1.1786406400000.browser-id",
+            "client_ip_address": "203.0.113.20",
+            "client_user_agent": "Browser/1.0",
+            "event_source_url": "https://ads.example/l/channel?fbclid=click-id",
+        }
+        db = SimpleNamespace(
+            execute=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(scalar_one_or_none=lambda: link),
+                    SimpleNamespace(scalar_one_or_none=lambda: attribution),
+                ]
+            )
+        )
+
+        class _DatabaseContext:
+            async def __aenter__(self):
+                return db
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+        send_event = AsyncMock(return_value={"events_received": 1})
+        monkeypatch.setattr(
+            postback_worker,
+            "get_db_session",
+            lambda: _DatabaseContext(),
+        )
+        monkeypatch.setattr(
+            postback_worker.FacebookCAPIService,
+            "send_external_event",
+            send_event,
+        )
+        event_id = f"channel:{uuid4()}:42:channel_subscribe:904"
+
+        result = await postback_worker.send_fb_capi_channel_event_task(
+            {"job_try": 1},
+            str(tracking_link_id),
+            "42",
+            "Subscribe",
+            "Lead",
+            None,
+            {"tracking_code": "channel"},
+            int(datetime.now(timezone.utc).timestamp()),
+            event_id,
+        )
+
+        assert result["status"] == "completed"
+        assert send_event.await_args.kwargs["browser_context"] == attribution
 
     asyncio.run(run())
 

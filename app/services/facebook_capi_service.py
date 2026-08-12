@@ -128,6 +128,7 @@ class FacebookCAPIService:
         event_time: int | None = None,
         custom_data: dict[str, Any] | None = None,
         event_id: str | None = None,
+        browser_context: dict[str, Any] | None = None,
         proxy_url: str | None = None,
         test_event_code: str | None = None,
     ) -> dict[str, Any]:
@@ -135,30 +136,17 @@ class FacebookCAPIService:
         normalized_token = cls.validate_token(token)
         normalized_event_name = cls.validate_event_name(event_name)
         normalized_event_time = cls.validate_event_time(event_time)
-        user_data: dict[str, Any] = {
-            "external_id": [cls.hash_data(external_id)],
-        }
-        if cls._clean_string(first_name):
-            user_data["fn"] = [cls.hash_data(str(first_name))]
-        if cls._clean_string(last_name):
-            user_data["ln"] = [cls.hash_data(str(last_name))]
-        event: dict[str, Any] = {
-            "event_name": normalized_event_name,
-            "event_time": normalized_event_time,
-            "event_id": cls.validate_event_id(
-                event_id
-                or f"external:{cls.hash_data(external_id)[:16]}:{normalized_event_name}:{normalized_event_time}"
-            ),
-            "action_source": "other",
-            "user_data": user_data,
-        }
-        cleaned_custom_data = cls.clean_custom_data(custom_data)
-        if cleaned_custom_data:
-            event["custom_data"] = cleaned_custom_data
-        payload: dict[str, Any] = {"data": [event]}
-        normalized_test_code = cls._clean_string(test_event_code)
-        if normalized_test_code:
-            payload["test_event_code"] = normalized_test_code
+        payload = cls.build_external_payload(
+            event_name=normalized_event_name,
+            external_id=external_id,
+            first_name=first_name,
+            last_name=last_name,
+            event_time=normalized_event_time,
+            custom_data=custom_data,
+            event_id=event_id,
+            browser_context=browser_context,
+            test_event_code=test_event_code,
+        )
 
         graph_version = cls.validate_graph_api_version(settings.FACEBOOK_GRAPH_API_VERSION)
         url = f"https://graph.facebook.com/{graph_version}/{normalized_pixel_id}/events"
@@ -187,9 +175,80 @@ class FacebookCAPIService:
                 retryable=response.status_code == 429 or response.status_code >= 500,
             )
         try:
-            return response.json()
+            data = response.json()
         except ValueError as exc:
             raise FacebookCAPIError("Facebook CAPI returned non-JSON response") from exc
+        context = browser_context if isinstance(browser_context, dict) else {}
+        logger.info(
+            "Facebook external CAPI event sent pixel_id=%s event_name=%s "
+            "match_context=%s response=%s",
+            normalized_pixel_id,
+            normalized_event_name,
+            sorted(
+                key
+                for key in (
+                    "fbc",
+                    "fbp",
+                    "client_ip_address",
+                    "client_user_agent",
+                    "event_source_url",
+                )
+                if cls._clean_string(context.get(key))
+            ),
+            data,
+        )
+        return data
+
+    @classmethod
+    def build_external_payload(
+        cls,
+        *,
+        event_name: str,
+        external_id: str,
+        first_name: str | None,
+        last_name: str | None,
+        event_time: int,
+        custom_data: dict[str, Any] | None,
+        event_id: str | None = None,
+        browser_context: dict[str, Any] | None = None,
+        test_event_code: str | None = None,
+    ) -> dict[str, Any]:
+        user_data: dict[str, Any] = {
+            "external_id": [cls.hash_data(external_id)],
+        }
+        context = browser_context if isinstance(browser_context, dict) else {}
+        for source_key in ("client_ip_address", "client_user_agent", "fbp", "fbc"):
+            value = cls._clean_string(context.get(source_key))
+            if value:
+                user_data[source_key] = value
+        if cls._clean_string(first_name):
+            user_data["fn"] = [cls.hash_data(str(first_name))]
+        if cls._clean_string(last_name):
+            user_data["ln"] = [cls.hash_data(str(last_name))]
+
+        source_url = cls.validate_event_source_url(
+            cls._clean_string(context.get("event_source_url"))
+        )
+        event: dict[str, Any] = {
+            "event_name": cls.validate_event_name(event_name),
+            "event_time": cls.validate_event_time(event_time),
+            "event_id": cls.validate_event_id(
+                event_id
+                or f"external:{cls.hash_data(external_id)[:16]}:{event_name}:{event_time}"
+            ),
+            "action_source": "website" if source_url else "other",
+            "user_data": user_data,
+        }
+        if source_url:
+            event["event_source_url"] = source_url
+        cleaned_custom_data = cls.clean_custom_data(custom_data)
+        if cleaned_custom_data:
+            event["custom_data"] = cleaned_custom_data
+        payload: dict[str, Any] = {"data": [event]}
+        normalized_test_code = cls._clean_string(test_event_code)
+        if normalized_test_code:
+            payload["test_event_code"] = normalized_test_code
+        return payload
 
     @classmethod
     def build_payload(

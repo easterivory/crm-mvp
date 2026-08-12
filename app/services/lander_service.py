@@ -12,9 +12,11 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,7 +27,8 @@ from app.core.telegram_links import (
     build_telegram_bot_start_link,
     canonicalize_telegram_web_link,
 )
-from app.models.channel_tracking import TelegramChannel
+from app.core.redis import get_redis
+from app.models.channel_tracking import TelegramChannel, TelegramChannelInviteLink
 from app.models.lander import ProjectDomain, ProjectLander
 from app.models.tracking import TrackingLink
 from app.repositories.tracking_repository import TrackingEventRepository
@@ -55,6 +58,7 @@ class LanderService:
         r"(?P<prefix>\bhref\s*=\s*)(?P<quote>[\"'])(?P<url>[^\"']*)(?P=quote)",
         re.IGNORECASE,
     )
+    ANCHOR_TAG_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
 
     def __init__(
         self,
@@ -158,6 +162,10 @@ class LanderService:
             tracking_link=lander.tracking_link,
             browser_event_seed=browser_event_seed,
             bridge_url=f"/l/{lander.slug}/bridge/{start_key}",
+            channel_invite_url=self._channel_attribution_endpoint(
+                lander,
+                start_key,
+            ),
         )
 
         if lander.type == self.DEFAULT_TG_REDIRECT:
@@ -176,6 +184,227 @@ class LanderService:
 
         await self._record_lander_click(lander)
         return rendered_html
+
+    async def resolve_channel_click_target(
+        self,
+        *,
+        host: str,
+        slug: str,
+        start_key: str,
+        browser_context: Mapping[str, object] | None = None,
+    ) -> str:
+        """Return a one-visitor channel invite that carries Meta click context."""
+        lander = await self.resolve_lander_request(host=host, slug=slug)
+        tracking_link = lander.tracking_link
+        static_invite = canonicalize_telegram_web_link(
+            tracking_link.invite_link if tracking_link is not None else None
+        )
+        if (
+            tracking_link is None
+            or tracking_link.destination_type != "channel"
+            or not tracking_link.is_active
+            or not static_invite
+        ):
+            raise LanderNotFoundError("Channel tracking destination is unavailable")
+        if (
+            not tracking_link.fb_campaign_enabled
+            or not str(tracking_link.fb_pixel_id or "").strip()
+            or not str(tracking_link.fb_capi_token or "").strip()
+        ):
+            return static_invite
+
+        bridge = await self.utm_bridge.load_lander_start(start_key)
+        expected_code = (tracking_link.code or tracking_link.ref_code or "").strip()
+        if bridge is None or bridge[0] != expected_code:
+            raise LanderNotFoundError("Landing attribution session has expired")
+        if browser_context:
+            await self.utm_bridge.update_lander_start_context(
+                start_key,
+                browser_context=browser_context,
+            )
+            bridge = await self.utm_bridge.load_lander_start(start_key)
+            if bridge is None or bridge[0] != expected_code:
+                raise LanderNotFoundError("Landing attribution session has expired")
+
+        attribution_data = self._attribution_snapshot(bridge[1])
+        # A session without a browser/click identifier cannot improve Meta
+        # matching, so it stays on the existing campaign-wide invite link.
+        if not attribution_data.get("fbc") and not attribution_data.get("fbp"):
+            return static_invite
+
+        normalized_start_key = self.utm_bridge.normalize_start_key(start_key)
+        if normalized_start_key is None:
+            raise LanderNotFoundError("Landing attribution session is invalid")
+        existing = await self._get_attribution_invite(
+            normalized_start_key,
+            tracking_link_id=tracking_link.id,
+        )
+        now = datetime.now(timezone.utc)
+        if (
+            existing is not None
+            and existing.revoked_at is None
+            and (existing.expires_at is None or existing.expires_at > now)
+        ):
+            return canonicalize_telegram_web_link(existing.invite_link) or static_invite
+        if existing is not None:
+            await self.db.delete(existing)
+            await self.db.commit()
+
+        channel = tracking_link.channel
+        if channel is None or not channel.is_active or not channel.can_invite_users:
+            raise ValueError("Tracker bot cannot create channel invite links")
+        token = str(channel.tracker_bot.telegram_token or "").strip()
+        if not token:
+            raise ValueError("Tracker bot token is not configured")
+
+        ttl_seconds = max(
+            15 * 60,
+            min(int(settings.CHANNEL_ATTRIBUTION_INVITE_TTL_SECONDS), 7 * 24 * 60 * 60),
+        )
+        expires_at = now + timedelta(seconds=ttl_seconds)
+        telegram_name = f"fb-{normalized_start_key.removeprefix('start_')}"[:32]
+        creates_join_request = bool(tracking_link.channel_join_request)
+        project_id = tracking_link.project_id
+        channel_id = channel.id
+        tracking_link_id = tracking_link.id
+        telegram_chat_id = channel.telegram_chat_id
+
+        # Do not keep a database transaction open while Telegram is contacted.
+        if self.db.in_transaction():
+            await self.db.commit()
+        try:
+            created = await self.telegram_sender.create_chat_invite_link(
+                token,
+                chat_id=telegram_chat_id,
+                name=telegram_name,
+                creates_join_request=creates_join_request,
+                expire_date=int(expires_at.timestamp()),
+                member_limit=None if creates_join_request else 1,
+            )
+        except RuntimeError as exc:
+            raise ValueError("Telegram did not create an attribution invite link") from exc
+
+        telegram_invite = str(created.get("invite_link") or "").strip()
+        created_invite = canonicalize_telegram_web_link(telegram_invite)
+        if not telegram_invite or not created_invite:
+            raise ValueError("Telegram returned an invalid attribution invite link")
+        item = TelegramChannelInviteLink(
+            project_id=project_id,
+            channel_id=channel_id,
+            tracking_link_id=tracking_link_id,
+            # Telegram sends the original URL in chat_member updates. Keep that
+            # exact value for webhook matching and canonicalize only for browsers.
+            invite_link=telegram_invite,
+            telegram_name=str(created.get("name") or telegram_name)[:64],
+            creates_join_request=bool(created.get("creates_join_request")),
+            is_current=False,
+            is_attribution_session=True,
+            lander_start_key=normalized_start_key,
+            attribution_data_json=attribution_data,
+            expires_at=expires_at,
+        )
+        try:
+            async with self.db.begin_nested():
+                self.db.add(item)
+                await self.db.flush()
+        except IntegrityError:
+            winner = await self._get_attribution_invite(
+                normalized_start_key,
+                tracking_link_id=tracking_link_id,
+            )
+            if winner is not None:
+                winner_url = canonicalize_telegram_web_link(winner.invite_link)
+                await self.db.commit()
+                await self._revoke_unused_invite(
+                    token=token,
+                    telegram_chat_id=telegram_chat_id,
+                    invite_link=telegram_invite,
+                )
+                return winner_url or static_invite
+            await self.db.rollback()
+            await self._revoke_unused_invite(
+                token=token,
+                telegram_chat_id=telegram_chat_id,
+                invite_link=telegram_invite,
+            )
+            raise
+        except Exception:
+            await self.db.rollback()
+            await self._revoke_unused_invite(
+                token=token,
+                telegram_chat_id=telegram_chat_id,
+                invite_link=telegram_invite,
+            )
+            raise
+
+        await self._maybe_cleanup_attribution_invites(now)
+        # The browser navigates to Telegram as soon as this endpoint responds.
+        # Persist the invite first so an immediate membership webhook can
+        # resolve the exact click attribution in a separate API process.
+        await self.db.commit()
+        return created_invite
+
+    async def _get_attribution_invite(
+        self,
+        start_key: str,
+        *,
+        tracking_link_id: UUID,
+    ) -> TelegramChannelInviteLink | None:
+        result = await self.db.execute(
+            select(TelegramChannelInviteLink).where(
+                TelegramChannelInviteLink.lander_start_key == start_key,
+                TelegramChannelInviteLink.tracking_link_id == tracking_link_id,
+                TelegramChannelInviteLink.is_attribution_session.is_(True),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _maybe_cleanup_attribution_invites(self, now: datetime) -> None:
+        try:
+            redis = await get_redis()
+            interval = max(
+                300,
+                int(settings.CHANNEL_ATTRIBUTION_CLEANUP_INTERVAL_SECONDS),
+            )
+            acquired = await redis.set(
+                "maintenance:channel-attribution-invites",
+                "1",
+                ex=interval,
+                nx=True,
+            )
+            if not acquired:
+                return
+            retention_seconds = max(60 * 60, interval * 2)
+            cleanup_before = now - timedelta(seconds=retention_seconds)
+            async with self.db.begin_nested():
+                await self.db.execute(
+                    delete(TelegramChannelInviteLink).where(
+                        TelegramChannelInviteLink.is_attribution_session.is_(True),
+                        TelegramChannelInviteLink.expires_at.is_not(None),
+                        TelegramChannelInviteLink.expires_at <= cleanup_before,
+                    )
+                )
+        except Exception:
+            logger.exception("Could not clean expired channel attribution invites")
+
+    async def _revoke_unused_invite(
+        self,
+        *,
+        token: str,
+        telegram_chat_id: int,
+        invite_link: str,
+    ) -> None:
+        try:
+            await self.telegram_sender.revoke_chat_invite_link(
+                token,
+                chat_id=telegram_chat_id,
+                invite_link=invite_link,
+            )
+        except RuntimeError:
+            logger.warning(
+                "Could not revoke unused channel attribution invite channel_id=%s",
+                telegram_chat_id,
+            )
 
     async def resolve_bot_avatar(
         self,
@@ -370,7 +599,44 @@ class LanderService:
                 ),
                 updated,
             )
-        return updated
+
+        target_url = canonicalize_telegram_web_link(telegram_url) or telegram_url
+        source_invite = canonicalize_telegram_web_link(
+            getattr(lander.tracking_link, "invite_link", None)
+            if lander.tracking_link is not None
+            else None
+        )
+
+        def normalize_anchor(match: re.Match[str]) -> str:
+            opening_tag = match.group(0)
+            href_match = self.HREF_ATTRIBUTE_RE.search(opening_tag)
+            if href_match is None:
+                return opening_tag
+            raw_href = html.unescape(href_match.group("url"))
+            normalized_href = canonicalize_telegram_web_link(raw_href)
+            is_target = normalized_href == target_url
+            is_source_invite = bool(
+                source_invite and normalized_href == source_invite
+            )
+            if not is_target and not is_source_invite:
+                return opening_tag
+            normalized_tag = self.HREF_ATTRIBUTE_RE.sub(
+                lambda href: (
+                    f"{href.group('prefix')}{href.group('quote')}"
+                    f"{escaped_url}{href.group('quote')}"
+                ),
+                opening_tag,
+                count=1,
+            )
+            if re.search(
+                r"\bdata-crm-telegram-link(?=\s|=|/|>)",
+                normalized_tag,
+                re.IGNORECASE,
+            ):
+                return normalized_tag
+            return f"{normalized_tag[:-1]} data-crm-telegram-link>"
+
+        return self.ANCHOR_TAG_RE.sub(normalize_anchor, updated)
 
     async def _get_lander_for_project(self, lander_id: UUID, project_id: UUID) -> ProjectLander:
         result = await self.db.execute(
@@ -534,6 +800,67 @@ class LanderService:
             bot_username = tracking_link.bot.bot_username or ""
         return (bot_username or settings.CLIENT_BOT_USERNAME or "").removeprefix("@").strip()
 
+    @staticmethod
+    def _channel_attribution_endpoint(
+        lander: ProjectLander,
+        start_key: str,
+    ) -> str | None:
+        tracking_link = lander.tracking_link
+        if (
+            tracking_link is None
+            or tracking_link.destination_type != "channel"
+            or not tracking_link.fb_campaign_enabled
+            or not str(tracking_link.fb_pixel_id or "").strip()
+            or not str(tracking_link.fb_capi_token or "").strip()
+        ):
+            return None
+        return f"/l/{lander.slug}/channel-invite/{start_key}"
+
+    @staticmethod
+    def _attribution_snapshot(raw: Mapping[str, object]) -> dict[str, object]:
+        exact_keys = {
+            "ad_id",
+            "ad_name",
+            "adset_id",
+            "adset_name",
+            "campaign_id",
+            "campaign_name",
+            "client_ip_address",
+            "client_user_agent",
+            "event_source_url",
+            "fbc",
+            "fbclid",
+            "fbp",
+            "lander_event_seed",
+            "placement",
+            "site_source_name",
+        }
+        snapshot: dict[str, object] = {}
+        for raw_key, raw_value in raw.items():
+            key = str(raw_key).strip()
+            if not key or (key not in exact_keys and not key.startswith("utm_")):
+                continue
+            if isinstance(raw_value, (str, int, float, bool)):
+                normalized: object = (
+                    str(raw_value).strip()[:2048]
+                    if isinstance(raw_value, str)
+                    else raw_value
+                )
+            elif isinstance(raw_value, list):
+                normalized = [
+                    str(item).strip()[:500]
+                    for item in raw_value[:10]
+                    if isinstance(item, (str, int, float, bool))
+                    and str(item).strip()
+                ]
+            else:
+                continue
+            if normalized not in ("", []):
+                snapshot[key[:100]] = normalized
+            if len(snapshot) >= 64:
+                break
+        return snapshot
+
     @classmethod
     def _render_pixel_markup(
         cls,
@@ -543,6 +870,7 @@ class LanderService:
         tracking_link: TrackingLink | None = None,
         browser_event_seed: str | None = None,
         bridge_url: str | None = None,
+        channel_invite_url: str | None = None,
     ) -> str:
         meta_pixel_id: str | None = None
         campaign_mappings: list[dict] = []
@@ -584,7 +912,7 @@ class LanderService:
             "s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');"
             f"fbq('init',{pixel_json});</script>"
             f"<noscript><img height=\"1\" width=\"1\" style=\"display:none\" src=\"https://www.facebook.com/tr?id={pixel_attr}&ev=PageView&noscript=1\" alt=\"\"></noscript>"
-            f"{cls._render_meta_event_bridge(meta_events, campaign_mappings, browser_event_seed, bridge_url)}"
+            f"{cls._render_meta_event_bridge(meta_events, campaign_mappings, browser_event_seed, bridge_url, channel_invite_url)}"
         )
 
     @staticmethod
@@ -593,6 +921,7 @@ class LanderService:
         event_mappings: list[dict] | None = None,
         browser_event_seed: str | None = None,
         bridge_url: str | None = None,
+        channel_invite_url: str | None = None,
     ) -> str:
         event_names: list[str] = []
         if isinstance(meta_events, list):
@@ -620,10 +949,19 @@ class LanderService:
             "<", "\\u003c"
         )
         bridge_url_json = json.dumps(bridge_url or "").replace("<", "\\u003c")
+        channel_invite_url_json = json.dumps(channel_invite_url or "").replace(
+            "<", "\\u003c"
+        )
+        channel_timeout_ms = max(
+            1000,
+            min(int(settings.CHANNEL_ATTRIBUTION_BROWSER_TIMEOUT_MS), 15000),
+        )
         return (
             "<script>"
             f"var crmFacebookMappings={mappings_json};var crmFacebookSeed={event_seed_json};"
             f"var crmFacebookBridgeUrl={bridge_url_json};"
+            f"var crmChannelInviteUrl={channel_invite_url_json};"
+            f"var crmChannelInviteTimeout={channel_timeout_ms};"
             "var crmFacebookEventSequence=0;"
             "var crmMetaStandardEvents={pageview:'PageView',viewcontent:'ViewContent',search:'Search',"
             "addtocart:'AddToCart',addtowishlist:'AddToWishlist',initiatecheckout:'InitiateCheckout',"
@@ -653,17 +991,29 @@ class LanderService:
             "var key=String(source||'').trim().toLowerCase();var mapping=crmFacebookMappings[key];"
             "if(!mapping||mapping.enabled===false){return;}var params=Object.assign({},mapping.parameters||{},overrides||{});"
             "crmFacebookDispatch(mapping.event_name,params,crmFacebookEventId(key));};"
+            "function crmFacebookContextPayload(){var cookies={};"
+            "String(document.cookie||'').split(';').forEach(function(item){"
+            "var parts=item.split('=');var key=String(parts.shift()||'').trim();"
+            "if(key==='_fbp'||key==='_fbc'){cookies[key]=decodeURIComponent(parts.join('=')||'');}});"
+            "cookies.event_source_url=window.location.href;return cookies;}"
             "window.__crmSyncFacebookContext=window.__crmSyncFacebookContext||(function(){"
             "var pending=null;return function(){"
             "if(!crmFacebookBridgeUrl||!window.fetch){return Promise.resolve();}"
             "if(pending){return pending;}"
-            "var cookies={};String(document.cookie||'').split(';').forEach(function(item){"
-            "var parts=item.split('=');var key=String(parts.shift()||'').trim();"
-            "if(key==='_fbp'||key==='_fbc'){cookies[key]=decodeURIComponent(parts.join('=')||'');}});"
-            "cookies.event_source_url=window.location.href;"
             "pending=fetch(crmFacebookBridgeUrl,{method:'POST',headers:{'Content-Type':'application/json'},"
-            "body:JSON.stringify(cookies),credentials:'same-origin',keepalive:true})"
+            "body:JSON.stringify(crmFacebookContextPayload()),credentials:'same-origin',keepalive:true})"
             ".catch(function(){}).finally(function(){pending=null;});return pending;};}());"
+            "window.__crmResolveTelegramTarget=window.__crmResolveTelegramTarget||(function(){"
+            "var pending=null;var resolved='';return function(fallback){"
+            "if(!crmChannelInviteUrl||!window.fetch){return Promise.resolve(fallback);}"
+            "if(resolved){return Promise.resolve(resolved);}if(pending){return pending;}"
+            "pending=fetch(crmChannelInviteUrl,{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify(crmFacebookContextPayload()),credentials:'same-origin'})"
+            ".then(function(response){if(!response.ok){throw new Error('invite');}return response.json();})"
+            ".then(function(payload){var value=payload&&payload.invite_url?String(payload.invite_url):'';"
+            "if(!/^https:\\/\\/(?:t|telegram)\\.me\\//i.test(value)){throw new Error('invite');}"
+            "resolved=value;return value;}).catch(function(){return fallback;})"
+            ".finally(function(){pending=null;});return pending;};}());"
             "if(crmFacebookMappings.page_view&&crmFacebookMappings.page_view.enabled!==false){"
             "if(String(crmFacebookMappings.page_view.event_name).toLowerCase()!=='pageview'){"
             "crmFacebookDispatch('PageView',{},crmFacebookEventId('base_page_view'));}"
@@ -684,8 +1034,11 @@ class LanderService:
             "if(eventTarget){window.__crmTrackMetaEvent(eventTarget.getAttribute('data-crm-meta-event'));}"
             "var link=target&&target.closest?target.closest('a[data-crm-telegram-link]'):null;"
             "if(!link){return;}window.__crmTrackTelegramOpen();window.__crmSyncFacebookContext();"
-            "if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.target){return;}"
-            "event.preventDefault();window.setTimeout(function(){window.location.assign(link.href);},80);});"
+            "if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||(link.target&&!crmChannelInviteUrl)){return;}"
+            "event.preventDefault();var fallback=link.href;"
+            "var timeout=new Promise(function(resolve){window.setTimeout(function(){resolve(fallback);},crmChannelInviteTimeout);});"
+            "Promise.race([window.__crmResolveTelegramTarget(fallback),timeout])"
+            ".then(function(targetUrl){window.location.assign(targetUrl||fallback);});});"
             "document.addEventListener('submit',function(event){var form=event.target;"
             "if(form&&form.getAttribute){var source=form.getAttribute('data-crm-fb-source');"
             "if(source){window.__crmTrackFacebookSource(source);}"
@@ -956,9 +1309,17 @@ class LanderService:
         if (opened) return;
         opened = true;
         if (window.__crmTrackTelegramOpen) window.__crmTrackTelegramOpen();
-        var sync = window.__crmSyncFacebookContext ? window.__crmSyncFacebookContext() : Promise.resolve();
-        Promise.race([sync, new Promise(function (resolve) {{ window.setTimeout(resolve, 180); }})])
-          .finally(function () {{ window.location.href = target; }});
+        if (window.__crmSyncFacebookContext) window.__crmSyncFacebookContext();
+        var resolver = window.__crmResolveTelegramTarget
+          ? window.__crmResolveTelegramTarget(target)
+          : Promise.resolve(target);
+        var timeoutMs = Number(window.crmChannelInviteTimeout || 5000);
+        var timeout = new Promise(function (resolve) {{
+          window.setTimeout(function () {{ resolve(target); }}, timeoutMs);
+        }});
+        Promise.race([resolver, timeout]).then(function (resolvedTarget) {{
+          window.location.href = resolvedTarget || target;
+        }});
       }}
       document.getElementById('open-telegram').addEventListener('click', function (event) {{
         event.preventDefault();

@@ -2179,6 +2179,9 @@ export default function LandersSettings({
                           maxLength={100}
                           className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm"
                         />
+                        <span className="mt-1.5 block text-xs leading-5 text-amber-300/80">
+                          Только для вкладки Test events. Перед запуском рекламы очистите поле, иначе события не попадут в боевую статистику Ads Manager.
+                        </span>
                       </label>
                     </div>
                     <p className="mt-2 text-xs leading-5 text-zinc-500">
@@ -2575,6 +2578,7 @@ export default function LandersSettings({
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium text-zinc-200">Test event code</span>
                 <input value={editForm.testEventCode} onChange={(event) => setEditForm((current) => current ? { ...current, testEventCode: event.target.value } : current)} placeholder="TEST12345" maxLength={100} className="w-full rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2 md:text-sm" />
+                <span className="mt-1.5 block text-xs leading-5 text-amber-300/80">Только для Test events. Для боевой атрибуции Ads Manager поле должно быть пустым.</span>
               </label>
               </div>
             </fieldset>

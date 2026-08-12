@@ -116,6 +116,60 @@ async def render_lander_bot_avatar(
     )
 
 
+@router.post("/l/{slug}/channel-invite/{start_key}", include_in_schema=False)
+async def resolve_channel_attribution_invite(
+    slug: str,
+    start_key: str,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        content_length = 4097
+    if content_length > 4096:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Payload is too large",
+        )
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    context = _browser_context_from_request(request)
+    # Keep the original landing page URL stored by the GET request. The POST
+    # endpoint URL itself is not a valid event_source_url for Meta.
+    context.pop("event_source_url", None)
+    context["fbp"] = payload.get("_fbp") or payload.get("fbp")
+    context["fbc"] = payload.get("_fbc") or payload.get("fbc")
+    try:
+        invite_url = await LanderService(db).resolve_channel_click_target(
+            host=_request_host(request),
+            slug=slug,
+            start_key=start_key,
+            browser_context=context,
+        )
+    except LanderNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attribution session not found",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["CDN-Cache-Control"] = "no-store"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return {"invite_url": invite_url}
+
+
 @router.get("/l/{slug}/{asset_path:path}", response_class=FileResponse, include_in_schema=False)
 async def render_prefixed_lander_asset(
     slug: str,

@@ -766,15 +766,22 @@ class TelegramSenderService:
         chat_id: str | int,
         name: str,
         creates_join_request: bool = False,
+        expire_date: int | None = None,
+        member_limit: int | None = None,
     ) -> dict:
+        json_payload: dict[str, str | int | bool] = {
+            "chat_id": chat_id,
+            "name": name[:32],
+            "creates_join_request": creates_join_request,
+        }
+        if expire_date is not None:
+            json_payload["expire_date"] = int(expire_date)
+        if member_limit is not None and not creates_join_request:
+            json_payload["member_limit"] = int(member_limit)
         payload = await self._post_bot_api(
             token=token,
             method="createChatInviteLink",
-            json_payload={
-                "chat_id": chat_id,
-                "name": name[:32],
-                "creates_join_request": creates_join_request,
-            },
+            json_payload=json_payload,
         )
         result = payload.get("result")
         if not isinstance(result, dict) or not str(result.get("invite_link") or "").strip():

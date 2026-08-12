@@ -71,7 +71,10 @@ from app.services.audit_service import AuditService
 from app.services.bot_engine_service import BotEngineService
 from app.services.broadcast_service import BroadcastService
 from app.services.chat_user_block_service import ChatUserBlockService
-from app.services.channel_subscription_service import ChannelSubscriptionService
+from app.services.channel_subscription_service import (
+    ChannelSubscriptionService,
+    ChannelTrackingAttribution,
+)
 from app.services.channel_join_request_queue import (
     enqueue_channel_join_request_action,
 )
@@ -245,15 +248,21 @@ class TelegramService:
             bot_id,
         )
         tracking_link_id = explicit_tracking_link_id
+        channel_attribution: ChannelTrackingAttribution | None = None
         if (
             tracking_link_id is None
             and not has_explicit_start_attribution
             and message.from_user is not None
             and self._is_start_command(message.text)
         ):
-            tracking_link_id = await self._resolve_channel_tracking_link_id(
+            channel_attribution = await self._resolve_channel_tracking_attribution(
                 project_id=project_id,
                 telegram_user_id=message.from_user.id,
+            )
+            tracking_link_id = (
+                channel_attribution.tracking_link_id
+                if channel_attribution is not None
+                else None
             )
         chat, should_start_runtime, is_reactivated_cycle = await self._find_or_create_chat(
             message,
@@ -334,10 +343,22 @@ class TelegramService:
                 project_id=project_id,
                 bot_id=bot_id,
             )
+        channel_attribution_applies = bool(
+            channel_attribution is not None
+            and tracking_link_id
+            == channel_attribution.tracking_link_id
+            and getattr(chat, "tracking_link_id", None) == tracking_link_id
+        )
         await self._attach_utm_bridge_data(
             lead,
             start_payload.utm_key,
-            start_payload.utm_data,
+            (
+                start_payload.utm_data
+                if start_payload.utm_data is not None
+                else channel_attribution.attribution_data
+                if channel_attribution_applies and channel_attribution is not None
+                else None
+            ),
         )
         is_start_command = self._is_start_command(message.text)
         custom_command = extract_telegram_command(message.text)
@@ -1580,10 +1601,22 @@ class TelegramService:
         project_id: UUID,
         telegram_user_id: int,
     ) -> UUID | None:
+        attribution = await self._resolve_channel_tracking_attribution(
+            project_id=project_id,
+            telegram_user_id=telegram_user_id,
+        )
+        return attribution.tracking_link_id if attribution is not None else None
+
+    async def _resolve_channel_tracking_attribution(
+        self,
+        *,
+        project_id: UUID,
+        telegram_user_id: int,
+    ) -> ChannelTrackingAttribution | None:
         db = getattr(self, "db", None)
         if db is None or not hasattr(db, "execute"):
             return None
-        return await ChannelSubscriptionService(db).resolve_latest_tracking_link(
+        return await ChannelSubscriptionService(db).resolve_latest_attribution(
             project_id=project_id,
             telegram_user_id=telegram_user_id,
         )

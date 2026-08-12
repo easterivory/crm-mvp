@@ -75,6 +75,13 @@ class TelegramChannelInviteLink(
         UniqueConstraint("invite_link", name="uq_channel_invite_links_invite_link"),
         Index("ix_channel_invite_links_channel_id", "channel_id"),
         Index("ix_channel_invite_links_tracking_link_id", "tracking_link_id"),
+        Index(
+            "uq_channel_invite_links_lander_start_key",
+            "tracking_link_id",
+            "lander_start_key",
+            unique=True,
+        ),
+        Index("ix_channel_invite_links_attribution_expires", "expires_at"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -97,6 +104,22 @@ class TelegramChannelInviteLink(
     )
     is_current: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+    is_attribution_session: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    lander_start_key: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    attribution_data_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_by_telegram_user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -169,6 +192,9 @@ class TelegramChannelSubscription(
         DateTime(timezone=True), nullable=False
     )
     last_update_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    attribution_data_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
     channel: Mapped[TelegramChannel] = relationship(
         "TelegramChannel", back_populates="subscriptions"
@@ -227,6 +253,9 @@ class TelegramChannelSubscriptionEvent(Base, UUIDPrimaryKey, TimestampMixin):
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     raw_payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    attribution_data_json: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     request_message_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

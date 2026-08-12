@@ -309,7 +309,8 @@ async def send_fb_capi_channel_event_task(
 ) -> dict:
     try:
         tracking_link_uuid = UUID(tracking_link_id)
-        normalized_user_id = str(int(telegram_user_id))
+        numeric_user_id = int(telegram_user_id)
+        normalized_user_id = str(numeric_user_id)
     except (TypeError, ValueError) as exc:
         return {"status": "failed", "error": str(exc)}
     try:
@@ -324,6 +325,27 @@ async def send_fb_capi_channel_event_task(
                 return {"status": "skipped", "error": "Not a channel tracking link"}
             if not link.fb_pixel_id or not link.fb_capi_token:
                 return {"status": "skipped", "error": "Facebook CAPI is not configured"}
+            attribution_data: dict = {}
+            try:
+                telegram_update_id = int(str(event_id or "").rsplit(":", maxsplit=1)[-1])
+            except (TypeError, ValueError):
+                telegram_update_id = 0
+            if telegram_update_id > 0:
+                attribution_result = await db.execute(
+                    select(
+                        TelegramChannelSubscriptionEvent.attribution_data_json
+                    ).where(
+                        TelegramChannelSubscriptionEvent.tracking_link_id
+                        == tracking_link_uuid,
+                        TelegramChannelSubscriptionEvent.telegram_user_id
+                        == numeric_user_id,
+                        TelegramChannelSubscriptionEvent.telegram_update_id
+                        == telegram_update_id,
+                    )
+                )
+                stored_attribution = attribution_result.scalar_one_or_none()
+                if isinstance(stored_attribution, dict):
+                    attribution_data = dict(stored_attribution)
             response = await FacebookCAPIService.send_external_event(
                 pixel_id=link.fb_pixel_id,
                 token=link.fb_capi_token,
@@ -334,6 +356,7 @@ async def send_fb_capi_channel_event_task(
                 event_time=event_time,
                 custom_data=custom_data or {},
                 event_id=event_id,
+                browser_context=attribution_data or None,
                 proxy_url=link.fb_proxy_url,
                 test_event_code=link.fb_test_event_code,
             )

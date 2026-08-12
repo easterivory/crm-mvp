@@ -106,11 +106,21 @@ class ChannelJoinFunnelService:
                 external_user_id=external_user_id,
             )
         contact_name = compose_lead_name(event.first_name, event.last_name)
+        has_click_attribution = bool(
+            isinstance(getattr(event, "attribution_data_json", None), dict)
+            and event.attribution_data_json
+        )
         if chat is not None:
             updates: dict[str, object] = {}
             if chat.external_chat_id != external_chat_id:
                 updates["external_chat_id"] = external_chat_id
-            if event.tracking_link_id is not None and chat.tracking_link_id is None:
+            if event.tracking_link_id is not None and (
+                chat.tracking_link_id is None
+                or (
+                    has_click_attribution
+                    and chat.tracking_link_id != event.tracking_link_id
+                )
+            ):
                 updates["tracking_link_id"] = event.tracking_link_id
             if contact_name and not chat.contact_name:
                 updates["contact_name"] = contact_name
@@ -144,7 +154,21 @@ class ChannelJoinFunnelService:
         event: TelegramChannelSubscriptionEvent,
         chat_id: UUID,
     ) -> None:
-        if await self.lead_repo.get_by_chat(chat_id, event.project_id) is not None:
+        attribution_data = (
+            dict(event.attribution_data_json)
+            if isinstance(getattr(event, "attribution_data_json", None), dict)
+            else {}
+        )
+        existing = await self.lead_repo.get_by_chat(chat_id, event.project_id)
+        if existing is not None:
+            existing_fields = dict(existing.custom_fields or {})
+            if attribution_data and existing_fields.get("fb_data") != attribution_data:
+                existing_fields["fb_data"] = attribution_data
+                await self.lead_repo.update_contact(
+                    existing.id,
+                    event.project_id,
+                    custom_fields=existing_fields,
+                )
             return
         status = await self.lead_repo.get_status_by_code(LeadStatusCode.NEW)
         if status is None:
@@ -161,6 +185,8 @@ class ChannelJoinFunnelService:
             }.items()
             if value
         }
+        if attribution_data:
+            custom_fields["fb_data"] = attribution_data
         try:
             async with self.db.begin_nested():
                 await self.lead_repo.create(

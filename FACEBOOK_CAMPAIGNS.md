@@ -18,12 +18,21 @@
 - CAPI delivery is asynchronous through ARQ and uses a stable `event_id` for retry safety.
 - When several rules for one source event match in the same lead lifecycle,
   they share the same stable event identity to prevent duplicate Meta events.
+- For channel campaigns, the landing page creates a short-lived per-visit
+  Telegram invite only when the visitor opens Telegram and has `_fbc` or
+  `_fbp`. Its browser context can be claimed by only one Telegram user and is
+  carried through the membership webhook, so `Subscribe` and later CRM events
+  can be attributed to the same Meta ad click. Existing campaign-wide invite
+  links remain the fallback when Telegram or browser attribution is unavailable.
 
 ## Required environment
 
 ```dotenv
 LANDER_TECH_DOMAIN=lp.sfera.cyou
 FACEBOOK_GRAPH_API_VERSION=v25.0
+CHANNEL_ATTRIBUTION_INVITE_TTL_SECONDS=86400
+CHANNEL_ATTRIBUTION_CLEANUP_INTERVAL_SECONDS=3600
+CHANNEL_ATTRIBUTION_BROWSER_TIMEOUT_MS=5000
 ```
 
 Run the database migration before serving the new UI:
@@ -52,7 +61,8 @@ The CDN or reverse proxy must:
 
 1. Preserve the visitor-facing `Host` header at the origin.
 2. Forward `X-Forwarded-For` and `X-Forwarded-Proto`.
-3. Bypass cache for `/l/*`, including HTML and `/l/<slug>/bridge/*`.
+3. Bypass cache for `/l/*`, including HTML, `/l/<slug>/bridge/*`, and
+   `/l/<slug>/channel-invite/*`.
 4. Respect `Cache-Control`, `CDN-Cache-Control`, and `Surrogate-Control` from the origin.
 5. Route all `/l/*` requests to the FastAPI application.
 
@@ -80,7 +90,9 @@ After deploy, purge the CDN cache for `/` and `/l/*`. The technical root must re
 3. Use the technical domain directly or select a parked advertising domain.
 4. Enter Pixel / Dataset ID and CAPI access token.
 5. Add a proxy only when Meta traffic must leave through that proxy.
-6. Use Test event code during Events Manager verification, then clear it for normal traffic.
+6. Use Test event code only during Events Manager verification. Clear it before
+   normal traffic: test events can be visible in Events Manager without being
+   attributed in production Ads Manager reporting.
 7. Review the event map. Automatic rows explain their fixed runtime trigger.
 8. For each server event, add one or more OR rules: funnel action, target lead
    status, or newly added project tag. `Purchase` supports `value` and `currency`.

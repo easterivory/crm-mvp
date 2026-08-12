@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -32,6 +32,12 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ChannelJoinRequestAction:
     event_id: UUID
+
+
+@dataclass(frozen=True)
+class ChannelTrackingAttribution:
+    tracking_link_id: UUID
+    attribution_data: dict
 
 
 class ChannelSubscriptionService:
@@ -81,6 +87,17 @@ class ChannelSubscriptionService:
             if subscription is not None
             else None
         )
+        attribution_data = (
+            await self._claim_invite_attribution(invite, user.id)
+            if new_active
+            else self._resolve_attribution_data(
+                subscription=subscription,
+            )
+        )
+        if new_active and invite is None and not attribution_data:
+            attribution_data = self._resolve_attribution_data(
+                subscription=subscription,
+            )
         inserted = await self._insert_event(
             channel=channel,
             bot_id=bot_id,
@@ -93,6 +110,7 @@ class ChannelSubscriptionService:
             new_status=event.new_chat_member.status,
             occurred_at=occurred_at,
             raw_payload=event.model_dump(mode="json", by_alias=True),
+            attribution_data=attribution_data,
         )
         if not inserted:
             return True
@@ -104,6 +122,7 @@ class ChannelSubscriptionService:
             status=subscription_status,
             occurred_at=occurred_at,
             update_id=update_id,
+            attribution_data=attribution_data,
         )
         await self._queue_facebook_event(
             tracking_link_id=tracking_link_id,
@@ -133,6 +152,10 @@ class ChannelSubscriptionService:
 
         invite_link = self._invite_url(event.invite_link)
         invite = await self._resolve_invite(channel.id, invite_link)
+        attribution_data = await self._claim_invite_attribution(
+            invite,
+            event.from_user.id,
+        )
         request_message_text, auto_approve, auto_start = await self._join_request_options(
             invite.tracking_link_id if invite is not None else None
         )
@@ -149,6 +172,7 @@ class ChannelSubscriptionService:
             new_status="pending",
             occurred_at=occurred_at,
             raw_payload=event.model_dump(mode="json", by_alias=True),
+            attribution_data=attribution_data,
             request_message_text=request_message_text,
             auto_approve_requested=auto_approve,
             auto_start_requested=auto_start,
@@ -163,6 +187,7 @@ class ChannelSubscriptionService:
             status="pending",
             occurred_at=occurred_at,
             update_id=update_id,
+            attribution_data=attribution_data,
         )
         if request_message_text or auto_approve or auto_start:
             return ChannelJoinRequestAction(event_id=inserted.id)
@@ -198,9 +223,25 @@ class ChannelSubscriptionService:
         project_id: UUID,
         telegram_user_id: int,
     ) -> UUID | None:
-        """Return last-touch attribution from a confirmed channel join."""
+        """Return last-touch tracking link from a confirmed channel join."""
+        attribution = await self.resolve_latest_attribution(
+            project_id=project_id,
+            telegram_user_id=telegram_user_id,
+        )
+        return attribution.tracking_link_id if attribution is not None else None
+
+    async def resolve_latest_attribution(
+        self,
+        *,
+        project_id: UUID,
+        telegram_user_id: int,
+    ) -> ChannelTrackingAttribution | None:
+        """Return durable click context from the latest confirmed channel join."""
         result = await self.db.execute(
-            select(TelegramChannelSubscriptionEvent.tracking_link_id)
+            select(
+                TelegramChannelSubscriptionEvent.tracking_link_id,
+                TelegramChannelSubscriptionEvent.attribution_data_json,
+            )
             .join(
                 TrackingLink,
                 TrackingLink.id
@@ -220,7 +261,15 @@ class ChannelSubscriptionService:
             )
             .limit(1)
         )
-        return result.scalar_one_or_none()
+        row = result.one_or_none()
+        if row is None or row.tracking_link_id is None:
+            return None
+        return ChannelTrackingAttribution(
+            tracking_link_id=row.tracking_link_id,
+            attribution_data=self._clean_attribution_data(
+                row.attribution_data_json
+            ),
+        )
 
     async def _find_channel(
         self,
@@ -252,6 +301,50 @@ class ChannelSubscriptionService:
             )
         )
         return result.scalar_one_or_none()
+
+    async def _claim_invite_attribution(
+        self,
+        invite: TelegramChannelInviteLink | None,
+        telegram_user_id: int,
+    ) -> dict:
+        if invite is None:
+            return {}
+        attribution_data = self._clean_attribution_data(
+            getattr(invite, "attribution_data_json", None)
+        )
+        if not bool(getattr(invite, "is_attribution_session", False)):
+            return attribution_data
+
+        claimed_by = getattr(invite, "claimed_by_telegram_user_id", None)
+        if claimed_by is not None:
+            return attribution_data if claimed_by == telegram_user_id else {}
+
+        claimed_at = datetime.now(timezone.utc)
+        result = await self.db.execute(
+            update(TelegramChannelInviteLink)
+            .where(
+                TelegramChannelInviteLink.id == invite.id,
+                TelegramChannelInviteLink.claimed_by_telegram_user_id.is_(None),
+            )
+            .values(
+                claimed_by_telegram_user_id=telegram_user_id,
+                claimed_at=claimed_at,
+            )
+            .returning(TelegramChannelInviteLink.id)
+            .execution_options(synchronize_session=False)
+        )
+        if result.scalar_one_or_none() is not None:
+            invite.claimed_by_telegram_user_id = telegram_user_id
+            invite.claimed_at = claimed_at
+            return attribution_data
+
+        owner_result = await self.db.execute(
+            select(TelegramChannelInviteLink.claimed_by_telegram_user_id).where(
+                TelegramChannelInviteLink.id == invite.id
+            )
+        )
+        owner_id = owner_result.scalar_one_or_none()
+        return attribution_data if owner_id == telegram_user_id else {}
 
     async def _join_request_options(
         self,
@@ -317,6 +410,7 @@ class ChannelSubscriptionService:
         new_status: str | None,
         occurred_at: datetime,
         raw_payload: dict,
+        attribution_data: dict | None = None,
         request_message_text: str | None = None,
         auto_approve_requested: bool = False,
         auto_start_requested: bool = False,
@@ -336,6 +430,7 @@ class ChannelSubscriptionService:
             first_name=self._clean(user.first_name),
             last_name=self._clean(user.last_name),
             raw_payload=raw_payload,
+            attribution_data_json=self._clean_attribution_data(attribution_data),
             request_message_text=request_message_text,
             auto_approve_requested=auto_approve_requested,
             auto_start_requested=auto_start_requested,
@@ -365,6 +460,7 @@ class ChannelSubscriptionService:
         status: str,
         occurred_at: datetime,
         update_id: int,
+        attribution_data: dict | None = None,
     ) -> None:
         item = await self._get_subscription(channel.id, user.id)
         if item is None:
@@ -376,6 +472,9 @@ class ChannelSubscriptionService:
                 telegram_user_id=user.id,
                 status=status,
                 last_event_at=occurred_at,
+                attribution_data_json=self._clean_attribution_data(
+                    attribution_data
+                ),
             )
             self.db.add(item)
         else:
@@ -391,6 +490,10 @@ class ChannelSubscriptionService:
                 return
             if tracking_link_id is not None and status in {"pending", "member"}:
                 item.tracking_link_id = tracking_link_id
+            if attribution_data is not None and status in {"pending", "member"}:
+                item.attribution_data_json = self._clean_attribution_data(
+                    attribution_data
+                )
         item.username = self._clean(user.username)
         item.first_name = self._clean(user.first_name)
         item.last_name = self._clean(user.last_name)
@@ -459,3 +562,23 @@ class ChannelSubscriptionService:
     def _clean(value: str | None) -> str | None:
         normalized = str(value or "").strip()
         return normalized[:255] or None
+
+    @classmethod
+    def _resolve_attribution_data(
+        cls,
+        *,
+        invite: TelegramChannelInviteLink | None = None,
+        subscription: TelegramChannelSubscription | None = None,
+    ) -> dict:
+        invite_data = cls._clean_attribution_data(
+            getattr(invite, "attribution_data_json", None)
+        )
+        if invite_data:
+            return invite_data
+        return cls._clean_attribution_data(
+            getattr(subscription, "attribution_data_json", None)
+        )
+
+    @staticmethod
+    def _clean_attribution_data(value: object) -> dict:
+        return dict(value) if isinstance(value, dict) else {}
