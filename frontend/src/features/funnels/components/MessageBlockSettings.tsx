@@ -28,6 +28,8 @@ export default function MessageBlockSettings({
       text: firstMessage?.text ?? '',
       message_type: firstMessage?.type ?? 'text',
       media: firstMessage?.media,
+      chat_action_enabled: firstMessage?.chat_action_enabled ?? false,
+      chat_action_duration_seconds: firstMessage?.chat_action_duration_seconds ?? 3,
       wait_for_answer: firstMessage?.wait_for_answer ?? false,
       button_mode: firstMessage?.button_mode ?? 'inline',
       buttons: firstMessage?.buttons ?? [],

@@ -40,7 +40,10 @@ from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.funnel_block_registry import is_supported_lead_field_key
-from app.services.funnel_job_queue import enqueue_funnel_scheduled_job
+from app.services.funnel_job_queue import (
+    enqueue_funnel_chat_action,
+    enqueue_funnel_scheduled_job,
+)
 from app.services.lead_scoring_service import LeadScoringService
 from app.services.lead_event_service import LeadEventService
 from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderService
@@ -70,6 +73,18 @@ MANUAL_STATUS_CODE_CANDIDATES = (
     "manual",
     "operator",
     "operator_required",
+)
+FUNNEL_CHAT_ACTION_MAX_DURATION_SECONDS = 60
+FUNNEL_CHAT_ACTION_REFRESH_SECONDS = 4
+FUNNEL_CHAT_ACTIONS = frozenset(
+    {
+        "typing",
+        "upload_photo",
+        "upload_video",
+        "record_voice",
+        "record_video_note",
+        "upload_document",
+    }
 )
 
 
@@ -1143,12 +1158,14 @@ class FunnelRuntimeService:
             return
 
         if job.job_type == "message_sequence":
-            index = int((job.payload_json or {}).get("message_index") or 0)
+            payload = dict(job.payload_json or {})
+            index = int(payload.get("message_index") or 0)
             next_step = await self._execute_message_sequence(
                 chat_id=job.chat_id,
                 step=step,
                 start_index=index,
                 skip_delay_at_start=True,
+                skip_chat_action_at_start=payload.get("chat_action_completed") is True,
             )
             if next_step is not None and next_step.id != step.id:
                 await self._execute_from_step(chat_id=job.chat_id, step=next_step)
@@ -1477,6 +1494,7 @@ class FunnelRuntimeService:
         start_index: int = 0,
         answer: Any | None = None,
         skip_delay_at_start: bool = False,
+        skip_chat_action_at_start: bool = False,
     ) -> Optional[FunnelStep]:
         messages = self._message_sequence(step)
         if not messages:
@@ -1504,6 +1522,43 @@ class FunnelRuntimeService:
                     delay_seconds,
                 )
                 return step
+
+            chat_action_duration = self._message_chat_action_duration_seconds(item)
+            should_skip_chat_action = skip_chat_action_at_start and index == start_index
+            if (
+                chat_action_duration > 0
+                and not should_skip_chat_action
+                and self._message_item_is_deliverable(step, item)
+            ):
+                chat_action = self._message_chat_action(step, item)
+                scheduled_job_id = await self._schedule_job(
+                    chat_id=chat_id,
+                    step=step,
+                    job_type="message_sequence",
+                    delay_seconds=chat_action_duration,
+                    payload_json={
+                        "message_index": index,
+                        "chat_action_completed": True,
+                        "chat_action": chat_action,
+                    },
+                )
+                if scheduled_job_id is not None:
+                    await enqueue_funnel_chat_action(
+                        scheduled_job_id=scheduled_job_id,
+                        chat_id=chat_id,
+                        action=chat_action,
+                        duration_seconds=chat_action_duration,
+                    )
+                    logger.info(
+                        "Scheduled message chat action chat_id=%s step_id=%s index=%s "
+                        "action=%s duration_seconds=%s",
+                        chat_id,
+                        step.id,
+                        index,
+                        chat_action,
+                        chat_action_duration,
+                    )
+                    return step
 
             buttons = self._buttons_from_message_item(item)
             try:
@@ -1609,10 +1664,10 @@ class FunnelRuntimeService:
         job_type: str,
         delay_seconds: int,
         payload_json: dict,
-    ) -> None:
+    ) -> UUID | None:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None:
-            return
+            return None
         await self.repo.cancel_scheduled_jobs_for_chat(
             chat_id=chat_id,
             job_type=job_type,
@@ -1629,6 +1684,7 @@ class FunnelRuntimeService:
             payload_json=payload_json,
         )
         await enqueue_funnel_scheduled_job(job.id, delay_seconds)
+        return job.id
 
     async def _execute_delay_step(self, *, chat_id: UUID, step: FunnelStep) -> Optional[FunnelStep]:
         delay_seconds = self._delay_step_seconds(step)
@@ -1829,11 +1885,11 @@ class FunnelRuntimeService:
         item: dict[str, Any],
         reply_markup: Optional[dict],
     ) -> bool:
+        if not self._message_item_is_deliverable(step, item):
+            return False
         text = self._message_item_text(item)
         message_type, media_ref = self._message_item_media_payload(step, item)
         upload_id = self._message_item_upload_id(item)
-        if not text and media_ref is None and upload_id is None:
-            return False
         await self._create_outgoing_message(
             chat_id=chat_id,
             text=text,
@@ -3515,6 +3571,8 @@ class FunnelRuntimeService:
             "text": text,
             "caption": config.get("caption"),
             "delay_seconds": config.get("delay_seconds") or 0,
+            "chat_action_enabled": config.get("chat_action_enabled") is True,
+            "chat_action_duration_seconds": config.get("chat_action_duration_seconds") or 0,
             "wait_for_answer": bool(config.get("wait_for_answer")),
             "button_mode": "reply" if config.get("button_mode") == "reply" else "inline",
             "buttons": config.get("buttons") or [],
@@ -3665,6 +3723,36 @@ class FunnelRuntimeService:
             return max(int(item.get("delay_seconds") or 0), 0)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _message_chat_action_duration_seconds(item: dict[str, Any]) -> int:
+        if item.get("chat_action_enabled") is not True:
+            return 0
+        try:
+            duration = int(item.get("chat_action_duration_seconds") or 0)
+        except (TypeError, ValueError):
+            return 0
+        return min(max(duration, 0), FUNNEL_CHAT_ACTION_MAX_DURATION_SECONDS)
+
+    @classmethod
+    def _message_chat_action(cls, step: FunnelStep, item: dict[str, Any]) -> str:
+        message_type, _ = cls._message_item_media_payload(step, item)
+        return {
+            MessageType.PHOTO: "upload_photo",
+            MessageType.VIDEO: "upload_video",
+            MessageType.VOICE: "record_voice",
+            MessageType.VIDEO_NOTE: "record_video_note",
+            MessageType.DOCUMENT: "upload_document",
+        }.get(message_type, "typing")
+
+    @classmethod
+    def _message_item_is_deliverable(cls, step: FunnelStep, item: dict[str, Any]) -> bool:
+        _, media_ref = cls._message_item_media_payload(step, item)
+        return bool(
+            cls._message_item_text(item)
+            or media_ref is not None
+            or cls._message_item_upload_id(item) is not None
+        )
 
     @staticmethod
     def _message_item_waits_for_answer(item: dict[str, Any]) -> bool:

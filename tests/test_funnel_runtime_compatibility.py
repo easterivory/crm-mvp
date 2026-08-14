@@ -746,6 +746,98 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             "custom value|custom value|",
         )
 
+    def test_legacy_message_keeps_chat_action_disabled(self) -> None:
+        step = SimpleNamespace(
+            step_type="message",
+            block_type="generic_message",
+            config_json={"text": "Старое сообщение", "delay_seconds": 2},
+        )
+
+        message = self.service._message_sequence(step)[0]
+
+        self.assertFalse(message["chat_action_enabled"])
+        self.assertEqual(
+            self.service._message_chat_action_duration_seconds(message),
+            0,
+        )
+
+    def test_chat_action_matches_actual_message_type(self) -> None:
+        step = SimpleNamespace(block_type="generic_message")
+        cases = [
+            ({"type": "text", "text": "Привет"}, "typing"),
+            (
+                {
+                    "type": "voice",
+                    "media": {"telegram_file_id": "voice-file-id"},
+                },
+                "record_voice",
+            ),
+            (
+                {
+                    "type": "video_note",
+                    "media": {"telegram_file_id": "circle-file-id"},
+                },
+                "record_video_note",
+            ),
+        ]
+
+        for item, expected in cases:
+            with self.subTest(message_type=item["type"]):
+                self.assertEqual(self.service._message_chat_action(step, item), expected)
+
+    async def test_enabled_chat_action_delays_only_its_message(self) -> None:
+        chat_id = uuid4()
+        step = SimpleNamespace(
+            id=uuid4(),
+            step_type="message",
+            block_type="generic_message",
+            config_json={
+                "messages": [
+                    {
+                        "id": "message_1",
+                        "type": "text",
+                        "text": "Привет",
+                        "delay_seconds": 0,
+                        "chat_action_enabled": True,
+                        "chat_action_duration_seconds": 7,
+                    }
+                ]
+            },
+        )
+        scheduled_job_id = uuid4()
+        self.service._schedule_job = AsyncMock(return_value=scheduled_job_id)
+        self.service._send_message_item = AsyncMock()
+        self.service._move_from_step = AsyncMock()
+
+        with patch(
+            "app.services.funnel_runtime_service.enqueue_funnel_chat_action",
+            new=AsyncMock(return_value="chat-action-job"),
+        ) as enqueue_mock:
+            result = await self.service._execute_message_sequence(
+                chat_id=chat_id,
+                step=step,
+            )
+
+        self.assertIs(result, step)
+        self.service._send_message_item.assert_not_awaited()
+        self.service._schedule_job.assert_awaited_once_with(
+            chat_id=chat_id,
+            step=step,
+            job_type="message_sequence",
+            delay_seconds=7,
+            payload_json={
+                "message_index": 0,
+                "chat_action_completed": True,
+                "chat_action": "typing",
+            },
+        )
+        enqueue_mock.assert_awaited_once_with(
+            scheduled_job_id=scheduled_job_id,
+            chat_id=chat_id,
+            action="typing",
+            duration_seconds=7,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

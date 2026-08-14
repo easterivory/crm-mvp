@@ -30,6 +30,170 @@ class _SessionContext:
 
 
 class FunnelScheduledWorkerResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_chat_action_is_not_scheduled_twice(self) -> None:
+        chat_id = uuid4()
+        funnel_version_id = uuid4()
+        step_id = uuid4()
+        step = SimpleNamespace(id=step_id)
+        job = SimpleNamespace(
+            id=uuid4(),
+            chat_id=chat_id,
+            funnel_version_id=funnel_version_id,
+            step_id=step_id,
+            job_type="message_sequence",
+            payload_json={"message_index": 2, "chat_action_completed": True},
+        )
+        service = FunnelRuntimeService.__new__(FunnelRuntimeService)
+        service.repo = SimpleNamespace(
+            get_chat_funnel_state=AsyncMock(
+                return_value=SimpleNamespace(
+                    completed_at=None,
+                    is_paused=False,
+                    funnel_version_id=funnel_version_id,
+                    current_step_id=step_id,
+                )
+            ),
+            get_step=AsyncMock(return_value=step),
+        )
+        service._execute_message_sequence = AsyncMock(return_value=step)
+        service._execute_from_step = AsyncMock()
+
+        await service.process_scheduled_job(job)
+
+        service._execute_message_sequence.assert_awaited_once_with(
+            chat_id=chat_id,
+            step=step,
+            start_index=2,
+            skip_delay_at_start=True,
+            skip_chat_action_at_start=True,
+        )
+        service._execute_from_step.assert_not_awaited()
+
+    async def test_chat_action_refresh_is_requeued_without_sleeping(self) -> None:
+        scheduled_job_id = uuid4()
+        chat_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.in_transaction.return_value = False
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(
+                return_value=SimpleNamespace(status="pending", chat_id=chat_id)
+            )
+        )
+        chat_repo = SimpleNamespace(
+            get_by_id=AsyncMock(
+                return_value=SimpleNamespace(
+                    is_deleted=False,
+                    reset_at=None,
+                    project_id=uuid4(),
+                    bot_id=uuid4(),
+                    external_chat_id="42",
+                )
+            )
+        )
+        sender = SimpleNamespace(send_chat_action=AsyncMock(return_value=True))
+        redis = SimpleNamespace(enqueue_job=AsyncMock(return_value=SimpleNamespace(job_id="next")))
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "ChatRepository",
+                return_value=chat_repo,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "TelegramSenderService",
+                return_value=sender,
+            ),
+        ):
+            result = await funnel_scheduled_worker.process_funnel_chat_action_task(
+                {"redis": redis},
+                str(scheduled_job_id),
+                str(chat_id),
+                "record_voice",
+                10,
+                0,
+            )
+
+        self.assertEqual(result["status"], "scheduled")
+        sender.send_chat_action.assert_awaited_once()
+        self.assertEqual(sender.send_chat_action.await_args.kwargs["action"], "record_voice")
+        redis.enqueue_job.assert_awaited_once()
+        self.assertEqual(redis.enqueue_job.await_args.args[-1], 4)
+        self.assertEqual(redis.enqueue_job.await_args.kwargs["_defer_by"], 4)
+
+    async def test_chat_action_refresh_queue_failure_is_non_fatal(self) -> None:
+        scheduled_job_id = uuid4()
+        chat_id = uuid4()
+        db = MagicMock()
+        db.rollback = AsyncMock()
+        db.in_transaction.return_value = False
+        repo = SimpleNamespace(
+            get_scheduled_job=AsyncMock(
+                return_value=SimpleNamespace(status="pending", chat_id=chat_id)
+            )
+        )
+        chat_repo = SimpleNamespace(
+            get_by_id=AsyncMock(
+                return_value=SimpleNamespace(
+                    is_deleted=False,
+                    reset_at=None,
+                    project_id=uuid4(),
+                    bot_id=uuid4(),
+                    external_chat_id="42",
+                )
+            )
+        )
+        sender = SimpleNamespace(send_chat_action=AsyncMock(return_value=True))
+        redis = SimpleNamespace(
+            enqueue_job=AsyncMock(side_effect=ConnectionError("redis unavailable"))
+        )
+
+        with (
+            patch.object(
+                funnel_scheduled_worker,
+                "get_db_session",
+                return_value=_SessionContext(db),
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "FunnelRepository",
+                return_value=repo,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "ChatRepository",
+                return_value=chat_repo,
+            ),
+            patch.object(
+                funnel_scheduled_worker,
+                "TelegramSenderService",
+                return_value=sender,
+            ),
+        ):
+            result = await funnel_scheduled_worker.process_funnel_chat_action_task(
+                {"redis": redis},
+                str(scheduled_job_id),
+                str(chat_id),
+                "typing",
+                10,
+                0,
+            )
+
+        self.assertEqual(result["status"], "partial")
+        self.assertIn("redis unavailable", result["error"])
+        sender.send_chat_action.assert_awaited_once()
+
     async def test_resume_job_executes_current_committed_step(self) -> None:
         chat_id = uuid4()
         funnel_version_id = uuid4()

@@ -47,6 +47,8 @@ export const universalBlocks: UniversalBlock[] = [
           type: 'text',
           text: 'Введите текст сообщения',
           delay_seconds: 0,
+          chat_action_enabled: false,
+          chat_action_duration_seconds: 3,
           button_mode: 'inline',
           buttons: [],
         },

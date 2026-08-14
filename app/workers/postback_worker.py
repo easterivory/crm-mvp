@@ -32,7 +32,10 @@ from app.services.telegram_service import TelegramService
 from app.services.telegram_sender import TelegramSenderService
 from app.repositories.bot_repository import BotRepository
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
-from app.workers.funnel_scheduled_worker import process_funnel_scheduled_job_task
+from app.workers.funnel_scheduled_worker import (
+    process_funnel_chat_action_task,
+    process_funnel_scheduled_job_task,
+)
 
 try:
     from arq import Retry, cron
@@ -738,6 +741,7 @@ class WorkerSettings:
         recover_missed_funnel_starts_task,
         process_broadcast,
         process_due_broadcasts,
+        process_funnel_chat_action_task,
         process_funnel_scheduled_job_task,
     ]
     redis_settings = _redis_settings_from_url()

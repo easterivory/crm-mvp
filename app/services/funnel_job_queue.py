@@ -56,3 +56,45 @@ async def enqueue_funnel_scheduled_job(job_id: UUID, delay_seconds: int) -> str 
     finally:
         if redis is not None:
             await redis.close()
+
+
+async def enqueue_funnel_chat_action(
+    *,
+    scheduled_job_id: UUID,
+    chat_id: UUID,
+    action: str,
+    duration_seconds: int,
+) -> str | None:
+    """Start the non-critical Telegram activity refresh chain for a delayed message."""
+
+    if create_pool is None:
+        logger.warning(
+            "ARQ is not installed; Telegram chat action was not queued job_id=%s",
+            scheduled_job_id,
+        )
+        return None
+
+    redis = None
+    try:
+        redis = await create_pool(_redis_settings_from_url())
+        job = await redis.enqueue_job(
+            "process_funnel_chat_action_task",
+            str(scheduled_job_id),
+            str(chat_id),
+            action,
+            int(duration_seconds),
+            0,
+            _job_id=f"funnel-chat-action:{scheduled_job_id}:0",
+            _queue_name=JOBS_QUEUE_NAME,
+        )
+        return job.job_id if job is not None else None
+    except Exception:
+        logger.exception(
+            "Could not enqueue Telegram chat action job_id=%s action=%s",
+            scheduled_job_id,
+            action,
+        )
+        return None
+    finally:
+        if redis is not None:
+            await redis.close()

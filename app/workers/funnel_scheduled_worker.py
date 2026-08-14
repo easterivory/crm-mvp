@@ -10,9 +10,14 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.database import get_db_session
+from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.services.funnel_runtime_service import (
+    FUNNEL_CHAT_ACTIONS,
+    FUNNEL_CHAT_ACTION_MAX_DURATION_SECONDS,
+    FUNNEL_CHAT_ACTION_REFRESH_SECONDS,
     FunnelRuntimeDeliveryError,
     FunnelRuntimeService,
 )
@@ -20,7 +25,7 @@ from app.services.operational_alert_service import (
     prime_operational_alert_config,
     send_operational_alert,
 )
-from app.services.telegram_sender import TelegramDeliveryError
+from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderService
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +467,122 @@ async def process_funnel_scheduled_job_task(ctx: dict, job_id: str) -> dict:
             dedupe_key=f"funnel-scheduled-arq:{exc.__class__.__name__}",
         )
         return {"status": "failed", "job_id": job_id, "error": error[:1000]}
+
+
+async def process_funnel_chat_action_task(
+    ctx: dict,
+    scheduled_job_id: str,
+    chat_id: str,
+    action: str,
+    duration_seconds: int,
+    elapsed_seconds: int = 0,
+) -> dict[str, Any]:
+    """Refresh a Telegram activity indicator without holding a DB transaction open."""
+
+    try:
+        scheduled_job_uuid = UUID(scheduled_job_id)
+        chat_uuid = UUID(chat_id)
+        duration = min(
+            max(int(duration_seconds), 0),
+            FUNNEL_CHAT_ACTION_MAX_DURATION_SECONDS,
+        )
+        elapsed = max(int(elapsed_seconds), 0)
+    except (TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    normalized_action = str(action or "").strip()
+    if normalized_action not in FUNNEL_CHAT_ACTIONS:
+        return {"status": "failed", "error": "Unsupported Telegram chat action"}
+    if duration <= 0 or elapsed >= duration:
+        return {"status": "completed", "scheduled_job_id": scheduled_job_id}
+
+    try:
+        async with get_db_session() as db:
+            scheduled_job = await FunnelRepository(db).get_scheduled_job(scheduled_job_uuid)
+            if scheduled_job is not None:
+                job_status = str(scheduled_job.status)
+                job_chat_id = scheduled_job.chat_id
+                if job_status != "pending" or job_chat_id != chat_uuid:
+                    await db.rollback()
+                    return {
+                        "status": "skipped",
+                        "scheduled_job_id": scheduled_job_id,
+                        "job_status": job_status,
+                    }
+            elif elapsed > 0:
+                await db.rollback()
+                return {"status": "skipped", "scheduled_job_id": scheduled_job_id}
+
+            chat = await ChatRepository(db).get_by_id(chat_uuid)
+            if chat is None or chat.is_deleted or chat.reset_at is not None:
+                await db.rollback()
+                return {"status": "skipped", "scheduled_job_id": scheduled_job_id}
+
+            accepted = await TelegramSenderService(
+                db,
+                release_transaction_before_network=True,
+            ).send_chat_action(
+                project_id=chat.project_id,
+                bot_id=chat.bot_id,
+                external_chat_id=chat.external_chat_id,
+                action=normalized_action,
+            )
+            if db.in_transaction():
+                await db.rollback()
+    except Exception as exc:
+        logger.info(
+            "Telegram funnel chat action failed job_id=%s chat_id=%s action=%s error=%s",
+            scheduled_job_id,
+            chat_id,
+            normalized_action,
+            exc.__class__.__name__,
+        )
+        return {"status": "failed", "error": str(exc)[:500]}
+
+    if not accepted:
+        return {"status": "failed", "error": "Telegram did not accept chat action"}
+
+    next_elapsed = elapsed + FUNNEL_CHAT_ACTION_REFRESH_SECONDS
+    if next_elapsed >= duration:
+        return {"status": "completed", "scheduled_job_id": scheduled_job_id}
+
+    redis = ctx.get("redis")
+    if redis is None:
+        return {
+            "status": "partial",
+            "scheduled_job_id": scheduled_job_id,
+            "error": "ARQ context has no Redis connection",
+        }
+
+    try:
+        queued = await redis.enqueue_job(
+            "process_funnel_chat_action_task",
+            scheduled_job_id,
+            chat_id,
+            normalized_action,
+            duration,
+            next_elapsed,
+            _job_id=f"funnel-chat-action:{scheduled_job_id}:{next_elapsed}",
+            _queue_name=JOBS_QUEUE_NAME,
+            _defer_by=FUNNEL_CHAT_ACTION_REFRESH_SECONDS,
+        )
+    except Exception as exc:
+        logger.info(
+            "Could not refresh Telegram funnel chat action job_id=%s action=%s error=%s",
+            scheduled_job_id,
+            normalized_action,
+            exc.__class__.__name__,
+        )
+        return {
+            "status": "partial",
+            "scheduled_job_id": scheduled_job_id,
+            "error": str(exc)[:500],
+        }
+    return {
+        "status": "scheduled" if queued is not None else "partial",
+        "scheduled_job_id": scheduled_job_id,
+        "next_elapsed_seconds": next_elapsed,
+    }
 
 
 async def run_loop(interval_seconds: float = 1.0) -> None:

@@ -33,6 +33,8 @@ type MessageSequenceEditorProps = {
   onChange: (messages: MessageConfig[]) => void
 }
 
+const MAX_CHAT_ACTION_DURATION_SECONDS = 60
+
 const mediaModes: Array<{
   type: FunnelMessageMediaType
   label: string
@@ -68,6 +70,15 @@ function mediaIcon(type: string | undefined) {
   if (type === 'voice') return <Mic size={16} />
   if (type === 'video_note') return <PlayCircle size={16} />
   return <FileText size={16} />
+}
+
+function chatActionLabel(type: string) {
+  if (type === 'voice') return 'Показывать «записывает голосовое…»'
+  if (type === 'video_note') return 'Показывать «записывает видеосообщение…»'
+  if (type === 'photo') return 'Показывать «отправляет фото…»'
+  if (type === 'video') return 'Показывать «отправляет видео…»'
+  if (type === 'document') return 'Показывать «отправляет файл…»'
+  return 'Показывать «печатает…»'
 }
 
 function formatBytes(value?: number) {
@@ -274,6 +285,8 @@ export default function MessageSequenceEditor({
                 type: 'text',
                 text: '',
                 delay_seconds: 0,
+                chat_action_enabled: false,
+                chat_action_duration_seconds: 3,
                 wait_for_answer: false,
                 button_mode: 'inline',
                 buttons: [],
@@ -473,6 +486,38 @@ export default function MessageSequenceEditor({
                 className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
               />
             </label>
+
+            <div className="mt-2 rounded-lg border border-white/8 bg-background/45 px-3 py-2">
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={message.chat_action_enabled}
+                  onChange={(event) => update(index, { chat_action_enabled: event.target.checked })}
+                  className="h-4 w-4 shrink-0 rounded border-white/20 bg-background text-accent-300"
+                />
+                <span className="min-w-0 text-sm font-medium text-gray-100">
+                  {chatActionLabel(message.type)}
+                </span>
+              </label>
+              {message.chat_action_enabled ? (
+                <label className="mt-3 block">
+                  <span className="mb-1 block text-xs text-gray-500">Длительность индикатора, сек</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_CHAT_ACTION_DURATION_SECONDS}
+                    value={message.chat_action_duration_seconds}
+                    onChange={(event) => update(index, {
+                      chat_action_duration_seconds: Math.min(
+                        MAX_CHAT_ACTION_DURATION_SECONDS,
+                        Math.max(1, Number(event.target.value) || 1),
+                      ),
+                    })}
+                    className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-base text-gray-100 outline-none md:text-sm"
+                  />
+                </label>
+              ) : null}
+            </div>
 
             <div className="mt-3">
               <ButtonListEditor

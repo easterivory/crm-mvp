@@ -31,6 +31,8 @@ export type MessageConfig = {
   text: string
   caption?: string
   delay_seconds: number
+  chat_action_enabled: boolean
+  chat_action_duration_seconds: number
   wait_for_answer?: boolean
   button_mode: ButtonDisplayMode
   buttons: ButtonConfig[]
@@ -273,6 +275,11 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
         text,
         caption: typeof item.caption === 'string' ? item.caption : undefined,
         delay_seconds: typeof item.delay_seconds === 'number' ? item.delay_seconds : 0,
+        chat_action_enabled: item.chat_action_enabled === true,
+        chat_action_duration_seconds:
+          typeof item.chat_action_duration_seconds === 'number'
+            ? item.chat_action_duration_seconds
+            : 3,
         wait_for_answer:
           typeof item.wait_for_answer === 'boolean'
             ? item.wait_for_answer
@@ -293,6 +300,8 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
       text: legacyText,
       caption: textValue(config, 'caption') || undefined,
       delay_seconds: numberValue(config, 'delay_seconds', 0),
+      chat_action_enabled: boolValue(config, 'chat_action_enabled', false),
+      chat_action_duration_seconds: numberValue(config, 'chat_action_duration_seconds', 3),
       wait_for_answer: boolValue(config, 'wait_for_answer', false),
       button_mode: config.button_mode === 'reply' ? 'reply' : 'inline',
       buttons: normalizeButtons(config.buttons),
