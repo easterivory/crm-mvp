@@ -93,6 +93,7 @@ class TelegramMessage(BaseModel):
     sticker: Optional[TelegramSticker] = None
     animation: Optional[TelegramAnimation] = None
     contact: Optional[TelegramContact] = None
+    reply_to_message: Optional["TelegramMessage"] = None
 
 
 class TelegramCallbackQuery(BaseModel):

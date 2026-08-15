@@ -33,14 +33,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import MessageType, RoleName, SenderType
-from app.models.message import MessageUpload
+from app.models.message import Message, MessageUpload
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.message import MessageCreate, MessageOut, MessageUploadOut
+from app.schemas.message import MessageCreate, MessageOut, MessageReplyOut, MessageUploadOut
 from app.services.access_control import has_project_access
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import TelegramSenderService
@@ -128,6 +128,7 @@ class MessageService:
         mime_type: str | None = None,
         original_text: str | None = None,
         auto_translate: bool = True,
+        reply_to_message_id: UUID | None = None,
     ) -> MessageOut:
         await self._ensure_operator_can_send(operator_id, project_id)
         chat = await self.chat_repo.get_active(chat_id, project_id)
@@ -136,6 +137,11 @@ class MessageService:
         self._raise_if_bot_blocked_by_user(chat)
         if chat.bot_id is None:
             raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
+        reply_parameters = await self._telegram_reply_parameters(
+            chat_id=chat_id,
+            project_id=project_id,
+            reply_to_message_id=reply_to_message_id,
+        )
 
         normalized_type = self._normalize_outgoing_media_type(media_type)
         if normalized_type not in self._operator_send_media_types() | {MessageType.TEXT}:
@@ -159,6 +165,7 @@ class MessageService:
                 bot_id=chat.bot_id,
                 external_chat_id=chat.external_chat_id,
                 text=sent_text,
+                reply_parameters=reply_parameters,
             )
             if result is None:
                 await self._raise_if_bot_blocked_after_send(chat.id, project_id)
@@ -171,6 +178,7 @@ class MessageService:
                 operator_id=operator_id,
                 body=sent_text,
                 original_text=approved_original_text or original_text,
+                reply_to_message_id=reply_to_message_id,
                 raw_payload_json={"telegram_result": result},
             )
             message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
@@ -207,6 +215,7 @@ class MessageService:
             reply_markup=None,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
         )
         if result is None:
             await self._raise_if_bot_blocked_after_send(chat.id, project_id)
@@ -231,6 +240,7 @@ class MessageService:
             file_name=file_name,
             mime_type=mime_type,
             file_size=telegram_file_size or (len(file_bytes) if file_bytes is not None else None),
+            reply_to_message_id=reply_to_message_id,
             raw_payload_json={"telegram_result": result},
         )
         message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
@@ -410,6 +420,7 @@ class MessageService:
                     mime_type=data.mime_type,
                     file_size=data.file_size,
                     media_group_id=data.media_group_id,
+                    reply_to_message_id=data.reply_to_message_id,
                     raw_payload_json=data.raw_payload_json,
                 )
         except IntegrityError:
@@ -444,7 +455,7 @@ class MessageService:
         if data.sender_type == SenderType.MANAGER:
             await self.bot_repo.disable_bot_for_chat(chat_id)
 
-        return MessageOut.model_validate(message)
+        return await self._message_out(message)
 
     async def upload_attachment(
         self,
@@ -651,6 +662,11 @@ class MessageService:
             external_chat_id=chat.external_chat_id,
             text=data.body or "",
             reply_markup=data.reply_markup,
+            reply_parameters=await self._telegram_reply_parameters(
+                chat_id=chat.id,
+                project_id=project_id,
+                reply_to_message_id=data.reply_to_message_id,
+            ),
         )
         if result is None:
             await self._raise_if_bot_blocked_after_send(chat.id, project_id)
@@ -701,6 +717,11 @@ class MessageService:
             bot_id=chat.bot_id,
             external_chat_id=chat.external_chat_id,
             caption=caption,
+            reply_parameters=await self._telegram_reply_parameters(
+                chat_id=chat.id,
+                project_id=project_id,
+                reply_to_message_id=data.reply_to_message_id,
+            ),
         )
         if result is None:
             await self.message_repo.mark_upload_failed(upload.id, project_id)
@@ -754,6 +775,11 @@ class MessageService:
             reply_markup=data.reply_markup,
             file_name=data.file_name,
             mime_type=data.mime_type,
+            reply_parameters=await self._telegram_reply_parameters(
+                chat_id=chat.id,
+                project_id=project_id,
+                reply_to_message_id=data.reply_to_message_id,
+            ),
         )
         if result is None:
             await self._raise_if_bot_blocked_after_send(chat.id, project_id)
@@ -788,6 +814,7 @@ class MessageService:
         bot_id: UUID,
         external_chat_id: str,
         caption: str | None,
+        reply_parameters: dict | None = None,
     ) -> dict | None:
         return await self._send_media_to_telegram_by_type(
             media_type=upload.media_type,
@@ -799,6 +826,7 @@ class MessageService:
             reply_markup=None,
             file_name=upload.file_name,
             mime_type=upload.mime_type,
+            reply_parameters=reply_parameters,
         )
 
     async def _send_media_to_telegram_by_type(
@@ -813,6 +841,7 @@ class MessageService:
         reply_markup: dict | None,
         file_name: str | None,
         mime_type: str | None,
+        reply_parameters: dict | None = None,
     ) -> dict | None:
         if media_type == MessageType.PHOTO:
             return await self.telegram_sender.send_photo(
@@ -824,6 +853,7 @@ class MessageService:
                 reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
+                reply_parameters=reply_parameters,
             )
         if media_type == MessageType.VIDEO:
             return await self.telegram_sender.send_video(
@@ -835,6 +865,7 @@ class MessageService:
                 reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
+                reply_parameters=reply_parameters,
             )
         if media_type == MessageType.VOICE:
             return await self.telegram_sender.send_voice(
@@ -846,6 +877,7 @@ class MessageService:
                 reply_markup=reply_markup,
                 file_name=file_name,
                 mime_type=mime_type,
+                reply_parameters=reply_parameters,
             )
         if media_type == MessageType.VIDEO_NOTE:
             try:
@@ -857,6 +889,7 @@ class MessageService:
                     reply_markup=reply_markup,
                     file_name=file_name,
                     mime_type=mime_type,
+                    reply_parameters=reply_parameters,
                 )
             except VideoProcessingError as exc:
                 raise HTTPException(
@@ -872,6 +905,7 @@ class MessageService:
             reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
         )
 
     @staticmethod
@@ -1013,6 +1047,7 @@ class MessageService:
         project_id: UUID,
         limit: int,
         offset: int,
+        before_message_id: UUID | None = None,
     ) -> tuple[list[MessageOut], int]:
         """
         Returns messages for a chat in chronological order (oldest first).
@@ -1035,12 +1070,13 @@ class MessageService:
             limit=limit,
             offset=offset,
             since=since,
+            before_message_id=before_message_id,
         )
         total = await self.message_repo.count_by_chat(
             chat_id,
             since=since,
         )
-        return [MessageOut.model_validate(m) for m in messages], total
+        return await self._messages_out(messages), total
 
     async def translate_message_on_demand(
         self,
@@ -1078,12 +1114,9 @@ class MessageService:
             source_lang = None
             target_lang = self._lang_or_default(project.operator_lang, "ru")
         else:
-            source_text = message.original_text or message.body or message.caption
-            source_lang = self._lang_or_default(project.operator_lang, "ru")
-            target_lang = self._lang_or_default(
-                chat.client_lang or project.default_client_lang,
-                "en",
-            )
+            source_text = message.body or message.caption or message.original_text
+            source_lang = None
+            target_lang = self._lang_or_default(project.operator_lang, "ru")
 
         if source_text is None or not source_text.strip():
             raise HTTPException(
@@ -1105,7 +1138,213 @@ class MessageService:
             ) from exc
         await self.db.flush()
         await self.db.refresh(message)
-        return MessageOut.model_validate(message)
+        return await self._message_out(message)
+
+    async def edit_message(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        message_id: UUID,
+        operator_id: UUID,
+        text: str,
+    ) -> MessageOut:
+        await self._ensure_operator_can_send(operator_id, project_id)
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found in this project")
+        self._raise_if_bot_blocked_by_user(chat)
+        if chat.bot_id is None:
+            raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
+
+        message = await self.message_repo.get_by_id_in_project(message_id, project_id)
+        if message is None or message.chat_id != chat_id or message.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Message not found in this chat")
+        if message.sender_type not in {SenderType.MANAGER, SenderType.BOT}:
+            raise HTTPException(status_code=403, detail="Можно редактировать только исходящие сообщения.")
+        if not str(message.external_message_id or "").isdigit():
+            raise HTTPException(status_code=422, detail="У сообщения нет Telegram ID для редактирования.")
+
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise HTTPException(status_code=422, detail="Текст сообщения не может быть пустым.")
+        is_caption = message.message_type not in {MessageType.TEXT, MessageType.SYSTEM}
+        reply_markup = self._saved_reply_markup(message)
+        if is_caption:
+            result = await self.telegram_sender.edit_message_caption(
+                project_id=project_id,
+                bot_id=chat.bot_id,
+                external_chat_id=chat.external_chat_id,
+                message_id=int(message.external_message_id),
+                caption=normalized_text,
+                reply_markup=reply_markup,
+            )
+        else:
+            result = await self.telegram_sender.edit_message_text(
+                project_id=project_id,
+                bot_id=chat.bot_id,
+                external_chat_id=chat.external_chat_id,
+                message_id=int(message.external_message_id),
+                text=normalized_text,
+                reply_markup=reply_markup,
+            )
+        if result is None:
+            await self._raise_if_bot_blocked_after_send(chat.id, project_id)
+            raise HTTPException(status_code=502, detail="Telegram не принял изменение сообщения.")
+
+        edited_at = datetime.now(timezone.utc)
+        await self.message_repo.mark_edited(
+            message_id=message.id,
+            text=normalized_text,
+            is_caption=is_caption,
+            edited_at=edited_at,
+        )
+        await self.db.flush()
+        await self.db.refresh(message)
+        return await self._message_out(message)
+
+    async def delete_message(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        message_id: UUID,
+        operator_id: UUID,
+    ) -> None:
+        await self._ensure_operator_can_send(operator_id, project_id)
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found in this project")
+        if chat.bot_id is None:
+            raise HTTPException(status_code=422, detail="У чата не настроен бот для удаления.")
+
+        message = await self.message_repo.get_by_id_in_project(message_id, project_id)
+        if message is None or message.chat_id != chat_id:
+            raise HTTPException(status_code=404, detail="Message not found in this chat")
+        if message.deleted_at is not None:
+            return
+        if not str(message.external_message_id or "").isdigit():
+            raise HTTPException(status_code=422, detail="У сообщения нет Telegram ID для удаления.")
+        if message.created_at < datetime.now(timezone.utc) - timedelta(hours=48):
+            raise HTTPException(
+                status_code=422,
+                detail="Telegram разрешает удалять сообщения только в течение 48 часов после отправки.",
+            )
+
+        deleted = await self.telegram_sender.delete_message(
+            project_id=project_id,
+            bot_id=chat.bot_id,
+            external_chat_id=chat.external_chat_id,
+            message_id=int(message.external_message_id),
+        )
+        if not deleted:
+            await self._raise_if_bot_blocked_after_send(chat.id, project_id)
+            raise HTTPException(status_code=502, detail="Telegram не принял удаление сообщения.")
+
+        await self.message_repo.mark_deleted(
+            message_id=message.id,
+            deleted_at=datetime.now(timezone.utc),
+        )
+        await self._refresh_chat_message_timestamps(chat)
+
+    async def _refresh_chat_message_timestamps(self, chat) -> None:
+        since = (
+            chat.current_cycle_started_at - MESSAGE_CYCLE_START_TOLERANCE
+            if chat.current_cycle_started_at is not None
+            else None
+        )
+        latest, latest_user, latest_outgoing, latest_manager = (
+            await self.message_repo.timestamp_summary(chat_id=chat.id, since=since)
+        )
+        chat.last_message_at = latest
+        chat.last_user_message_at = latest_user
+        chat.last_client_message_at = latest_user
+        chat.last_manager_reply_at = latest_outgoing
+        chat.last_operator_message_at = latest_manager
+        chat.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+
+    async def _telegram_reply_parameters(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        reply_to_message_id: UUID | None,
+    ) -> dict | None:
+        if reply_to_message_id is None:
+            return None
+        target = await self.message_repo.get_by_id_in_project(
+            reply_to_message_id,
+            project_id,
+        )
+        if (
+            target is None
+            or target.chat_id != chat_id
+            or target.deleted_at is not None
+            or not str(target.external_message_id or "").isdigit()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Сообщение для ответа не найдено в текущем Telegram-чате.",
+            )
+        return {
+            "message_id": int(target.external_message_id),
+            "allow_sending_without_reply": False,
+        }
+
+    async def _messages_out(self, messages: list[Message]) -> list[MessageOut]:
+        reply_ids = list(
+            dict.fromkeys(
+                message.reply_to_message_id
+                for message in messages
+                if message.reply_to_message_id is not None
+            )
+        )
+        reply_messages = await self.message_repo.list_by_ids(reply_ids)
+        replies_by_id = {message.id: message for message in reply_messages}
+        return [
+            self._message_out_with_reply(
+                message,
+                replies_by_id.get(message.reply_to_message_id),
+            )
+            for message in messages
+        ]
+
+    async def _message_out(self, message: Message) -> MessageOut:
+        reply = None
+        if message.reply_to_message_id is not None:
+            reply = await self.message_repo.get_by_id(message.reply_to_message_id)
+        return self._message_out_with_reply(message, reply)
+
+    @staticmethod
+    def _message_out_with_reply(message: Message, reply: Message | None) -> MessageOut:
+        reply_out = None
+        if reply is not None:
+            reply_out = MessageReplyOut(
+                id=reply.id,
+                sender_type=reply.sender_type,
+                message_type=reply.message_type,
+                body=reply.body,
+                caption=reply.caption,
+                file_name=reply.file_name,
+                deleted_at=reply.deleted_at,
+            )
+        return MessageOut.model_validate(message).model_copy(
+            update={"reply_to": reply_out}
+        )
+
+    @staticmethod
+    def _saved_reply_markup(message: Message) -> dict | None:
+        payload = message.raw_payload_json if isinstance(message.raw_payload_json, dict) else {}
+        reply_markup = payload.get("reply_markup")
+        if not isinstance(reply_markup, dict):
+            telegram_result = payload.get("telegram_result")
+            reply_markup = (
+                telegram_result.get("reply_markup")
+                if isinstance(telegram_result, dict)
+                else None
+            )
+        return reply_markup if isinstance(reply_markup, dict) else None
 
     async def media_response(self, message_id: UUID, project_id: UUID) -> StreamingResponse:
         message = await self.message_repo.get_by_id_in_project(message_id, project_id)

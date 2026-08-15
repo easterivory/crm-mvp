@@ -8,6 +8,7 @@ import httpx
 from sqlalchemy.dialects import postgresql
 
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.message_repository import MessageRepository
 from app.services.chat_service import ChatService
 from app.services.chat_user_block_service import ChatUserBlockService
 from app.services.telegram_sender import TelegramSenderService
@@ -140,3 +141,68 @@ def test_telegram_forbidden_response_persists_user_block() -> None:
         bot_id=bot_id,
         external_chat_id="12345",
     )
+
+
+def test_expired_assignment_does_not_reopen_read_chat() -> None:
+    chat_id = uuid4()
+    lead_id = uuid4()
+    manager_id = uuid4()
+
+    class RowsResult:
+        @staticmethod
+        def all():
+            return [(chat_id, lead_id, manager_id)]
+
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[RowsResult(), SimpleNamespace(rowcount=1), SimpleNamespace(rowcount=1)]
+        )
+    )
+    repository = ChatRepository(db)
+
+    result = asyncio.run(
+        repository.release_expired_assignments(
+            project_id=uuid4(),
+            expires_before=datetime.now(timezone.utc),
+        )
+    )
+
+    assert result == [(chat_id, lead_id, manager_id)]
+    chat_update = db.execute.await_args_list[2].args[0]
+    sql = str(chat_update.compile(dialect=postgresql.dialect()))
+    assert "assignment_expires_at" in sql
+    assert "is_read=" not in sql
+
+
+def test_message_history_cursor_uses_oldest_loaded_message() -> None:
+    chat_id = uuid4()
+    anchor_id = uuid4()
+    anchor_created_at = datetime.now(timezone.utc)
+
+    class AnchorResult:
+        @staticmethod
+        def one_or_none():
+            return SimpleNamespace(created_at=anchor_created_at, id=anchor_id)
+
+    class MessagesResult:
+        @staticmethod
+        def scalars():
+            return SimpleNamespace(all=lambda: [])
+
+    db = SimpleNamespace(execute=AsyncMock(side_effect=[AnchorResult(), MessagesResult()]))
+    repository = MessageRepository(db)
+
+    result = asyncio.run(
+        repository.list_by_chat(
+            chat_id,
+            limit=100,
+            offset=900,
+            before_message_id=anchor_id,
+        )
+    )
+
+    assert result == []
+    page_query = db.execute.await_args_list[1].args[0]
+    sql = str(page_query.compile(dialect=postgresql.dialect()))
+    assert "(messages.created_at, messages.id) <" in sql
+    assert " OFFSET " not in sql

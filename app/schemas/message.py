@@ -25,6 +25,7 @@ class MessageCreate(BaseModel):
     mime_type: Optional[str] = Field(None, max_length=255)
     file_size: Optional[int] = None
     media_group_id: Optional[str] = Field(None, max_length=255)
+    reply_to_message_id: Optional[uuid.UUID] = None
     raw_payload_json: Optional[dict] = None
     reply_markup: Optional[dict] = None
     upload_id: Optional[uuid.UUID] = None
@@ -39,6 +40,20 @@ class MessageTranslationPreviewOut(BaseModel):
     translated_text: str
     source_lang: str
     target_lang: str
+
+
+class MessageEditRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+
+
+class MessageReplyOut(BaseModel):
+    id: uuid.UUID
+    sender_type: str
+    message_type: str
+    body: Optional[str] = None
+    caption: Optional[str] = None
+    file_name: Optional[str] = None
+    deleted_at: Optional[datetime] = None
 
 
 class MessageOut(OrmBase):
@@ -60,6 +75,10 @@ class MessageOut(OrmBase):
     mime_type: Optional[str] = None
     file_size: Optional[int] = None
     media_group_id: Optional[str] = None
+    reply_to_message_id: Optional[uuid.UUID] = None
+    reply_to: Optional[MessageReplyOut] = None
+    edited_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
     buttons: list[str] = Field(default_factory=list)
     created_at: datetime
 

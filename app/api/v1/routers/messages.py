@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.schemas.common import PaginatedResponse
 from app.schemas.message import (
     MessageCreate,
+    MessageEditRequest,
     MessageOut,
     MessageTranslationPreviewOut,
     MessageTranslationPreviewRequest,
@@ -44,6 +45,10 @@ async def create_message(
         request.query_params.get("auto_translate", payload.get("auto_translate")),
         default=True,
     )
+    reply_to_message_id = _optional_uuid(
+        payload.get("reply_to_message_id"),
+        "reply_to_message_id",
+    )
 
     upload_id = _optional_uuid(payload.get("upload_id"), "upload_id")
     if upload_id is not None:
@@ -55,6 +60,7 @@ async def create_message(
             body=_optional_text(payload.get("body")),
             caption=_optional_text(payload.get("caption") or payload.get("text")),
             upload_id=upload_id,
+            reply_to_message_id=reply_to_message_id,
         )
         return await message_service.create_message(
             chat_id=chat_id,
@@ -88,6 +94,7 @@ async def create_message(
             mime_type=snippet.mime_type,
             original_text=_optional_text(payload.get("original_text")),
             auto_translate=auto_translate,
+            reply_to_message_id=reply_to_message_id,
         )
 
     media_type = str(payload.get("media_type") or payload.get("message_type") or MessageType.TEXT)
@@ -109,6 +116,7 @@ async def create_message(
             mime_type=upload.content_type,
             original_text=original_text,
             auto_translate=auto_translate,
+            reply_to_message_id=reply_to_message_id,
         )
 
     return await message_service.send_message_to_client(
@@ -120,6 +128,7 @@ async def create_message(
         file_id=file_id,
         original_text=original_text,
         auto_translate=auto_translate,
+        reply_to_message_id=reply_to_message_id,
     )
 
 
@@ -156,11 +165,48 @@ async def translate_message(
     )
 
 
+@router.patch("/{message_id}", response_model=MessageOut)
+async def edit_message(
+    chat_id: UUID,
+    message_id: UUID,
+    data: MessageEditRequest,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageOut:
+    _ensure_message_write_access(current_user)
+    return await MessageService(db).edit_message(
+        chat_id=chat_id,
+        project_id=project_id,
+        message_id=message_id,
+        operator_id=current_user.id,
+        text=data.text,
+    )
+
+
+@router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_message(
+    chat_id: UUID,
+    message_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    _ensure_message_write_access(current_user)
+    await MessageService(db).delete_message(
+        chat_id=chat_id,
+        project_id=project_id,
+        message_id=message_id,
+        operator_id=current_user.id,
+    )
+
+
 @router.get("", response_model=PaginatedResponse[MessageOut])
 async def list_messages(
     chat_id: UUID,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    before_message_id: UUID | None = Query(default=None),
     project_id: UUID = Depends(get_current_project_id),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[MessageOut]:
@@ -169,6 +215,7 @@ async def list_messages(
         project_id=project_id,
         limit=limit,
         offset=offset,
+        before_message_id=before_message_id,
     )
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
@@ -265,6 +312,7 @@ async def schedule_chat_message(
 @scheduled_router.get("", response_model=list[ScheduledMessageOut])
 async def list_scheduled_chat_messages(
     chat_id: UUID,
+    active_only: bool = Query(default=False),
     project_id: UUID = Depends(get_current_project_id),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -273,6 +321,7 @@ async def list_scheduled_chat_messages(
         project_id=project_id,
         chat_id=chat_id,
         actor=current_user,
+        active_only=active_only,
     )
 
 

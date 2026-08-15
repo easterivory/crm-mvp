@@ -84,6 +84,7 @@ class TelegramSenderService:
         external_chat_id: str,
         text: str,
         reply_markup: dict | None = None,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         token = await self._get_token(project_id, bot_id)
         if not token:
@@ -115,6 +116,8 @@ class TelegramSenderService:
         payload: dict[str, Any] = {"chat_id": external_chat_id, "text": message_text}
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if reply_parameters:
+            payload["reply_parameters"] = reply_parameters
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -204,6 +207,7 @@ class TelegramSenderService:
         reply_markup: dict | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendPhoto",
@@ -216,6 +220,7 @@ class TelegramSenderService:
             reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
         )
 
     async def edit_message_reply_markup(
@@ -262,6 +267,144 @@ class TelegramSenderService:
             )
             return False
 
+    async def edit_message_text(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        message_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+    ) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {
+            "chat_id": external_chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        return await self._edit_message(
+            method="editMessageText",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            payload=payload,
+        )
+
+    async def edit_message_caption(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        message_id: int,
+        caption: str,
+        reply_markup: dict | None = None,
+    ) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {
+            "chat_id": external_chat_id,
+            "message_id": message_id,
+            "caption": caption,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        return await self._edit_message(
+            method="editMessageCaption",
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+            payload=payload,
+        )
+
+    async def _edit_message(
+        self,
+        *,
+        method: str,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        token = await self._get_token(project_id, bot_id)
+        if not token:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{token}/{method}",
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            await self._handle_delivery_error(
+                self._network_delivery_error(method, exc),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
+            return None
+        return await self._result_or_delivery_error(
+            method=method,
+            response=response,
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+        )
+
+    async def delete_message(
+        self,
+        *,
+        project_id: UUID,
+        bot_id: UUID | None,
+        external_chat_id: str,
+        message_id: int,
+    ) -> bool:
+        token = await self._get_token(project_id, bot_id)
+        if not token:
+            return False
+        method = "deleteMessage"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{token}/{method}",
+                    json={
+                        "chat_id": external_chat_id,
+                        "message_id": message_id,
+                    },
+                )
+        except httpx.HTTPError as exc:
+            await self._handle_delivery_error(
+                self._network_delivery_error(method, exc),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
+            return False
+
+        try:
+            payload: Any = response.json()
+        except ValueError:
+            payload = None
+        if (
+            response.is_success
+            and isinstance(payload, dict)
+            and payload.get("ok") is True
+            and payload.get("result") is True
+        ):
+            return True
+
+        await self._handle_delivery_error(
+            self._response_delivery_error(
+                method=method,
+                response=response,
+                payload=payload,
+            ),
+            project_id=project_id,
+            bot_id=bot_id,
+            external_chat_id=external_chat_id,
+        )
+        return False
+
     async def send_video(
         self,
         project_id: UUID,
@@ -273,6 +416,7 @@ class TelegramSenderService:
         reply_markup: dict | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendVideo",
@@ -285,6 +429,7 @@ class TelegramSenderService:
             reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
             timeout=90.0,
         )
 
@@ -299,6 +444,7 @@ class TelegramSenderService:
         reply_markup: dict | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendDocument",
@@ -311,6 +457,7 @@ class TelegramSenderService:
             reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
             timeout=90.0,
         )
 
@@ -325,6 +472,7 @@ class TelegramSenderService:
         reply_markup: dict | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendVoice",
@@ -337,6 +485,7 @@ class TelegramSenderService:
             reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
             timeout=90.0,
         )
 
@@ -350,6 +499,7 @@ class TelegramSenderService:
         reply_markup: dict | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         if isinstance(video_note, (bytes, Path)):
             try:
@@ -368,6 +518,7 @@ class TelegramSenderService:
                     reply_markup=reply_markup,
                     file_name=self._video_note_file_name(file_name),
                     mime_type="video/mp4",
+                    reply_parameters=reply_parameters,
                     timeout=90.0,
                     supports_caption=False,
                 )
@@ -392,6 +543,7 @@ class TelegramSenderService:
             reply_markup=reply_markup,
             file_name=file_name,
             mime_type=mime_type,
+            reply_parameters=reply_parameters,
             timeout=90.0,
             supports_caption=False,
         )
@@ -418,6 +570,7 @@ class TelegramSenderService:
         mime_type: str | None = None,
         timeout: float = 30.0,
         supports_caption: bool = True,
+        reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
         token = await self._get_token(project_id, bot_id)
         if not token:
@@ -442,6 +595,8 @@ class TelegramSenderService:
                         data["caption"] = caption_text
                     if reply_markup:
                         data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                    if reply_parameters:
+                        data["reply_parameters"] = json.dumps(reply_parameters)
                     with media.open("rb") as media_file:
                         files = {
                             media_field: (
@@ -457,6 +612,8 @@ class TelegramSenderService:
                         data["caption"] = caption_text
                     if reply_markup:
                         data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                    if reply_parameters:
+                        data["reply_parameters"] = json.dumps(reply_parameters)
                     files = {
                         media_field: (
                             file_name or f"{media_field}.bin",
@@ -471,6 +628,8 @@ class TelegramSenderService:
                         payload["caption"] = caption_text
                     if reply_markup:
                         payload["reply_markup"] = reply_markup
+                    if reply_parameters:
+                        payload["reply_parameters"] = reply_parameters
                     response = await client.post(url, json=payload)
         except httpx.HTTPError as exc:
             await self._handle_delivery_error(

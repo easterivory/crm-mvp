@@ -16,7 +16,9 @@ import {
   MousePointerClick,
   Music,
   Paperclip,
+  Pencil,
   Plus,
+  Reply,
   Search,
   Send,
   Star,
@@ -121,6 +123,18 @@ type Message = {
   mime_type: string | null
   file_size: number | null
   media_group_id: string | null
+  reply_to_message_id: string | null
+  reply_to: {
+    id: string
+    sender_type: 'user' | 'manager' | 'bot' | 'system'
+    message_type: string
+    body: string | null
+    caption: string | null
+    file_name: string | null
+    deleted_at: string | null
+  } | null
+  edited_at: string | null
+  deleted_at: string | null
   buttons?: string[]
   created_at: string
 }
@@ -166,13 +180,6 @@ type TranslationPreview = {
   translated_text: string
   source_lang: string
   target_lang: string
-}
-
-type PendingTranslationApproval = {
-  originalText: string
-  approvedText: string
-  sourceLang: string
-  targetLang: string
 }
 
 type ScheduledMessage = {
@@ -417,6 +424,16 @@ function filtersEqual(left: ChatFiltersState, right: ChatFiltersState) {
 
 function getMediaLabel(message: Message) {
   return mediaLabels[message.message_type] ?? message.message_type
+}
+
+function messageSummary(message: Pick<Message, 'body' | 'caption' | 'file_name' | 'message_type'>) {
+  return (
+    message.body?.trim()
+    || message.caption?.trim()
+    || message.file_name?.trim()
+    || mediaLabels[message.message_type]
+    || 'Сообщение'
+  )
 }
 
 function getMediaIcon(messageType: string) {
@@ -710,9 +727,7 @@ export default function ChatsPage() {
   const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isPreparingTranslation, setIsPreparingTranslation] = useState(false)
-  const [isAutoTranslateEnabled, setIsAutoTranslateEnabled] = useState(true)
-  const [pendingTranslation, setPendingTranslation] =
-    useState<PendingTranslationApproval | null>(null)
+  const [translatedDraftOriginal, setTranslatedDraftOriginal] = useState<string | null>(null)
   const [translatingMessageId, setTranslatingMessageId] = useState<string | null>(null)
   const [isUpdatingChatLanguage, setIsUpdatingChatLanguage] = useState(false)
   const [attachment, setAttachment] = useState<ChatAttachmentDraft | null>(null)
@@ -736,6 +751,12 @@ export default function ChatsPage() {
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
   const [isScheduling, setIsScheduling] = useState(false)
   const [cancellingScheduledMessageId, setCancellingScheduledMessageId] = useState<string | null>(null)
+  const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null)
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
+  const [editingMessageText, setEditingMessageText] = useState('')
+  const [isEditingMessage, setIsEditingMessage] = useState(false)
+  const [messagePendingDeletion, setMessagePendingDeletion] = useState<Message | null>(null)
+  const [isDeletingMessage, setIsDeletingMessage] = useState(false)
   const [openingMediaId, setOpeningMediaId] = useState<string | null>(null)
   const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null)
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
@@ -1024,60 +1045,65 @@ export default function ChatsPage() {
       return
     }
 
+    const searchQuery = debouncedChatFilters.q.trim()
     const params: Record<string, boolean | number | string> = {
       limit: CHAT_LIMIT,
       offset: append ? loadedChatCountRef.current : 0,
       project_id: selectedProjectId,
       sort_by: debouncedChatFilters.sortBy,
       timezone_offset_minutes: new Date().getTimezoneOffset(),
-      view: debouncedChatFilters.workspaceView,
     }
 
-    if (selectedBotIds.length === 1) {
-      params.bot_id = selectedBotIds[0]
-    } else if (selectedBotIds.length > 1) {
-      params.bot_ids = selectedBotIds.join(',')
+    if (!searchQuery) {
+      params.view = debouncedChatFilters.workspaceView
+      if (selectedBotIds.length === 1) {
+        params.bot_id = selectedBotIds[0]
+      } else if (selectedBotIds.length > 1) {
+        params.bot_ids = selectedBotIds.join(',')
+      }
     }
 
-    if (debouncedChatFilters.q.trim()) {
-      params.q = debouncedChatFilters.q.trim()
+    if (searchQuery) {
+      params.q = searchQuery
     }
-    if (debouncedChatFilters.hasUnansweredIncoming) {
-      params.has_unanswered_incoming = true
-    }
-    if (debouncedChatFilters.isRed) {
-      params.is_red = true
-    }
-    if (debouncedChatFilters.isHotLead) {
-      params.is_hot_lead = true
-    }
-    if (debouncedChatFilters.assignedUserId) {
-      params.assigned_user_id = debouncedChatFilters.assignedUserId
-    }
-    if (debouncedChatFilters.unassigned) {
-      params.unassigned = true
-    }
-    if (debouncedChatFilters.trackingLinkId) {
-      params.tracking_link_id = debouncedChatFilters.trackingLinkId
-    }
-    if (debouncedChatFilters.dateFrom) {
-      params.date_from = debouncedChatFilters.dateFrom
-    }
-    if (debouncedChatFilters.dateTo) {
-      params.date_to = debouncedChatFilters.dateTo
-    }
-    if (debouncedChatFilters.tagIds.length > 0) {
-      params.tag_ids = debouncedChatFilters.tagIds.join(',')
-      params.tag_mode = debouncedChatFilters.tagMode
-    }
-    if (debouncedChatFilters.leadStatuses.length > 0) {
-      params.lead_statuses = debouncedChatFilters.leadStatuses.join(',')
-    }
-    if (debouncedChatFilters.funnelState) {
-      params.funnel_state = debouncedChatFilters.funnelState
-    }
-    if (debouncedChatFilters.currentStepId) {
-      params.current_step_id = debouncedChatFilters.currentStepId
+    if (!searchQuery) {
+      if (debouncedChatFilters.hasUnansweredIncoming) {
+        params.has_unanswered_incoming = true
+      }
+      if (debouncedChatFilters.isRed) {
+        params.is_red = true
+      }
+      if (debouncedChatFilters.isHotLead) {
+        params.is_hot_lead = true
+      }
+      if (debouncedChatFilters.assignedUserId) {
+        params.assigned_user_id = debouncedChatFilters.assignedUserId
+      }
+      if (debouncedChatFilters.unassigned) {
+        params.unassigned = true
+      }
+      if (debouncedChatFilters.trackingLinkId) {
+        params.tracking_link_id = debouncedChatFilters.trackingLinkId
+      }
+      if (debouncedChatFilters.dateFrom) {
+        params.date_from = debouncedChatFilters.dateFrom
+      }
+      if (debouncedChatFilters.dateTo) {
+        params.date_to = debouncedChatFilters.dateTo
+      }
+      if (debouncedChatFilters.tagIds.length > 0) {
+        params.tag_ids = debouncedChatFilters.tagIds.join(',')
+        params.tag_mode = debouncedChatFilters.tagMode
+      }
+      if (debouncedChatFilters.leadStatuses.length > 0) {
+        params.lead_statuses = debouncedChatFilters.leadStatuses.join(',')
+      }
+      if (debouncedChatFilters.funnelState) {
+        params.funnel_state = debouncedChatFilters.funnelState
+      }
+      if (debouncedChatFilters.currentStepId) {
+        params.current_step_id = debouncedChatFilters.currentStepId
+      }
     }
 
     const queryParams = { ...params }
@@ -1223,17 +1249,14 @@ export default function ChatsPage() {
   const loadProjectTranslation = useCallback(async () => {
     if (!selectedProjectId) {
       setProjectTranslation(null)
-      setIsAutoTranslateEnabled(true)
       return
     }
 
     try {
       const { data } = await api.get<ProjectTranslationConfig>(`/projects/${selectedProjectId}`)
       setProjectTranslation(data)
-      setIsAutoTranslateEnabled(data.is_translation_enabled)
     } catch {
       setProjectTranslation(null)
-      setIsAutoTranslateEnabled(true)
     }
   }, [selectedProjectId])
 
@@ -1360,7 +1383,7 @@ export default function ChatsPage() {
     try {
       const { data } = await api.get<ScheduledMessage[]>(
         `/chats/${chatId}/scheduled-messages`,
-        { params: { project_id: selectedProjectId } },
+        { params: { project_id: selectedProjectId, active_only: true } },
       )
       setScheduledMessages(data)
     } catch (err) {
@@ -1491,7 +1514,6 @@ export default function ChatsPage() {
     }
 
     const chatId = selectedChatId
-    const offset = messages.length
     const anchorMessage = messages[0]
     const container = messagesScrollRef.current
     const anchorElement = anchorMessage
@@ -1511,7 +1533,8 @@ export default function ChatsPage() {
         api.get<PaginatedResponse<Message>>(`/chats/${chatId}/messages`, {
           params: {
             limit: MESSAGE_LIMIT,
-            offset,
+            offset: 0,
+            ...(anchorMessage ? { before_message_id: anchorMessage.id } : {}),
             ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
           },
           signal: controller.signal,
@@ -1731,6 +1754,7 @@ export default function ChatsPage() {
     const timer = window.setInterval(() => {
       void loadMessages(selectedChatId)
       void loadSelectedChat(selectedChatId)
+      void loadScheduledMessages(selectedChatId)
     }, 7000)
 
     return () => {
@@ -1747,7 +1771,10 @@ export default function ChatsPage() {
     setIsSnippetsOpen(false)
     setSnippetSearch('')
     setSnippetMedia(null)
-    setPendingTranslation(null)
+    setTranslatedDraftOriginal(null)
+    setReplyingToMessage(null)
+    setEditingMessage(null)
+    setMessagePendingDeletion(null)
     setAlternateMessageTextIds(new Set<string>())
     if (attachmentPreviewUrl) {
       window.URL.revokeObjectURL(attachmentPreviewUrl)
@@ -1833,9 +1860,19 @@ export default function ChatsPage() {
     return () => window.cancelAnimationFrame(frame)
   }, [highlightedMessageId, messages, searchNavigationKey])
 
-  const prepareTranslationApproval = async (text: string) => {
+  const handleTranslateDraft = async () => {
+    const text = draft.trim()
     if (!selectedChatId || isPreparingTranslation) {
-      return false
+      return
+    }
+    if (translatedDraftOriginal !== null) {
+      setDraft(translatedDraftOriginal)
+      setTranslatedDraftOriginal(null)
+      return
+    }
+    if (!text) {
+      notify({ tone: 'error', message: 'Сначала напишите текст для перевода.' })
+      return
     }
 
     setIsPreparingTranslation(true)
@@ -1847,13 +1884,8 @@ export default function ChatsPage() {
           params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
         },
       )
-      setPendingTranslation({
-        originalText: data.original_text,
-        approvedText: normalizeTranslationForChat(data.translated_text),
-        sourceLang: data.source_lang,
-        targetLang: data.target_lang,
-      })
-      return true
+      setTranslatedDraftOriginal(data.original_text)
+      setDraft(normalizeTranslationForChat(data.translated_text))
     } catch (err) {
       if (isTelegramUserBlockError(err) && selectedChatId) {
         setChats((current) => current.map((chat) => (
@@ -1861,7 +1893,6 @@ export default function ChatsPage() {
         )))
       }
       notify({ tone: 'error', message: getErrorMessage(err) })
-      return false
     } finally {
       setIsPreparingTranslation(false)
     }
@@ -1870,7 +1901,6 @@ export default function ChatsPage() {
   const sendMessage = async (options: {
     autoTranslate?: boolean
     originalText?: string
-    skipTranslationApproval?: boolean
     textOverride?: string
   } = {}) => {
     const text = (options.textOverride ?? draft).trim()
@@ -1884,24 +1914,14 @@ export default function ChatsPage() {
       return false
     }
 
-    const shouldPrepareTranslation =
-      Boolean(text)
-      && isAutoTranslateEnabled
-      && !options.skipTranslationApproval
-      && projectTranslation?.is_translation_enabled !== false
-
-    if (shouldPrepareTranslation) {
-      return prepareTranslationApproval(text)
-    }
-
     setIsSending(true)
 
     try {
       const params = {
         ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
-        auto_translate: options.autoTranslate ?? isAutoTranslateEnabled,
+        auto_translate: options.autoTranslate ?? false,
       }
-      const originalText = options.originalText?.trim()
+      const originalText = (options.originalText ?? translatedDraftOriginal)?.trim()
       const { data } = attachment
         ? await api.post<Message>(
             `/chats/${selectedChatId}/messages`,
@@ -1915,6 +1935,9 @@ export default function ChatsPage() {
               if (originalText) {
                 formData.append('original_text', originalText)
               }
+              if (replyingToMessage) {
+                formData.append('reply_to_message_id', replyingToMessage.id)
+              }
               return formData
             })(),
             { params },
@@ -1926,6 +1949,7 @@ export default function ChatsPage() {
                 snippet_id: snippetMedia.id,
                 text,
                 ...(originalText ? { original_text: originalText } : {}),
+                ...(replyingToMessage ? { reply_to_message_id: replyingToMessage.id } : {}),
               },
               { params },
             )
@@ -1935,6 +1959,7 @@ export default function ChatsPage() {
               media_type: 'text',
               text,
               ...(originalText ? { original_text: originalText } : {}),
+              ...(replyingToMessage ? { reply_to_message_id: replyingToMessage.id } : {}),
             },
             { params },
           )
@@ -1950,7 +1975,8 @@ export default function ChatsPage() {
       setDraft('')
       clearAttachment()
       setSnippetMedia(null)
-      setPendingTranslation(null)
+      setTranslatedDraftOriginal(null)
+      setReplyingToMessage(null)
       await loadChats()
       void loadWorkspaceCounts()
       return true
@@ -1969,6 +1995,7 @@ export default function ChatsPage() {
     clearAttachment()
     setSnippetMedia(snippet.type === 'text' ? null : snippet)
     setDraft(snippet.content ?? '')
+    setTranslatedDraftOriginal(null)
     setIsSnippetsOpen(false)
   }
 
@@ -2047,7 +2074,7 @@ export default function ChatsPage() {
   const handleTranslateMessage = async (message: Message) => {
     const isOutgoing = message.sender_type === 'manager' || message.sender_type === 'bot'
     const hasSavedAlternative = isOutgoing
-      ? hasText(message.original_text)
+      ? hasText(message.original_text) || hasText(message.translated_text)
       : hasText(message.translated_text)
 
     if (hasSavedAlternative) {
@@ -2063,7 +2090,7 @@ export default function ChatsPage() {
       return
     }
 
-    if (!selectedChatId || translatingMessageId || isOutgoing) {
+    if (!selectedChatId || translatingMessageId) {
       return
     }
 
@@ -2089,6 +2116,75 @@ export default function ChatsPage() {
     } finally {
       setTranslatingMessageId(null)
     }
+  }
+
+  const openMessageEditor = (message: Message) => {
+    setEditingMessage(message)
+    setEditingMessageText((message.body ?? message.caption ?? '').trim())
+  }
+
+  const handleEditMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selectedChatId || !editingMessage || isEditingMessage) {
+      return
+    }
+    const text = editingMessageText.trim()
+    if (!text) {
+      notify({ tone: 'error', message: 'Текст сообщения не может быть пустым.' })
+      return
+    }
+    setIsEditingMessage(true)
+    try {
+      const { data } = await api.patch<Message>(
+        `/chats/${selectedChatId}/messages/${editingMessage.id}`,
+        { text },
+        { params: selectedProjectId ? { project_id: selectedProjectId } : undefined },
+      )
+      setMessages((current) => sortMessagesByDate(
+        current.map((message) => message.id === data.id ? data : message),
+      ))
+      setEditingMessage(null)
+      setEditingMessageText('')
+      notify({ tone: 'success', message: 'Сообщение изменено в Telegram.' })
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось изменить сообщение.') })
+    } finally {
+      setIsEditingMessage(false)
+    }
+  }
+
+  const handleDeleteMessage = async () => {
+    if (!selectedChatId || !messagePendingDeletion || isDeletingMessage) {
+      return
+    }
+    const messageId = messagePendingDeletion.id
+    setIsDeletingMessage(true)
+    try {
+      await api.delete(`/chats/${selectedChatId}/messages/${messageId}`, {
+        params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+      })
+      setMessages((current) => current.filter((message) => message.id !== messageId))
+      setMessageTotal((current) => Math.max(0, current - 1))
+      setReplyingToMessage((current) => current?.id === messageId ? null : current)
+      setMessagePendingDeletion(null)
+      notify({ tone: 'success', message: 'Сообщение удалено из Telegram.' })
+      void loadChats()
+    } catch (err) {
+      notify({ tone: 'error', message: getErrorMessage(err, 'Не удалось удалить сообщение.') })
+    } finally {
+      setIsDeletingMessage(false)
+    }
+  }
+
+  const scrollToMessage = (messageId: string) => {
+    const target = document.getElementById(`message-${messageId}`)
+    const container = messagesScrollRef.current
+    if (!target || !container) {
+      notify({ tone: 'info', message: 'Исходное сообщение находится выше. Загрузите предыдущие сообщения.' })
+      return
+    }
+    shouldAutoScrollMessagesRef.current = false
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
   const handleClientLanguageChange = async (clientLang: string) => {
@@ -2331,7 +2427,10 @@ export default function ChatsPage() {
         const formData = new FormData()
         formData.append('scheduled_at', scheduledAt.toISOString())
         formData.append('media_type', attachment.media_type)
-        formData.append('auto_translate', String(isAutoTranslateEnabled))
+        formData.append('auto_translate', 'false')
+        if (translatedDraftOriginal) {
+          formData.append('original_text', translatedDraftOriginal)
+        }
         formData.append('file', attachment.file, attachment.file.name)
         if (text) {
           formData.append('text', text)
@@ -2345,7 +2444,8 @@ export default function ChatsPage() {
             media_type: snippetMedia.type,
             snippet_id: snippetMedia.id,
             text,
-            auto_translate: isAutoTranslateEnabled,
+            auto_translate: false,
+            ...(translatedDraftOriginal ? { original_text: translatedDraftOriginal } : {}),
           },
           { params },
         )
@@ -2356,12 +2456,14 @@ export default function ChatsPage() {
             scheduled_at: scheduledAt.toISOString(),
             media_type: 'text',
             text,
-            auto_translate: isAutoTranslateEnabled,
+            auto_translate: false,
+            ...(translatedDraftOriginal ? { original_text: translatedDraftOriginal } : {}),
           },
           { params },
         )
       }
       setDraft('')
+      setTranslatedDraftOriginal(null)
       clearAttachment()
       setSnippetMedia(null)
       setIsScheduleOpen(false)
@@ -2390,23 +2492,6 @@ export default function ChatsPage() {
     } finally {
       setCancellingScheduledMessageId(null)
     }
-  }
-
-  const handleApproveTranslation = async () => {
-    if (!pendingTranslation || isSending) {
-      return
-    }
-    const approvedText = pendingTranslation.approvedText.trim()
-    if (!approvedText) {
-      notify({ tone: 'error', message: 'Перевод не может быть пустым.' })
-      return
-    }
-    await sendMessage({
-      autoTranslate: false,
-      originalText: pendingTranslation.originalText,
-      skipTranslationApproval: true,
-      textOverride: approvedText,
-    })
   }
 
   const openMedia = async (message: Message) => {
@@ -2698,36 +2783,51 @@ export default function ChatsPage() {
                 )
                 const translatedText = message.translated_text?.trim() || null
                 const originalText = message.original_text?.trim() || null
+                const outgoingAlternativeText = originalText ?? translatedText
                 const hasTranslatableText = hasText(message.body) || hasText(message.caption)
                 const isAlternateTextVisible = alternateMessageTextIds.has(message.id)
                 const canUseMessageTextToggle = isOutgoing
-                  ? Boolean(originalText)
+                  ? hasTranslatableText || Boolean(outgoingAlternativeText)
                   : hasTranslatableText
                 const isTranslationLoading = translatingMessageId === message.id
                 const visibleBody =
-                  isAlternateTextVisible && isOutgoing && originalText
-                    ? originalText
+                  isAlternateTextVisible && isOutgoing && outgoingAlternativeText
+                    ? outgoingAlternativeText
                     : isAlternateTextVisible && !isOutgoing && translatedText
                       ? translatedText
                       : message.body
                 const visibleCaption =
-                  isAlternateTextVisible && isOutgoing && originalText
-                    ? originalText
+                  isAlternateTextVisible && isOutgoing && outgoingAlternativeText
+                    ? outgoingAlternativeText
                     : isAlternateTextVisible && !isOutgoing && translatedText
                       ? translatedText
                       : message.caption
                 const textToggleLabel = isAlternateTextVisible
-                  ? (isOutgoing ? 'Перевод' : 'Оригинал')
+                  ? (isOutgoing && originalText ? 'Перевод' : 'Оригинал')
                   : isOutgoing
-                    ? 'Исходник'
+                    ? originalText
+                      ? 'Исходник'
+                      : translatedText
+                        ? 'Перевод'
+                        : 'Перевести'
                     : translatedText
                       ? 'Перевод'
                       : 'Перевести'
                 const textToggleTitle = isAlternateTextVisible
                   ? 'Показать исходный текст сообщения'
                   : isOutgoing
-                    ? 'Показать текст до перевода'
+                    ? originalText
+                      ? 'Показать текст до перевода'
+                      : 'Перевести сообщение для оператора'
                     : 'Показать перевод вместо оригинала'
+                const canReplyToMessage = !isBuyer && Boolean(message.external_message_id)
+                const canEditMessage =
+                  !isBuyer
+                  && isOutgoing
+                  && Boolean(message.external_message_id)
+                  && hasTranslatableText
+                  && message.message_type !== 'video_note'
+                const canDeleteMessage = !isBuyer && Boolean(message.external_message_id)
 
                 return (
                   <div
@@ -2751,10 +2851,28 @@ export default function ChatsPage() {
                             : ''
                         }`}
                       >
+                        {message.reply_to ? (
+                          <button
+                            type="button"
+                            onClick={() => scrollToMessage(message.reply_to?.id ?? '')}
+                            className="mb-2 block w-full border-l-2 border-accent-300/60 bg-black/10 px-2 py-1.5 text-left"
+                            title="Перейти к исходному сообщению"
+                          >
+                            <span className="block text-[11px] font-semibold text-accent-100">
+                              Ответ на сообщение
+                            </span>
+                            <span className="block max-w-[22rem] truncate text-xs opacity-70">
+                              {message.reply_to.deleted_at
+                                ? 'Сообщение удалено'
+                                : messageSummary(message.reply_to)}
+                            </span>
+                          </button>
+                        ) : null}
                         <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
                           {isBot ? <Bot size={13} /> : null}
                           <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
                           <span>{formatDateTime(message.created_at)}</span>
+                          {message.edited_at ? <span>· изменено</span> : null}
                         </div>
                         {message.message_type === 'text' || message.message_type === 'system' || message.message_type === 'contact' ? (
                           <p className="whitespace-pre-wrap break-words text-sm leading-6">
@@ -2823,8 +2941,45 @@ export default function ChatsPage() {
                             </div>
                           </div>
                         ) : null}
-                        {canUseMessageTextToggle ? (
-                          <div className="mt-2 flex justify-end border-t border-white/10 pt-1.5">
+                        {canUseMessageTextToggle || canReplyToMessage || canEditMessage || canDeleteMessage ? (
+                          <div className="mt-2 flex flex-wrap justify-end gap-1 border-t border-white/10 pt-1.5">
+                            {canReplyToMessage ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReplyingToMessage(message)
+                                  handleComposerFocus()
+                                }}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-black/10 text-white/70 transition hover:border-accent-300/40 hover:text-white"
+                                title="Ответить на сообщение"
+                                aria-label="Ответить на сообщение"
+                              >
+                                <Reply size={12} />
+                              </button>
+                            ) : null}
+                            {canEditMessage ? (
+                              <button
+                                type="button"
+                                onClick={() => openMessageEditor(message)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-black/10 text-white/70 transition hover:border-accent-300/40 hover:text-white"
+                                title="Редактировать сообщение"
+                                aria-label="Редактировать сообщение"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                            ) : null}
+                            {canDeleteMessage ? (
+                              <button
+                                type="button"
+                                onClick={() => setMessagePendingDeletion(message)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-red-300/15 bg-red-500/5 text-red-100/70 transition hover:border-red-300/40 hover:text-red-100"
+                                title="Удалить сообщение"
+                                aria-label="Удалить сообщение"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            ) : null}
+                            {canUseMessageTextToggle ? (
                             <button
                               type="button"
                               onClick={() => void handleTranslateMessage(message)}
@@ -2839,6 +2994,7 @@ export default function ChatsPage() {
                               )}
                               <span>{textToggleLabel}</span>
                             </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -2856,6 +3012,54 @@ export default function ChatsPage() {
           ) : null}
         </div>
 
+        {selectedChat && scheduledMessages.some((item) => ['pending', 'running', 'failed'].includes(item.status)) ? (
+          <div className="shrink-0 border-t border-white/5 bg-[#0B0F19]/95 px-3 py-2 md:px-4">
+            <div className="flex items-center gap-2 overflow-x-auto">
+              <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-gray-300">
+                <Clock3 size={14} className="text-accent-200" />
+                Отложенные
+              </span>
+              {scheduledMessages
+                .filter((item) => ['pending', 'running', 'failed'].includes(item.status))
+                .slice(0, 5)
+                .map((item) => (
+                  <div
+                    key={item.id}
+                    className={`flex min-w-[13rem] max-w-xs shrink-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+                      item.status === 'failed'
+                        ? 'border-red-300/25 bg-red-500/10'
+                        : 'border-white/10 bg-white/[0.04]'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs text-gray-200">
+                        {item.file_name ?? item.text ?? 'Сообщение'}
+                      </p>
+                      <p className={`truncate text-[11px] ${item.status === 'failed' ? 'text-red-200' : 'text-gray-500'}`}>
+                        {item.status === 'failed'
+                          ? item.last_error || 'Ошибка отправки'
+                          : new Date(item.scheduled_at).toLocaleString()}
+                      </p>
+                    </div>
+                    {!isBuyer && item.status === 'pending' ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleCancelScheduledMessage(item.id)}
+                        disabled={cancellingScheduledMessageId === item.id}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 transition hover:bg-red-500/10 hover:text-red-100 disabled:opacity-50"
+                        title="Отменить отложенное сообщение"
+                      >
+                        {cancellingScheduledMessageId === item.id
+                          ? <LoaderCircle size={13} className="animate-spin" />
+                          : <X size={14} />}
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+            </div>
+          </div>
+        ) : null}
+
         <form
           className={`${isBuyer ? 'hidden' : 'relative z-10'} shrink-0 border-t border-white/5 bg-surface/95 p-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-4`}
           onSubmit={handleSend}
@@ -2872,6 +3076,23 @@ export default function ChatsPage() {
             </div>
           ) : (
             <div>
+          {replyingToMessage ? (
+            <div className="mb-2 flex items-center gap-3 border-l-2 border-accent-300/60 bg-accent-300/[0.06] px-3 py-2">
+              <Reply size={15} className="shrink-0 text-accent-100" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-accent-100">Ответ на сообщение</p>
+                <p className="truncate text-xs text-gray-400">{messageSummary(replyingToMessage)}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReplyingToMessage(null)}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-white/[0.05] hover:text-white"
+                title="Отменить ответ"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ) : null}
           {attachment ? (
             <div className="mb-3 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
               {attachment.media_type === 'photo' && attachmentPreviewUrl ? (
@@ -2927,20 +3148,28 @@ export default function ChatsPage() {
             </div>
           ) : null}
           <div className="mb-2 flex justify-end">
-            <label
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 text-xs font-medium text-sky-50 transition hover:border-sky-300/40"
-              title={`Подготовить перевод с ${operatorLangLabel} на ${clientLangLabel} перед отправкой`}
+            <button
+              type="button"
+              onClick={() => void handleTranslateDraft()}
+              disabled={
+                !selectedChat
+                || !draft.trim()
+                || isSending
+                || isPreparingTranslation
+                || projectTranslation?.is_translation_enabled === false
+              }
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 text-xs font-medium text-sky-50 transition hover:border-sky-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+              title={translatedDraftOriginal
+                ? 'Вернуть текст до перевода'
+                : `Перевести набранный текст с ${operatorLangLabel} на ${clientLangLabel}`}
             >
-              <input
-                type="checkbox"
-                checked={isAutoTranslateEnabled}
-                onChange={(event) => setIsAutoTranslateEnabled(event.target.checked)}
-                disabled={!selectedChat || isSending || isPreparingTranslation}
-                className="h-4 w-4 accent-sky-300 disabled:cursor-not-allowed"
-              />
-              <Languages size={14} />
-              <span className="whitespace-nowrap">Перевод на {clientLangLabel}</span>
-            </label>
+              {isPreparingTranslation
+                ? <LoaderCircle size={14} className="animate-spin" />
+                : <Languages size={14} />}
+              <span className="whitespace-nowrap">
+                {translatedDraftOriginal ? 'Вернуть исходник' : `Перевести на ${clientLangLabel}`}
+              </span>
+            </button>
           </div>
           <div className="flex min-h-[52px] items-end gap-2 rounded-xl border border-white/10 bg-background/70 p-2 transition focus-within:border-accent-300/45 focus-within:ring-2 focus-within:ring-accent-400/25">
             <input
@@ -3307,76 +3536,50 @@ export default function ChatsPage() {
         </Modal>
       ) : null}
 
-      {pendingTranslation ? (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm md:items-center">
-          <div className="max-h-[calc(100dvh-24px)] w-[calc(100%-24px)] max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-[#0d1222] shadow-2xl md:w-full">
-            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-3">
-              <div className="min-w-0">
-                <h3 className="text-base font-semibold text-white">Проверка перевода</h3>
-                <p className="mt-1 text-xs text-gray-500">
-                  {languageShortLabel(pendingTranslation.sourceLang)} → {languageShortLabel(pendingTranslation.targetLang)}
-                </p>
-              </div>
+      {editingMessage ? (
+        <Modal
+          title="Редактировать сообщение"
+          description="Изменение будет сразу применено в Telegram и в истории CRM."
+          maxWidthClassName="max-w-xl"
+          onClose={() => {
+            if (!isEditingMessage) {
+              setEditingMessage(null)
+              setEditingMessageText('')
+            }
+          }}
+        >
+          <form className="space-y-4" onSubmit={(event) => void handleEditMessage(event)}>
+            <textarea
+              value={editingMessageText}
+              onChange={(event) => setEditingMessageText(event.target.value)}
+              rows={7}
+              autoFocus
+              className="touch-scroll w-full resize-y rounded-xl border border-white/10 bg-background/80 px-3 py-2.5 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
+              disabled={isEditingMessage}
+            />
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => setPendingTranslation(null)}
-                disabled={isSending}
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-gray-300 transition hover:border-accent-300/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                aria-label="Закрыть проверку перевода"
+                onClick={() => {
+                  setEditingMessage(null)
+                  setEditingMessageText('')
+                }}
+                disabled={isEditingMessage}
+                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:opacity-60"
               >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="touch-scroll max-h-[calc(100dvh-11rem)] space-y-4 overflow-y-auto p-4">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Исходный текст
-                </span>
-                <textarea
-                  value={pendingTranslation.originalText}
-                  readOnly
-                  rows={4}
-                  className="touch-scroll w-full resize-none rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-base leading-6 text-gray-300 outline-none"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                  Текст к отправке
-                </span>
-                <textarea
-                  value={pendingTranslation.approvedText}
-                  onChange={(event) =>
-                    setPendingTranslation((current) =>
-                      current ? { ...current, approvedText: event.target.value } : current,
-                    )
-                  }
-                  rows={6}
-                  autoFocus
-                  className="touch-scroll w-full resize-none rounded-xl border border-accent-300/25 bg-background/80 px-3 py-2 text-base leading-6 text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
-                />
-              </label>
-            </div>
-            <div className="flex flex-col-reverse gap-2 border-t border-white/10 p-4 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setPendingTranslation(null)}
-                disabled={isSending}
-                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 px-4 text-sm font-medium text-gray-200 transition hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Вернуться к тексту
+                Отмена
               </button>
               <button
-                type="button"
-                onClick={() => void handleApproveTranslation()}
-                disabled={isSending || !pendingTranslation.approvedText.trim()}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-60"
+                type="submit"
+                disabled={isEditingMessage || !editingMessageText.trim()}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition disabled:opacity-60"
               >
-                {isSending ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
-                Отправить
+                {isEditingMessage ? <LoaderCircle size={16} className="animate-spin" /> : <Pencil size={16} />}
+                Сохранить
               </button>
             </div>
-          </div>
-        </div>
+          </form>
+        </Modal>
       ) : null}
 
       {mediaPreview ? (
@@ -3503,6 +3706,22 @@ export default function ChatsPage() {
             }
           }}
           onConfirm={() => void handleDeleteSnippet()}
+        />
+      ) : null}
+
+      {messagePendingDeletion ? (
+        <ConfirmDialog
+          title="Удалить сообщение?"
+          description="Сообщение будет удалено и из Telegram, и из истории CRM. Telegram разрешает удаление только в пределах своих ограничений."
+          confirmLabel="Удалить"
+          tone="danger"
+          isLoading={isDeletingMessage}
+          onCancel={() => {
+            if (!isDeletingMessage) {
+              setMessagePendingDeletion(null)
+            }
+          }}
+          onConfirm={() => void handleDeleteMessage()}
         />
       ) : null}
     </section>

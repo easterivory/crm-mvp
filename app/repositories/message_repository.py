@@ -20,15 +20,35 @@ class MessageRepository(BaseRepository[Message]):
         limit: int = 50,
         offset: int = 0,
         since: Optional[datetime] = None,
+        before_message_id: UUID | None = None,
     ) -> list[Message]:
-        stmt = select(Message).where(Message.chat_id == chat_id)
+        stmt = select(Message).where(
+            Message.chat_id == chat_id,
+            Message.deleted_at.is_(None),
+        )
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
+        if before_message_id is not None:
+            anchor_result = await self.db.execute(
+                select(Message.created_at, Message.id).where(
+                    Message.id == before_message_id,
+                    Message.chat_id == chat_id,
+                    Message.deleted_at.is_(None),
+                )
+            )
+            anchor = anchor_result.one_or_none()
+            if anchor is None:
+                return []
+            stmt = stmt.where(
+                tuple_(Message.created_at, Message.id)
+                < tuple_(anchor.created_at, anchor.id)
+            )
         stmt = (
             stmt.order_by(Message.created_at.desc(), Message.id.desc())
             .limit(limit)
-            .offset(offset)
         )
+        if before_message_id is None:
+            stmt = stmt.offset(offset)
         result = await self.db.execute(stmt)
         rows = list(result.scalars().all())
         return sorted(rows, key=self._chronological_message_key)
@@ -53,7 +73,10 @@ class MessageRepository(BaseRepository[Message]):
         chat_id: UUID,
         since: Optional[datetime] = None,
     ) -> int:
-        stmt = select(func.count(Message.id)).where(Message.chat_id == chat_id)
+        stmt = select(func.count(Message.id)).where(
+            Message.chat_id == chat_id,
+            Message.deleted_at.is_(None),
+        )
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
         result = await self.db.execute(stmt)
@@ -62,7 +85,11 @@ class MessageRepository(BaseRepository[Message]):
     async def get_first_user_message(self, chat_id: UUID) -> Optional[Message]:
         result = await self.db.execute(
             select(Message)
-            .where(Message.chat_id == chat_id, Message.sender_type == "user")
+            .where(
+                Message.chat_id == chat_id,
+                Message.sender_type == "user",
+                Message.deleted_at.is_(None),
+            )
             .order_by(Message.created_at.asc())
             .limit(1)
         )
@@ -71,7 +98,11 @@ class MessageRepository(BaseRepository[Message]):
     async def get_first_manager_reply(self, chat_id: UUID) -> Optional[Message]:
         result = await self.db.execute(
             select(Message)
-            .where(Message.chat_id == chat_id, Message.sender_type == "manager")
+            .where(
+                Message.chat_id == chat_id,
+                Message.sender_type == "manager",
+                Message.deleted_at.is_(None),
+            )
             .order_by(Message.created_at.asc())
             .limit(1)
         )
@@ -83,6 +114,7 @@ class MessageRepository(BaseRepository[Message]):
             .where(
                 Message.chat_id == chat_id,
                 Message.sender_type == SenderType.USER,
+                Message.deleted_at.is_(None),
             )
             .scalar_subquery()
         )
@@ -92,6 +124,7 @@ class MessageRepository(BaseRepository[Message]):
                 Message.chat_id == chat_id,
                 Message.sender_type == SenderType.MANAGER,
                 Message.created_at > first_user_at,
+                Message.deleted_at.is_(None),
             )
             .scalar_subquery()
         )
@@ -115,6 +148,7 @@ class MessageRepository(BaseRepository[Message]):
                 manager_message.chat_id == user_message.chat_id,
                 manager_message.sender_type == SenderType.MANAGER,
                 manager_message.created_at > user_message.created_at,
+                manager_message.deleted_at.is_(None),
             )
             .correlate(user_message)
             .scalar_subquery()
@@ -126,6 +160,7 @@ class MessageRepository(BaseRepository[Message]):
             ).where(
                 user_message.chat_id == chat_id,
                 user_message.sender_type == SenderType.USER,
+                user_message.deleted_at.is_(None),
                 next_manager_reply_at.is_not(None),
             )
         )
@@ -149,6 +184,7 @@ class MessageRepository(BaseRepository[Message]):
                 manager_message.chat_id == user_message.chat_id,
                 manager_message.sender_type == SenderType.MANAGER,
                 manager_message.created_at > user_message.created_at,
+                manager_message.deleted_at.is_(None),
             )
             .correlate(user_message)
             .scalar_subquery()
@@ -163,6 +199,7 @@ class MessageRepository(BaseRepository[Message]):
                 Chat.project_id == project_id,
                 Chat.is_deleted.is_(False),
                 user_message.sender_type == SenderType.USER,
+                user_message.deleted_at.is_(None),
                 user_message.created_at >= start_at,
                 user_message.created_at < end_at,
                 next_manager_reply_at.is_not(None),
@@ -188,6 +225,7 @@ class MessageRepository(BaseRepository[Message]):
             .where(
                 Message.chat_id == chat_id,
                 Message.sender_type == SenderType.USER,
+                Message.deleted_at.is_(None),
             )
             .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(1)
@@ -201,6 +239,7 @@ class MessageRepository(BaseRepository[Message]):
                 Message.chat_id == chat_id,
                 Message.sender_type.in_((SenderType.BOT, SenderType.MANAGER)),
                 Message.external_message_id.is_not(None),
+                Message.deleted_at.is_(None),
             )
             .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(20)
@@ -223,6 +262,7 @@ class MessageRepository(BaseRepository[Message]):
                 Message.chat_id == chat_id,
                 Message.sender_type == SenderType.USER,
                 Message.funnel_processed_at.is_(None),
+                Message.deleted_at.is_(None),
                 tuple_(Message.created_at, Message.id)
                 <= tuple_(through_message.created_at, through_message.id),
             )
@@ -266,6 +306,7 @@ class MessageRepository(BaseRepository[Message]):
         file_size: int | None,
         media_group_id: str | None,
         raw_payload_json: dict | None,
+        reply_to_message_id: UUID | None = None,
     ) -> Message:
         return await self.create(
             chat_id=chat_id,
@@ -285,8 +326,67 @@ class MessageRepository(BaseRepository[Message]):
             mime_type=mime_type,
             file_size=file_size,
             media_group_id=media_group_id,
+            reply_to_message_id=reply_to_message_id,
             raw_payload_json=raw_payload_json,
         )
+
+    async def list_by_ids(self, message_ids: list[UUID]) -> list[Message]:
+        if not message_ids:
+            return []
+        result = await self.db.execute(
+            select(Message).where(Message.id.in_(message_ids))
+        )
+        return list(result.scalars().all())
+
+    async def mark_edited(
+        self,
+        *,
+        message_id: UUID,
+        text: str,
+        is_caption: bool,
+        edited_at: datetime,
+    ) -> None:
+        values = {
+            "edited_at": edited_at,
+            "translated_text": None,
+            "original_text": None,
+        }
+        values["caption" if is_caption else "body"] = text
+        await self.db.execute(
+            update(Message)
+            .where(Message.id == message_id, Message.deleted_at.is_(None))
+            .values(**values)
+        )
+
+    async def mark_deleted(self, *, message_id: UUID, deleted_at: datetime) -> None:
+        await self.db.execute(
+            update(Message)
+            .where(Message.id == message_id, Message.deleted_at.is_(None))
+            .values(deleted_at=deleted_at)
+        )
+
+    async def timestamp_summary(
+        self,
+        *,
+        chat_id: UUID,
+        since: datetime | None,
+    ) -> tuple[datetime | None, datetime | None, datetime | None, datetime | None]:
+        stmt = select(
+            func.max(Message.created_at),
+            func.max(Message.created_at).filter(Message.sender_type == SenderType.USER),
+            func.max(Message.created_at).filter(
+                Message.sender_type.in_((SenderType.MANAGER, SenderType.BOT))
+            ),
+            func.max(Message.created_at).filter(Message.sender_type == SenderType.MANAGER),
+        ).where(
+            Message.chat_id == chat_id,
+            Message.deleted_at.is_(None),
+        )
+        if since is not None:
+            stmt = stmt.where(Message.created_at >= since)
+        result = await self.db.execute(stmt)
+        row = result.one()
+        return row[0], row[1], row[2], row[3]
 
     async def get_by_id_in_project(
         self,

@@ -101,11 +101,16 @@ class ScheduledMessageService:
         project_id: UUID,
         chat_id: UUID,
         actor: User,
+        active_only: bool = False,
     ) -> list[ScheduledMessageOut]:
         require_project_access(actor, project_id)
         return [
             ScheduledMessageOut.model_validate(item)
-            for item in await self.repo.list_for_chat(chat_id, project_id)
+            for item in await self.repo.list_for_chat(
+                chat_id,
+                project_id,
+                active_only=active_only,
+            )
         ]
 
     async def cancel_message(

@@ -1711,6 +1711,15 @@ class TelegramService:
         data = self._telegram_message_to_create(message).model_copy(
             update={"tracking_link_id": tracking_link_id}
         )
+        if message.reply_to_message is not None:
+            reply_target = await self.message_repo.get_by_external_id(
+                chat_id,
+                str(message.reply_to_message.message_id),
+            )
+            if reply_target is not None:
+                data = data.model_copy(
+                    update={"reply_to_message_id": reply_target.id}
+                )
         return await self.message_service.create_message(
             chat_id=chat_id,
             project_id=project_id,

@@ -25,11 +25,23 @@ class ScheduledMessageRepository(BaseRepository[ScheduledMessage]):
         )
         return list(result.scalars().all())
 
-    async def list_for_chat(self, chat_id: UUID, project_id: UUID) -> list[ScheduledMessage]:
+    async def list_for_chat(
+        self,
+        chat_id: UUID,
+        project_id: UUID,
+        *,
+        active_only: bool = False,
+    ) -> list[ScheduledMessage]:
+        stmt = select(ScheduledMessage).where(
+            ScheduledMessage.chat_id == chat_id,
+            ScheduledMessage.project_id == project_id,
+        )
+        if active_only:
+            stmt = stmt.where(
+                ScheduledMessage.status.in_(("pending", "running", "failed"))
+            )
         result = await self.db.execute(
-            select(ScheduledMessage)
-            .where(ScheduledMessage.chat_id == chat_id, ScheduledMessage.project_id == project_id)
-            .order_by(ScheduledMessage.scheduled_at.asc())
+            stmt.order_by(ScheduledMessage.scheduled_at.asc()).limit(200)
         )
         return list(result.scalars().all())
 
