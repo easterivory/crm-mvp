@@ -17,6 +17,9 @@ SNIPPET_TYPES = {
     MessageType.DOCUMENT,
 }
 
+TELEGRAM_TEXT_LIMIT = 4096
+TELEGRAM_CAPTION_LIMIT = 1024
+
 
 class SnippetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -53,10 +56,35 @@ class SnippetCreate(BaseModel):
         file_id = self.file_id.strip() if isinstance(self.file_id, str) else self.file_id
         if self.type == MessageType.TEXT and not content:
             raise ValueError("Text snippet requires content")
+        if self.type == MessageType.TEXT and content and len(content) > TELEGRAM_TEXT_LIMIT:
+            raise ValueError(f"Text snippet cannot exceed {TELEGRAM_TEXT_LIMIT} characters")
         if self.type != MessageType.TEXT and not file_id:
             raise ValueError("Media snippet requires file_id")
+        if self.type != MessageType.TEXT and content and len(content) > TELEGRAM_CAPTION_LIMIT:
+            raise ValueError(f"Media caption cannot exceed {TELEGRAM_CAPTION_LIMIT} characters")
         self.content = content
         self.file_id = file_id
+        return self
+
+
+class SnippetUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    content: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_optional_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            raise ValueError("Snippet name cannot be null")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Snippet name cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_update_field(self) -> "SnippetUpdate":
+        if not self.model_fields_set:
+            raise ValueError("At least one snippet field must be provided")
         return self
 
 
@@ -71,4 +99,5 @@ class SnippetOut(OrmBase):
     file_name: Optional[str] = None
     mime_type: Optional[str] = None
     file_size: Optional[int] = None
+    preview_available: bool = False
     created_at: datetime

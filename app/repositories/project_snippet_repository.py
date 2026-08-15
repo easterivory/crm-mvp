@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.models.project_snippet import ProjectSnippet
 from app.repositories.base import BaseRepository
@@ -68,3 +68,19 @@ class ProjectSnippetRepository(BaseRepository[ProjectSnippet]):
             )
         )
         return bool(result.rowcount)
+
+    async def update_in_project(
+        self,
+        snippet_id: UUID,
+        project_id: UUID,
+        **values: object,
+    ) -> Optional[ProjectSnippet]:
+        await self.db.execute(
+            update(ProjectSnippet)
+            .where(
+                ProjectSnippet.id == snippet_id,
+                ProjectSnippet.project_id == project_id,
+            )
+            .values(**values)
+        )
+        return await self.get_in_project(snippet_id, project_id)

@@ -19,6 +19,7 @@ import TrackingPage from './pages/TrackingPage'
 import FacebookCampaignsPage from './pages/FacebookCampaignsPage'
 import AISettingsPage from './pages/AISettingsPage'
 import NotFoundPage from './pages/NotFoundPage'
+import SnippetsPage from './pages/SnippetsPage'
 import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
 import { NotificationViewport } from './shared/ui'
 import { useAuthStore } from './store/authStore'
@@ -81,6 +82,7 @@ function CrmApplication() {
           <Route path="/dashboard" element={<BuyerRestrictedRoute><DashboardPage /></BuyerRestrictedRoute>} />
           <Route path="/analytics" element={<BuyerRestrictedRoute><DashboardPage /></BuyerRestrictedRoute>} />
           <Route path="/chats" element={<ChatsPage />} />
+          <Route path="/snippets" element={<BuyerRestrictedRoute><SnippetsPage /></BuyerRestrictedRoute>} />
           <Route path="/funnels" element={<FunnelsPage />} />
           <Route path="/funnels/:funnelId/builder" element={<FunnelsPage />} />
           <Route path="/broadcasts" element={<BuyerRestrictedRoute><BroadcastsPage /></BuyerRestrictedRoute>} />

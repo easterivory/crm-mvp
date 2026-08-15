@@ -51,3 +51,7 @@ class ProjectSnippet(Base, UUIDPrimaryKey, TimestampMixin):
     file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     project: Mapped[Project] = relationship("Project", back_populates="snippets")
+
+    @property
+    def preview_available(self) -> bool:
+        return bool(self.storage_path)

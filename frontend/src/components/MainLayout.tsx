@@ -4,6 +4,7 @@ import {
   Bot,
   BrainCircuit,
   LogOut,
+  Library,
   Megaphone,
   Menu,
   MessageSquareText,
@@ -31,6 +32,7 @@ const SIDEBAR_COLLAPSED_KEY = 'crm:sidebarCollapsed'
 
 const navItems = [
   { label: t('chats'), path: '/chats', icon: MessageSquareText },
+  { label: 'Заготовки', path: '/snippets', icon: Library },
   { label: t('funnels'), path: '/funnels', icon: Workflow },
   { label: t('broadcasts'), path: '/broadcasts', icon: Megaphone },
   { label: t('bots'), path: '/bots', icon: Bot },
