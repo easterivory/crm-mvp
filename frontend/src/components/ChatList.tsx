@@ -186,13 +186,7 @@ function mediaPreviewLabel(chat: Chat) {
 }
 
 function waitingMinutes(chat: Chat) {
-  if (!chat.last_client_message_at) {
-    return null
-  }
-  if (
-    chat.last_operator_message_at &&
-    new Date(chat.last_operator_message_at).getTime() >= new Date(chat.last_client_message_at).getTime()
-  ) {
+  if (!chat.has_unanswered_incoming || !chat.last_client_message_at) {
     return null
   }
 

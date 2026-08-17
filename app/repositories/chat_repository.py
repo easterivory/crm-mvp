@@ -39,32 +39,35 @@ class ChatRepository(BaseRepository[Chat]):
     # ── SQL expressions ────────────────────────────────────────────────────────
 
     @staticmethod
-    def _unanswered_expr() -> ColumnElement:
+    def unanswered_expr() -> ColumnElement:
         """
-        True when the client sent at least one message and an operator has not
-        replied after it. Legacy timestamp columns are used as a fallback while
-        older rows are migrated by normal message flow.
+        True when the client sent at least one message and no outgoing message
+        (from either the bot or an operator) followed it.
+
+        ``last_manager_reply_at`` is the legacy name of the canonical latest
+        outgoing-message timestamp. It is intentionally updated for both BOT
+        and MANAGER senders. ``last_operator_message_at`` remains separate for
+        operator-only analytics and must not drive the unanswered workspace.
         """
         last_client_message_at = func.coalesce(
             Chat.last_client_message_at,
             Chat.last_user_message_at,
         )
-        last_operator_message_at = case(
-            (
-                Chat.last_client_message_at.is_(None),
-                func.coalesce(Chat.last_operator_message_at, Chat.last_manager_reply_at),
-            ),
-            else_=Chat.last_operator_message_at,
-        )
+        last_outgoing_message_at = Chat.last_manager_reply_at
         return (
             Chat.is_blocked.is_(False)
             & Chat.is_blocked_by_user.is_(False)
             & (last_client_message_at.isnot(None))
             & (
-                last_operator_message_at.is_(None)
-                | (last_client_message_at > last_operator_message_at)
+                last_outgoing_message_at.is_(None)
+                | (last_client_message_at > last_outgoing_message_at)
             )
         )
+
+    @staticmethod
+    def _unanswered_expr() -> ColumnElement:
+        """Backward-compatible internal alias for the canonical expression."""
+        return ChatRepository.unanswered_expr()
 
     @staticmethod
     def _is_red_expr(sla_threshold_minutes: int) -> ColumnElement:
@@ -1129,6 +1132,7 @@ class ChatRepository(BaseRepository[Chat]):
             values["has_out_of_scenario_message"] = False
         elif sender_type == SenderType.BOT:
             values["last_manager_reply_at"] = ts
+            values["unanswered_minutes"] = 0
 
         result = await self.db.execute(
             update(Chat)

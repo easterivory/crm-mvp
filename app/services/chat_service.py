@@ -516,6 +516,11 @@ class ChatService:
         Called once per Chat after it is fetched — no extra DB queries.
         """
         now = datetime.now(timezone.utc)
+        last_client_message_at = (
+            getattr(chat, "last_client_message_at", None)
+            or chat.last_user_message_at
+        )
+        last_outgoing_message_at = chat.last_manager_reply_at
 
         unread: bool = bool(
             chat.last_message_at
@@ -528,18 +533,17 @@ class ChatService:
         unanswered: bool = bool(
             not chat.is_blocked
             and not chat.is_blocked_by_user
-            and
-            chat.last_user_message_at
+            and last_client_message_at
             and (
-                chat.last_manager_reply_at is None
-                or chat.last_user_message_at > chat.last_manager_reply_at
+                last_outgoing_message_at is None
+                or last_client_message_at > last_outgoing_message_at
             )
         )
 
         is_red: bool = bool(
             unanswered
-            and chat.last_user_message_at
-            and (now - chat.last_user_message_at).total_seconds() / 60
+            and last_client_message_at
+            and (now - last_client_message_at).total_seconds() / 60
             > sla_threshold_minutes
         )
 
@@ -547,8 +551,8 @@ class ChatService:
             "unread": unread,
             "unanswered": unanswered,
             "is_red": is_red,
-            "last_incoming_at": chat.last_user_message_at,
-            "last_outgoing_at": chat.last_manager_reply_at,
+            "last_incoming_at": last_client_message_at,
+            "last_outgoing_at": last_outgoing_message_at,
             "has_unanswered_incoming": unanswered,
         }
 

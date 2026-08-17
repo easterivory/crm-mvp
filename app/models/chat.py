@@ -34,7 +34,8 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
 
     Computed fields (never stored):
       - unread     = last_message_at > last_read_at (OR last_read_at IS NULL)
-      - unanswered = last_user_message_at > last_manager_reply_at (OR last_manager_reply_at IS NULL)
+      - unanswered = latest client message is newer than the latest outgoing
+        bot/operator message (or there is no outgoing message)
       - is_red     = unanswered AND now() - last_user_message_at > project.sla_threshold_minutes
     """
     __tablename__ = "chats"

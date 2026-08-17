@@ -13,6 +13,7 @@ from app.models.funnel import ChatFunnelState
 from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
 from app.models.tracking import TrackingLink
+from app.repositories.chat_repository import ChatRepository
 from app.schemas.broadcast import (
     AudienceFilter,
     AudiencePreviewResponse,
@@ -212,10 +213,7 @@ class AudienceFilterService:
             return self._apply_operator(created_at, operator, raw_value, value_type="datetime")
 
         if field == "has_unanswered_incoming":
-            expr = (Chat.last_user_message_at.isnot(None)) & (
-                Chat.last_manager_reply_at.is_(None)
-                | (Chat.last_user_message_at > Chat.last_manager_reply_at)
-            )
+            expr = ChatRepository.unanswered_expr()
             expected = self._bool_value(raw_value)
             return expr if expected else not_(expr)
 

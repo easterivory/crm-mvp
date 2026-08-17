@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -9,6 +9,8 @@ from sqlalchemy.dialects import postgresql
 
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.message_repository import MessageRepository
+from app.schemas.broadcast import AudienceRule
+from app.services.audience_filter_service import AudienceFilterService
 from app.services.chat_service import ChatService
 from app.services.chat_user_block_service import ChatUserBlockService
 from app.services.telegram_sender import TelegramSenderService
@@ -65,6 +67,66 @@ def test_user_blocked_chat_is_not_marked_unanswered_or_sla() -> None:
     flags = ChatService._compute_flags(chat, sla_threshold_minutes=0)
 
     assert flags["unanswered"] is False
+    assert flags["is_red"] is False
+
+
+def test_bot_reply_clears_unanswered_across_chat_flags_and_sql_filters() -> None:
+    now = datetime.now(timezone.utc)
+    client_message_at = now - timedelta(minutes=2)
+    bot_reply_at = now - timedelta(minutes=1)
+    chat = SimpleNamespace(
+        is_blocked=False,
+        is_blocked_by_user=False,
+        last_message_at=bot_reply_at,
+        last_read_at=bot_reply_at,
+        last_user_message_at=client_message_at,
+        last_client_message_at=client_message_at,
+        last_manager_reply_at=bot_reply_at,
+        last_operator_message_at=None,
+    )
+
+    flags = ChatService._compute_flags(chat, sla_threshold_minutes=0)
+
+    assert flags["unanswered"] is False
+    assert flags["has_unanswered_incoming"] is False
+    assert flags["is_red"] is False
+
+    sql = str(
+        ChatRepository.unanswered_expr().compile(dialect=postgresql.dialect())
+    )
+    assert "last_manager_reply_at" in sql
+    assert "last_operator_message_at" not in sql
+
+    audience_expr = AudienceFilterService(AsyncMock())._rule_expr(
+        AudienceRule(
+            field="has_unanswered_incoming",
+            operator="equals",
+            value=True,
+        )
+    )
+    audience_sql = str(audience_expr.compile(dialect=postgresql.dialect()))
+    assert audience_sql == sql
+
+
+def test_client_message_after_latest_outgoing_is_unanswered() -> None:
+    now = datetime.now(timezone.utc)
+    outgoing_message_at = now - timedelta(minutes=2)
+    client_message_at = now - timedelta(minutes=1)
+    chat = SimpleNamespace(
+        is_blocked=False,
+        is_blocked_by_user=False,
+        last_message_at=client_message_at,
+        last_read_at=outgoing_message_at,
+        last_user_message_at=client_message_at,
+        last_client_message_at=client_message_at,
+        last_manager_reply_at=outgoing_message_at,
+        last_operator_message_at=outgoing_message_at,
+    )
+
+    flags = ChatService._compute_flags(chat, sla_threshold_minutes=30)
+
+    assert flags["unanswered"] is True
+    assert flags["has_unanswered_incoming"] is True
     assert flags["is_red"] is False
 
 
