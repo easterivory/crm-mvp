@@ -87,7 +87,17 @@ class BotService:
         data: BotCreate,
     ) -> BotOut:
         project = await self._resolve_project_for_create(data.project_id or project_id)
-        token = self._normalize_telegram_token(data.telegram_token, required=False)
+        transport_type = data.transport_type
+        if transport_type == "user_mtproto" and data.telegram_token:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Для именного аккаунта укажите api_id и api_hash после создания, а не bot token.",
+            )
+        token = (
+            self._normalize_telegram_token(data.telegram_token, required=False)
+            if transport_type == "bot_api"
+            else None
+        )
         identity_values: dict[str, Any] = {}
         if token is not None:
             telegram_info = await self._fetch_telegram_bot_info(token)
@@ -107,9 +117,15 @@ class BotService:
                 detail="Укажите название черновика или Telegram token",
             )
 
+        transport_values = (
+            {"transport_type": transport_type}
+            if transport_type != "bot_api"
+            else {}
+        )
         bot = await self.bot_repo.create(
             project_id=project.id,
             name=name,
+            **transport_values,
             telegram_token=token,
             **identity_values,
             **self._bot_profile_values(data),
@@ -148,6 +164,11 @@ class BotService:
         values.pop("bot_username", None)
         if "telegram_token" in values and values["telegram_token"] is None:
             values.pop("telegram_token")
+        if getattr(bot, "transport_type", "bot_api") == "user_mtproto" and "telegram_token" in values:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Именной аккаунт подключается через api_id/api_hash, а не bot token.",
+            )
 
         new_token: Optional[str] = None
         old_token: Optional[str] = None
@@ -213,6 +234,11 @@ class BotService:
         actor: User | None = None,
     ) -> dict[str, Any]:
         bot = await self._get_active_bot_or_404(bot_id)
+        if bot.transport_type != "bot_api":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Описание профиля доступно только для Telegram-ботов.",
+            )
         token = self._normalize_optional(bot.telegram_token)
         if not token:
             raise HTTPException(
@@ -265,6 +291,11 @@ class BotService:
         mime_type: str = "image/jpeg",
     ) -> dict[str, Any]:
         bot = await self._get_active_bot_or_404(bot_id)
+        if bot.transport_type != "bot_api":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Аватар рабочего аккаунта меняется в приложении Telegram.",
+            )
         token = self._normalize_optional(bot.telegram_token)
         if not token:
             raise HTTPException(
@@ -313,6 +344,11 @@ class BotService:
         project_id: UUID,
     ) -> tuple[bytes, str]:
         bot = await self._get_bot_or_404(bot_id, project_id)
+        if bot.transport_type != "bot_api":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Account profile photo is unavailable through Bot API",
+            )
         token = self._normalize_optional(bot.telegram_token)
         telegram_bot_id = bot.telegram_bot_id
         if not token or telegram_bot_id is None:

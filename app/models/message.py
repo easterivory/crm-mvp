@@ -127,6 +127,23 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
                     labels.append(label)
         return labels
 
+    @property
+    def transport_source(self) -> str:
+        payload = self.raw_payload_json if isinstance(self.raw_payload_json, dict) else {}
+        telegram_result = payload.get("telegram_result")
+        result_transport = (
+            telegram_result.get("_transport")
+            if isinstance(telegram_result, dict)
+            else None
+        )
+        source = str(payload.get("_transport") or result_transport or "bot_api").strip()
+        return source or "bot_api"
+
+    @property
+    def is_external_account_message(self) -> bool:
+        payload = self.raw_payload_json if isinstance(self.raw_payload_json, dict) else {}
+        return bool(payload.get("mtproto_manual_outgoing"))
+
 
 class MessageUpload(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "message_uploads"

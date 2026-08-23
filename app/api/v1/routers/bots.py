@@ -13,6 +13,10 @@ from app.schemas.bot import (
     BotTelegramStatusOut,
     BotUpdate,
     BotWebhookOut,
+    TelegramAccountCodeIn,
+    TelegramAccountConnectIn,
+    TelegramAccountConnectionOut,
+    TelegramAccountPasswordIn,
 )
 from app.schemas.common import PaginatedResponse
 from app.schemas.funnel import BotActiveFunnelOut, BotActiveFunnelSetIn
@@ -25,6 +29,7 @@ from app.schemas.lead_import import (
 from app.services.bot_lead_import_service import BotLeadImportService
 from app.services.bot_service import BotService
 from app.services.funnel_service import FunnelService
+from app.services.telegram_user_account_service import TelegramUserAccountService
 
 router = APIRouter(tags=["bots"])
 
@@ -73,6 +78,119 @@ async def get_bot(
     db: AsyncSession = Depends(get_db),
 ) -> BotOut:
     return await BotService(db).get_bot(bot_id=bot_id, project_id=project_id)
+
+
+@router.get(
+    "/bots/{bot_id}/telegram-account",
+    response_model=TelegramAccountConnectionOut,
+)
+async def get_telegram_account_connection(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelegramAccountConnectionOut:
+    _ensure_telegram_account_management_access(current_user)
+    return await TelegramUserAccountService(db).get_status(
+        bot_id=bot_id,
+        project_id=project_id,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/telegram-account/request-code",
+    response_model=TelegramAccountConnectionOut,
+)
+async def request_telegram_account_code(
+    bot_id: UUID,
+    data: TelegramAccountConnectIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelegramAccountConnectionOut:
+    _ensure_telegram_account_management_access(current_user)
+    return await TelegramUserAccountService(db).request_login_code(
+        bot_id=bot_id,
+        project_id=project_id,
+        data=data,
+        actor=current_user,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/telegram-account/confirm-code",
+    response_model=TelegramAccountConnectionOut,
+)
+async def confirm_telegram_account_code(
+    bot_id: UUID,
+    data: TelegramAccountCodeIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelegramAccountConnectionOut:
+    _ensure_telegram_account_management_access(current_user)
+    return await TelegramUserAccountService(db).confirm_code(
+        bot_id=bot_id,
+        project_id=project_id,
+        code=data.code,
+        actor=current_user,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/telegram-account/confirm-password",
+    response_model=TelegramAccountConnectionOut,
+)
+async def confirm_telegram_account_password(
+    bot_id: UUID,
+    data: TelegramAccountPasswordIn,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelegramAccountConnectionOut:
+    _ensure_telegram_account_management_access(current_user)
+    return await TelegramUserAccountService(db).confirm_password(
+        bot_id=bot_id,
+        project_id=project_id,
+        password=data.password,
+        actor=current_user,
+    )
+
+
+@router.post(
+    "/bots/{bot_id}/telegram-account/sync",
+    response_model=TelegramAccountConnectionOut,
+)
+async def sync_telegram_account(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelegramAccountConnectionOut:
+    _ensure_telegram_account_management_access(current_user)
+    return await TelegramUserAccountService(db).sync_identity(
+        bot_id=bot_id,
+        project_id=project_id,
+        actor=current_user,
+    )
+
+
+@router.delete(
+    "/bots/{bot_id}/telegram-account",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def disconnect_telegram_account(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    _ensure_telegram_account_management_access(current_user)
+    await TelegramUserAccountService(db).disconnect(
+        bot_id=bot_id,
+        project_id=project_id,
+        actor=current_user,
+    )
 
 
 @router.get("/bots/{bot_id}/lead-imports", response_model=list[BotLeadImportOut])
@@ -341,4 +459,12 @@ def _ensure_bot_management_access(current_user: Any) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Current user cannot manage bots",
+        )
+
+
+def _ensure_telegram_account_management_access(current_user: Any) -> None:
+    if current_user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can authorize a Telegram account",
         )

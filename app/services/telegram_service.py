@@ -173,6 +173,7 @@ class TelegramService:
             update=update,
             project_id=bot.project_id,
             bot_id=bot.id,
+            source_transport="bot_api",
         )
 
     async def handle_update(
@@ -180,6 +181,7 @@ class TelegramService:
         update: TelegramUpdate,
         project_id: UUID,
         bot_id: UUID,
+        source_transport: str = "bot_api",
     ) -> None:
         """
         Entry point for processing a single Telegram update.
@@ -238,7 +240,12 @@ class TelegramService:
             logger.debug("update_id=%s: unsupported update — skipping", update.update_id)
             return
 
-        start_payload = await self._hydrate_start_payload(self._extract_start_payload(message.text))
+        is_bot_api = source_transport == "bot_api"
+        start_payload = (
+            await self._hydrate_start_payload(self._extract_start_payload(message.text))
+            if is_bot_api
+            else TelegramStartPayload()
+        )
         has_explicit_start_attribution = self._has_explicit_start_attribution(
             start_payload
         )
@@ -253,6 +260,7 @@ class TelegramService:
             tracking_link_id is None
             and not has_explicit_start_attribution
             and message.from_user is not None
+            and is_bot_api
             and self._is_start_command(message.text)
         ):
             channel_attribution = await self._resolve_channel_tracking_attribution(
@@ -284,7 +292,7 @@ class TelegramService:
         external_chat_id = chat.external_chat_id
         chat_is_blocked = chat.is_blocked
         start_tracking_link_id: UUID | None = None
-        if self._is_start_command(message.text):
+        if is_bot_api and self._is_start_command(message.text):
             start_tracking_link_id = (
                 explicit_tracking_link_id
                 if has_explicit_start_attribution
@@ -295,6 +303,7 @@ class TelegramService:
             project_id,
             message,
             tracking_link_id=start_tracking_link_id,
+            source_transport=source_transport,
         )
         message_id = msg.id
         event_reference = msg.external_message_id or str(message_id)
@@ -360,7 +369,7 @@ class TelegramService:
                 else None
             ),
         )
-        is_start_command = self._is_start_command(message.text)
+        is_start_command = is_bot_api and self._is_start_command(message.text)
         custom_command = extract_telegram_command(message.text)
         if (
             custom_command is not None
@@ -451,7 +460,7 @@ class TelegramService:
                     message_id,
                     result,
                 )
-            if lead_id is not None and should_start_runtime:
+            if lead_id is not None and should_start_runtime and is_bot_api:
                 await self._enqueue_facebook_event_safely(
                     lead_id=lead_id,
                     source_event="bot_start",
@@ -521,6 +530,145 @@ class TelegramService:
             start_requested=False,
             fresh_lifecycle=False,
         )
+
+    async def handle_mtproto_outgoing_message(
+        self,
+        *,
+        update: TelegramUpdate,
+        project_id: UUID,
+        bot_id: UUID,
+        manual_outgoing: bool = True,
+    ) -> None:
+        """Persist a message sent manually from the connected Telegram client."""
+
+        message = self.extract_message(update)
+        if message is None:
+            return
+        chat, _, is_reactivated_cycle = await self._find_or_create_chat(
+            message,
+            project_id,
+            bot_id=bot_id,
+        )
+        await self._find_or_create_lead(
+            chat.id,
+            project_id,
+            message,
+            reset_existing=is_reactivated_cycle,
+        )
+        data = self._telegram_message_to_create(
+            message,
+            source_transport="user_mtproto",
+        )
+        raw_payload = dict(data.raw_payload_json or {})
+        raw_payload["mtproto_manual_outgoing"] = manual_outgoing
+        data = data.model_copy(
+            update={
+                "sender_type": SenderType.BOT,
+                "sender_id": None,
+                "operator_id": None,
+                "raw_payload_json": raw_payload,
+            }
+        )
+        if message.reply_to_message is not None:
+            reply_target = await self.message_repo.get_by_external_id(
+                chat.id,
+                str(message.reply_to_message.message_id),
+            )
+            if reply_target is not None:
+                data = data.model_copy(update={"reply_to_message_id": reply_target.id})
+        await self.message_service.create_message(
+            chat_id=chat.id,
+            project_id=project_id,
+            data=data,
+            send_to_telegram=False,
+        )
+        if manual_outgoing:
+            await self.bot_repo.disable_bot_for_chat(chat.id)
+            await self.funnel_runtime.pause_for_external_account_message(
+                chat_id=chat.id,
+                project_id=project_id,
+            )
+
+    async def handle_mtproto_message_edit(
+        self,
+        *,
+        external_chat_id: str,
+        external_message_id: str,
+        project_id: UUID,
+        bot_id: UUID,
+        text: str,
+        is_caption: bool,
+        edited_at: datetime,
+    ) -> bool:
+        chat = await self.chat_repo.get_by_external(
+            project_id,
+            external_chat_id,
+            bot_id=bot_id,
+        )
+        if chat is None:
+            return False
+        message = await self.message_repo.get_by_external_id(
+            chat.id,
+            external_message_id,
+        )
+        if message is None:
+            return False
+        await self.message_repo.mark_edited(
+            message_id=message.id,
+            text=text,
+            is_caption=is_caption,
+            edited_at=edited_at,
+        )
+        return True
+
+    async def handle_mtproto_message_delete(
+        self,
+        *,
+        external_chat_id: str,
+        external_message_ids: list[str],
+        project_id: UUID,
+        bot_id: UUID,
+        deleted_at: datetime,
+    ) -> int:
+        chat = await self.chat_repo.get_by_external(
+            project_id,
+            external_chat_id,
+            bot_id=bot_id,
+        )
+        if chat is None:
+            return 0
+        deleted = 0
+        for external_message_id in external_message_ids:
+            message = await self.message_repo.get_by_external_id(
+                chat.id,
+                external_message_id,
+            )
+            if message is None:
+                continue
+            await self.message_repo.mark_deleted(
+                message_id=message.id,
+                deleted_at=deleted_at,
+            )
+            deleted += 1
+        return deleted
+
+    async def handle_mtproto_message_delete_without_peer(
+        self,
+        *,
+        external_message_ids: list[str],
+        bot_id: UUID,
+        deleted_at: datetime,
+    ) -> int:
+        messages = await self.message_repo.list_by_external_ids_for_bot(
+            bot_id=bot_id,
+            external_message_ids=external_message_ids,
+        )
+        for message in messages:
+            await self.message_repo.mark_deleted(
+                message_id=message.id,
+                deleted_at=deleted_at,
+            )
+        return len(messages)
 
     async def dispatch_post_commit_actions(self) -> None:
         pending = tuple(self._pending_channel_join_request_actions)
@@ -736,6 +884,11 @@ class TelegramService:
         if chat is not None:
             contact_name = self._contact_name_from_message(message)
             updates: dict[str, Any] = {}
+            if (
+                message.chat.access_hash is not None
+                and message.chat.access_hash != chat.external_access_hash
+            ):
+                updates["external_access_hash"] = message.chat.access_hash
             is_imported = bool(getattr(chat, "is_imported", False))
             identity_pending = bool(
                 getattr(chat, "import_identity_pending", False)
@@ -854,6 +1007,7 @@ class TelegramService:
                     tracking_link_id=tracking_link_id,
                     external_chat_id=external_chat_id,
                     external_user_id=external_user_id,
+                    external_access_hash=message.chat.access_hash,
                     contact_name=contact_name,
                 )
             logger.info(
@@ -1700,6 +1854,7 @@ class TelegramService:
         message: TelegramMessage,
         *,
         tracking_link_id: UUID | None = None,
+        source_transport: str = "bot_api",
     ) -> MessageOut:
         """
         Persist the Telegram message via MessageService (includes idempotency,
@@ -1708,7 +1863,10 @@ class TelegramService:
         message.text may be None for stickers, photos, etc. Media metadata is
         stored for lazy proxy access; files are not downloaded here.
         """
-        data = self._telegram_message_to_create(message).model_copy(
+        data = self._telegram_message_to_create(
+            message,
+            source_transport=source_transport,
+        ).model_copy(
             update={"tracking_link_id": tracking_link_id}
         )
         if message.reply_to_message is not None:
@@ -1727,8 +1885,13 @@ class TelegramService:
         )
 
     @staticmethod
-    def _telegram_message_to_create(message: TelegramMessage) -> MessageCreate:
+    def _telegram_message_to_create(
+        message: TelegramMessage,
+        *,
+        source_transport: str = "bot_api",
+    ) -> MessageCreate:
         raw_payload = message.model_dump(mode="json", by_alias=True, exclude_none=True)
+        raw_payload["_transport"] = source_transport
         base = {
             "external_message_id": str(message.message_id),
             "sender_type": SenderType.USER,
@@ -1752,6 +1915,8 @@ class TelegramService:
 
         if message.photo:
             photo = max(message.photo, key=lambda item: item.file_size or 0)
+            if photo.local_path:
+                raw_payload["mtproto_media_path"] = photo.local_path
             return MessageCreate(
                 **base,
                 message_type=MessageType.PHOTO,
@@ -1775,6 +1940,8 @@ class TelegramService:
         for message_type, media in media_specs:
             if media is None:
                 continue
+            if media.local_path:
+                raw_payload["mtproto_media_path"] = media.local_path
             return MessageCreate(
                 **base,
                 message_type=message_type,

@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.bot_repository import BotRepository
 from app.services.chat_user_block_service import ChatUserBlockService
+from app.services.telegram_account_gateway import (
+    TelegramAccountGateway,
+    TelegramAccountGatewayError,
+)
 from app.utils.video_processor import (
     VideoProcessingError,
     crop_video_file_to_square,
@@ -64,8 +68,55 @@ class TelegramSenderService:
     ) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
+        self.account_gateway = TelegramAccountGateway()
         self.release_transaction_before_network = release_transaction_before_network
         self.raise_on_delivery_error = raise_on_delivery_error
+
+    async def _get_transport_type(
+        self,
+        project_id: UUID,
+        bot_id: UUID | None,
+    ) -> str:
+        if bot_id is None:
+            return "bot_api"
+        bot_repo = getattr(self, "bot_repo", None)
+        if bot_repo is None:
+            return "bot_api"
+        transport_type = await bot_repo.get_transport_type(bot_id, project_id)
+        if self.release_transaction_before_network and self.db.in_transaction():
+            await self.db.commit()
+        return transport_type or "bot_api"
+
+    async def _invoke_account_gateway(
+        self,
+        *,
+        method: str,
+        project_id: UUID,
+        bot_id: UUID,
+        external_chat_id: str,
+        operation: str,
+        payload: dict[str, Any],
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            return await self.account_gateway.invoke(
+                bot_id=bot_id,
+                operation=operation,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+            )
+        except TelegramAccountGatewayError as exc:
+            await self._handle_delivery_error(
+                TelegramDeliveryError(
+                    method=method,
+                    description=str(exc),
+                    transient=exc.transient,
+                ),
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+            )
+            return None
 
     async def _get_token(self, project_id: UUID, bot_id: UUID | None) -> str | None:
         token = (
@@ -86,12 +137,12 @@ class TelegramSenderService:
         reply_markup: dict | None = None,
         reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
-        token = await self._get_token(project_id, bot_id)
-        if not token:
+        message_text = text.strip()
+        if not message_text:
             await self._handle_delivery_error(
                 TelegramDeliveryError(
                     method="sendMessage",
-                    description="Bot token is not configured",
+                    description="Message text is empty",
                 ),
                 project_id=project_id,
                 bot_id=bot_id,
@@ -99,12 +150,33 @@ class TelegramSenderService:
             )
             return None
 
-        message_text = text.strip()
-        if not message_text:
+        transport_type = await self._get_transport_type(project_id, bot_id)
+        if transport_type == "user_mtproto":
+            if bot_id is None:
+                return None
+            message_text = self._account_text_with_button_fallback(
+                message_text,
+                reply_markup,
+            )
+            return await self._invoke_account_gateway(
+                method="sendMessage",
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                operation="send_message",
+                payload={
+                    "external_chat_id": external_chat_id,
+                    "text": message_text,
+                    "reply_to_message_id": self._reply_message_id(reply_parameters),
+                },
+            )
+
+        token = await self._get_token(project_id, bot_id)
+        if not token:
             await self._handle_delivery_error(
                 TelegramDeliveryError(
                     method="sendMessage",
-                    description="Message text is empty",
+                    description="Bot token is not configured",
                 ),
                 project_id=project_id,
                 bot_id=bot_id,
@@ -163,10 +235,30 @@ class TelegramSenderService:
         delivery of the actual funnel message.
         """
 
+        transport_type = await self._get_transport_type(project_id, bot_id)
+        normalized_action = action.strip() or "typing"
+        if transport_type == "user_mtproto":
+            if bot_id is None:
+                return False
+            try:
+                result = await self._invoke_account_gateway(
+                    method="sendChatAction",
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                    operation="send_chat_action",
+                    payload={
+                        "external_chat_id": external_chat_id,
+                        "action": normalized_action,
+                    },
+                )
+            except TelegramDeliveryError:
+                return False
+            return result is not None and result.get("accepted") is True
+
         token = await self._get_token(project_id, bot_id)
         if not token:
             return False
-        normalized_action = action.strip() or "typing"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
@@ -231,6 +323,11 @@ class TelegramSenderService:
         message_id: int,
         reply_markup: dict | None = None,
     ) -> bool:
+        transport_type = await self._get_transport_type(project_id, bot_id)
+        if transport_type == "user_mtproto":
+            # Named accounts cannot attach or remove bot reply markup. The
+            # visible text alternatives are emitted with the original message.
+            return True
         token = await self._get_token(project_id, bot_id)
         if not token:
             return False
@@ -326,6 +423,33 @@ class TelegramSenderService:
         external_chat_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        transport_type = await self._get_transport_type(project_id, bot_id)
+        if transport_type == "user_mtproto":
+            if bot_id is None:
+                return None
+            operation = (
+                "edit_message_caption"
+                if method == "editMessageCaption"
+                else "edit_message_text"
+            )
+            text_value = str(payload.get("caption") or payload.get("text") or "").strip()
+            text_value = self._account_text_with_button_fallback(
+                text_value,
+                payload.get("reply_markup") if isinstance(payload.get("reply_markup"), dict) else None,
+            )
+            return await self._invoke_account_gateway(
+                method=method,
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                operation=operation,
+                payload={
+                    "external_chat_id": external_chat_id,
+                    "message_id": payload["message_id"],
+                    "text": text_value,
+                },
+            )
+
         token = await self._get_token(project_id, bot_id)
         if not token:
             return None
@@ -359,6 +483,23 @@ class TelegramSenderService:
         external_chat_id: str,
         message_id: int,
     ) -> bool:
+        transport_type = await self._get_transport_type(project_id, bot_id)
+        if transport_type == "user_mtproto":
+            if bot_id is None:
+                return False
+            result = await self._invoke_account_gateway(
+                method="deleteMessage",
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                operation="delete_message",
+                payload={
+                    "external_chat_id": external_chat_id,
+                    "message_id": message_id,
+                },
+            )
+            return result is not None and result.get("deleted") is True
+
         token = await self._get_token(project_id, bot_id)
         if not token:
             return False
@@ -572,6 +713,25 @@ class TelegramSenderService:
         supports_caption: bool = True,
         reply_parameters: dict | None = None,
     ) -> dict[str, Any] | None:
+        transport_type = await self._get_transport_type(project_id, bot_id)
+        if transport_type == "user_mtproto":
+            if bot_id is None:
+                return None
+            return await self._send_account_media(
+                method=method,
+                media_field=media_field,
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                media=media,
+                caption=caption,
+                reply_markup=reply_markup,
+                file_name=file_name,
+                timeout=timeout,
+                supports_caption=supports_caption,
+                reply_parameters=reply_parameters,
+            )
+
         token = await self._get_token(project_id, bot_id)
         if not token:
             await self._handle_delivery_error(
@@ -669,6 +829,153 @@ class TelegramSenderService:
             bot_id=bot_id,
             external_chat_id=external_chat_id,
         )
+
+    async def _send_account_media(
+        self,
+        *,
+        method: str,
+        media_field: str,
+        project_id: UUID,
+        bot_id: UUID,
+        external_chat_id: str,
+        media: str | Path | bytes,
+        caption: str | None,
+        reply_markup: dict | None,
+        file_name: str | None,
+        timeout: float,
+        supports_caption: bool,
+        reply_parameters: dict | None,
+    ) -> dict[str, Any] | None:
+        staged_path: Path | None = None
+        if isinstance(media, bytes):
+            staged_path = await self.account_gateway.stage_bytes(
+                media,
+                file_name=file_name or f"{media_field}.bin",
+            )
+            media_path = staged_path
+        else:
+            candidate = media if isinstance(media, Path) else Path(media)
+            try:
+                is_file = candidate.is_file()
+            except OSError:
+                is_file = False
+            if not is_file:
+                await self._handle_delivery_error(
+                    TelegramDeliveryError(
+                        method=method,
+                        description=(
+                            "Named Telegram accounts cannot reuse Bot API file_id values; "
+                            "upload this media for the account transport"
+                        ),
+                    ),
+                    project_id=project_id,
+                    bot_id=bot_id,
+                    external_chat_id=external_chat_id,
+                )
+                return None
+            media_path = candidate
+
+        media_type_by_method = {
+            "sendPhoto": "photo",
+            "sendVideo": "video",
+            "sendDocument": "document",
+            "sendVoice": "voice",
+            "sendVideoNote": "video_note",
+        }
+        media_type = media_type_by_method.get(method, media_field)
+        caption_text = caption.strip() if supports_caption and isinstance(caption, str) else ""
+        caption_text = self._account_text_with_button_fallback(
+            caption_text,
+            reply_markup if supports_caption else None,
+        )
+        try:
+            result = await self._invoke_account_gateway(
+                method=method,
+                project_id=project_id,
+                bot_id=bot_id,
+                external_chat_id=external_chat_id,
+                operation="send_media",
+                payload={
+                    "external_chat_id": external_chat_id,
+                    "path": str(media_path),
+                    "media_type": media_type,
+                    "caption": caption_text or None,
+                    "reply_to_message_id": self._reply_message_id(reply_parameters),
+                },
+                timeout_seconds=max(int(timeout) + 15, 30),
+            )
+            if result is not None and not supports_caption and reply_markup:
+                options_text = self._account_text_with_button_fallback("", reply_markup)
+                if options_text:
+                    await self._invoke_account_gateway(
+                        method="sendMessage",
+                        project_id=project_id,
+                        bot_id=bot_id,
+                        external_chat_id=external_chat_id,
+                        operation="send_message",
+                        payload={
+                            "external_chat_id": external_chat_id,
+                            "text": options_text,
+                            "reply_to_message_id": result.get("message_id"),
+                        },
+                    )
+            return result
+        finally:
+            if staged_path is not None and staged_path.exists():
+                # The worker removes successful staged uploads after preserving
+                # them. A failed RPC must not leave private temp files behind.
+                try:
+                    staged_path.unlink()
+                except OSError:
+                    logger.warning("Could not remove staged MTProto media %s", staged_path)
+
+    @classmethod
+    def _account_text_with_button_fallback(
+        cls,
+        text: str,
+        reply_markup: dict | None,
+    ) -> str:
+        base = text.strip()
+        if not isinstance(reply_markup, dict):
+            return base
+        rows = reply_markup.get("inline_keyboard") or reply_markup.get("keyboard") or []
+        if not isinstance(rows, list):
+            return base
+
+        lines: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, list):
+                continue
+            for button in row:
+                if not isinstance(button, dict):
+                    continue
+                label = str(button.get("text") or "").strip()
+                if not label:
+                    continue
+                url = str(button.get("url") or "").strip()
+                web_app = button.get("web_app")
+                if not url and isinstance(web_app, dict):
+                    url = str(web_app.get("url") or "").strip()
+                line = f"{label}: {url}" if url else f"• {label}"
+                if line not in seen:
+                    seen.add(line)
+                    lines.append(line)
+        if not lines:
+            return base
+        return "\n\n".join(part for part in (base, "\n".join(lines)) if part)
+
+    @staticmethod
+    def _reply_message_id(reply_parameters: dict | None) -> int | None:
+        if not isinstance(reply_parameters, dict):
+            return None
+        value = reply_parameters.get("message_id")
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
     async def _result_or_delivery_error(
         self,

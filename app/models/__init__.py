@@ -24,7 +24,14 @@ from app.models.lead import Lead, LeadTag  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.alert import Alert  # noqa: F401
 from app.models.daily_stats import DailyStats  # noqa: F401
-from app.models.bot import Bot, BotConfigAuditLog, BotVersion, BotStep, ChatBotState  # noqa: F401
+from app.models.bot import (  # noqa: F401
+    Bot,
+    BotConfigAuditLog,
+    BotVersion,
+    BotStep,
+    ChatBotState,
+    TelegramUserConnection,
+)
 from app.models.channel_tracking import (  # noqa: F401
     TelegramChannel,
     TelegramChannelInviteLink,
@@ -84,6 +91,7 @@ __all__ = [
     "BotVersion",
     "BotStep",
     "ChatBotState",
+    "TelegramUserConnection",
     "TelegramChannel",
     "TelegramChannelInviteLink",
     "TelegramChannelSubscription",

@@ -30,6 +30,7 @@ class TelegramChat(BaseModel):
     type: Optional[str] = None
     title: Optional[str] = None
     username: Optional[str] = None
+    access_hash: Optional[int] = None
 
 
 class TelegramFile(BaseModel):
@@ -38,6 +39,7 @@ class TelegramFile(BaseModel):
     file_id: str
     file_unique_id: Optional[str] = None
     file_size: Optional[int] = None
+    local_path: Optional[str] = None
 
 
 class TelegramDocument(TelegramFile):

@@ -117,6 +117,7 @@ class TrackingService:
             project_id=project_id,
             mappings=data.fb_event_mappings,
         )
+        await self._ensure_bot_supports_tracking(data.bot_id, project_id)
         bot = await self.bot_service.ensure_bot_username(
             bot_id=data.bot_id,
             project_id=project_id,
@@ -421,6 +422,7 @@ class TrackingService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="bot_id is required for bot tracking links",
                 )
+            await self._ensure_bot_supports_tracking(data.bot_id, project.id)
             bot = await self.bot_service.ensure_bot_username(
                 bot_id=data.bot_id,
                 project_id=project.id,
@@ -540,7 +542,6 @@ class TrackingService:
                 )
             await self._create_initial_manual_spend(link, data, actor_id=actor.id)
             await self.db.flush()
-            return await self._to_read(link, include_total_spend=True)
         except Exception as exc:
             await self.db.rollback()
             if prepared_invite is not None:
@@ -553,6 +554,24 @@ class TrackingService:
                     detail="Tracking code already exists",
                 ) from exc
             raise
+        return await self._to_read(link, include_total_spend=True)
+
+    async def _ensure_bot_supports_tracking(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> None:
+        transport_type = await self.bot_repo.get_transport_type(bot_id, project_id)
+        if transport_type is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+        if transport_type == "user_mtproto":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Именной Telegram-аккаунт не поддерживает /start-реферальные ссылки. "
+                    "Общая статистика по аккаунту доступна без трекинг-ссылки."
+                ),
+            )
 
     async def update_tracking_link(
         self,

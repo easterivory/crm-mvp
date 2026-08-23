@@ -1,5 +1,5 @@
 """
-Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|scheduled|postback|buyer|admin|backup|all]
+Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|scheduled|postback|buyer|admin|backup|mtproto|all]
 
 Each worker is an independent asyncio loop.
 Running 'all' starts both workers concurrently in the same process.
@@ -12,7 +12,8 @@ Usage:
     python -m app.workers postback  # partner postback worker only
     python -m app.workers buyer  # buyer Telegram bot polling worker only
     python -m app.workers backup  # scheduled database backups only
-    python -m app.workers all     # all workers (default in Docker)
+    python -m app.workers mtproto # dedicated Telegram work-account process
+    python -m app.workers all     # shared workers (default in Docker)
 """
 import asyncio
 import logging
@@ -73,6 +74,10 @@ def main() -> None:
         from app.workers.backup_worker import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "mtproto":
+        from app.workers.telegram_account_worker import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "all":
         from app.workers.alert_worker import run_loop as alert_loop
         from app.workers.broadcast_worker import run_loop as broadcast_loop
@@ -85,7 +90,7 @@ def main() -> None:
         from app.workers.stats_worker import run_loop as stats_loop
 
         async def run_all() -> None:
-            logger.info("Starting all workers")
+            logger.info("Starting shared workers; MTProto runs in its dedicated service")
             await asyncio.gather(
                 alert_loop(),
                 stats_loop(),
@@ -102,7 +107,7 @@ def main() -> None:
 
     else:
         logger.error(
-            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | backup | all",
+            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | backup | mtproto | all",
             mode,
         )
         sys.exit(1)

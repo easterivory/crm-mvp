@@ -28,12 +28,16 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
         Index("ix_bots_is_deleted", "is_deleted"),
         Index("ix_bots_active_funnel_id", "active_funnel_id"),
         Index("ix_bots_active_funnel_version_id", "active_funnel_version_id"),
+        Index("ix_bots_transport_type", "transport_type"),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    transport_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="bot_api", server_default="bot_api"
+    )
     telegram_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     telegram_bot_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     telegram_first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -70,10 +74,75 @@ class Bot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin)
         back_populates="bot",
         cascade="all, delete-orphan",
     )
+    telegram_user_connection: Mapped[Optional[TelegramUserConnection]] = relationship(
+        "TelegramUserConnection",
+        back_populates="bot",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
     @property
     def has_telegram_token(self) -> bool:
         return bool(self.telegram_token)
+
+    @property
+    def is_telegram_user_account(self) -> bool:
+        return self.transport_type == "user_mtproto"
+
+
+class TelegramUserConnection(
+    Base,
+    UUIDPrimaryKey,
+    TimestampMixin,
+    UpdatedAtMixin,
+):
+    """Encrypted MTProto authorization state for one dedicated work account."""
+
+    __tablename__ = "telegram_user_connections"
+    __table_args__ = (
+        Index("ix_telegram_user_connections_auth_status", "auth_status"),
+        Index("ix_telegram_user_connections_connection_status", "connection_status"),
+        Index(
+            "ix_telegram_user_connections_telegram_user_id",
+            "telegram_user_id",
+            unique=True,
+        ),
+    )
+
+    bot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bots.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    api_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    api_hash_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    api_hash_last_four: Mapped[str] = mapped_column(String(4), nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    session_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    phone_code_hash_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auth_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="disconnected", server_default="disconnected"
+    )
+    connection_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="disconnected", server_default="disconnected"
+    )
+    telegram_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    telegram_first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    telegram_last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    telegram_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    auth_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_connected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    bot: Mapped[Bot] = relationship("Bot", back_populates="telegram_user_connection")
 
 
 class BotConfigAuditLog(Base, UUIDPrimaryKey, TimestampMixin):

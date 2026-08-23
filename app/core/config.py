@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # Provider credentials are encrypted at rest. Set a dedicated value in
     # production; SECRET_KEY remains a compatible fallback for existing installs.
     AI_CREDENTIAL_ENCRYPTION_KEY: Optional[str] = None
+    # MTProto sessions and API hashes are encrypted separately from bot tokens.
+    # SECRET_KEY remains a backwards-compatible fallback for installations that
+    # have not provisioned the dedicated key yet.
+    TELEGRAM_ACCOUNT_ENCRYPTION_KEY: Optional[str] = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24h
     ALGORITHM: str = "HS256"
 
@@ -53,6 +57,10 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
     TELEGRAM_INPUT_DEBOUNCE_SECONDS: int = 4
     TELEGRAM_INPUT_QUIET_SECONDS: int = 2
+    TELEGRAM_ACCOUNT_RPC_TIMEOUT_SECONDS: int = 30
+    TELEGRAM_ACCOUNT_SUPERVISOR_INTERVAL_SECONDS: int = 5
+    TELEGRAM_ACCOUNT_AUTH_TTL_MINUTES: int = 10
+    TELEGRAM_ACCOUNT_MEDIA_STORAGE_PATH: str = "storage/telegram_account_media"
 
     # Delayed funnel worker resilience
     FUNNEL_SCHEDULED_JOB_TIMEOUT_SECONDS: int = 300

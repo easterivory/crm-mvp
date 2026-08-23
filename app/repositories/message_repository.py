@@ -219,6 +219,26 @@ class MessageRepository(BaseRepository[Message]):
         )
         return result.scalar_one_or_none()
 
+    async def list_by_external_ids_for_bot(
+        self,
+        *,
+        bot_id: UUID,
+        external_message_ids: list[str],
+    ) -> list[Message]:
+        if not external_message_ids:
+            return []
+        result = await self.db.execute(
+            select(Message)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(
+                Chat.bot_id == bot_id,
+                Chat.is_deleted.is_(False),
+                Message.external_message_id.in_(external_message_ids),
+                Message.deleted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())
+
     async def get_latest_user_message(self, chat_id: UUID) -> Optional[Message]:
         result = await self.db.execute(
             select(Message)

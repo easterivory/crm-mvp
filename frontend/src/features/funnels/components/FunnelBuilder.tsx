@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowLeft,
   BarChart3,
   CopyPlus,
@@ -14,6 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useNotificationStore } from '../../../shared/lib'
+import { fetchBots } from '../../bots/api'
 import {
   createDraftVersion,
   createDraftFromVersion,
@@ -288,6 +290,7 @@ export default function FunnelBuilder({
   const [compactPanel, setCompactPanel] = useState<CompactBuilderPanel>('canvas')
   const [analyticsData, setAnalyticsData] = useState<FunnelDropOffAnalytics | null>(null)
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
+  const [botTransportType, setBotTransportType] = useState<'bot_api' | 'user_mtproto' | null>(null)
   const isLoadingAnalyticsRef = useRef(false)
   const hasLoadedInitialVersionRef = useRef(false)
 
@@ -341,6 +344,32 @@ export default function FunnelBuilder({
       isMounted = false
     }
   }, [projectId])
+
+  useEffect(() => {
+    let isMounted = true
+    if (!funnel?.bot_id) {
+      setBotTransportType(null)
+      return () => {
+        isMounted = false
+      }
+    }
+    fetchBots(projectId)
+      .then((items) => {
+        if (isMounted) {
+          setBotTransportType(
+            items.find((item) => item.id === funnel.bot_id)?.transport_type ?? 'bot_api',
+          )
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setBotTransportType(null)
+        }
+      })
+    return () => {
+      isMounted = false
+    }
+  }, [funnel?.bot_id, projectId])
 
   useEffect(() => {
     let isMounted = true
@@ -1020,6 +1049,19 @@ export default function FunnelBuilder({
           )}
         </div>
       </header>
+
+      {activeTab === 'editor' && botTransportType === 'user_mtproto' ? (
+        <div className="flex shrink-0 items-start gap-3 border-b border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm leading-5 text-amber-50">
+          <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-200" />
+          <p className="min-w-0">
+            <span className="font-semibold">Режим именного аккаунта.</span>{' '}
+            Воронка запускается первым входящим сообщением, без отдельной реакции на /start.
+            Ветвящие кнопки показываются как текстовые варианты, запрос контакта принимает номер
+            сообщением, URL остаются ссылками. Медиа из Bot API file_id нужно загрузить для этого
+            аккаунта заново; конфигурация воронки при этом не переписывается.
+          </p>
+        </div>
+      ) : null}
 
       {activeTab === 'analytics' && (
         <div className="border-b border-white/8 bg-[#0d1324]/95 px-4 py-3">

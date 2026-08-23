@@ -782,9 +782,11 @@ class BroadcastService:
                     chat_id=chat_id,
                     project_id=broadcast.project_id,
                     data=MessageCreate(
+                        external_message_id=self._telegram_message_id(sent),
                         message_type=MessageType.TEXT,
                         sender_type=SenderType.BOT,
                         body=text,
+                        raw_payload_json={"telegram_result": sent},
                         reply_markup=reply_markup,
                     ),
                     send_to_telegram=False,
@@ -803,6 +805,9 @@ class BroadcastService:
                 chat_id=chat_id,
                 project_id=broadcast.project_id,
                 data=MessageCreate(
+                    external_message_id=self._telegram_message_id(
+                        media_result["telegram_result"]
+                    ),
                     message_type=message_type,
                     sender_type=SenderType.BOT,
                     body=None,
@@ -985,6 +990,7 @@ class BroadcastService:
             await self.repo.mark_upload_used(upload_id, broadcast.project_id)
 
         return {
+            "telegram_result": telegram_result,
             "caption": None if message_type == MessageType.VIDEO_NOTE else caption or None,
             "telegram_file_id": self._extract_telegram_file_id(message_type, telegram_result)
             or (str(media.get("telegram_file_id") or "").strip() or None),
@@ -993,6 +999,11 @@ class BroadcastService:
             "file_size": file_size,
             "raw_payload_json": {"telegram_result": telegram_result, "broadcast_media": media},
         }
+
+    @staticmethod
+    def _telegram_message_id(result: dict[str, Any]) -> str | None:
+        message_id = result.get("message_id")
+        return str(message_id) if message_id is not None else None
 
     @staticmethod
     def _content_messages(content: dict[str, Any]) -> list[dict[str, Any]]:

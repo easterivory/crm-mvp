@@ -450,6 +450,10 @@ export default function TrackingPage() {
     () => new Map(bots.map((bot) => [bot.id, bot.name])),
     [bots],
   )
+  const trackingBots = useMemo(
+    () => bots.filter((bot) => bot.transport_type !== 'user_mtproto'),
+    [bots],
+  )
 
   const linkMetricsById = useMemo(() => {
     return new Map((metrics?.links ?? []).map((item) => [item.link_id, item]))
@@ -1645,7 +1649,7 @@ export default function TrackingPage() {
                     className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
                   >
                     <option value="" disabled>Выберите бота</option>
-                    {bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
+                    {trackingBots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
                   </select>
                 </label>
                 <label className="block">

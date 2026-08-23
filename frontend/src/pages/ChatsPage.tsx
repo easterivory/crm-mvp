@@ -136,6 +136,8 @@ type Message = {
   edited_at: string | null
   deleted_at: string | null
   buttons?: string[]
+  transport_source?: string
+  is_external_account_message?: boolean
   created_at: string
 }
 
@@ -2770,7 +2772,8 @@ export default function ChatsPage() {
                 const message = item.message
                 const isOutgoing =
                   message.sender_type === 'manager' || message.sender_type === 'bot'
-                const isBot = message.sender_type === 'bot'
+                const isExternalAccountMessage = message.is_external_account_message === true
+                const isBot = message.sender_type === 'bot' && !isExternalAccountMessage
                 const messageButtons = message.buttons ?? []
                 const operator = userById.get(message.operator_id ?? message.sender_id ?? '')
                 const operatorName = userLabel(
@@ -2843,7 +2846,9 @@ export default function ChatsPage() {
                           isOutgoing
                             ? isBot
                               ? 'border-accent-300/25 bg-accent-400/10 text-accent-50 shadow-glow-accent'
-                              : 'border-primary-300/25 bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary'
+                              : isExternalAccountMessage
+                                ? 'border-cyan-300/25 bg-cyan-400/10 text-cyan-50 shadow-glow-accent'
+                                : 'border-primary-300/25 bg-gradient-to-br from-primary-500 to-accent-500 text-white shadow-glow-primary'
                             : 'border-white/10 bg-white/[0.055] text-gray-100'
                         } ${
                           highlightedMessageId === message.id
@@ -2869,8 +2874,16 @@ export default function ChatsPage() {
                           </button>
                         ) : null}
                         <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
-                          {isBot ? <Bot size={13} /> : null}
-                          <span>{message.sender_type === 'manager' ? 'менеджер' : message.sender_type === 'bot' ? 'бот' : 'клиент'}</span>
+                          {isExternalAccountMessage ? <UserRound size={13} /> : isBot ? <Bot size={13} /> : null}
+                          <span>
+                            {message.sender_type === 'manager'
+                              ? 'менеджер'
+                              : isExternalAccountMessage
+                                ? 'рабочий аккаунт · из Telegram'
+                                : message.sender_type === 'bot'
+                                  ? 'бот'
+                                  : 'клиент'}
+                          </span>
                           <span>{formatDateTime(message.created_at)}</span>
                           {message.edited_at ? <span>· изменено</span> : null}
                         </div>

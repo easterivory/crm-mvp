@@ -379,6 +379,35 @@ class FunnelRuntimeService:
         )
         return True
 
+    async def pause_for_external_account_message(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+    ) -> bool:
+        """Pause automation when a work account sends a message outside CRM."""
+
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is None or state.completed_at is not None:
+            return False
+        if state.is_paused:
+            return True
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        await self.repo.set_chat_funnel_paused(
+            chat_id=chat_id,
+            is_paused=True,
+            paused_at=datetime.now(timezone.utc),
+            paused_by_user_id=None,
+        )
+        await self.chat_audit.log_event(
+            chat_id=chat_id,
+            project_id=project_id,
+            user_id=None,
+            event_type=ChatEventType.NOTE_ADDED,
+            new_value="Воронка приостановлена: сообщение отправлено из приложения Telegram.",
+        )
+        return True
+
     async def get_manager_funnel_control(
         self,
         *,
@@ -630,6 +659,7 @@ class FunnelRuntimeService:
         step = await self.repo.get_step(state.current_step_id)
         if step is None:
             return False
+        uses_account_button_fallback = await self._uses_account_button_fallback(chat_id)
 
         if state.waiting_for_answer and self._is_message_step(step):
             message_index = self._waiting_message_index(step, state.runtime_json)
@@ -642,9 +672,19 @@ class FunnelRuntimeService:
                 if message_type == MessageType.CONTACT
                 else None
             )
+            if contact_button is None and uses_account_button_fallback:
+                contact_button = self._account_contact_choice(buttons, text)
             reply_choice = (
-                self._choice_for_buttons(buttons, text)
-                if button_mode == "reply" and message_type != MessageType.CONTACT
+                (
+                    self._choice_for_account_buttons(buttons, text)
+                    if uses_account_button_fallback
+                    else self._choice_for_buttons(buttons, text)
+                )
+                if (
+                    (button_mode == "reply" or uses_account_button_fallback)
+                    and message_type != MessageType.CONTACT
+                    and contact_button is None
+                )
                 else None
             )
             if (
@@ -652,6 +692,7 @@ class FunnelRuntimeService:
                 and button_mode == "inline"
                 and self._has_callback_buttons(buttons)
                 and contact_button is None
+                and not uses_account_button_fallback
             ):
                 logger.info(
                     "Ignoring text while funnel message waits for button callback "
@@ -665,6 +706,8 @@ class FunnelRuntimeService:
                 or contact_button is not None
                 or reply_choice is not None
             ):
+                if contact_button is not None and uses_account_button_fallback:
+                    await self._save_account_contact_answer(chat_id=chat_id, answer=text)
                 await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=text)
                 await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
                 runtime_json = self._runtime_with_answer(
@@ -735,6 +778,11 @@ class FunnelRuntimeService:
                 if message_type == MessageType.CONTACT
                 else None
             )
+            if contact_choice is None and uses_account_button_fallback:
+                contact_choice = self._account_contact_choice(
+                    self._buttons_from_step(step),
+                    text,
+                )
             validation = (
                 {"valid": True, "normalized": text}
                 if contact_choice is not None
@@ -790,6 +838,11 @@ class FunnelRuntimeService:
                 return True
 
             normalized_text = validation.get("normalized", text)
+            if contact_choice is not None and uses_account_button_fallback:
+                await self._save_account_contact_answer(
+                    chat_id=chat_id,
+                    answer=normalized_text,
+                )
             await self._save_input_answer(chat_id=chat_id, step=step, answer=normalized_text)
             await self.apply_field_mappings(chat_id=chat_id, step_id=step.id, answer=normalized_text)
             await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
@@ -807,7 +860,14 @@ class FunnelRuntimeService:
                 waiting_for_answer=False,
                 runtime_json=runtime_json,
             )
-            choice = contact_choice or self._choice_for_answer(step, str(normalized_text or ""))
+            choice = contact_choice or (
+                self._choice_for_account_buttons(
+                    self._buttons_from_step(step),
+                    str(normalized_text or ""),
+                )
+                if uses_account_button_fallback
+                else self._choice_for_answer(step, str(normalized_text or ""))
+            )
             if choice and choice.get("target_step_id"):
                 next_step = await self._move_to_step_id(
                     chat_id=chat_id,
@@ -4245,6 +4305,68 @@ class FunnelRuntimeService:
 
     def _choice_for_answer(self, step: FunnelStep, answer: Any | None) -> Optional[dict[str, Any]]:
         return self._choice_for_buttons(self._buttons_from_step(step), answer)
+
+    async def _uses_account_button_fallback(self, chat_id: UUID) -> bool:
+        chat_repo = getattr(self, "chat_repo", None)
+        bot_repo = getattr(self, "bot_repo", None)
+        if chat_repo is None or bot_repo is None:
+            return False
+        chat = await chat_repo.get_by_id(chat_id)
+        if chat is None or chat.bot_id is None:
+            return False
+        transport_type = await bot_repo.get_transport_type(
+            chat.bot_id,
+            chat.project_id,
+        )
+        return transport_type == "user_mtproto"
+
+    @staticmethod
+    def _account_contact_choice(
+        buttons: list[dict[str, Any]],
+        answer: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        contact = FunnelRuntimeService._contact_button(buttons)
+        if contact is None:
+            return None
+        value = str(answer or "").strip()
+        match = PHONE_SEARCH_RE.search(value)
+        if match is None:
+            return None
+        digits = re.sub(r"\D+", "", match.group(1))
+        return contact if 9 <= len(digits) <= 15 else None
+
+    @staticmethod
+    def _choice_for_account_buttons(
+        buttons: list[dict[str, Any]],
+        answer: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        branch_buttons = [
+            button
+            for button in buttons
+            if button.get("type") not in {"contact", "url"}
+        ]
+        return FunnelRuntimeService._choice_for_buttons(branch_buttons, answer)
+
+    async def _save_account_contact_answer(
+        self,
+        *,
+        chat_id: UUID,
+        answer: Any,
+    ) -> None:
+        chat = await self.chat_repo.get_by_id(chat_id)
+        if chat is None:
+            return
+        lead = await self.lead_repo.get_by_chat(chat_id, chat.project_id)
+        if lead is None:
+            return
+        match = PHONE_SEARCH_RE.search(str(answer or ""))
+        if match is None:
+            return
+        await self.lead_repo.update_contact(
+            lead.id,
+            chat.project_id,
+            phone=self._normalize_phone(match.group(1)),
+        )
 
     @staticmethod
     def _runtime_with_answer(

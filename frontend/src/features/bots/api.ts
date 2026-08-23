@@ -5,6 +5,7 @@ import type {
   BotLeadImport,
   LeadImportExecuteResult,
   LeadImportPreview,
+  TelegramAccountConnection,
 } from './types'
 
 export async function fetchBots(projectId?: string): Promise<Bot[]> {
@@ -37,6 +38,80 @@ export async function updateBot(
   })
 
   return data
+}
+
+function telegramAccountParams(projectId?: string | null) {
+  return projectId ? { project_id: projectId } : undefined
+}
+
+export async function fetchTelegramAccountConnection(
+  botId: string,
+  projectId?: string | null,
+): Promise<TelegramAccountConnection> {
+  const { data } = await api.get<TelegramAccountConnection>(`/bots/${botId}/telegram-account`, {
+    params: telegramAccountParams(projectId),
+  })
+  return data
+}
+
+export async function requestTelegramAccountCode(
+  botId: string,
+  payload: { api_id: number; api_hash: string; phone_number: string },
+  projectId?: string | null,
+): Promise<TelegramAccountConnection> {
+  const { data } = await api.post<TelegramAccountConnection>(
+    `/bots/${botId}/telegram-account/request-code`,
+    payload,
+    { params: telegramAccountParams(projectId) },
+  )
+  return data
+}
+
+export async function confirmTelegramAccountCode(
+  botId: string,
+  code: string,
+  projectId?: string | null,
+): Promise<TelegramAccountConnection> {
+  const { data } = await api.post<TelegramAccountConnection>(
+    `/bots/${botId}/telegram-account/confirm-code`,
+    { code },
+    { params: telegramAccountParams(projectId) },
+  )
+  return data
+}
+
+export async function confirmTelegramAccountPassword(
+  botId: string,
+  password: string,
+  projectId?: string | null,
+): Promise<TelegramAccountConnection> {
+  const { data } = await api.post<TelegramAccountConnection>(
+    `/bots/${botId}/telegram-account/confirm-password`,
+    { password },
+    { params: telegramAccountParams(projectId) },
+  )
+  return data
+}
+
+export async function syncTelegramAccount(
+  botId: string,
+  projectId?: string | null,
+): Promise<TelegramAccountConnection> {
+  const { data } = await api.post<TelegramAccountConnection>(
+    `/bots/${botId}/telegram-account/sync`,
+    null,
+    { params: telegramAccountParams(projectId) },
+  )
+  return data
+}
+
+export async function disconnectTelegramAccount(
+  botId: string,
+  projectId?: string | null,
+): Promise<void> {
+  await api.delete(`/bots/${botId}/telegram-account`, {
+    params: telegramAccountParams(projectId),
+  })
 }
 
 export async function uploadBotAvatar(

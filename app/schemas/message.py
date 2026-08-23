@@ -80,6 +80,8 @@ class MessageOut(OrmBase):
     edited_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
     buttons: list[str] = Field(default_factory=list)
+    transport_source: str = "bot_api"
+    is_external_account_message: bool = False
     created_at: datetime
 
 

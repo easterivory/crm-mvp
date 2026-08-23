@@ -26,7 +26,7 @@ from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1225,7 +1225,16 @@ class MessageService:
             return
         if not str(message.external_message_id or "").isdigit():
             raise HTTPException(status_code=422, detail="У сообщения нет Telegram ID для удаления.")
-        if message.created_at < datetime.now(timezone.utc) - timedelta(hours=48):
+        bot_repo = getattr(self, "bot_repo", None)
+        transport_type = (
+            await bot_repo.get_transport_type(chat.bot_id, project_id)
+            if bot_repo is not None
+            else "bot_api"
+        )
+        if (
+            transport_type != "user_mtproto"
+            and message.created_at < datetime.now(timezone.utc) - timedelta(hours=48)
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="Telegram разрешает удалять сообщения только в течение 48 часов после отправки.",
@@ -1346,13 +1355,34 @@ class MessageService:
             )
         return reply_markup if isinstance(reply_markup, dict) else None
 
-    async def media_response(self, message_id: UUID, project_id: UUID) -> StreamingResponse:
+    async def media_response(
+        self,
+        message_id: UUID,
+        project_id: UUID,
+    ) -> StreamingResponse | FileResponse:
         message = await self.message_repo.get_by_id_in_project(message_id, project_id)
         if message is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Message not found",
             )
+        local_path = self._mtproto_local_media_path(message)
+        if local_path is not None:
+            media_type = self._media_content_type(message.message_type, message.mime_type)
+            headers = {
+                "Cache-Control": "private, max-age=300",
+                "Content-Disposition": self._content_disposition(
+                    message.message_type,
+                    message.file_name,
+                ),
+            }
+            return FileResponse(
+                path=local_path,
+                media_type=media_type,
+                headers=headers,
+                filename=None,
+            )
+
         if not message.telegram_file_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1404,6 +1434,51 @@ class MessageService:
             media_type=media_type,
             headers=headers,
         )
+
+    @staticmethod
+    def _mtproto_local_media_path(message: Message) -> Path | None:
+        payload = message.raw_payload_json if isinstance(message.raw_payload_json, dict) else {}
+        candidates: list[object] = []
+        telegram_result = payload.get("telegram_result")
+        if isinstance(telegram_result, dict):
+            candidates.append(telegram_result.get("mtproto_media_path"))
+        candidates.append(payload.get("mtproto_media_path"))
+        for key in (
+            "photo",
+            "video",
+            "video_note",
+            "voice",
+            "audio",
+            "document",
+            "animation",
+            "sticker",
+        ):
+            media = payload.get(key)
+            if isinstance(media, list):
+                candidates.extend(
+                    item.get("local_path")
+                    for item in media
+                    if isinstance(item, dict)
+                )
+            elif isinstance(media, dict):
+                candidates.append(media.get("local_path"))
+
+        root = Path(settings.TELEGRAM_ACCOUNT_MEDIA_STORAGE_PATH).resolve()
+        for value in candidates:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            try:
+                candidate = Path(value).resolve()
+                candidate.relative_to(root)
+            except (OSError, ValueError):
+                logger.warning(
+                    "Rejected MTProto media path outside private storage message_id=%s",
+                    message.id,
+                )
+                continue
+            if candidate.is_file():
+                return candidate
+        return None
 
     @staticmethod
     async def _iter_telegram_file(file_url: str):

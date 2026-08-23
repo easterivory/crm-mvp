@@ -2,6 +2,7 @@ export type Bot = {
   id: string
   project_id: string
   name: string
+  transport_type: 'bot_api' | 'user_mtproto'
   crm_description: string | null
   telegram_description: string | null
   telegram_about: string | null
@@ -13,6 +14,23 @@ export type Bot = {
   updated_at: string
   is_deleted: boolean
   telegram_setup_warning?: string | null
+}
+
+export type TelegramAccountConnection = {
+  bot_id: string
+  auth_status: 'disconnected' | 'awaiting_code' | 'awaiting_password' | 'authorized' | 'error'
+  connection_status: 'disconnected' | 'connecting' | 'connected' | 'error'
+  api_id: number | null
+  api_hash_last_four: string | null
+  phone_number_masked: string | null
+  telegram_user_id: number | null
+  telegram_first_name: string | null
+  telegram_last_name: string | null
+  telegram_username: string | null
+  auth_expires_at: string | null
+  last_connected_at: string | null
+  last_synced_at: string | null
+  last_error: string | null
 }
 
 export type BotLeadImportStatus = 'created' | 'validated' | 'completed' | 'failed'

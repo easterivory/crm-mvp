@@ -18,6 +18,7 @@ class BotCreate(BaseModel):
     crm_description: Optional[str] = Field(None, max_length=4096)
     telegram_description: Optional[str] = Field(None, max_length=512)
     telegram_about: Optional[str] = Field(None, max_length=120)
+    transport_type: str = Field(default="bot_api", pattern="^(bot_api|user_mtproto)$")
 
 
 class BotUpdate(BaseModel):
@@ -34,6 +35,7 @@ class BotOut(OrmBase):
     id: uuid.UUID
     project_id: uuid.UUID
     name: str
+    transport_type: str = "bot_api"
     has_telegram_token: bool
     telegram_bot_id: Optional[int] = None
     telegram_first_name: Optional[str] = None
@@ -49,6 +51,37 @@ class BotOut(OrmBase):
     # Present only on create/update when Telegram accepted getMe but a
     # follow-up setup call (normally setWebhook) still needs attention.
     telegram_setup_warning: Optional[str] = None
+
+
+class TelegramAccountConnectIn(BaseModel):
+    api_id: int = Field(..., gt=0)
+    api_hash: str = Field(..., min_length=32, max_length=32, pattern="^[0-9a-fA-F]{32}$")
+    phone_number: str = Field(..., min_length=7, max_length=32)
+
+
+class TelegramAccountCodeIn(BaseModel):
+    code: str = Field(..., min_length=3, max_length=16)
+
+
+class TelegramAccountPasswordIn(BaseModel):
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class TelegramAccountConnectionOut(BaseModel):
+    bot_id: uuid.UUID
+    auth_status: str
+    connection_status: str
+    api_id: Optional[int] = None
+    api_hash_last_four: Optional[str] = None
+    phone_number_masked: Optional[str] = None
+    telegram_user_id: Optional[int] = None
+    telegram_first_name: Optional[str] = None
+    telegram_last_name: Optional[str] = None
+    telegram_username: Optional[str] = None
+    auth_expires_at: Optional[datetime] = None
+    last_connected_at: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
+    last_error: Optional[str] = None
 
 
 class BotWebhookOut(BaseModel):

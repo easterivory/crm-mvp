@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  UserRound,
   X,
 } from 'lucide-react'
 import { FormEvent, useCallback, useEffect, useState } from 'react'
@@ -24,6 +25,7 @@ import {
   type Bot as BotRecord,
 } from '../features/bots'
 import LeadImportModal from '../features/bots/components/LeadImportModal'
+import TelegramAccountConnectionPanel from '../features/bots/components/TelegramAccountConnectionPanel'
 import { useProjectBotSelection } from '../shared/lib'
 import type { PaginatedResponse } from '../shared/types'
 import { useAuthStore } from '../store/authStore'
@@ -97,6 +99,7 @@ export default function BotsPage() {
 
   const [botName, setBotName] = useState('')
   const [botToken, setBotToken] = useState('')
+  const [transportType, setTransportType] = useState<'bot_api' | 'user_mtproto'>('bot_api')
   const canImportLeads = currentUser?.role_name === 'admin' || currentUser?.role_name === 'super_admin'
 
   const loadBots = useCallback(async () => {
@@ -136,7 +139,11 @@ export default function BotsPage() {
     }
     const name = botName.trim()
     const token = normalizeTelegramToken(botToken)
-    if (!name && !token) {
+    if (transportType === 'user_mtproto' && !name) {
+      setError('Укажите внутреннее название рабочего аккаунта.')
+      return
+    }
+    if (transportType === 'bot_api' && !name && !token) {
       setError('Укажите название черновика или Telegram token.')
       return
     }
@@ -148,7 +155,8 @@ export default function BotsPage() {
     try {
       const { data: createdBot } = await api.post<BotRecord>('/bots', {
         name: name || undefined,
-        ...(token ? { telegram_token: token } : {}),
+        transport_type: transportType,
+        ...(transportType === 'bot_api' && token ? { telegram_token: token } : {}),
       }, {
         params: { project_id: activeProjectId },
       })
@@ -160,7 +168,9 @@ export default function BotsPage() {
         return
       }
       setNotice(
-        token
+        transportType === 'user_mtproto'
+          ? 'Рабочий аккаунт создан. Завершите вход в его карточке.'
+          : token
           ? 'Бот добавлен: имя подтянуто из Telegram, webhook зарегистрирован.'
           : 'Черновик бота создан. Добавьте новый token после завершения импорта.',
       )
@@ -235,13 +245,18 @@ export default function BotsPage() {
     setNotice('')
 
     try {
+      const editedBot = bots.find((bot) => bot.id === botId)
       const token = normalizeTelegramToken(editingBotToken)
       const updatedBot = await updateBot(botId, {
         name: editingBotName.trim(),
         crm_description: normalizeOptionalText(editingCrmDescription),
-        telegram_about: normalizeOptionalText(editingTelegramAbout),
-        telegram_description: normalizeOptionalText(editingTelegramDescription),
-        ...(token ? { telegram_token: token } : {}),
+        ...(editedBot?.transport_type !== 'user_mtproto'
+          ? {
+              telegram_about: normalizeOptionalText(editingTelegramAbout),
+              telegram_description: normalizeOptionalText(editingTelegramDescription),
+              ...(token ? { telegram_token: token } : {}),
+            }
+          : {}),
       }, activeProjectId)
       cancelEditBot()
       await loadBots()
@@ -249,7 +264,11 @@ export default function BotsPage() {
         setError(updatedBot.telegram_setup_warning)
         return
       }
-      setNotice('Бот обновлён, профиль Telegram синхронизирован.')
+      setNotice(
+        editedBot?.transport_type === 'user_mtproto'
+          ? 'Настройки рабочего аккаунта обновлены.'
+          : 'Бот обновлён, профиль Telegram синхронизирован.',
+      )
     } catch (err) {
       setError(getErrorMessage(err, 'Не удалось обновить бота.'))
     } finally {
@@ -326,8 +345,8 @@ export default function BotsPage() {
               <BotIcon size={18} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold text-white">Боты</h1>
-              <p className="text-sm text-gray-500">Управление Telegram-ботами проекта</p>
+              <h1 className="text-xl font-semibold text-white">Telegram</h1>
+              <p className="text-sm text-gray-500">Боты и рабочие аккаунты проекта</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -362,31 +381,55 @@ export default function BotsPage() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-        <form className="mb-5 grid gap-3 rounded-xl border border-white/5 bg-surface p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_auto]" onSubmit={handleAddBot}>
+        <form className="mb-5 grid gap-3 rounded-xl border border-white/5 bg-surface p-4 md:grid-cols-2 xl:grid-cols-[auto_1fr_1fr_auto]" onSubmit={handleAddBot}>
+          <div className="flex min-h-10 rounded-lg border border-white/10 bg-background/70 p-1 md:col-span-2 xl:col-span-1">
+            <button
+              type="button"
+              onClick={() => setTransportType('bot_api')}
+              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition ${transportType === 'bot_api' ? 'bg-cyan-500/15 text-cyan-100' : 'text-gray-500 hover:text-gray-200'}`}
+            >
+              <BotIcon size={15} />
+              Бот
+            </button>
+            <button
+              type="button"
+              onClick={() => setTransportType('user_mtproto')}
+              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition ${transportType === 'user_mtproto' ? 'bg-cyan-500/15 text-cyan-100' : 'text-gray-500 hover:text-gray-200'}`}
+            >
+              <UserRound size={15} />
+              Аккаунт
+            </button>
+          </div>
           <input
             value={botName}
             onChange={(event) => setBotName(event.target.value)}
-            placeholder="Название бота"
+            placeholder={transportType === 'user_mtproto' ? 'Внутреннее название аккаунта' : 'Название бота'}
             maxLength={255}
             className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
           />
-          <input
-            value={botToken}
-            onChange={(event) => setBotToken(event.target.value)}
-            placeholder="Telegram token (можно добавить позже)"
-            type="password"
-            autoComplete="new-password"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            data-1p-ignore="true"
-            data-lpignore="true"
-            maxLength={255}
-            className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
-          />
+          {transportType === 'bot_api' ? (
+            <input
+              value={botToken}
+              onChange={(event) => setBotToken(event.target.value)}
+              placeholder="Telegram token (можно добавить позже)"
+              type="password"
+              autoComplete="new-password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              data-1p-ignore="true"
+              data-lpignore="true"
+              maxLength={255}
+              className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+            />
+          ) : (
+            <div className="flex min-h-10 items-center rounded-xl border border-white/5 bg-white/[0.02] px-3 text-sm text-gray-500">
+              API ID и API hash указываются после создания.
+            </div>
+          )}
           <button
             type="submit"
-            disabled={isAddingBot || (!botName.trim() && !botToken.trim())}
+            disabled={isAddingBot || (transportType === 'user_mtproto' ? !botName.trim() : !botName.trim() && !botToken.trim())}
             className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 px-4 text-sm font-semibold text-white shadow-glow-primary transition hover:shadow-glow-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isAddingBot ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -410,6 +453,7 @@ export default function BotsPage() {
 
           {bots.map((bot) => {
             const isEditing = editingBotId === bot.id
+            const isUserAccount = bot.transport_type === 'user_mtproto'
 
             return (
               <article key={bot.id} className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
@@ -425,20 +469,22 @@ export default function BotsPage() {
                     <div className="rounded-xl border border-white/10 bg-background/50 px-3 py-2 text-sm text-gray-400">
                       Username обновляется только через Telegram getMe.
                     </div>
-                    <input
-                      value={editingBotToken}
-                      onChange={(event) => setEditingBotToken(event.target.value)}
-                      maxLength={255}
-                      type="password"
-                      autoComplete="new-password"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      data-1p-ignore="true"
-                      data-lpignore="true"
-                      placeholder="Новый token, необязательно"
-                      className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
-                    />
+                    {!isUserAccount ? (
+                      <input
+                        value={editingBotToken}
+                        onChange={(event) => setEditingBotToken(event.target.value)}
+                        maxLength={255}
+                        type="password"
+                        autoComplete="new-password"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        data-1p-ignore="true"
+                        data-lpignore="true"
+                        placeholder="Новый token, необязательно"
+                        className="rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2 md:text-sm"
+                      />
+                    ) : null}
                     <label className="grid gap-1">
                       <span className="text-xs font-medium text-gray-500">CRM-описание</span>
                       <textarea
@@ -450,7 +496,7 @@ export default function BotsPage() {
                         placeholder="Внутреннее описание для операторов"
                       />
                     </label>
-                    <label className="grid gap-1">
+                    {!isUserAccount ? <label className="grid gap-1">
                       <span className="text-xs font-medium text-gray-500">Короткое описание Telegram</span>
                       <textarea
                         value={editingTelegramAbout}
@@ -460,8 +506,8 @@ export default function BotsPage() {
                         className="min-h-[68px] resize-y rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                         placeholder="Текст в блоке «О боте»"
                       />
-                    </label>
-                    <label className="grid gap-1">
+                    </label> : null}
+                    {!isUserAccount ? <label className="grid gap-1">
                       <span className="text-xs font-medium text-gray-500">Приветственное описание Telegram</span>
                       <textarea
                         value={editingTelegramDescription}
@@ -471,11 +517,17 @@ export default function BotsPage() {
                         className="min-h-[84px] resize-y rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none ring-accent-400/50 transition placeholder:text-gray-600 focus:ring-2"
                         placeholder="Описание до старта бота"
                       />
-                    </label>
+                    </label> : null}
                   </div>
                 ) : (
                   <div className="min-w-0">
-                    <h2 className="truncate text-lg font-semibold text-white">{bot.name}</h2>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {isUserAccount ? <UserRound size={17} className="shrink-0 text-cyan-300" /> : <BotIcon size={17} className="shrink-0 text-cyan-300" />}
+                      <h2 className="min-w-0 truncate text-lg font-semibold text-white">{bot.name}</h2>
+                      <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold text-gray-400">
+                        {isUserAccount ? 'АККАУНТ' : 'БОТ'}
+                      </span>
+                    </div>
                     <p className="truncate text-sm text-gray-500">
                       {bot.bot_username ? `@${bot.bot_username}` : 'username не указан'}
                     </p>
@@ -484,13 +536,15 @@ export default function BotsPage() {
                         Telegram: {[bot.telegram_first_name, bot.telegram_bot_id ? `ID ${bot.telegram_bot_id}` : null].filter(Boolean).join(' · ')}
                       </p>
                     ) : null}
-                    <p className="mt-2 text-xs text-gray-500">
-                      Token: {bot.has_telegram_token ? 'добавлен' : 'не добавлен'}
-                    </p>
+                    {!isUserAccount ? (
+                      <p className="mt-2 text-xs text-gray-500">
+                        Token: {bot.has_telegram_token ? 'добавлен' : 'не добавлен'}
+                      </p>
+                    ) : null}
                     <div className="mt-4 grid gap-2 text-sm">
                       <BotDescriptionRow label="CRM" value={bot.crm_description} />
-                      <BotDescriptionRow label="About" value={bot.telegram_about} />
-                      <BotDescriptionRow label="Description" value={bot.telegram_description} />
+                      {!isUserAccount ? <BotDescriptionRow label="About" value={bot.telegram_about} /> : null}
+                      {!isUserAccount ? <BotDescriptionRow label="Description" value={bot.telegram_description} /> : null}
                     </div>
                   </div>
                 )}
@@ -520,7 +574,7 @@ export default function BotsPage() {
                     </>
                   ) : (
                     <>
-                      <button
+                      {!isUserAccount ? <button
                         type="button"
                         title="Зарегистрировать webhook"
                         onClick={() => void handleSetWebhook(bot.id)}
@@ -529,8 +583,8 @@ export default function BotsPage() {
                       >
                         {webhookBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <PlugZap size={15} />}
                         Webhook
-                      </button>
-                      <button
+                      </button> : null}
+                      {!isUserAccount ? <button
                         type="button"
                         title="Синхронизировать с Telegram"
                         onClick={() => void handleSyncBot(bot.id)}
@@ -539,7 +593,7 @@ export default function BotsPage() {
                       >
                         {syncingBotId === bot.id ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                         Синхронизировать
-                      </button>
+                      </button> : null}
                       <button
                         type="button"
                         title="Редактировать"
@@ -549,7 +603,7 @@ export default function BotsPage() {
                         <Pencil size={15} />
                         Изменить
                       </button>
-                      <label
+                      {!isUserAccount ? <label
                         title="Загрузить JPEG-аватар"
                         className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-200 transition hover:border-accent-300/50 ${
                           avatarUploadingBotId === bot.id ? 'pointer-events-none opacity-50' : ''
@@ -566,7 +620,7 @@ export default function BotsPage() {
                             event.currentTarget.value = ''
                           }}
                         />
-                      </label>
+                      </label> : null}
                       <button
                         type="button"
                         title="Скачать логи изменений настроек бота"
@@ -601,13 +655,20 @@ export default function BotsPage() {
                     </>
                   )}
                 </div>
+                {isUserAccount && activeProjectId ? (
+                  <TelegramAccountConnectionPanel
+                    bot={bot}
+                    projectId={activeProjectId}
+                    onChanged={loadBots}
+                  />
+                ) : null}
               </article>
             )
           })}
         </div>
 
         <div className="mt-5 rounded-xl border border-accent-300/20 bg-accent-500/10 p-4 text-sm text-accent-100">
-          Tracking links создаются только в разделе «Трекинг» через кнопку «Создать ссылку».
+          Реферальные tracking links доступны Telegram-ботам. Для рабочих аккаунтов считается общая статистика по аккаунту.
         </div>
       </div>
       {leadImportBot && activeProjectId ? (

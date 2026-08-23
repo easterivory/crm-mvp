@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -100,6 +101,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
     )
     external_chat_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_access_hash: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     contact_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     client_lang: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
 

@@ -277,6 +277,20 @@ class BotRepository(BaseRepository[Bot]):
         token = result.scalar_one_or_none()
         return token.strip() if token else None
 
+    async def get_transport_type(
+        self,
+        bot_id: UUID,
+        project_id: UUID,
+    ) -> Optional[str]:
+        result = await self.db.execute(
+            select(Bot.transport_type).where(
+                Bot.id == bot_id,
+                Bot.project_id == project_id,
+                Bot.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_project_id_for_bot_version(
         self,
         bot_version_id: UUID,
