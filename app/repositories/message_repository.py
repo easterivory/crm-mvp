@@ -252,6 +252,19 @@ class MessageRepository(BaseRepository[Message]):
         )
         return result.scalar_one_or_none()
 
+    async def get_latest_outgoing_message(self, chat_id: UUID) -> Optional[Message]:
+        result = await self.db.execute(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.sender_type.in_((SenderType.BOT, SenderType.MANAGER)),
+                Message.deleted_at.is_(None),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def list_recent_outgoing_with_buttons(self, chat_id: UUID) -> list[Message]:
         result = await self.db.execute(
             select(Message)

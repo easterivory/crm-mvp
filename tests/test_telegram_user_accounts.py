@@ -286,6 +286,95 @@ def test_mtproto_history_import_is_claimed_without_replaying_funnel() -> None:
     )
 
 
+def test_first_live_input_starts_funnel_for_imported_mtproto_dialog() -> None:
+    chat_id = uuid4()
+    project_id = uuid4()
+    bot_id = uuid4()
+    version_id = uuid4()
+    history_message = SimpleNamespace(
+        id=uuid4(),
+        sender_type="bot",
+        is_external_account_message=True,
+        raw_payload_json={
+            "mtproto_manual_outgoing": True,
+            "mtproto_history_import": True,
+        },
+    )
+    service = TelegramService.__new__(TelegramService)
+    service.message_repo = SimpleNamespace(
+        get_latest_outgoing_message=AsyncMock(return_value=history_message),
+    )
+    service.funnel_runtime = SimpleNamespace(
+        get_active_published_funnel_for_bot=AsyncMock(
+            return_value=(SimpleNamespace(id=uuid4()), SimpleNamespace(id=version_id)),
+        ),
+        get_state_status=AsyncMock(return_value=("not_started", None)),
+    )
+
+    should_start = asyncio.run(
+        service._should_start_imported_mtproto_runtime(
+            chat_id=chat_id,
+            project_id=project_id,
+            bot_id=bot_id,
+            chat_is_imported=True,
+        )
+    )
+
+    assert should_start is True
+    service.funnel_runtime.get_state_status.assert_awaited_once_with(
+        chat_id=chat_id,
+        active_funnel_version_id=version_id,
+    )
+
+
+def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> None:
+    chat_id = uuid4()
+    project_id = uuid4()
+    bot_id = uuid4()
+    version_id = uuid4()
+    service = TelegramService.__new__(TelegramService)
+    service.message_repo = SimpleNamespace(
+        get_latest_outgoing_message=AsyncMock(return_value=None),
+    )
+    service.funnel_runtime = SimpleNamespace(
+        get_active_published_funnel_for_bot=AsyncMock(
+            return_value=(SimpleNamespace(id=uuid4()), SimpleNamespace(id=version_id)),
+        ),
+        get_state_status=AsyncMock(return_value=("waiting_for_answer", SimpleNamespace())),
+    )
+
+    active_should_start = asyncio.run(
+        service._should_start_imported_mtproto_runtime(
+            chat_id=chat_id,
+            project_id=project_id,
+            bot_id=bot_id,
+            chat_is_imported=True,
+        )
+    )
+
+    service.message_repo.get_latest_outgoing_message = AsyncMock(
+        return_value=SimpleNamespace(
+            id=uuid4(),
+            sender_type="manager",
+            is_external_account_message=False,
+            raw_payload_json={},
+        )
+    )
+    service.funnel_runtime.get_state_status.reset_mock()
+    manual_should_start = asyncio.run(
+        service._should_start_imported_mtproto_runtime(
+            chat_id=chat_id,
+            project_id=project_id,
+            bot_id=bot_id,
+            chat_is_imported=True,
+        )
+    )
+
+    assert active_should_start is False
+    assert manual_should_start is False
+    service.funnel_runtime.get_state_status.assert_not_awaited()
+
+
 def test_tracking_link_is_rejected_only_for_named_account() -> None:
     bot_id = uuid4()
     project_id = uuid4()

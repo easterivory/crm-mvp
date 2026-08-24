@@ -107,6 +107,7 @@ type PaginatedResponse<T> = {
 type LeadSidebarProps = {
   activeBotId: string | null
   activeBotName: string | null
+  activeBotTransportType: 'bot_api' | 'user_mtproto' | null
   activeChatId: string | null
   hasActiveScope: boolean
   isChatBlocked: boolean
@@ -236,6 +237,7 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
 export default function LeadSidebar({
   activeBotId,
   activeBotName,
+  activeBotTransportType,
   activeChatId,
   hasActiveScope,
   isChatBlocked,
@@ -282,6 +284,7 @@ export default function LeadSidebar({
   const [isCreatingLeadEvent, setIsCreatingLeadEvent] = useState(false)
   const [leadEventFeedback, setLeadEventFeedback] = useState('')
   const managerCommentSaveSeqRef = useRef(0)
+  const isTelegramUserAccount = activeBotTransportType === 'user_mtproto'
 
   const currentStatus = useMemo(
     () => statuses.find((status) => status.id === lead?.status_id) ?? null,
@@ -764,13 +767,20 @@ export default function LeadSidebar({
   return (
     <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-surface/90 shadow-card">
       <div className="flex min-h-[73px] items-center justify-between gap-3 border-b border-white/5 px-5">
-        <div>
+        <div className="min-w-0">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-300">
             Карточка лида
           </h2>
-          <p className="text-xs text-gray-500">
-            {currentStatus?.name ?? activeBotName ?? 'Статус не указан'}
-          </p>
+          <div className="mt-0.5 flex min-w-0 items-center gap-2">
+            <p className="truncate text-xs text-gray-500">
+              {currentStatus?.name ?? activeBotName ?? 'Статус не указан'}
+            </p>
+            {isTelegramUserAccount ? (
+              <span className="shrink-0 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[10px] font-medium text-cyan-100">
+                Именной аккаунт
+              </span>
+            ) : null}
+          </div>
         </div>
         <button
           type="button"
@@ -1374,11 +1384,13 @@ export default function LeadSidebar({
                   ? 'border-red-300/25 bg-red-500/[0.06]'
                   : 'border-white/5 bg-white/[0.02]'
               }`}>
-                <p className="text-sm font-medium text-gray-200">Доступ к боту</p>
+                <p className="text-sm font-medium text-gray-200">
+                  {isTelegramUserAccount ? 'Доступ к аккаунту' : 'Доступ к боту'}
+                </p>
                 <p className="mt-1 text-xs leading-5 text-gray-500">
                   {isChatBlocked
-                    ? 'Клиент заблокирован в CRM: сообщения и старые кнопки не запускают сценарий бота.'
-                    : 'Блокировка остановит сценарий и автоответы для этого Telegram-диалога.'}
+                    ? 'Клиент заблокирован в CRM: входящие сообщения не запускают сценарий и автоответы.'
+                    : `Блокировка остановит сценарий и автоответы для этого Telegram-диалога${isTelegramUserAccount ? ' именного аккаунта' : ''}.`}
                 </p>
                 <button
                   type="button"

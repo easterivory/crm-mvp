@@ -119,7 +119,7 @@ export default function FunnelTraceWidget({
         <div className="border-t border-white/5 px-4 py-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-xs leading-5 text-gray-500">
-              Хронология переходов клиента по шагам бота.
+              Хронология переходов клиента по шагам сценария.
             </p>
             <button
               type="button"

@@ -298,6 +298,7 @@ class TelegramService:
         chat_id = chat.id
         external_chat_id = chat.external_chat_id
         chat_is_blocked = chat.is_blocked
+        chat_is_imported = bool(getattr(chat, "is_imported", False))
         start_tracking_link_id: UUID | None = None
         if is_bot_api and self._is_start_command(message.text):
             start_tracking_link_id = (
@@ -438,27 +439,40 @@ class TelegramService:
             )
             return
 
-        start_requested = should_start_runtime
+        should_start_imported_account_runtime = bool(
+            not is_bot_api
+            and not should_start_runtime
+            and await self._should_start_imported_mtproto_runtime(
+                chat_id=chat_id,
+                project_id=project_id,
+                bot_id=bot_id,
+                chat_is_imported=chat_is_imported,
+            )
+        )
+        start_requested = should_start_runtime or should_start_imported_account_runtime
         if start_requested:
             # Make the chat and lead visible before Telegram network calls made by the funnel.
             await self.db.commit()
             queued = await enqueue_funnel_start(
                 chat_id,
                 message_id,
-                fresh_lifecycle=should_start_runtime,
+                fresh_lifecycle=True,
             )
             if queued:
                 logger.info(
-                    "Funnel start queued chat_id=%s message_id=%s fresh_lifecycle=%s",
+                    "Funnel start queued chat_id=%s message_id=%s fresh_lifecycle=%s "
+                    "source_transport=%s imported_account_start=%s",
                     chat_id,
                     message_id,
-                    should_start_runtime,
+                    True,
+                    source_transport,
+                    should_start_imported_account_runtime,
                 )
             else:
                 result = await self.process_queued_funnel_start(
                     chat_id=chat_id,
                     trigger_message_id=message_id,
-                    fresh_lifecycle=should_start_runtime,
+                    fresh_lifecycle=True,
                 )
                 logger.warning(
                     "Funnel start queue unavailable; processed inline chat_id=%s "
@@ -1265,11 +1279,38 @@ class TelegramService:
         if chat.is_blocked:
             return "blocked"
 
+        if (
+            getattr(latest, "transport_source", "bot_api") == "user_mtproto"
+            and await self._should_start_imported_mtproto_runtime(
+                chat_id=chat.id,
+                project_id=chat.project_id,
+                bot_id=chat.bot_id,
+                chat_is_imported=bool(getattr(chat, "is_imported", False)),
+            )
+        ):
+            representative = MessageOut.model_validate(batch[-1])
+            await self._process_runtime_or_legacy(
+                chat=chat,
+                project_id=chat.project_id,
+                bot_id=chat.bot_id,
+                user_message=representative,
+                start_requested=True,
+                fresh_lifecycle=True,
+            )
+            logger.warning(
+                "Recovered first live MTProto input for imported dialog chat_id=%s "
+                "messages=%s",
+                chat_id,
+                len(batch),
+            )
+            return "processed"
+
         start_index = next(
             (
                 index
                 for index, item in enumerate(batch)
-                if self._is_start_command(item.body)
+                if getattr(item, "transport_source", "bot_api") == "bot_api"
+                and self._is_start_command(item.body)
             ),
             None,
         )
@@ -1403,6 +1444,57 @@ class TelegramService:
             command=command,
         )
         return trigger is not None
+
+    async def _should_start_imported_mtproto_runtime(
+        self,
+        *,
+        chat_id: UUID,
+        project_id: UUID,
+        bot_id: UUID,
+        chat_is_imported: bool,
+    ) -> bool:
+        """Start automation on the first live input after MTProto history import."""
+
+        if not chat_is_imported:
+            return False
+
+        latest_outgoing = await self.message_repo.get_latest_outgoing_message(chat_id)
+        if latest_outgoing is not None:
+            payload = (
+                latest_outgoing.raw_payload_json
+                if isinstance(latest_outgoing.raw_payload_json, dict)
+                else {}
+            )
+            is_live_manual_message = (
+                latest_outgoing.sender_type == SenderType.MANAGER
+                or (
+                    latest_outgoing.is_external_account_message
+                    and not bool(payload.get("mtproto_history_import"))
+                )
+            )
+            if is_live_manual_message:
+                logger.info(
+                    "MTProto funnel auto-start suppressed after a live manual "
+                    "message chat_id=%s message_id=%s",
+                    chat_id,
+                    latest_outgoing.id,
+                )
+                return False
+
+        active_funnel, active_version = (
+            await self.funnel_runtime.get_active_published_funnel_for_bot(
+                bot_id,
+                project_id,
+            )
+        )
+        if active_funnel is None or active_version is None:
+            return False
+
+        status_name, _ = await self.funnel_runtime.get_state_status(
+            chat_id=chat_id,
+            active_funnel_version_id=active_version.id,
+        )
+        return status_name == "not_started"
 
     async def _run_active_funnel_runtime(
         self,

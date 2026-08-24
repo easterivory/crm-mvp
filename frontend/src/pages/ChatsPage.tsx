@@ -812,11 +812,20 @@ export default function ChatsPage() {
     window.setTimeout(() => scrollMessagesToBottom(), 250)
   }, [scrollMessagesToBottom])
 
+  const botById = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots])
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId],
   )
-  const isTelegramBlockedByUser = Boolean(selectedChat?.is_blocked_by_user)
+  const selectedChatBot = useMemo(
+    () => selectedChat?.bot_id ? botById.get(selectedChat.bot_id) ?? null : null,
+    [botById, selectedChat?.bot_id],
+  )
+  const selectedChatTransportType = selectedChatBot?.transport_type ?? null
+  const isTelegramUserAccountChat = selectedChatTransportType === 'user_mtproto'
+  const isTelegramBlockedByUser = Boolean(
+    !isTelegramUserAccountChat && selectedChat?.is_blocked_by_user,
+  )
   const effectiveClientLang = normalizeLanguageCode(
     selectedChat?.client_lang ?? projectTranslation?.default_client_lang ?? 'en',
   ) ?? 'en'
@@ -893,8 +902,6 @@ export default function ChatsPage() {
     }
     return `${selectedBotIds.length} выбранных бота`
   }, [selectedBotIds.length, selectedProjectId])
-
-  const botById = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots])
 
   useEffect(() => {
     selectedChatIdRef.current = selectedChatId
@@ -2631,10 +2638,15 @@ export default function ChatsPage() {
                       </span>
                     ) : null}
                     {selectedChat.is_red ? <AlertCircle size={16} className="text-red-300 drop-shadow-[0_0_10px_rgba(248,113,113,0.6)]" /> : null}
-                    {selectedChat.is_blocked_by_user ? (
+                    {!isTelegramUserAccountChat && selectedChat.is_blocked_by_user ? (
                       <span className="inline-flex items-center gap-1 rounded-full border border-red-300/25 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-100">
                         <Ban size={12} />
                         Бот заблокирован
+                      </span>
+                    ) : null}
+                    {isTelegramUserAccountChat ? (
+                      <span className="hidden rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-medium text-cyan-100 sm:inline-flex">
+                        Именной аккаунт
                       </span>
                     ) : null}
                     {selectedChat.is_blocked ? (
@@ -3377,8 +3389,9 @@ export default function ChatsPage() {
 
       <div className="hidden h-full min-h-0 lg:block">
         <LeadSidebar
-          activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
-          activeBotName={botScopeLabel}
+          activeBotId={selectedChat?.bot_id ?? (selectedBotIds.length === 1 ? selectedBotIds[0] : null)}
+          activeBotName={selectedChatBot?.name ?? botScopeLabel}
+          activeBotTransportType={selectedChatTransportType}
           activeChatId={selectedChatId}
           hasActiveScope={Boolean(selectedProjectId)}
           isChatBlocked={Boolean(selectedChat?.is_blocked)}
@@ -3656,8 +3669,9 @@ export default function ChatsPage() {
             </div>
             <div className="min-h-0 flex-1 p-3">
             <LeadSidebar
-              activeBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : null}
-              activeBotName={botScopeLabel}
+              activeBotId={selectedChat?.bot_id ?? (selectedBotIds.length === 1 ? selectedBotIds[0] : null)}
+              activeBotName={selectedChatBot?.name ?? botScopeLabel}
+              activeBotTransportType={selectedChatTransportType}
               activeChatId={selectedChatId}
               hasActiveScope={Boolean(selectedProjectId)}
               isChatBlocked={Boolean(selectedChat?.is_blocked)}
