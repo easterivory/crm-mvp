@@ -299,6 +299,7 @@ class TelegramService:
         external_chat_id = chat.external_chat_id
         chat_is_blocked = chat.is_blocked
         chat_is_imported = bool(getattr(chat, "is_imported", False))
+        chat_lead_import_id = getattr(chat, "lead_import_id", None)
         start_tracking_link_id: UUID | None = None
         if is_bot_api and self._is_start_command(message.text):
             start_tracking_link_id = (
@@ -447,6 +448,7 @@ class TelegramService:
                 project_id=project_id,
                 bot_id=bot_id,
                 chat_is_imported=chat_is_imported,
+                lead_import_id=chat_lead_import_id,
             )
         )
         start_requested = should_start_runtime or should_start_imported_account_runtime
@@ -1286,6 +1288,7 @@ class TelegramService:
                 project_id=chat.project_id,
                 bot_id=chat.bot_id,
                 chat_is_imported=bool(getattr(chat, "is_imported", False)),
+                lead_import_id=getattr(chat, "lead_import_id", None),
             )
         ):
             representative = MessageOut.model_validate(batch[-1])
@@ -1452,10 +1455,15 @@ class TelegramService:
         project_id: UUID,
         bot_id: UUID,
         chat_is_imported: bool,
+        lead_import_id: UUID | None,
     ) -> bool:
         """Start automation on the first live input after MTProto history import."""
 
-        if not chat_is_imported:
+        # Spreadsheet/CRM transfers are intentionally inert: an imported lead
+        # must never be replayed through the funnel. Only the technical history
+        # sync performed when a named Telegram account is connected can start
+        # on its first subsequent live input.
+        if not chat_is_imported or lead_import_id is not None:
             return False
 
         latest_outgoing = await self.message_repo.get_latest_outgoing_message(chat_id)

@@ -90,6 +90,25 @@ def test_pending_import_claim_is_atomic_and_scoped() -> None:
     assert "external_chat_id" in sql
 
 
+def test_reset_chat_clears_import_provenance_for_a_fresh_lifecycle() -> None:
+    chat_id = uuid4()
+    reset_chat = SimpleNamespace(id=chat_id, is_imported=False, lead_import_id=None)
+    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=1)))
+    repo = ChatRepository(db)
+    repo.get_by_id = AsyncMock(return_value=reset_chat)
+
+    result = asyncio.run(repo.reset_chat(chat_id))
+
+    statement = db.execute.await_args.args[0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "is_imported" in sql
+    assert "lead_import_id" in sql
+    assert "imported_at" in sql
+    assert "import_username_key" in sql
+    assert "import_identity_pending" in sql
+    assert result is reset_chat
+
+
 def test_existing_imported_chat_never_requests_fresh_funnel_start() -> None:
     imported_chat = SimpleNamespace(
         id=uuid4(),

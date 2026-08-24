@@ -317,6 +317,7 @@ def test_first_live_input_starts_funnel_for_imported_mtproto_dialog() -> None:
             project_id=project_id,
             bot_id=bot_id,
             chat_is_imported=True,
+            lead_import_id=None,
         )
     )
 
@@ -349,6 +350,7 @@ def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> 
             project_id=project_id,
             bot_id=bot_id,
             chat_is_imported=True,
+            lead_import_id=None,
         )
     )
 
@@ -367,12 +369,38 @@ def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> 
             project_id=project_id,
             bot_id=bot_id,
             chat_is_imported=True,
+            lead_import_id=None,
         )
     )
 
     assert active_should_start is False
     assert manual_should_start is False
     service.funnel_runtime.get_state_status.assert_not_awaited()
+
+
+def test_spreadsheet_import_never_auto_starts_mtproto_funnel() -> None:
+    service = TelegramService.__new__(TelegramService)
+    service.message_repo = SimpleNamespace(
+        get_latest_outgoing_message=AsyncMock(return_value=None),
+    )
+    service.funnel_runtime = SimpleNamespace(
+        get_active_published_funnel_for_bot=AsyncMock(),
+        get_state_status=AsyncMock(),
+    )
+
+    should_start = asyncio.run(
+        service._should_start_imported_mtproto_runtime(
+            chat_id=uuid4(),
+            project_id=uuid4(),
+            bot_id=uuid4(),
+            chat_is_imported=True,
+            lead_import_id=uuid4(),
+        )
+    )
+
+    assert should_start is False
+    service.message_repo.get_latest_outgoing_message.assert_not_awaited()
+    service.funnel_runtime.get_active_published_funnel_for_bot.assert_not_awaited()
 
 
 def test_tracking_link_is_rejected_only_for_named_account() -> None:

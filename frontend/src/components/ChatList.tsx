@@ -29,6 +29,7 @@ export type Chat = {
   is_favorite: boolean
   has_restarted_bot: boolean
   is_imported: boolean
+  lead_import_id: string | null
   imported_at: string | null
   import_identity_pending: boolean
   unanswered_minutes: number
@@ -616,7 +617,7 @@ export default function ChatList({
                       Бот заблокирован
                     </span>
                   ) : null}
-                  {chat.is_imported ? (
+                  {chat.is_imported && chat.lead_import_id ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-violet-400/10 px-2 py-0.5 text-xs font-medium text-violet-200">
                       <Database size={11} />
                       Импорт

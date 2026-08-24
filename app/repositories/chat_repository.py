@@ -1382,6 +1382,11 @@ class ChatRepository(BaseRepository[Chat]):
             )
             .values(
                 tracking_link_id=None,
+                is_imported=False,
+                lead_import_id=None,
+                imported_at=None,
+                import_username_key=None,
+                import_identity_pending=False,
                 reset_at=now,
                 reset_count=Chat.reset_count + 1,
                 current_cycle_started_at=None,

@@ -78,6 +78,7 @@ class ChatOut(OrmBase):
     unanswered_push_count: int = 0
     has_out_of_scenario_message: bool = False
     is_imported: bool = False
+    lead_import_id: Optional[uuid.UUID] = None
     imported_at: Optional[datetime] = None
     import_identity_pending: bool = False
     last_read_at: Optional[datetime]
