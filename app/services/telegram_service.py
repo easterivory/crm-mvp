@@ -298,7 +298,6 @@ class TelegramService:
         chat_id = chat.id
         external_chat_id = chat.external_chat_id
         chat_is_blocked = chat.is_blocked
-        chat_is_imported = bool(getattr(chat, "is_imported", False))
         chat_lead_import_id = getattr(chat, "lead_import_id", None)
         start_tracking_link_id: UUID | None = None
         if is_bot_api and self._is_start_command(message.text):
@@ -440,18 +439,17 @@ class TelegramService:
             )
             return
 
-        should_start_imported_account_runtime = bool(
+        should_start_account_runtime = bool(
             not is_bot_api
             and not should_start_runtime
-            and await self._should_start_imported_mtproto_runtime(
+            and await self._should_start_mtproto_runtime(
                 chat_id=chat_id,
                 project_id=project_id,
                 bot_id=bot_id,
-                chat_is_imported=chat_is_imported,
                 lead_import_id=chat_lead_import_id,
             )
         )
-        start_requested = should_start_runtime or should_start_imported_account_runtime
+        start_requested = should_start_runtime or should_start_account_runtime
         if start_requested:
             # Make the chat and lead visible before Telegram network calls made by the funnel.
             await self.db.commit()
@@ -463,12 +461,12 @@ class TelegramService:
             if queued:
                 logger.info(
                     "Funnel start queued chat_id=%s message_id=%s fresh_lifecycle=%s "
-                    "source_transport=%s imported_account_start=%s",
+                    "source_transport=%s named_account_start=%s",
                     chat_id,
                     message_id,
                     True,
                     source_transport,
-                    should_start_imported_account_runtime,
+                    should_start_account_runtime,
                 )
             else:
                 result = await self.process_queued_funnel_start(
@@ -1283,11 +1281,10 @@ class TelegramService:
 
         if (
             getattr(latest, "transport_source", "bot_api") == "user_mtproto"
-            and await self._should_start_imported_mtproto_runtime(
+            and await self._should_start_mtproto_runtime(
                 chat_id=chat.id,
                 project_id=chat.project_id,
                 bot_id=chat.bot_id,
-                chat_is_imported=bool(getattr(chat, "is_imported", False)),
                 lead_import_id=getattr(chat, "lead_import_id", None),
             )
         ):
@@ -1301,7 +1298,7 @@ class TelegramService:
                 fresh_lifecycle=True,
             )
             logger.warning(
-                "Recovered first live MTProto input for imported dialog chat_id=%s "
+                "Recovered first live MTProto input for named-account dialog chat_id=%s "
                 "messages=%s",
                 chat_id,
                 len(batch),
@@ -1448,22 +1445,21 @@ class TelegramService:
         )
         return trigger is not None
 
-    async def _should_start_imported_mtproto_runtime(
+    async def _should_start_mtproto_runtime(
         self,
         *,
         chat_id: UUID,
         project_id: UUID,
         bot_id: UUID,
-        chat_is_imported: bool,
         lead_import_id: UUID | None,
     ) -> bool:
-        """Start automation on the first live input after MTProto history import."""
+        """Start automation on a live MTProto input when no lifecycle exists."""
 
         # Spreadsheet/CRM transfers are intentionally inert: an imported lead
-        # must never be replayed through the funnel. Only the technical history
-        # sync performed when a named Telegram account is connected can start
-        # on its first subsequent live input.
-        if not chat_is_imported or lead_import_id is not None:
+        # must never be replayed through the funnel. Technical history import,
+        # a reset chat, and an older dialog created before account sync metadata
+        # existed may all receive a legitimate first live input.
+        if lead_import_id is not None:
             return False
 
         latest_outgoing = await self.message_repo.get_latest_outgoing_message(chat_id)
@@ -1496,12 +1492,28 @@ class TelegramService:
             )
         )
         if active_funnel is None or active_version is None:
+            logger.info(
+                "Named-account funnel start skipped because no active published "
+                "version was found project_id=%s bot_id=%s chat_id=%s",
+                project_id,
+                bot_id,
+                chat_id,
+            )
             return False
 
         status_name, _ = await self.funnel_runtime.get_state_status(
             chat_id=chat_id,
             active_funnel_version_id=active_version.id,
         )
+        if status_name != "not_started":
+            logger.info(
+                "Named-account funnel start skipped because lifecycle already exists "
+                "project_id=%s bot_id=%s chat_id=%s state=%s",
+                project_id,
+                bot_id,
+                chat_id,
+                status_name,
+            )
         return status_name == "not_started"
 
     async def _run_active_funnel_runtime(

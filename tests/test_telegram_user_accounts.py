@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -286,7 +286,7 @@ def test_mtproto_history_import_is_claimed_without_replaying_funnel() -> None:
     )
 
 
-def test_first_live_input_starts_funnel_for_imported_mtproto_dialog() -> None:
+def test_live_input_starts_funnel_for_existing_mtproto_dialog() -> None:
     chat_id = uuid4()
     project_id = uuid4()
     bot_id = uuid4()
@@ -312,11 +312,10 @@ def test_first_live_input_starts_funnel_for_imported_mtproto_dialog() -> None:
     )
 
     should_start = asyncio.run(
-        service._should_start_imported_mtproto_runtime(
+        service._should_start_mtproto_runtime(
             chat_id=chat_id,
             project_id=project_id,
             bot_id=bot_id,
-            chat_is_imported=True,
             lead_import_id=None,
         )
     )
@@ -326,6 +325,78 @@ def test_first_live_input_starts_funnel_for_imported_mtproto_dialog() -> None:
         chat_id=chat_id,
         active_funnel_version_id=version_id,
     )
+
+
+def test_existing_named_account_chat_queues_funnel_on_live_input() -> None:
+    chat_id = uuid4()
+    message_id = uuid4()
+    project_id = uuid4()
+    bot_id = uuid4()
+    chat = SimpleNamespace(
+        id=chat_id,
+        external_chat_id="8053174284",
+        is_blocked=False,
+        lead_import_id=None,
+        tracking_link_id=None,
+    )
+    message = TelegramMessage(
+        message_id=101,
+        chat=TelegramChat(id=8053174284, access_hash=123456),
+        from_user=TelegramUser(
+            id=8053174284,
+            first_name="Виктор",
+            username="smmirnovvictor",
+        ),
+        text="Здравствуйте",
+    )
+    service = TelegramService.__new__(TelegramService)
+    service.db = SimpleNamespace(commit=AsyncMock())
+    service._resolve_tracking_link_id = AsyncMock(return_value=None)
+    service._find_or_create_chat = AsyncMock(return_value=(chat, False, False))
+    service._create_message = AsyncMock(
+        return_value=SimpleNamespace(id=message_id, external_message_id="101")
+    )
+    service.message_repo = SimpleNamespace(
+        get_by_id=AsyncMock(return_value=SimpleNamespace(funnel_processed_at=None)),
+    )
+    service._find_or_create_lead = AsyncMock(
+        return_value=SimpleNamespace(id=uuid4())
+    )
+    service._save_shared_contact = AsyncMock(return_value=False)
+    service._attach_utm_bridge_data = AsyncMock()
+    service._should_start_mtproto_runtime = AsyncMock(return_value=True)
+
+    update = SimpleNamespace(
+        update_id=101,
+        message=message,
+        callback_query=None,
+        my_chat_member=None,
+    )
+    with patch(
+        "app.services.telegram_service.enqueue_funnel_start",
+        new=AsyncMock(return_value=True),
+    ) as enqueue_start:
+        asyncio.run(
+            service.handle_update(
+                update=update,
+                project_id=project_id,
+                bot_id=bot_id,
+                source_transport="user_mtproto",
+            )
+        )
+
+    service._should_start_mtproto_runtime.assert_awaited_once_with(
+        chat_id=chat_id,
+        project_id=project_id,
+        bot_id=bot_id,
+        lead_import_id=None,
+    )
+    enqueue_start.assert_awaited_once_with(
+        chat_id,
+        message_id,
+        fresh_lifecycle=True,
+    )
+    service.db.commit.assert_awaited_once()
 
 
 def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> None:
@@ -345,11 +416,10 @@ def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> 
     )
 
     active_should_start = asyncio.run(
-        service._should_start_imported_mtproto_runtime(
+        service._should_start_mtproto_runtime(
             chat_id=chat_id,
             project_id=project_id,
             bot_id=bot_id,
-            chat_is_imported=True,
             lead_import_id=None,
         )
     )
@@ -364,11 +434,10 @@ def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> 
     )
     service.funnel_runtime.get_state_status.reset_mock()
     manual_should_start = asyncio.run(
-        service._should_start_imported_mtproto_runtime(
+        service._should_start_mtproto_runtime(
             chat_id=chat_id,
             project_id=project_id,
             bot_id=bot_id,
-            chat_is_imported=True,
             lead_import_id=None,
         )
     )
@@ -389,11 +458,10 @@ def test_spreadsheet_import_never_auto_starts_mtproto_funnel() -> None:
     )
 
     should_start = asyncio.run(
-        service._should_start_imported_mtproto_runtime(
+        service._should_start_mtproto_runtime(
             chat_id=uuid4(),
             project_id=uuid4(),
             bot_id=uuid4(),
-            chat_is_imported=True,
             lead_import_id=uuid4(),
         )
     )
