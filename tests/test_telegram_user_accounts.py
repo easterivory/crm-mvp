@@ -23,6 +23,7 @@ from app.services.telegram_account_gateway import (
 )
 from app.services.telegram_sender import TelegramSenderService
 from app.services.telegram_service import TelegramService
+from app.services.telegram_user_account_service import TelegramUserAccountService
 from app.services.tracking_service import TrackingService
 from app.workers.telegram_account_worker import TelegramAccountWorker
 
@@ -113,6 +114,58 @@ def test_account_credentials_are_encrypted_at_rest(monkeypatch: pytest.MonkeyPat
     assert credentials.decrypt(encrypted, label="API hash") == (
         "0123456789abcdef0123456789abcdef"
     )
+
+
+def test_account_login_assigns_uuid_before_the_first_database_flush(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "TELEGRAM_ACCOUNT_ENCRYPTION_KEY", "test-key")
+    bot_id = uuid4()
+    project_id = uuid4()
+    connection = SimpleNamespace(auth_status="disconnected")
+    authorized = SimpleNamespace(auth_status="awaiting_code")
+    client = SimpleNamespace(
+        connect=AsyncMock(),
+        disconnect=AsyncMock(),
+        send_code_request=AsyncMock(
+            return_value=SimpleNamespace(phone_code_hash="phone-code-hash")
+        ),
+    )
+
+    service = TelegramUserAccountService.__new__(TelegramUserAccountService)
+    service.db = SimpleNamespace(commit=AsyncMock())
+    service.bot_repo = SimpleNamespace()
+    service.connection_repo = SimpleNamespace(
+        get_by_bot_id=AsyncMock(return_value=None),
+        create=AsyncMock(return_value=connection),
+        update_by_bot_id=AsyncMock(return_value=authorized),
+    )
+    service.credentials = TelegramAccountCredentialService()
+    service._get_account_bot = AsyncMock(return_value=SimpleNamespace(id=bot_id))
+    service._client = lambda **_kwargs: client
+    service._save_session = lambda _client: "session"
+    service._audit = AsyncMock()
+    service._status_out = lambda _bot_id, _connection: "awaiting-code"
+
+    result = asyncio.run(
+        service.request_login_code(
+            bot_id=bot_id,
+            project_id=project_id,
+            data=TelegramAccountConnectIn(
+                api_id=12345,
+                api_hash="a" * 32,
+                phone_number="+79990001122",
+            ),
+            actor=SimpleNamespace(),
+        )
+    )
+
+    assert result == "awaiting-code"
+    create_kwargs = service.connection_repo.create.await_args.kwargs
+    assert isinstance(create_kwargs["id"], type(bot_id))
+    assert create_kwargs["bot_id"] == bot_id
 
 
 def test_account_sender_uses_mtproto_gateway_and_text_button_analogues() -> None:

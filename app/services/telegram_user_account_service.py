@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,7 +91,13 @@ class TelegramUserAccountService:
             "last_error": None,
         }
         if connection is None:
-            connection = await self.connection_repo.create(bot_id=bot.id, **values)
+            # Keep account authorization available during rolling deploys even if
+            # the schema-default repair has not reached every API replica yet.
+            connection = await self.connection_repo.create(
+                id=uuid4(),
+                bot_id=bot.id,
+                **values,
+            )
         else:
             updated = await self.connection_repo.update_by_bot_id(bot.id, **values)
             assert updated is not None
