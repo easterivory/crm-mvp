@@ -305,6 +305,7 @@ class MessageService:
         *,
         send_to_telegram: bool = True,
         auto_translate: bool = True,
+        translate_incoming: bool = True,
     ) -> MessageOut:
         """
         Atomically (within one DB transaction):
@@ -356,7 +357,7 @@ class MessageService:
         if data.operator_id is not None:
             await self._ensure_operator_can_send(data.operator_id, project_id)
 
-        if data.sender_type == SenderType.USER:
+        if data.sender_type == SenderType.USER and translate_incoming:
             data = await self._with_incoming_translation(
                 project_id=project_id,
                 data=data,
@@ -422,6 +423,7 @@ class MessageService:
                     media_group_id=data.media_group_id,
                     reply_to_message_id=data.reply_to_message_id,
                     raw_payload_json=data.raw_payload_json,
+                    created_at=data.created_at,
                 )
         except IntegrityError:
             # SAVEPOINT was rolled back. Re-fetch the row that caused the conflict.

@@ -78,23 +78,39 @@ class TelegramAccountWorker:
         interval = max(settings.TELEGRAM_ACCOUNT_SUPERVISOR_INTERVAL_SECONDS, 2)
         while not self._stopping.is_set():
             try:
-                async with get_db_session() as db:
-                    connections = await TelegramUserConnectionRepository(db).list_authorized()
-                    await db.rollback()
-                active_ids = {connection.bot_id for connection in connections}
-                for bot_id, task in tuple(self.connection_tasks.items()):
-                    if task.done() or bot_id not in active_ids:
-                        if not task.done():
-                            task.cancel()
-                        self.connection_tasks.pop(bot_id, None)
-                for connection in connections:
-                    if connection.bot_id not in self.connection_tasks:
-                        self.connection_tasks[connection.bot_id] = asyncio.create_task(
-                            self._run_connection(connection.bot_id)
-                        )
-            except Exception:
+                await self._refresh_connections()
+            except Exception as exc:
                 logger.exception("Could not refresh Telegram account connections")
+                await send_operational_alert(
+                    component="telegram_account_worker",
+                    title="Telegram work account supervisor failed",
+                    details={"error": self._safe_error(exc)},
+                    dedupe_key=(
+                        "telegram-account-supervisor:"
+                        f"{exc.__class__.__name__}"
+                    ),
+                )
             await asyncio.sleep(interval)
+
+    async def _refresh_connections(self) -> None:
+        async with get_db_session() as db:
+            connections = await TelegramUserConnectionRepository(db).list_authorized()
+            # Rollback expires ORM attributes. Snapshot primitive IDs while
+            # the rows are still attached to this session so the supervisor
+            # never triggers an async lazy load after the context closes.
+            active_ids = {connection.bot_id for connection in connections}
+            await db.rollback()
+
+        for bot_id, task in tuple(self.connection_tasks.items()):
+            if task.done() or bot_id not in active_ids:
+                if not task.done():
+                    task.cancel()
+                self.connection_tasks.pop(bot_id, None)
+        for bot_id in active_ids:
+            if bot_id not in self.connection_tasks:
+                self.connection_tasks[bot_id] = asyncio.create_task(
+                    self._run_connection(bot_id)
+                )
 
     async def _run_connection(self, bot_id: UUID) -> None:
         backoff = 2
@@ -365,6 +381,7 @@ class TelegramAccountWorker:
         peer: Any,
         input_peer: Any,
         bot_id: UUID,
+        max_media_bytes: int | None = None,
     ) -> TelegramUpdate:
         access_hash = getattr(input_peer, "access_hash", None)
         user = TelegramUser(
@@ -384,6 +401,7 @@ class TelegramAccountWorker:
             message=message,
             bot_id=bot_id,
             peer_id=int(peer.id),
+            max_bytes=max_media_bytes,
         )
         telegram_message = self._message_schema(
             message,
@@ -400,7 +418,18 @@ class TelegramAccountWorker:
         bot_id: UUID,
         project_id: UUID,
     ) -> None:
-        last_synced_at, own_user_id = await self._load_sync_cursor(bot_id)
+        last_synced_at, own_user_id, initial_sync_required = await self._load_sync_cursor(
+            bot_id
+        )
+        if initial_sync_required:
+            await self._sync_initial_dialogs(
+                client=client,
+                bot_id=bot_id,
+                project_id=project_id,
+                own_user_id=own_user_id,
+            )
+            await self._touch_last_sync(bot_id)
+            return
         if last_synced_at is None:
             await self._touch_last_sync(bot_id)
             return
@@ -481,6 +510,154 @@ class TelegramAccountWorker:
                 last_synced_at.isoformat(),
             )
 
+    async def _sync_initial_dialogs(
+        self,
+        *,
+        client: TelegramClient,
+        bot_id: UUID,
+        project_id: UUID,
+        own_user_id: int | None,
+    ) -> None:
+        dialog_limit = max(
+            1,
+            min(settings.TELEGRAM_ACCOUNT_INITIAL_SYNC_DIALOG_LIMIT, 5000),
+        )
+        messages_per_dialog = max(
+            1,
+            min(settings.TELEGRAM_ACCOUNT_INITIAL_SYNC_MESSAGES_PER_DIALOG, 200),
+        )
+        max_media_bytes = (
+            max(settings.TELEGRAM_ACCOUNT_INITIAL_SYNC_MEDIA_MAX_MB, 0)
+            * 1024
+            * 1024
+        )
+        total_media_budget = (
+            max(settings.TELEGRAM_ACCOUNT_INITIAL_SYNC_TOTAL_MEDIA_MAX_MB, 0)
+            * 1024
+            * 1024
+        )
+        imported_media_bytes = 0
+        imported_dialogs = 0
+        imported_messages = 0
+        failed_messages = 0
+        attempted_messages = 0
+        eligible_dialogs = 0
+
+        async for dialog in client.iter_dialogs(limit=None):
+            if not bool(getattr(dialog, "is_user", False)):
+                continue
+            peer = getattr(dialog, "entity", None)
+            input_peer = getattr(dialog, "input_entity", None)
+            peer_id = getattr(peer, "id", None)
+            if (
+                peer is None
+                or input_peer is None
+                or peer_id is None
+                or int(peer_id) == own_user_id
+                or not self._is_supported_private_peer(peer)
+            ):
+                continue
+            if eligible_dialogs >= dialog_limit:
+                break
+            eligible_dialogs += 1
+
+            history: list[Any] = []
+            async for message in client.iter_messages(
+                input_peer,
+                limit=messages_per_dialog,
+            ):
+                if getattr(message, "action", None) is not None:
+                    continue
+                if (
+                    getattr(message, "message", None) is None
+                    and getattr(message, "media", None) is None
+                ):
+                    continue
+                history.append(message)
+
+            imported_chat_id: UUID | None = None
+            for message in reversed(history):
+                attempted_messages += 1
+                try:
+                    remaining_media_budget = max(
+                        total_media_budget - imported_media_bytes,
+                        0,
+                    )
+                    message_media_limit = min(
+                        max_media_bytes,
+                        remaining_media_budget,
+                    )
+                    update = await self._telegram_update_from_message(
+                        client=client,
+                        message=message,
+                        peer=peer,
+                        input_peer=input_peer,
+                        bot_id=bot_id,
+                        max_media_bytes=message_media_limit,
+                    )
+                    imported_media_bytes += self._local_media_bytes(update)
+                    sent_at = self._as_utc(getattr(message, "date", None))
+                    if sent_at is None:
+                        sent_at = datetime.now(timezone.utc)
+                    async with get_db_session() as db:
+                        service = TelegramService(db)
+                        result = await service.handle_mtproto_history_message(
+                            update=update,
+                            project_id=project_id,
+                            bot_id=bot_id,
+                            sent_at=sent_at,
+                            outgoing=bool(getattr(message, "out", False)),
+                        )
+                        await db.commit()
+                    if result is not None:
+                        imported_chat_id = result.chat_id
+                        imported_messages += 1
+                except Exception:
+                    failed_messages += 1
+                    logger.exception(
+                        "MTProto initial history message failed bot_id=%s peer_id=%s "
+                        "message_id=%s",
+                        bot_id,
+                        peer_id,
+                        getattr(message, "id", None),
+                    )
+
+            if imported_chat_id is not None:
+                async with get_db_session() as db:
+                    await TelegramService(db).finalize_mtproto_history_dialog(
+                        chat_id=imported_chat_id,
+                        is_read=int(getattr(dialog, "unread_count", 0) or 0) == 0,
+                    )
+                    await db.commit()
+                imported_dialogs += 1
+
+        if attempted_messages and imported_messages == 0:
+            raise RuntimeError(
+                "Initial Telegram dialog synchronization could not persist any message"
+            )
+        if failed_messages:
+            await send_operational_alert(
+                component="telegram_account_worker",
+                title="Telegram work account history was only partially synchronized",
+                details={
+                    "bot_id": bot_id,
+                    "imported_dialogs": imported_dialogs,
+                    "imported_messages": imported_messages,
+                    "imported_media_bytes": imported_media_bytes,
+                    "failed_messages": failed_messages,
+                },
+                dedupe_key=f"telegram-account-initial-sync-partial:{bot_id}",
+            )
+        logger.info(
+            "MTProto initial dialog synchronization completed bot_id=%s dialogs=%s "
+            "messages=%s media_bytes=%s failed=%s",
+            bot_id,
+            imported_dialogs,
+            imported_messages,
+            imported_media_bytes,
+            failed_messages,
+        )
+
     async def _sync_existing_outgoing(
         self,
         *,
@@ -522,16 +699,20 @@ class TelegramAccountWorker:
                 await db.rollback()
             return True
 
-    async def _load_sync_cursor(self, bot_id: UUID) -> tuple[datetime | None, int | None]:
+    async def _load_sync_cursor(
+        self,
+        bot_id: UUID,
+    ) -> tuple[datetime | None, int | None, bool]:
         async with get_db_session() as db:
             connection = await TelegramUserConnectionRepository(db).get_by_bot_id(bot_id)
             if connection is None:
                 await db.rollback()
-                return None, None
+                return None, None, False
             last_synced_at = self._as_utc(connection.last_synced_at)
             telegram_user_id = connection.telegram_user_id
+            initial_sync_required = connection.last_connected_at is None
             await db.rollback()
-        return last_synced_at, telegram_user_id
+        return last_synced_at, telegram_user_id, initial_sync_required
 
     @staticmethod
     def _as_utc(value: Any) -> datetime | None:
@@ -550,6 +731,36 @@ class TelegramAccountWorker:
             and not bool(getattr(peer, "is_self", False))
         )
 
+    @staticmethod
+    def _local_media_bytes(update: TelegramUpdate) -> int:
+        message = update.message
+        if message is None:
+            return 0
+        media_items: list[Any] = list(message.photo or [])
+        media_items.extend(
+            item
+            for item in (
+                message.video,
+                message.voice,
+                message.video_note,
+                message.document,
+                message.audio,
+                message.sticker,
+                message.animation,
+            )
+            if item is not None
+        )
+        paths = {
+            str(item.local_path)
+            for item in media_items
+            if getattr(item, "local_path", None)
+        }
+        return sum(
+            os.path.getsize(path)
+            for path in paths
+            if os.path.isfile(path)
+        )
+
     async def _download_media(
         self,
         *,
@@ -557,8 +768,27 @@ class TelegramAccountWorker:
         message: Any,
         bot_id: UUID,
         peer_id: int,
+        max_bytes: int | None = None,
     ) -> str | None:
         if message.media is None:
+            return None
+        if max_bytes is not None and max_bytes <= 0:
+            return None
+        file_size = getattr(getattr(message, "file", None), "size", None)
+        if (
+            max_bytes is not None
+            and isinstance(file_size, int)
+            and file_size > max_bytes
+        ):
+            logger.info(
+                "Skipping oversized MTProto history media bot_id=%s peer_id=%s "
+                "message_id=%s bytes=%s limit=%s",
+                bot_id,
+                peer_id,
+                getattr(message, "id", None),
+                file_size,
+                max_bytes,
+            )
             return None
         directory = Path(settings.TELEGRAM_ACCOUNT_MEDIA_STORAGE_PATH) / str(bot_id) / str(peer_id)
         await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)

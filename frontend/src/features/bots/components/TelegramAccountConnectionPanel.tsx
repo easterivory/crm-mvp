@@ -157,7 +157,8 @@ export default function TelegramAccountConnectionPanel({ bot, projectId, onChang
               {connection?.telegram_user_id ? ` · ID ${connection.telegram_user_id}` : ''}
             </div>
             <p className="mt-2 text-xs leading-5 text-gray-500">
-              Новые входящие и сообщения, отправленные из приложения Telegram, синхронизируются автоматически.
+              При первом подключении загружаются недавние личные диалоги. Новые входящие и
+              сообщения из Telegram синхронизируются автоматически.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

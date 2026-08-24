@@ -1,5 +1,5 @@
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import extract, func, select, tuple_, update
@@ -327,27 +327,33 @@ class MessageRepository(BaseRepository[Message]):
         media_group_id: str | None,
         raw_payload_json: dict | None,
         reply_to_message_id: UUID | None = None,
+        created_at: datetime | None = None,
     ) -> Message:
+        values: dict[str, Any] = {
+            "chat_id": chat_id,
+            "external_message_id": external_message_id,
+            "message_type": message_type,
+            "sender_type": sender_type,
+            "sender_id": sender_id,
+            "operator_id": operator_id,
+            "tracking_link_id": tracking_link_id,
+            "body": body,
+            "translated_text": translated_text,
+            "original_text": original_text,
+            "caption": caption,
+            "telegram_file_id": telegram_file_id,
+            "file_unique_id": file_unique_id,
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "file_size": file_size,
+            "media_group_id": media_group_id,
+            "reply_to_message_id": reply_to_message_id,
+            "raw_payload_json": raw_payload_json,
+        }
+        if created_at is not None:
+            values["created_at"] = created_at
         return await self.create(
-            chat_id=chat_id,
-            external_message_id=external_message_id,
-            message_type=message_type,
-            sender_type=sender_type,
-            sender_id=sender_id,
-            operator_id=operator_id,
-            tracking_link_id=tracking_link_id,
-            body=body,
-            translated_text=translated_text,
-            original_text=original_text,
-            caption=caption,
-            telegram_file_id=telegram_file_id,
-            file_unique_id=file_unique_id,
-            file_name=file_name,
-            mime_type=mime_type,
-            file_size=file_size,
-            media_group_id=media_group_id,
-            reply_to_message_id=reply_to_message_id,
-            raw_payload_json=raw_payload_json,
+            **values,
         )
 
     async def list_by_ids(self, message_ids: list[UUID]) -> list[Message]:

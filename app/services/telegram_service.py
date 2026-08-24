@@ -100,6 +100,13 @@ class TelegramStartPayload:
     utm_data: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class TelegramHistoryImportResult:
+    chat_id: UUID
+    lead_id: UUID | None
+    chat_created: bool
+
+
 class TelegramService:
     START_UTM_SUFFIX_RE = re.compile(r"^(?P<ref_code>.+)_(?P<utm_key>utm_[0-9a-fA-F]{8})$")
 
@@ -588,6 +595,95 @@ class TelegramService:
                 chat_id=chat.id,
                 project_id=project_id,
             )
+
+    async def handle_mtproto_history_message(
+        self,
+        *,
+        update: TelegramUpdate,
+        project_id: UUID,
+        bot_id: UUID,
+        sent_at: datetime,
+        outgoing: bool,
+    ) -> TelegramHistoryImportResult | None:
+        """Import MTProto history without replaying old input through a funnel."""
+
+        message = self.extract_message(update)
+        if message is None:
+            return None
+        chat, chat_created, is_reactivated_cycle = await self._find_or_create_chat(
+            message,
+            project_id,
+            bot_id=bot_id,
+        )
+        lead = await self._find_or_create_lead(
+            chat.id,
+            project_id,
+            message,
+            reset_existing=is_reactivated_cycle,
+        )
+        data = self._telegram_message_to_create(
+            message,
+            source_transport="user_mtproto",
+        )
+        raw_payload = dict(data.raw_payload_json or {})
+        raw_payload["mtproto_history_import"] = True
+        if outgoing:
+            raw_payload["mtproto_manual_outgoing"] = True
+        data = data.model_copy(
+            update={
+                "sender_type": SenderType.BOT if outgoing else SenderType.USER,
+                "sender_id": None,
+                "operator_id": None,
+                "raw_payload_json": raw_payload,
+                "created_at": sent_at,
+            }
+        )
+        if message.reply_to_message is not None:
+            reply_target = await self.message_repo.get_by_external_id(
+                chat.id,
+                str(message.reply_to_message.message_id),
+            )
+            if reply_target is not None:
+                data = data.model_copy(update={"reply_to_message_id": reply_target.id})
+        persisted = await self.message_service.create_message(
+            chat_id=chat.id,
+            project_id=project_id,
+            data=data,
+            send_to_telegram=False,
+            translate_incoming=False,
+        )
+        if not outgoing:
+            # Recovery jobs only consider unclaimed incoming messages. Claiming
+            # imported history prevents an old reply from starting a funnel.
+            await self.message_repo.claim_funnel_processing([persisted.id])
+
+        if chat_created:
+            now = datetime.now(timezone.utc)
+            await self.chat_repo.update_by_id(
+                chat.id,
+                is_imported=True,
+                imported_at=now,
+                created_at=sent_at,
+            )
+            if lead is not None:
+                await self.lead_repo.update_by_id(lead.id, created_at=sent_at)
+
+        return TelegramHistoryImportResult(
+            chat_id=chat.id,
+            lead_id=lead.id if lead is not None else None,
+            chat_created=chat_created,
+        )
+
+    async def finalize_mtproto_history_dialog(
+        self,
+        *,
+        chat_id: UUID,
+        is_read: bool,
+    ) -> None:
+        if is_read:
+            await self.chat_repo.mark_as_read(chat_id)
+        else:
+            await self.chat_repo.mark_as_unread(chat_id)
 
     async def handle_mtproto_message_edit(
         self,

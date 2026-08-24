@@ -29,6 +29,9 @@ class MessageCreate(BaseModel):
     raw_payload_json: Optional[dict] = None
     reply_markup: Optional[dict] = None
     upload_id: Optional[uuid.UUID] = None
+    # Internal imports may preserve the original messenger timestamp. Public
+    # message routes build this schema explicitly and never accept this field.
+    created_at: Optional[datetime] = None
 
 
 class MessageTranslationPreviewRequest(BaseModel):

@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -228,6 +228,64 @@ def test_mtproto_incoming_payload_is_marked_without_start_attribution() -> None:
     assert created.raw_payload_json["_transport"] == "user_mtproto"
 
 
+def test_mtproto_history_import_is_claimed_without_replaying_funnel() -> None:
+    project_id = uuid4()
+    bot_id = uuid4()
+    chat_id = uuid4()
+    lead_id = uuid4()
+    persisted_message_id = uuid4()
+    sent_at = datetime(2026, 8, 20, 12, 30, tzinfo=timezone.utc)
+    update = SimpleNamespace(
+        message=TelegramMessage(
+            message_id=91,
+            text="Старое сообщение",
+            chat=TelegramChat(id=12345, type="private", access_hash=777),
+            from_user=TelegramUser(id=12345, first_name="Lead"),
+        )
+    )
+
+    service = TelegramService.__new__(TelegramService)
+    service._find_or_create_chat = AsyncMock(
+        return_value=(SimpleNamespace(id=chat_id), True, False)
+    )
+    service._find_or_create_lead = AsyncMock(
+        return_value=SimpleNamespace(id=lead_id)
+    )
+    service.message_repo = SimpleNamespace(
+        get_by_external_id=AsyncMock(return_value=None),
+        claim_funnel_processing=AsyncMock(return_value=True),
+    )
+    service.message_service = SimpleNamespace(
+        create_message=AsyncMock(
+            return_value=SimpleNamespace(id=persisted_message_id)
+        )
+    )
+    service.chat_repo = SimpleNamespace(update_by_id=AsyncMock())
+    service.lead_repo = SimpleNamespace(update_by_id=AsyncMock())
+
+    result = asyncio.run(
+        service.handle_mtproto_history_message(
+            update=update,
+            project_id=project_id,
+            bot_id=bot_id,
+            sent_at=sent_at,
+            outgoing=False,
+        )
+    )
+
+    assert result is not None
+    assert result.chat_id == chat_id
+    create_call = service.message_service.create_message.await_args
+    assert create_call.kwargs["send_to_telegram"] is False
+    assert create_call.kwargs["translate_incoming"] is False
+    data = create_call.kwargs["data"]
+    assert data.created_at == sent_at
+    assert data.raw_payload_json["mtproto_history_import"] is True
+    service.message_repo.claim_funnel_processing.assert_awaited_once_with(
+        [persisted_message_id]
+    )
+
+
 def test_tracking_link_is_rejected_only_for_named_account() -> None:
     bot_id = uuid4()
     project_id = uuid4()
@@ -286,3 +344,92 @@ def test_account_worker_ignores_bots_and_saved_messages() -> None:
     assert not TelegramAccountWorker._is_supported_private_peer(
         SimpleNamespace(id=300, bot=False, is_self=True)
     )
+
+
+def test_account_worker_snapshots_connection_ids_before_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import telegram_account_worker as worker_module
+
+    bot_id = uuid4()
+
+    class ExpiringConnection:
+        def __init__(self) -> None:
+            self.expired = False
+
+        @property
+        def bot_id(self) -> UUID:
+            if self.expired:
+                raise RuntimeError("detached ORM attribute access")
+            return bot_id
+
+    connection = ExpiringConnection()
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            connection.expired = True
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class FakeRepository:
+        def __init__(self, _db) -> None:
+            pass
+
+        async def list_authorized(self):
+            return [connection]
+
+    monkeypatch.setattr(worker_module, "get_db_session", FakeSessionContext)
+    monkeypatch.setattr(
+        worker_module,
+        "TelegramUserConnectionRepository",
+        FakeRepository,
+    )
+
+    async def scenario() -> None:
+        worker = TelegramAccountWorker()
+        release = asyncio.Event()
+
+        async def hold_connection(_bot_id) -> None:
+            await release.wait()
+
+        worker._run_connection = hold_connection
+        await worker._refresh_connections()
+        assert bot_id in worker.connection_tasks
+        release.set()
+        await asyncio.gather(*worker.connection_tasks.values())
+
+    asyncio.run(scenario())
+
+
+def test_account_worker_runs_safe_initial_sync_before_regular_catchup() -> None:
+    async def scenario() -> None:
+        worker = TelegramAccountWorker()
+        bot_id = uuid4()
+        project_id = uuid4()
+        client = SimpleNamespace()
+        worker._load_sync_cursor = AsyncMock(
+            return_value=(datetime.now(timezone.utc), 12345, True)
+        )
+        worker._sync_initial_dialogs = AsyncMock()
+        worker._touch_last_sync = AsyncMock()
+
+        await worker._sync_missed_messages(
+            client=client,
+            bot_id=bot_id,
+            project_id=project_id,
+        )
+
+        worker._sync_initial_dialogs.assert_awaited_once_with(
+            client=client,
+            bot_id=bot_id,
+            project_id=project_id,
+            own_user_id=12345,
+        )
+        worker._touch_last_sync.assert_awaited_once_with(bot_id)
+
+    asyncio.run(scenario())
