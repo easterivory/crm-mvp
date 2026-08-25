@@ -11,10 +11,13 @@ from app.api.v1.dependencies import get_current_project_id, get_current_user, ge
 from app.core.config import settings
 from app.core.constants import RoleName
 from app.models.user import User
+from app.repositories.project_repository import ProjectRepository
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
 from app.schemas.manager_analytics import ManagerPerformanceOut
+from app.schemas.project_calculator import ProjectCalculatorSnapshotOut
 from app.services.buyer_analytics_service import BuyerAnalyticsService
 from app.services.manager_analytics_service import ManagerAnalyticsService
+from app.services.tracking_metrics_service import TrackingMetricsService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -66,6 +69,54 @@ async def get_managers_performance(
     )
 
 
+@router.get(
+    "/project-calculator",
+    response_model=ProjectCalculatorSnapshotOut,
+)
+async def get_project_calculator_snapshot(
+    bot_id: UUID | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ProjectCalculatorSnapshotOut:
+    _ensure_admin(current_user)
+    metrics = await TrackingMetricsService(db).get_project_metrics(
+        current_user=current_user,
+        project_id=project_id,
+        bot_id=bot_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    summary = metrics.summary
+    return ProjectCalculatorSnapshotOut(
+        project_id=project_id,
+        project_name=project.name,
+        project_format=metrics.project_format,
+        bot_id=metrics.bot_id,
+        date_from=metrics.date_from,
+        date_to=metrics.date_to,
+        clicks=summary.clicks,
+        starts=summary.starts,
+        leads=summary.leads,
+        submitted_leads=summary.submitted_leads,
+        registrations=summary.registrations,
+        first_deposits=summary.first_deposits,
+        redeposits=summary.redeposits,
+        channel_join_requests=summary.channel_join_requests,
+        channel_joins=summary.channel_joins,
+        spend=summary.spend,
+    )
+
+
 def _verify_buyer_bot_token(
     *,
     query_token: str | None,
@@ -87,5 +138,5 @@ def _ensure_admin(user: User) -> None:
     if user.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin/super_admin can read buyer analytics",
+            detail="Only admin/super_admin can read analytics",
         )

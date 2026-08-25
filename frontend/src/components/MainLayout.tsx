@@ -3,6 +3,7 @@ import {
   BookOpen,
   Bot,
   BrainCircuit,
+  Calculator,
   LogOut,
   Library,
   Megaphone,
@@ -24,7 +25,13 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { BotSelector } from '../features/bots'
 import { ProjectSelector } from '../features/projects'
-import { isBuyerRole, isManagerRole, isSuperAdminRole, t } from '../shared/lib'
+import {
+  isAdminOrSuperAdminRole,
+  isBuyerRole,
+  isManagerRole,
+  isSuperAdminRole,
+  t,
+} from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 import DashboardHeaderMetrics from './DashboardHeaderMetrics'
 
@@ -38,6 +45,7 @@ const navItems = [
   { label: t('bots'), path: '/bots', icon: Bot },
   { label: t('leads'), path: '/leads', icon: UsersRound },
   { label: t('analytics'), path: '/analytics', icon: BarChart3 },
+  { label: 'Калькулятор', path: '/calculator', icon: Calculator },
   { label: t('tracking'), path: '/tracking', icon: MousePointerClick },
   { label: t('docs'), path: '/docs', icon: BookOpen },
   { label: 'AI и модели', path: '/settings/ai', icon: BrainCircuit },
@@ -113,6 +121,9 @@ export default function MainLayout() {
         }
         if (item.path === '/docs') {
           return isSuperAdminRole(user?.role_name)
+        }
+        if (item.path === '/calculator') {
+          return isAdminOrSuperAdminRole(user?.role_name)
         }
 
         return !isManagerRole(user?.role_name) || ![

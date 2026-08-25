@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import MainLayout from './components/MainLayout'
+import AdminRoute from './components/AdminRoute'
 import BuyerRestrictedRoute from './components/BuyerRestrictedRoute'
 import ManagerRestrictedRoute from './components/ManagerRestrictedRoute'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -20,6 +21,7 @@ import FacebookCampaignsPage from './pages/FacebookCampaignsPage'
 import AISettingsPage from './pages/AISettingsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import SnippetsPage from './pages/SnippetsPage'
+import ProjectCalculatorPage from './pages/ProjectCalculatorPage'
 import { isKnownRole, ProjectBotSelectionProvider } from './shared/lib'
 import { NotificationViewport } from './shared/ui'
 import { useAuthStore } from './store/authStore'
@@ -81,6 +83,7 @@ function CrmApplication() {
           <Route path="/" element={<Navigate to="/chats" replace />} />
           <Route path="/dashboard" element={<BuyerRestrictedRoute><DashboardPage /></BuyerRestrictedRoute>} />
           <Route path="/analytics" element={<BuyerRestrictedRoute><DashboardPage /></BuyerRestrictedRoute>} />
+          <Route path="/calculator" element={<AdminRoute><ProjectCalculatorPage /></AdminRoute>} />
           <Route path="/chats" element={<ChatsPage />} />
           <Route path="/snippets" element={<BuyerRestrictedRoute><SnippetsPage /></BuyerRestrictedRoute>} />
           <Route path="/funnels" element={<FunnelsPage />} />

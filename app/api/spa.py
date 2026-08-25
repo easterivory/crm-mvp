@@ -123,6 +123,7 @@ async def get_ui_host_context(request: Request) -> JSONResponse:
 @router.get("/login")
 @router.get("/dashboard")
 @router.get("/analytics")
+@router.get("/calculator")
 @router.get("/chats")
 @router.get("/funnels")
 @router.get("/broadcasts")

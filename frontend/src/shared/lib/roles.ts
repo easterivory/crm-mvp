@@ -20,6 +20,15 @@ export function isSuperAdminRole(roleName?: string | null): boolean {
   return normalizeRoleName(roleName) === 'super_admin'
 }
 
+export function isAdminRole(roleName?: string | null): boolean {
+  return normalizeRoleName(roleName) === 'admin'
+}
+
+export function isAdminOrSuperAdminRole(roleName?: string | null): boolean {
+  const role = normalizeRoleName(roleName)
+  return role === 'admin' || role === 'super_admin'
+}
+
 export function isManagerRole(roleName?: string | null): boolean {
   return normalizeRoleName(roleName) === 'manager'
 }
