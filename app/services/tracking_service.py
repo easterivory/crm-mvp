@@ -7,7 +7,6 @@ import string
 import unicodedata
 from datetime import date
 from decimal import Decimal
-from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -15,10 +14,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.constants import RoleName, TrackingCostModel, TrackingSpendSource
 from app.core.facebook_events import normalize_facebook_event_mappings
-from app.core.lander_urls import build_channel_tracking_url
 from app.core.telegram_links import (
     build_telegram_bot_start_link,
     canonicalize_telegram_web_link,
@@ -1323,10 +1320,8 @@ class TrackingService:
         invite_link: str | None,
     ) -> str | None:
         if destination_type == "channel":
-            technical_host = str(settings.LANDER_TECH_DOMAIN or "").strip()
-            if technical_host:
-                return build_channel_tracking_url(host=technical_host, code=code)
-            base_url = str(settings.BASE_URL or "").strip().rstrip("/")
-            return f"{base_url}/join/{quote(code, safe='')}" if base_url else invite_link
+            # Telegram returns the invite link in the join-request update, so a
+            # per-link invite is sufficient for attribution without a web hop.
+            return canonicalize_telegram_web_link(invite_link)
         username = str(bot_username or "").removeprefix("@").strip()
         return build_telegram_bot_start_link(username, code) if username else invite_link

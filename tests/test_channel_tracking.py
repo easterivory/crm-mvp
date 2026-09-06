@@ -12,7 +12,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
-from app.core.lander_urls import build_channel_tracking_url
 from app.core.constants import RoleName
 from app.repositories.message_repository import MessageRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
@@ -85,20 +84,13 @@ def test_existing_tracking_payload_keeps_bot_destination_by_default() -> None:
     assert payload.channel_auto_approve is False
 
 
-def test_channel_tracking_url_uses_configured_technical_domain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.services.tracking_service.settings.LANDER_TECH_DOMAIN",
-        "LP.SFERA.CYOU.",
-    )
-
+def test_channel_tracking_url_uses_direct_telegram_invite() -> None:
     assert TrackingService._public_tracking_url(
         destination_type="channel",
         code="channel_01",
         bot_username=None,
         invite_link="https://telegram.me/+private-invite",
-    ) == "https://lp.sfera.cyou/join/channel_01"
+    ) == "https://telegram.me/+private-invite"
 
 
 def test_global_channel_join_actions_default_to_enabled() -> None:
@@ -192,12 +184,6 @@ def test_facebook_channel_campaign_has_no_funnel_entry_requirement() -> None:
                 "target_funnel_step_key": "question_1",
             }
         )
-
-
-def test_channel_click_url_uses_public_tracking_hop() -> None:
-    assert build_channel_tracking_url(host="LP.SFERA.CYOU.", code="channel_01") == (
-        "https://lp.sfera.cyou/join/channel_01"
-    )
 
 
 def test_current_fbclid_replaces_stale_fbc_cookie() -> None:
