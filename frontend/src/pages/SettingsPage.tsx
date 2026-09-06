@@ -1559,7 +1559,8 @@ export default function SettingsPage() {
                 <span className="min-w-0">
                   <span className="block text-sm font-medium text-zinc-200">Автоматически принимать заявки</span>
                   <span className="mt-1 block text-xs leading-5 text-zinc-500">
-                    Бот-трекер принимает заявку после запуска воронки. При выключении решение остаётся администратору канала.
+                    Бот-трекер сначала пытается запустить воронку, затем принимает заявку независимо от результата запуска.
+                    При выключении решение остаётся администратору канала.
                   </span>
                 </span>
                 <input

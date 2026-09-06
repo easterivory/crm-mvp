@@ -820,6 +820,102 @@ def test_join_request_action_is_queued_only_after_service_commit_hook(
     asyncio.run(run())
 
 
+def test_join_request_auto_approval_survives_funnel_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        from app.workers import postback_worker
+
+        event_id = uuid4()
+        chat_id = uuid4()
+        event = SimpleNamespace(
+            id=event_id,
+            event_type="join_request",
+            project_id=uuid4(),
+            tracker_bot_id=uuid4(),
+            telegram_user_id=42,
+            channel=SimpleNamespace(telegram_chat_id=-1001234567890),
+            raw_payload={"user_chat_id": 9876543210},
+            request_message_text=None,
+            request_message_sent_at=None,
+            auto_approve_requested=True,
+            request_approved_at=None,
+            auto_start_requested=True,
+            funnel_start_processed_at=None,
+            funnel_started_at=None,
+            funnel_start_chat_id=None,
+            funnel_start_error=None,
+            request_action_error=None,
+        )
+        db = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(scalar_one_or_none=lambda: event)
+            ),
+            commit=AsyncMock(),
+            rollback=AsyncMock(),
+        )
+
+        class _DatabaseContext:
+            async def __aenter__(self):
+                return db
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+        approve = AsyncMock(return_value=True)
+        start = AsyncMock(
+            return_value=SimpleNamespace(
+                chat_id=chat_id,
+                started=False,
+                error="У бота-трекера нет активной опубликованной воронки",
+            )
+        )
+        monkeypatch.setattr(
+            postback_worker,
+            "get_db_session",
+            lambda: _DatabaseContext(),
+        )
+        monkeypatch.setattr(
+            postback_worker,
+            "BotRepository",
+            lambda _db: SimpleNamespace(
+                get_bot_token_by_id=AsyncMock(return_value="tracker-token")
+            ),
+        )
+        monkeypatch.setattr(
+            postback_worker,
+            "ChannelJoinFunnelService",
+            lambda _db: SimpleNamespace(start_for_join_request=start),
+        )
+        monkeypatch.setattr(
+            postback_worker,
+            "TelegramSenderService",
+            lambda _db: SimpleNamespace(approve_chat_join_request=approve),
+        )
+        monkeypatch.setattr(
+            postback_worker,
+            "send_operational_alert",
+            AsyncMock(),
+        )
+
+        result = await postback_worker.process_channel_join_request_action_task(
+            {"job_try": 1},
+            str(event_id),
+        )
+
+        assert result["status"] == "partial"
+        assert result["funnel_started"] is False
+        assert result["approved"] is True
+        approve.assert_awaited_once_with(
+            "tracker-token",
+            chat_id=-1001234567890,
+            user_id=42,
+        )
+        assert event.request_approved_at is not None
+
+    asyncio.run(run())
+
+
 def test_stale_channel_update_does_not_rewind_current_subscription() -> None:
     async def run() -> None:
         db = SimpleNamespace(flush=AsyncMock())

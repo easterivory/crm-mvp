@@ -408,16 +408,10 @@ async def process_channel_join_request_action_task(
         approval_requested = bool(
             event.auto_approve_requested and event.request_approved_at is None
         )
-        approval_pending = bool(
-            approval_requested
-            and (
-                not event.auto_start_requested
-                or (
-                    event.funnel_start_processed_at is not None
-                    and not event.funnel_start_error
-                )
-            )
-        )
+        # Funnel delivery is attempted first while Telegram's temporary
+        # user_chat_id is valid, but auto-approval is an independent setting.
+        # A missing/misconfigured funnel must not leave the join request stuck.
+        approval_pending = approval_requested
         funnel_start_pending = bool(
             event.auto_start_requested and event.funnel_start_processed_at is None
         )
@@ -527,14 +521,7 @@ async def process_channel_join_request_action_task(
                 )
 
         approval_pending = bool(
-            approval_requested
-            and (
-                not event.auto_start_requested
-                or (
-                    event.funnel_start_processed_at is not None
-                    and not event.funnel_start_error
-                )
-            )
+            approval_requested and event.request_approved_at is None
         )
         if approval_pending:
             try:
@@ -557,6 +544,22 @@ async def process_channel_join_request_action_task(
                     await db.commit()
                     if job_try < 3 and Retry is not None:
                         raise Retry(defer=min(5 * job_try, 15)) from exc
+                    await send_operational_alert(
+                        component="channel_join_approval",
+                        title="Channel join request auto-approval failed",
+                        details={
+                            "event_id": event.id,
+                            "project_id": event.project_id,
+                            "tracker_bot_id": event.tracker_bot_id,
+                            "channel_chat_id": channel_chat_id,
+                            "telegram_user_id": telegram_user_id,
+                            "error": approval_error,
+                        },
+                        dedupe_key=(
+                            f"channel-join-approval:{event.tracker_bot_id}:"
+                            f"{type(exc).__name__}"
+                        ),
+                    )
                     return {
                         "status": "failed",
                         "event_id": str(event.id),
@@ -593,13 +596,6 @@ async def recover_channel_join_request_actions_task(ctx: dict) -> dict:
                     and_(
                         TelegramChannelSubscriptionEvent.auto_approve_requested.is_(True),
                         TelegramChannelSubscriptionEvent.request_approved_at.is_(None),
-                        or_(
-                            TelegramChannelSubscriptionEvent.auto_start_requested.is_(False),
-                            and_(
-                                TelegramChannelSubscriptionEvent.funnel_start_processed_at.is_not(None),
-                                TelegramChannelSubscriptionEvent.funnel_start_error.is_(None),
-                            ),
-                        ),
                     ),
                     and_(
                         TelegramChannelSubscriptionEvent.auto_start_requested.is_(True),
