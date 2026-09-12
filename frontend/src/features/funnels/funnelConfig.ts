@@ -34,6 +34,7 @@ export type MessageConfig = {
   chat_action_enabled: boolean
   chat_action_duration_seconds: number
   wait_for_answer?: boolean
+  continue_after_buttons?: boolean
   button_mode: ButtonDisplayMode
   buttons: ButtonConfig[]
   media?: MessageMediaConfig
@@ -284,6 +285,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
           typeof item.wait_for_answer === 'boolean'
             ? item.wait_for_answer
             : item.waitForAnswer === true,
+        continue_after_buttons: item.continue_after_buttons === true,
         button_mode: item.button_mode === 'reply' ? 'reply' : 'inline',
         buttons: normalizeButtons(item.buttons),
         ...(media ? { media } : {}),
@@ -303,6 +305,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
       chat_action_enabled: boolValue(config, 'chat_action_enabled', false),
       chat_action_duration_seconds: numberValue(config, 'chat_action_duration_seconds', 3),
       wait_for_answer: boolValue(config, 'wait_for_answer', false),
+      continue_after_buttons: boolValue(config, 'continue_after_buttons', false),
       button_mode: config.button_mode === 'reply' ? 'reply' : 'inline',
       buttons: normalizeButtons(config.buttons),
       ...(legacyMedia ? { media: legacyMedia } : {}),
@@ -500,9 +503,21 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
           targetStepId: button.target_step_id,
         })),
     )
-    return outputs.length > 0
-      ? outputs
-      : [{ key: 'message:next', label: messages.some((message) => message.wait_for_answer) ? 'После ответа' : 'Далее' }]
+    if (outputs.length > 0) {
+      return outputs
+    }
+    const hasBlockingUrlButtons = messages.some((message) =>
+      message.buttons.length > 0 &&
+      message.buttons.every((button) => button.type === 'url') &&
+      message.continue_after_buttons !== true,
+    )
+    if (hasBlockingUrlButtons) {
+      return []
+    }
+    return [{
+      key: 'message:next',
+      label: messages.some((message) => message.wait_for_answer) ? 'После ответа' : 'Далее',
+    }]
   }
 
   if (step.step_type === 'delay') {

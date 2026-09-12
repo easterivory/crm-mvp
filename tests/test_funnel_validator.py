@@ -123,3 +123,58 @@ def test_message_cycle_without_wait_or_buttons_is_still_rejected() -> None:
 
     assert result["is_valid"] is False
     assert any("автоматический цикл" in error.lower() for error in result["errors"])
+
+
+def test_url_button_with_continue_is_an_automatic_transition() -> None:
+    nodes = [
+        _node("start", step_type="trigger"),
+        _node(
+            "message",
+            step_type="message",
+            config={
+                "messages": [
+                    {
+                        "text": "Откройте ссылку",
+                        "continue_after_buttons": True,
+                        "buttons": [
+                            {
+                                "label": "Открыть",
+                                "type": "url",
+                                "url": "https://example.com",
+                            }
+                        ],
+                    }
+                ]
+            },
+        ),
+    ]
+    edges = [_edge("start", "message"), _edge("message", "start")]
+
+    result = FunnelGraphValidator().validate_graph(nodes, edges)
+
+    assert result["is_valid"] is False
+    assert any("автоматический цикл" in error.lower() for error in result["errors"])
+
+
+def test_branch_button_remains_runtime_boundary_with_continue_flag() -> None:
+    nodes = [
+        _node("start", step_type="trigger"),
+        _node(
+            "message",
+            step_type="message",
+            config={
+                "messages": [
+                    {
+                        "text": "Выберите вариант",
+                        "continue_after_buttons": True,
+                        "buttons": [{"label": "Назад", "type": "branch"}],
+                    }
+                ]
+            },
+        ),
+    ]
+    edges = [_edge("start", "message"), _edge("message", "start")]
+
+    result = FunnelGraphValidator().validate_graph(nodes, edges)
+
+    assert result["is_valid"] is True

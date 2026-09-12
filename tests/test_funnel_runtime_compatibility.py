@@ -785,6 +785,131 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(message_type=item["type"]):
                 self.assertEqual(self.service._message_chat_action(step, item), expected)
 
+    async def test_url_button_can_continue_message_sequence_when_enabled(self) -> None:
+        chat_id = uuid4()
+        step = SimpleNamespace(
+            id=uuid4(),
+            step_type="message",
+            block_type="generic_message",
+            config_json={
+                "messages": [
+                    {
+                        "id": "message_1",
+                        "type": "text",
+                        "text": "Откройте ссылку",
+                        "continue_after_buttons": True,
+                        "buttons": [
+                            {
+                                "id": "site",
+                                "label": "Открыть",
+                                "type": "url",
+                                "url": "https://example.com",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        next_step = SimpleNamespace(id=uuid4())
+        self.service._send_message_item = AsyncMock(return_value=True)
+        self.service._move_from_step = AsyncMock(return_value=next_step)
+
+        result = await self.service._execute_message_sequence(chat_id=chat_id, step=step)
+
+        self.assertIs(result, next_step)
+        self.service._move_from_step.assert_awaited_once_with(
+            chat_id=chat_id,
+            step=step,
+            answer=None,
+        )
+
+    async def test_existing_url_button_without_flag_keeps_waiting(self) -> None:
+        chat_id = uuid4()
+        step = SimpleNamespace(
+            id=uuid4(),
+            step_type="message",
+            block_type="generic_message",
+            config_json={
+                "messages": [
+                    {
+                        "id": "message_1",
+                        "type": "text",
+                        "text": "Откройте ссылку",
+                        "buttons": [
+                            {
+                                "id": "site",
+                                "label": "Открыть",
+                                "type": "url",
+                                "url": "https://example.com",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        state = SimpleNamespace(
+            funnel_id=uuid4(),
+            funnel_version_id=uuid4(),
+            entered_step_at=None,
+            runtime_json={},
+        )
+        self.service.repo = SimpleNamespace(
+            get_chat_funnel_state=AsyncMock(return_value=state),
+            upsert_chat_funnel_state=AsyncMock(),
+        )
+        self.service._send_message_item = AsyncMock(return_value=True)
+        self.service._move_from_step = AsyncMock()
+
+        result = await self.service._execute_message_sequence(chat_id=chat_id, step=step)
+
+        self.assertIs(result, step)
+        self.service._move_from_step.assert_not_awaited()
+        self.service.repo.upsert_chat_funnel_state.assert_awaited_once()
+
+    async def test_branch_button_still_waits_when_continue_flag_is_present(self) -> None:
+        chat_id = uuid4()
+        step = SimpleNamespace(
+            id=uuid4(),
+            step_type="message",
+            block_type="generic_message",
+            config_json={
+                "messages": [
+                    {
+                        "id": "message_1",
+                        "type": "text",
+                        "text": "Выберите вариант",
+                        "continue_after_buttons": True,
+                        "buttons": [
+                            {
+                                "id": "yes",
+                                "label": "Да",
+                                "type": "branch",
+                                "value": "yes",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        state = SimpleNamespace(
+            funnel_id=uuid4(),
+            funnel_version_id=uuid4(),
+            entered_step_at=None,
+            runtime_json={},
+        )
+        self.service.repo = SimpleNamespace(
+            get_chat_funnel_state=AsyncMock(return_value=state),
+            upsert_chat_funnel_state=AsyncMock(),
+        )
+        self.service._send_message_item = AsyncMock(return_value=True)
+        self.service._move_from_step = AsyncMock()
+
+        result = await self.service._execute_message_sequence(chat_id=chat_id, step=step)
+
+        self.assertIs(result, step)
+        self.service._move_from_step.assert_not_awaited()
+        self.service.repo.upsert_chat_funnel_state.assert_awaited_once()
+
     async def test_enabled_chat_action_delays_only_its_message(self) -> None:
         chat_id = uuid4()
         step = SimpleNamespace(

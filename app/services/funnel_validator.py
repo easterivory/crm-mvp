@@ -271,7 +271,10 @@ class FunnelGraphValidator:
         config = node.config
         if config.get("wait_for_answer") is True:
             return True
-        if self._has_buttons(config.get("buttons")):
+        if self._buttons_pause_runtime(
+            config.get("buttons"),
+            continue_after_buttons=config.get("continue_after_buttons") is True,
+        ):
             return True
 
         messages = config.get("messages")
@@ -282,7 +285,10 @@ class FunnelGraphValidator:
             and (
                 message.get("wait_for_answer") is True
                 or message.get("waitForAnswer") is True
-                or self._has_buttons(message.get("buttons"))
+                or self._buttons_pause_runtime(
+                    message.get("buttons"),
+                    continue_after_buttons=message.get("continue_after_buttons") is True,
+                )
             )
             for message in messages
         )
@@ -291,6 +297,30 @@ class FunnelGraphValidator:
     def _has_buttons(value: Any) -> bool:
         return isinstance(value, list) and any(
             isinstance(button, (dict, str)) for button in value
+        )
+
+    @classmethod
+    def _buttons_pause_runtime(
+        cls,
+        value: Any,
+        *,
+        continue_after_buttons: bool,
+    ) -> bool:
+        if not cls._has_buttons(value):
+            return False
+        if not continue_after_buttons or not isinstance(value, list):
+            return True
+        return not all(
+            isinstance(button, dict)
+            and (
+                str(button.get("type") or "").strip().lower() == "url"
+                or (
+                    not str(button.get("type") or "").strip()
+                    and bool(str(button.get("url") or "").strip())
+                )
+            )
+            and bool(str(button.get("url") or "").strip())
+            for button in value
         )
 
     @staticmethod

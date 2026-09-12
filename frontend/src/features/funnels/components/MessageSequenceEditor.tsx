@@ -288,6 +288,7 @@ export default function MessageSequenceEditor({
                 chat_action_enabled: false,
                 chat_action_duration_seconds: 3,
                 wait_for_answer: false,
+                continue_after_buttons: false,
                 button_mode: 'inline',
                 buttons: [],
               },
@@ -463,7 +464,10 @@ export default function MessageSequenceEditor({
               <input
                 type="checkbox"
                 checked={message.wait_for_answer === true}
-                onChange={(event) => update(index, { wait_for_answer: event.target.checked })}
+                onChange={(event) => update(index, {
+                  wait_for_answer: event.target.checked,
+                  ...(event.target.checked ? { continue_after_buttons: false } : {}),
+                })}
                 className="mt-1 h-4 w-4 rounded border-white/20 bg-background text-accent-300"
               />
               <span className="min-w-0">
@@ -526,9 +530,41 @@ export default function MessageSequenceEditor({
                 onButtonModeChange={(buttonMode) => update(index, { button_mode: buttonMode })}
                 currentStepId={currentStepId}
                 steps={steps}
-                onChange={(buttons) => update(index, { buttons })}
+                onChange={(buttons) => update(index, {
+                  buttons,
+                  ...(buttons.some((button) => button.type !== 'url')
+                    ? { continue_after_buttons: false }
+                    : {}),
+                })}
               />
             </div>
+
+            {message.buttons.length > 0 ? (
+              <label className="mt-3 flex items-start gap-3 rounded-lg border border-white/8 bg-background/45 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={message.continue_after_buttons === true}
+                  disabled={message.buttons.some((button) => button.type !== 'url')}
+                  onChange={(event) => update(index, {
+                    continue_after_buttons: event.target.checked,
+                    ...(event.target.checked ? { wait_for_answer: false } : {}),
+                  })}
+                  className="mt-1 h-4 w-4 rounded border-white/20 bg-background text-accent-300 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-gray-100">
+                    Продолжить воронку после отправки
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-5 text-gray-500">
+                    {message.buttons.some((button) => button.type !== 'url')
+                      ? 'Доступно только для URL-кнопок. Ветки и запрос контакта должны дождаться действия лида.'
+                      : message.continue_after_buttons === true
+                        ? 'Ссылка останется в сообщении, а сценарий сразу перейдёт дальше.'
+                        : 'Без этого флажка сценарий остановится на сообщении. Нажатие URL-кнопки Telegram не передаёт в воронку.'}
+                  </span>
+                </span>
+              </label>
+            ) : null}
           </div>
         )
       })}

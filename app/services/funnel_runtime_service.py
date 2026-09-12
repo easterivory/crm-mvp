@@ -1647,7 +1647,11 @@ class FunnelRuntimeService:
                     step.id,
                     index,
                 )
-            if buttons or self._message_item_waits_for_answer(item):
+            should_wait_for_buttons = bool(buttons) and not (
+                self._message_item_continues_after_buttons(item)
+                and self._buttons_support_automatic_continue(buttons)
+            )
+            if should_wait_for_buttons or self._message_item_waits_for_answer(item):
                 state = await self.repo.get_chat_funnel_state(chat_id)
                 if state is not None:
                     runtime_json = dict(state.runtime_json or {})
@@ -3634,6 +3638,7 @@ class FunnelRuntimeService:
             "chat_action_enabled": config.get("chat_action_enabled") is True,
             "chat_action_duration_seconds": config.get("chat_action_duration_seconds") or 0,
             "wait_for_answer": bool(config.get("wait_for_answer")),
+            "continue_after_buttons": config.get("continue_after_buttons") is True,
             "button_mode": "reply" if config.get("button_mode") == "reply" else "inline",
             "buttons": config.get("buttons") or [],
             "media": config.get("media"),
@@ -3821,6 +3826,17 @@ class FunnelRuntimeService:
             or item.get("waitForAnswer")
             or item.get("wait_answer")
             or item.get("wait_for_reply")
+        )
+
+    @staticmethod
+    def _message_item_continues_after_buttons(item: dict[str, Any]) -> bool:
+        return item.get("continue_after_buttons") is True
+
+    @staticmethod
+    def _buttons_support_automatic_continue(buttons: list[dict[str, Any]]) -> bool:
+        return bool(buttons) and all(
+            button.get("type") == "url" and bool(str(button.get("url") or "").strip())
+            for button in buttons
         )
 
     def _waiting_message_index(
