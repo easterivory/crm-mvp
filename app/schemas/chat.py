@@ -101,6 +101,8 @@ class ChatOut(OrmBase):
     last_message_sender_type: Optional[str] = None
     last_message_created_at: Optional[datetime] = None
     last_message_file_name: Optional[str] = None
+    last_message_deleted_at: Optional[datetime] = None
+    last_message_edited_at: Optional[datetime] = None
 
     search_hit_message_id: Optional[uuid.UUID] = None
     search_hit_text: Optional[str] = None

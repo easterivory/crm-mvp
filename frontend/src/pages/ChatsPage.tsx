@@ -134,6 +134,7 @@ type Message = {
     deleted_at: string | null
   } | null
   edited_at: string | null
+  text_before_edit?: string | null
   deleted_at: string | null
   buttons?: string[]
   transport_source?: string
@@ -1456,7 +1457,21 @@ export default function ChatsPage() {
         offset: 0,
         ...(selectedProjectId ? { project_id: selectedProjectId } : {}),
       }
-      const [messagesResponse, auditResponse] = await Promise.all([
+      const container = messagesScrollRef.current
+      const bounds = container?.getBoundingClientRect()
+      const visibleIds = !showLoader && container && bounds
+        ? Array.from(container.querySelectorAll<HTMLElement>('[data-account-message="true"]'))
+          .filter((element) => {
+            const rect = element.getBoundingClientRect()
+            return rect.bottom >= bounds.top && rect.top <= bounds.bottom
+          })
+          .slice(0, MESSAGE_LIMIT)
+          .map((element) => element.id.slice('message-'.length))
+        : []
+      const refreshParams = new URLSearchParams()
+      visibleIds.forEach((id) => refreshParams.append('message_ids', id))
+      if (selectedProjectId) refreshParams.set('project_id', selectedProjectId)
+      const [messagesResponse, auditResponse, refreshedMessages] = await Promise.all([
         api.get<PaginatedResponse<Message>>(`/chats/${chatId}/messages`, {
           params,
           signal: controller.signal,
@@ -1469,6 +1484,12 @@ export default function ChatsPage() {
           },
           signal: controller.signal,
         }),
+        visibleIds.length
+          ? api.get<Message[]>(`/chats/${chatId}/messages/history-refresh`, {
+            params: refreshParams,
+            signal: controller.signal,
+          }).then((response) => response.data).catch(() => [] as Message[])
+          : Promise.resolve([] as Message[]),
       ])
       if (controller.signal.aborted || selectedChatIdRef.current !== chatId) {
         return
@@ -1484,7 +1505,7 @@ export default function ChatsPage() {
       setMessages((current) => (
         showLoader
           ? nextMessages
-          : sortMessagesByDate(mergeById(current, nextMessages))
+          : sortMessagesByDate(mergeById(mergeById(current, nextMessages), refreshedMessages))
       ))
       setAuditLogs((current) => (
         showLoader
@@ -2172,8 +2193,15 @@ export default function ChatsPage() {
       await api.delete(`/chats/${selectedChatId}/messages/${messageId}`, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
-      setMessages((current) => current.filter((message) => message.id !== messageId))
-      setMessageTotal((current) => Math.max(0, current - 1))
+      if (isTelegramUserAccountChat) {
+        const deletedAt = new Date().toISOString()
+        setMessages((current) => current.map((message) => (
+          message.id === messageId ? { ...message, deleted_at: deletedAt } : message
+        )))
+      } else {
+        setMessages((current) => current.filter((message) => message.id !== messageId))
+        setMessageTotal((current) => Math.max(0, current - 1))
+      }
       setReplyingToMessage((current) => current?.id === messageId ? null : current)
       setMessagePendingDeletion(null)
       notify({ tone: 'success', message: 'Сообщение удалено из Telegram.' })
@@ -2835,18 +2863,20 @@ export default function ChatsPage() {
                       ? 'Показать текст до перевода'
                       : 'Перевести сообщение для оператора'
                     : 'Показать перевод вместо оригинала'
-                const canReplyToMessage = !isBuyer && Boolean(message.external_message_id)
+                const canReplyToMessage = !isBuyer && !message.deleted_at && Boolean(message.external_message_id)
                 const canEditMessage =
                   !isBuyer
+                  && !message.deleted_at
                   && isOutgoing
                   && Boolean(message.external_message_id)
                   && hasTranslatableText
                   && message.message_type !== 'video_note'
-                const canDeleteMessage = !isBuyer && Boolean(message.external_message_id)
+                const canDeleteMessage = !isBuyer && !message.deleted_at && Boolean(message.external_message_id)
 
                 return (
                   <div
                     id={`message-${message.id}`}
+                    data-account-message={isTelegramUserAccountChat || message.transport_source === 'user_mtproto' ? 'true' : undefined}
                     key={message.id}
                     className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
                   >
@@ -2885,7 +2915,7 @@ export default function ChatsPage() {
                             </span>
                           </button>
                         ) : null}
-                        <div className="mb-1 flex items-center gap-1.5 text-xs opacity-75">
+                        <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs opacity-75">
                           {isExternalAccountMessage ? <UserRound size={13} /> : isBot ? <Bot size={13} /> : null}
                           <span>
                             {message.sender_type === 'manager'
@@ -2897,8 +2927,14 @@ export default function ChatsPage() {
                                   : 'клиент'}
                           </span>
                           <span>{formatDateTime(message.created_at)}</span>
-                          {message.edited_at ? <span>· изменено</span> : null}
+                          {message.edited_at ? <span title={formatDateTime(message.edited_at)}>· изменено</span> : null}
                         </div>
+                        {message.deleted_at ? (
+                          <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-red-200" title={formatDateTime(message.deleted_at)}>
+                            <Trash2 size={13} className="shrink-0" />
+                            Удалено в Telegram
+                          </p>
+                        ) : null}
                         {message.message_type === 'text' || message.message_type === 'system' || message.message_type === 'contact' ? (
                           <p className="whitespace-pre-wrap break-words text-sm leading-6">
                             {message.message_type === 'contact' ? `Телефон: ${visibleBody || 'не указан'}` : visibleBody || ''}
@@ -2948,6 +2984,14 @@ export default function ChatsPage() {
                             ) : null}
                           </div>
                         )}
+                        {message.text_before_edit != null ? (
+                          <details className="mt-2 border-t border-white/10 pt-2 text-xs opacity-80">
+                            <summary className="cursor-pointer">До первого сохранённого изменения</summary>
+                            <p className="mt-1 whitespace-pre-wrap break-words leading-5">
+                              {message.text_before_edit || 'Без текста'}
+                            </p>
+                          </details>
+                        ) : null}
                         {messageButtons.length > 0 ? (
                           <div className="mt-2 border-t border-white/10 pt-2">
                             <p className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] font-medium opacity-70">

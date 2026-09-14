@@ -220,6 +220,18 @@ async def list_messages(
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
+@router.get("/history-refresh", response_model=list[MessageOut])
+async def refresh_history_messages(
+    chat_id: UUID,
+    message_ids: list[UUID] = Query(min_length=1, max_length=100),
+    project_id: UUID = Depends(get_current_project_id),
+    db: AsyncSession = Depends(get_db),
+) -> list[MessageOut]:
+    return await MessageService(db).refresh_history_messages(
+        chat_id=chat_id, project_id=project_id, message_ids=message_ids,
+    )
+
+
 @media_router.get("/{message_id}/media", response_class=StreamingResponse)
 async def get_message_media(
     message_id: UUID,

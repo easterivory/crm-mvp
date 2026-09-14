@@ -47,6 +47,8 @@ export type Chat = {
   last_message_sender_type: 'user' | 'manager' | 'bot' | 'system' | null
   last_message_created_at: string | null
   last_message_file_name: string | null
+  last_message_deleted_at?: string | null
+  last_message_edited_at?: string | null
   search_hit_message_id: string | null
   search_hit_text: string | null
   search_hit_created_at: string | null
@@ -519,7 +521,7 @@ export default function ChatList({
           const hasSearchHit = Boolean(filters.q.trim() && chat.search_hit_text)
           const preview = hasSearchHit
             ? chat.search_hit_text || ''
-            : `${senderPrefix(chat.last_message_sender_type)}${mediaPreviewLabel(chat)}`
+            : `${chat.last_message_deleted_at ? 'Удалено в Telegram · ' : chat.last_message_edited_at ? 'Изменено · ' : ''}${senderPrefix(chat.last_message_sender_type)}${mediaPreviewLabel(chat)}`
           const visibleTags = chat.tags.slice(0, 3)
           const hiddenTags = chat.tags.slice(3)
           const isUnread = chat.is_read === false || chat.unread

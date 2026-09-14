@@ -81,6 +81,7 @@ class MessageOut(OrmBase):
     reply_to_message_id: Optional[uuid.UUID] = None
     reply_to: Optional[MessageReplyOut] = None
     edited_at: Optional[datetime] = None
+    text_before_edit: Optional[str] = None
     deleted_at: Optional[datetime] = None
     buttons: list[str] = Field(default_factory=list)
     transport_source: str = "bot_api"

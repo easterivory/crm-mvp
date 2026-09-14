@@ -467,7 +467,7 @@ class TelegramAccountWorker:
                 missed.append(message)
 
             for message in reversed(missed):
-                if bool(getattr(message, "out", False)) and await self._sync_existing_outgoing(
+                if await self._sync_existing_message(
                     message=message,
                     peer_id=int(peer_id),
                     bot_id=bot_id,
@@ -607,6 +607,7 @@ class TelegramAccountWorker:
                             bot_id=bot_id,
                             sent_at=sent_at,
                             outgoing=bool(getattr(message, "out", False)),
+                            edited_at=self._as_utc(getattr(message, "edit_date", None)),
                         )
                         await db.commit()
                     if result is not None:
@@ -658,7 +659,7 @@ class TelegramAccountWorker:
             failed_messages,
         )
 
-    async def _sync_existing_outgoing(
+    async def _sync_existing_message(
         self,
         *,
         message: Any,
@@ -683,6 +684,12 @@ class TelegramAccountWorker:
             if existing is None:
                 await db.rollback()
                 return False
+            # Unclaimed incoming messages must still reach the normal recovery path.
+            already_processed = (
+                bool(getattr(message, "out", False))
+                or existing.funnel_processed_at is not None
+                or existing.deleted_at is not None
+            )
             edit_date = getattr(message, "edit_date", None)
             if edit_date is not None:
                 await service.handle_mtproto_message_edit(
@@ -697,7 +704,7 @@ class TelegramAccountWorker:
                 await db.commit()
             else:
                 await db.rollback()
-            return True
+            return already_processed
 
     async def _load_sync_cursor(
         self,

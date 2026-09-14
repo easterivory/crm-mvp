@@ -621,6 +621,8 @@ class ChatService:
             "last_message_sender_type": message.sender_type,
             "last_message_created_at": message.created_at,
             "last_message_file_name": message.file_name,
+            "last_message_deleted_at": message.deleted_at,
+            "last_message_edited_at": message.edited_at,
         }
 
     @staticmethod

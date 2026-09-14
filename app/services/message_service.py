@@ -1073,12 +1073,29 @@ class MessageService:
             offset=offset,
             since=since,
             before_message_id=before_message_id,
+            include_account_tombstones=True,
         )
         total = await self.message_repo.count_by_chat(
             chat_id,
             since=since,
+            include_account_tombstones=True,
         )
         return await self._messages_out(messages), total
+
+    async def refresh_history_messages(
+        self, *, chat_id: UUID, project_id: UUID, message_ids: list[UUID],
+    ) -> list[MessageOut]:
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found in this project")
+        since = (
+            chat.current_cycle_started_at - MESSAGE_CYCLE_START_TOLERANCE
+            if chat.current_cycle_started_at is not None else None
+        )
+        messages = await self.message_repo.list_history_by_ids(
+            chat_id=chat_id, message_ids=message_ids, since=since,
+        )
+        return await self._messages_out(messages)
 
     async def translate_message_on_demand(
         self,
@@ -1200,6 +1217,7 @@ class MessageService:
             text=normalized_text,
             is_caption=is_caption,
             edited_at=edited_at,
+            preserve_previous=message.transport_source == "user_mtproto",
         )
         await self.db.flush()
         await self.db.refresh(message)

@@ -30,6 +30,7 @@ from app.models.project import Project
 from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.repositories.base import BaseRepository
+from app.repositories.message_repository import MessageRepository
 
 
 class ChatRepository(BaseRepository[Chat]):
@@ -455,7 +456,7 @@ class ChatRepository(BaseRepository[Chat]):
             select(Message.id)
             .where(
                 Message.chat_id == Chat.id,
-                Message.deleted_at.is_(None),
+                MessageRepository.history_visibility_expr(),
                 Message.created_at >= cycle_lower_bound,
                 or_(
                     func.lower(func.coalesce(Message.body, "")).like(needle, escape="\\"),
@@ -1002,7 +1003,7 @@ class ChatRepository(BaseRepository[Chat]):
                 Message.chat_id.in_(chat_ids),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                Message.deleted_at.is_(None),
+                MessageRepository.history_visibility_expr(),
                 Message.created_at >= cycle_lower_bound,
             )
             .order_by(Message.chat_id, Message.created_at.desc(), Message.id.desc())
@@ -1036,7 +1037,7 @@ class ChatRepository(BaseRepository[Chat]):
                 Message.chat_id.in_(chat_ids),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                Message.deleted_at.is_(None),
+                MessageRepository.history_visibility_expr(),
                 Message.created_at >= cycle_lower_bound,
                 or_(
                     func.lower(func.coalesce(Message.body, "")).like(needle, escape="\\"),

@@ -618,6 +618,7 @@ class TelegramService:
         bot_id: UUID,
         sent_at: datetime,
         outgoing: bool,
+        edited_at: datetime | None = None,
     ) -> TelegramHistoryImportResult | None:
         """Import MTProto history without replaying old input through a funnel."""
 
@@ -670,6 +671,15 @@ class TelegramService:
             # Recovery jobs only consider unclaimed incoming messages. Claiming
             # imported history prevents an old reply from starting a funnel.
             await self.message_repo.claim_funnel_processing([persisted.id])
+
+        if edited_at is not None:
+            await self.message_repo.mark_edited(
+                message_id=persisted.id,
+                text=data.caption if data.caption is not None else data.body or "",
+                is_caption=data.message_type != MessageType.TEXT,
+                edited_at=edited_at,
+                preserve_previous=True,
+            )
 
         if chat_created:
             now = datetime.now(timezone.utc)
@@ -728,6 +738,7 @@ class TelegramService:
             text=text,
             is_caption=is_caption,
             edited_at=edited_at,
+            preserve_previous=True,
         )
         return True
 

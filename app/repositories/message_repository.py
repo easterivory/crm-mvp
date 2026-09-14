@@ -2,17 +2,30 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import extract, func, select, tuple_, update
+from sqlalchemy import ColumnElement, extract, func, or_, select, tuple_, update
 from sqlalchemy.orm import aliased
 
-from app.core.constants import SenderType
+from app.core.constants import MessageType, SenderType
 from app.models.chat import Chat
+from app.models.bot import Bot
 from app.models.message import Message, MessageUpload
 from app.repositories.base import BaseRepository
 
 
 class MessageRepository(BaseRepository[Message]):
     model = Message
+
+    @staticmethod
+    def history_visibility_expr() -> ColumnElement[bool]:
+        # Tombstones belong in account history, not in funnel input/metrics queries.
+        account_chat = (
+            select(Chat.id)
+            .join(Bot, Bot.id == Chat.bot_id)
+            .where(Chat.id == Message.chat_id, Bot.transport_type == "user_mtproto")
+            .correlate(Message)
+            .exists()
+        )
+        return or_(Message.deleted_at.is_(None), account_chat)
 
     async def list_by_chat(
         self,
@@ -21,10 +34,12 @@ class MessageRepository(BaseRepository[Message]):
         offset: int = 0,
         since: Optional[datetime] = None,
         before_message_id: UUID | None = None,
+        include_account_tombstones: bool = False,
     ) -> list[Message]:
+        visible = self.history_visibility_expr() if include_account_tombstones else Message.deleted_at.is_(None)
         stmt = select(Message).where(
             Message.chat_id == chat_id,
-            Message.deleted_at.is_(None),
+            visible,
         )
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
@@ -33,7 +48,7 @@ class MessageRepository(BaseRepository[Message]):
                 select(Message.created_at, Message.id).where(
                     Message.id == before_message_id,
                     Message.chat_id == chat_id,
-                    Message.deleted_at.is_(None),
+                    visible,
                 )
             )
             anchor = anchor_result.one_or_none()
@@ -72,10 +87,11 @@ class MessageRepository(BaseRepository[Message]):
         self,
         chat_id: UUID,
         since: Optional[datetime] = None,
+        include_account_tombstones: bool = False,
     ) -> int:
         stmt = select(func.count(Message.id)).where(
             Message.chat_id == chat_id,
-            Message.deleted_at.is_(None),
+            self.history_visibility_expr() if include_account_tombstones else Message.deleted_at.is_(None),
         )
         if since is not None:
             stmt = stmt.where(Message.created_at >= since)
@@ -94,6 +110,21 @@ class MessageRepository(BaseRepository[Message]):
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def list_history_by_ids(
+        self, *, chat_id: UUID, message_ids: list[UUID], since: datetime | None,
+    ) -> list[Message]:
+        if not message_ids:
+            return []
+        stmt = select(Message).where(
+            Message.chat_id == chat_id,
+            Message.id.in_(message_ids),
+            self.history_visibility_expr(),
+        )
+        if since is not None:
+            stmt = stmt.where(Message.created_at >= since)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_first_manager_reply(self, chat_id: UUID) -> Optional[Message]:
         result = await self.db.execute(
@@ -384,7 +415,47 @@ class MessageRepository(BaseRepository[Message]):
         text: str,
         is_caption: bool,
         edited_at: datetime,
+        preserve_previous: bool = False,
     ) -> None:
+        if preserve_previous:
+            result = await self.db.execute(
+                select(Message)
+                .where(Message.id == message_id, Message.deleted_at.is_(None))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            message = result.scalar_one_or_none()
+            if message is None:
+                return
+            incoming_at = (
+                edited_at.replace(tzinfo=timezone.utc)
+                if edited_at.tzinfo is None else edited_at
+            )
+            previous_at = message.edited_at
+            if previous_at is not None:
+                previous_at = (
+                    previous_at.replace(tzinfo=timezone.utc)
+                    if previous_at.tzinfo is None else previous_at
+                )
+                if incoming_at < previous_at:
+                    return
+            # A Telegram link preview is media too, but its text stays in body.
+            field = (
+                "body" if message.message_type in {MessageType.TEXT, MessageType.SYSTEM, MessageType.CONTACT}
+                else "caption"
+            )
+            previous_text = getattr(message, field)
+            if previous_text != text:
+                payload = dict(message.raw_payload_json or {})
+                # Keep one bounded snapshot, separate from the translation source.
+                payload.setdefault("crm_edit_snapshot", {"text": previous_text or ""})
+                message.raw_payload_json = payload
+                setattr(message, field, text)
+                message.translated_text = None
+                message.original_text = None
+            message.edited_at = incoming_at
+            await self.db.flush()
+            return
         values = {
             "edited_at": edited_at,
             "translated_text": None,

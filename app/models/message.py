@@ -25,6 +25,14 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     that have no text content.
     """
     __tablename__ = "messages"
+
+    @property
+    def text_before_edit(self) -> str | None:
+        payload = self.raw_payload_json if isinstance(self.raw_payload_json, dict) else {}
+        snapshot = payload.get("crm_edit_snapshot")
+        value = snapshot.get("text") if isinstance(snapshot, dict) else None
+        return value if isinstance(value, str) else None
+
     __table_args__ = (
         Index(
             "ix_messages_tracking_link_created_at",
