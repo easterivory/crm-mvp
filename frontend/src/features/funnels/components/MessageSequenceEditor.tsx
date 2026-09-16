@@ -320,6 +320,9 @@ export default function MessageSequenceEditor({
           : null
         const isMedia = mediaType !== null
         const captionText = isMedia ? message.caption ?? message.text : message.text
+        const textLength = Array.from((captionText ?? '').trim()).length
+        const textLimit = isMedia ? 1024 : 4096
+        const hasVariables = (captionText ?? '').includes('{{')
         const fileSize = formatBytes(message.media?.file_size)
         return (
           <div key={message.id} className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
@@ -459,6 +462,19 @@ export default function MessageSequenceEditor({
               }
               className="mt-3 w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
+
+            {message.type !== 'video_note' ? (
+              <div aria-live="polite" className={`mt-1 text-xs ${textLength > textLimit ? 'text-red-300' : 'text-gray-400'}`}>
+                <span>{textLength} / {textLimit}</span>
+                {textLength > textLimit ? (
+                  <p role="alert" className="mt-1">
+                    Сообщение {index + 1}: {isMedia ? 'слишком длинная подпись к вложению' : 'слишком длинный текст'}.
+                    {' '}Telegram может отклонить отправку. Перенесите часть текста в отдельное текстовое сообщение.
+                  </p>
+                ) : null}
+                {hasVariables ? <p className="mt-1 text-amber-300">Есть переменные: после подстановки данных длина изменится. Проверьте сообщение на реальном лиде.</p> : null}
+              </div>
+            ) : null}
 
             <label className="mt-3 flex items-start gap-3 rounded-lg border border-white/8 bg-background/45 px-3 py-2">
               <input

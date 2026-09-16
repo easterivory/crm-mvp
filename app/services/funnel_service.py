@@ -1201,6 +1201,24 @@ class FunnelService:
                     )
                 )
             if strict_config:
+                if FunnelRuntimeService._is_message_step(step):
+                    for index, item in enumerate(FunnelRuntimeService._message_sequence(step), 1):
+                        text = FunnelRuntimeService._message_item_text(item)
+                        message_type, _ = FunnelRuntimeService._message_item_media_payload(step, item)
+                        limit = 4096 if message_type == "text" else 1024
+                        prefix = f"Блок «{step.title}», сообщение {index}"
+                        if "{{" in text:
+                            warnings.append(self._issue(
+                                "telegram_dynamic_text_length",
+                                f"{prefix}: есть переменные. После подстановки длина не должна превышать {limit} символов; проверьте на реальном лиде.",
+                                "warning", step_id=step.id,
+                            ))
+                        elif len(text) > limit:
+                            errors.append(self._issue(
+                                "telegram_text_too_long",
+                                f"{prefix}: {len(text)} символов при лимите {limit}. Перенесите часть текста в отдельное текстовое сообщение, иначе Telegram отклонит отправку.",
+                                "error", step_id=step.id,
+                            ))
                 for message in self.registry.validate_block(
                     step.step_type,
                     step.block_type,
