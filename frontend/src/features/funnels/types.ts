@@ -94,6 +94,7 @@ export type FunnelPushRule = {
   step_id: string
   delay_minutes: number
   message_text: string
+  photo_upload_id?: string | null
   action_after_send: 'stay' | 'move_to_step' | 'finish' | 'assign_operator'
   target_step_id: string | null
   is_active: boolean

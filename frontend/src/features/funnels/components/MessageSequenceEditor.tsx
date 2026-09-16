@@ -87,7 +87,7 @@ function formatBytes(value?: number) {
   return `${(value / 1024 / 1024).toFixed(1)} МБ`
 }
 
-function UploadedPhotoPreview({
+export function UploadedPhotoPreview({
   projectId,
   media,
 }: {
@@ -527,11 +527,12 @@ export default function MessageSequenceEditor({
               <ButtonListEditor
                 buttons={message.buttons}
                 buttonMode={message.button_mode}
-                onButtonModeChange={(buttonMode) => update(index, { button_mode: buttonMode })}
+                allowModeChange
                 currentStepId={currentStepId}
                 steps={steps}
-                onChange={(buttons) => update(index, {
+                onChange={(buttons, buttonMode) => update(index, {
                   buttons,
+                  ...(buttonMode ? { button_mode: buttonMode } : {}),
                   ...(buttons.some((button) => button.type !== 'url')
                     ? { continue_after_buttons: false }
                     : {}),

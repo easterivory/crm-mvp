@@ -1,4 +1,7 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { ImagePlus, Plus, Trash2 } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { uploadFunnelMedia } from '../api'
+import { UploadedPhotoPreview } from './MessageSequenceEditor'
 
 import type { FunnelPushRule, FunnelStep } from '../types'
 import {
@@ -8,6 +11,7 @@ import {
 } from '../funnelConfig'
 
 type PushRulesPanelProps = {
+  projectId: string
   selectedStep: FunnelStep | null
   steps: FunnelStep[]
   rules: FunnelPushRule[]
@@ -22,11 +26,29 @@ const actions = [
 ] as const
 
 export default function PushRulesPanel({
+  projectId,
   selectedStep,
   steps,
   rules,
   onChange,
 }: PushRulesPanelProps) {
+  const [uploadingId, setUploadingId] = useState<string | null>(null)
+  const [uploadError, setUploadError] = useState('')
+  const latestRules = useRef(rules)
+  latestRules.current = rules
+  const uploadPhoto = async (ruleId: string, file: File) => {
+    setUploadingId(ruleId)
+    setUploadError('')
+    try {
+      const upload = await uploadFunnelMedia(projectId, file, 'photo')
+      onChange(latestRules.current.map((rule) => rule.id === ruleId
+        ? { ...rule, photo_upload_id: upload.upload_id } : rule))
+    } catch {
+      setUploadError('Не удалось загрузить фото. Проверьте формат и размер файла.')
+    } finally {
+      setUploadingId(null)
+    }
+  }
   const stepRules = selectedStep ? rules.filter((rule) => rule.step_id === selectedStep.id) : []
   const numberById = funnelStepNumberMap(steps)
 
@@ -59,7 +81,7 @@ export default function PushRulesPanel({
   return (
     <section className="rounded-lg border border-white/8 bg-white/[0.03] p-3">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-white">Push rules</h3>
+        <h3 className="text-sm font-semibold text-white">Пуши</h3>
         <button
           type="button"
           onClick={addRule}
@@ -97,10 +119,31 @@ export default function PushRulesPanel({
                   <textarea
                     rows={2}
                     value={rule.message_text}
+                    maxLength={rule.photo_upload_id ? 1024 : 4000}
                     onChange={(event) => patchRule(rule.id, { message_text: event.target.value })}
                     className="w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
                   />
                 </label>
+                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-gray-200">
+                  <ImagePlus size={16} />
+                  {uploadingId === rule.id ? 'Загрузка фото…' : rule.photo_upload_id ? 'Заменить фото' : 'Добавить фото'}
+                  <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only"
+                    disabled={uploadingId !== null}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      if (file) void uploadPhoto(rule.id, file)
+                      event.target.value = ''
+                    }} />
+                </label>
+                {rule.photo_upload_id ? (
+                  <div>
+                    <UploadedPhotoPreview projectId={projectId} media={{ source: 'upload', upload_id: rule.photo_upload_id, media_type: 'photo' }} />
+                    <button type="button" onClick={() => patchRule(rule.id, { photo_upload_id: null })}
+                      className="mt-1 inline-flex items-center gap-1 text-xs text-red-200">
+                      <Trash2 size={13} /> Убрать фото
+                    </button>
+                  </div>
+                ) : null}
                 <label className="block">
                   <span className="mb-1 block text-xs text-gray-500">После отправки</span>
                   <select
@@ -151,6 +194,7 @@ export default function PushRulesPanel({
           ))}
         </div>
       ) : null}
+      {uploadError ? <p role="alert" className="mt-2 text-xs text-red-200">{uploadError}</p> : null}
     </section>
   )
 }

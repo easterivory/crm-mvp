@@ -189,12 +189,12 @@ export default function InputBlockSettings({
 
       <ButtonListEditor
         title="Choices"
-        buttons={normalizeButtons(step.config_json.choices)}
+        buttons={normalizeButtons(step.config_json.choices ?? step.config_json.options ?? step.config_json.buttons)}
         buttonMode={step.config_json.button_mode === 'reply' ? 'reply' : 'inline'}
-        onButtonModeChange={(buttonMode) => patchConfig({ button_mode: buttonMode })}
+        allowModeChange
         currentStepId={step.id}
         steps={steps}
-        onChange={(choices) => patchConfig({ choices })}
+        onChange={(choices, buttonMode) => patchConfig({ choices, buttons: undefined, options: undefined, ...(buttonMode ? { button_mode: buttonMode } : {}) })}
       />
     </div>
   )

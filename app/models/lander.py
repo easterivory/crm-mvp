@@ -15,7 +15,8 @@ class ProjectDomain(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
 
     __tablename__ = "project_domains"
     __table_args__ = (
-        Index("ix_project_domains_domain_name", "domain_name", unique=True),
+        Index("ix_project_domains_domain_name", "domain_name"),
+        Index("uq_project_domains_project_name", "project_id", "domain_name", unique=True),
         Index("ix_project_domains_project_id", "project_id"),
         Index("ix_project_domains_project_active", "project_id", "is_active"),
     )

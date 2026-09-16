@@ -41,9 +41,9 @@ type ButtonListEditorProps = {
   buttons: ButtonConfig[]
   currentStepId: string
   steps: FunnelStep[]
-  onChange: (buttons: ButtonConfig[]) => void
+  onChange: (buttons: ButtonConfig[], mode?: ButtonDisplayMode) => void
   buttonMode?: ButtonDisplayMode
-  onButtonModeChange?: (mode: ButtonDisplayMode) => void
+  allowModeChange?: boolean
   title?: string
 }
 
@@ -53,7 +53,7 @@ export default function ButtonListEditor({
   steps,
   onChange,
   buttonMode = 'inline',
-  onButtonModeChange,
+  allowModeChange = false,
   title = 'Кнопки',
 }: ButtonListEditorProps) {
   const update = (index: number, patch: Partial<ButtonConfig>) => {
@@ -86,19 +86,18 @@ export default function ButtonListEditor({
         </button>
       </div>
 
-      {onButtonModeChange ? (
+      {allowModeChange ? (
         <label className="block">
           <span className="mb-1 block text-xs text-gray-500">Размещение</span>
           <select
             value={buttonMode}
             onChange={(event) => {
               const mode = event.target.value as ButtonDisplayMode
-              onButtonModeChange(mode)
               onChange(buttons.map((button) =>
                 button.type === 'contact'
                   ? { ...button, contact_mode: mode === 'reply' ? 'native' : 'mini_app' }
                   : button,
-              ))
+              ), mode)
             }}
             disabled={buttons.some((button) => button.type === 'url')}
             className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
@@ -162,7 +161,7 @@ export default function ButtonListEditor({
               value={button.type}
               onChange={(event) => {
                 const type = event.target.value as ButtonConfig['type']
-                const nextButton = {
+                const nextButton: ButtonConfig = {
                   ...button,
                   type,
                   target_step_id:
@@ -171,12 +170,15 @@ export default function ButtonListEditor({
                       : undefined,
                   url: type === 'url' ? button.url : undefined,
                   value: type === 'contact' ? 'contact' : button.value,
-                  contact_mode: type === 'contact' ? button.contact_mode ?? 'mini_app' : undefined,
+                  contact_mode: type === 'contact' ? (buttonMode === 'reply' ? 'native' : 'mini_app') : undefined,
                 }
-                if (type === 'url') {
-                  onButtonModeChange?.('inline')
-                }
-                update(index, nextButton)
+                const mode = type === 'url' ? 'inline' : buttonMode
+                onChange(buttons.map((item, idx) => {
+                  const updated = idx === index ? nextButton : item
+                  return updated.type === 'contact'
+                    ? { ...updated, contact_mode: mode === 'reply' ? 'native' : 'mini_app' }
+                    : updated
+                }), mode)
               }}
               className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
             >
@@ -212,13 +214,12 @@ export default function ButtonListEditor({
                     value={button.contact_mode ?? 'mini_app'}
                     onChange={(event) => {
                       const contactMode = event.target.value as 'mini_app' | 'native'
-                      update(index, { contact_mode: contactMode })
-                      onButtonModeChange?.(contactMode === 'native' ? 'reply' : 'inline')
+                      onChange(buttons.map((item, idx) => idx === index ? { ...item, contact_mode: contactMode } : item), contactMode === 'native' ? 'reply' : 'inline')
                     }}
                     className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
                   >
                     <option value="mini_app">Mini App под сообщением</option>
-                    <option value="native">Нативная кнопка Telegram</option>
+                    <option value="native" disabled={buttons.some((item) => item.type === 'url')}>Нативная кнопка Telegram</option>
                   </select>
                 </label>
                 <div className="flex items-start gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2 text-xs leading-5 text-emerald-100/80">

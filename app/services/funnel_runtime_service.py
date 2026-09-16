@@ -959,7 +959,7 @@ class FunnelRuntimeService:
                 )
             return True
 
-        payload_step_id, _, _ = self._parse_callback_data(callback_data)
+        payload_step_id, payload_message_index, _ = self._parse_callback_data(callback_data)
         if payload_step_id is not None and payload_step_id != step.id:
             logger.info(
                 "Ignoring stale funnel callback chat_id=%s state_step=%s payload_step=%s",
@@ -973,6 +973,15 @@ class FunnelRuntimeService:
             chat_id=chat_id,
             callback_data=callback_data,
         )
+        waiting_index = self._waiting_message_index(step, state.runtime_json) if self._is_message_step(step) else None
+        if callback_data and callback_data.startswith("fr:"):
+            if button is None or (
+                waiting_index is not None
+                and payload_message_index is not None
+                and waiting_index != payload_message_index
+            ):
+                logger.info("Ignoring invalid or stale funnel button chat_id=%s step_id=%s", chat_id, step.id)
+                return True
         answer = (button or {}).get("value") or fallback_text
         answer = answer or fallback_text
 
@@ -1022,6 +1031,12 @@ class FunnelRuntimeService:
                 target_step_id=button.get("target_step_id"),
                 from_step=step,
             )
+        elif waiting_index is not None:
+            next_step = await self._execute_message_sequence(
+                chat_id=chat_id, step=step, start_index=waiting_index + 1, answer=answer,
+            )
+            if next_step is not None and next_step.id == step.id:
+                return True
         else:
             next_step = await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
         if next_step is not None:
@@ -1160,6 +1175,8 @@ class FunnelRuntimeService:
             chat_id=chat_id,
             text=rule.message_text,
             reply_markup=None,
+            **({"message_type": MessageType.PHOTO, "broadcast_upload_id": rule.photo_upload_id}
+               if getattr(rule, "photo_upload_id", None) else {}),
         )
         sent[str(rule.id)] = marker
         runtime["push_rules_sent"] = sent
@@ -3964,7 +3981,7 @@ class FunnelRuntimeService:
             messages = self._message_sequence(step)
             if 0 <= message_index < len(messages):
                 return self._buttons_from_message_item(messages[message_index])
-        raw_buttons = config.get("buttons") or config.get("choices") or []
+        raw_buttons = config.get("buttons") or config.get("choices") or config.get("options") or []
         return self._normalize_buttons(raw_buttons)
 
     def _buttons_from_message_item(self, item: dict[str, Any]) -> list[dict[str, Any]]:

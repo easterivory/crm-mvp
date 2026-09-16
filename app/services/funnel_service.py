@@ -17,6 +17,7 @@ from app.core.telegram_commands import (
     normalize_telegram_command,
 )
 from app.models.funnel import Funnel, FunnelStep, FunnelVersion
+from app.models.broadcast import BroadcastUpload
 from app.models.project import Project
 from app.models.user import User
 from app.repositories.bot_repository import BotRepository
@@ -548,6 +549,16 @@ class FunnelService:
                     "version_status": version.status,
                 },
             )
+        photo_ids = {rule.photo_upload_id for rule in graph.push_rules if rule.photo_upload_id is not None}
+        if photo_ids:
+            result = await self.db.execute(select(BroadcastUpload.id).where(
+                BroadcastUpload.id.in_(photo_ids),
+                BroadcastUpload.project_id == project_id,
+                BroadcastUpload.media_type == "photo",
+                BroadcastUpload.expires_at.is_(None),
+            ))
+            if set(result.scalars().all()) != photo_ids:
+                raise HTTPException(status_code=422, detail="Фото пуша недоступно в этом проекте. Загрузите фото заново.")
         draft_validation = self._validate_graph_payload(graph, strict_config=False)
         if draft_validation.errors:
             logger.warning(
@@ -1089,6 +1100,7 @@ class FunnelService:
                     "step_id": rule.step_id,
                     "delay_minutes": rule.delay_minutes,
                     "message_text": rule.message_text,
+                    "photo_upload_id": rule.photo_upload_id,
                     "action_after_send": rule.action_after_send,
                     "target_step_id": rule.target_step_id,
                     "is_active": rule.is_active,

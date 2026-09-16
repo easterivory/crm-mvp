@@ -93,6 +93,7 @@ export default function InspectorPanel({
                   onChange={onFieldMappingsChange}
                 />
                 <PushRulesPanel
+                  projectId={projectId}
                   selectedStep={selectedStep}
                   steps={steps}
                   rules={pushRules}

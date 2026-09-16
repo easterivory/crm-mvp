@@ -221,6 +221,9 @@ class FunnelPushRule(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     )
     delay_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    photo_upload_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broadcast_uploads.id", name="fk_funnel_push_rules_photo_upload"), nullable=True
+    )
     action_after_send: Mapped[str] = mapped_column(
         String(50), nullable=False, default="stay", server_default="stay"
     )

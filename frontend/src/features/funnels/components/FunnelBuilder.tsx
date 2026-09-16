@@ -553,6 +553,7 @@ export default function FunnelBuilder({
           step_id: duplicateId,
           delay_minutes: rule.delay_minutes,
           message_text: rule.message_text,
+          photo_upload_id: rule.photo_upload_id,
           action_after_send: rule.action_after_send,
           target_step_id: rule.target_step_id,
           is_active: rule.is_active,

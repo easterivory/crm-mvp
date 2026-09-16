@@ -629,6 +629,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                     step_id=id_map[rule.step_id],
                     delay_minutes=rule.delay_minutes,
                     message_text=rule.message_text,
+                    photo_upload_id=rule.photo_upload_id,
                     action_after_send=rule.action_after_send,
                     target_step_id=(
                         id_map.get(rule.target_step_id) if rule.target_step_id else None

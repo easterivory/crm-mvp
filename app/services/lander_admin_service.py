@@ -79,14 +79,12 @@ class LanderAdminService:
         await self._ensure_admin_project_access(actor=actor, project_id=project_id)
         domain_name = data.domain_name
         existing_result = await self.db.execute(
-            select(ProjectDomain).where(ProjectDomain.domain_name == domain_name)
+            select(ProjectDomain).where(
+                ProjectDomain.domain_name == domain_name,
+                ProjectDomain.project_id == project_id,
+            )
         )
         existing = existing_result.scalar_one_or_none()
-        if existing is not None and existing.project_id != project_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Domain already exists",
-            )
         if existing is not None:
             existing.is_active = True
             await self.db.flush()

@@ -178,10 +178,19 @@ class FunnelPushRuleIn(BaseModel):
     id: Optional[uuid.UUID] = None
     step_id: uuid.UUID
     delay_minutes: int = Field(..., ge=1)
-    message_text: str = Field(..., min_length=1, max_length=4000)
+    message_text: str = Field(default="", max_length=4000)
+    photo_upload_id: Optional[uuid.UUID] = None
     action_after_send: PushAction = "stay"
     target_step_id: Optional[uuid.UUID] = None
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_content(self) -> "FunnelPushRuleIn":
+        if not self.message_text and self.photo_upload_id is None:
+            raise ValueError("Добавьте текст или фото пуша")
+        if self.photo_upload_id is not None and len(self.message_text) > 1024:
+            raise ValueError("Подпись к фото пуша не должна превышать 1024 символа")
+        return self
 
 
 class FunnelPushRuleOut(OrmBase):
@@ -190,6 +199,7 @@ class FunnelPushRuleOut(OrmBase):
     step_id: uuid.UUID
     delay_minutes: int
     message_text: str
+    photo_upload_id: Optional[uuid.UUID] = None
     action_after_send: PushAction
     target_step_id: Optional[uuid.UUID]
     is_active: bool
