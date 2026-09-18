@@ -23,6 +23,7 @@ from app.models.tag import Tag
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.services.lead_auto_submit_queue import enqueue_lead_auto_submit
 from app.services.lead_identity_service import LeadIdentityService
+from app.core.name_extraction import KNOWN_NAMES, name_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,7 +359,7 @@ class LeadConfidenceService:
             message="Имя выглядит тестовым или некорректным.",
             meta={
                 "present": bool(normalized),
-                "known_name": normalized in self._KNOWN_FIRST_NAMES,
+                "known_name": name_key(normalized) in KNOWN_NAMES or normalized in self._KNOWN_FIRST_NAMES,
                 "suspicious": suspicious,
             },
         )
@@ -774,7 +775,7 @@ class LeadConfidenceService:
     def _is_suspicious_name(cls, normalized: str) -> bool:
         if not normalized:
             return False
-        if normalized in cls._KNOWN_FIRST_NAMES:
+        if normalized in cls._KNOWN_FIRST_NAMES or name_key(normalized) in KNOWN_NAMES:
             return False
         return normalized in cls._SUSPICIOUS_NAME_VALUES or cls._is_garbage_text(normalized)
 

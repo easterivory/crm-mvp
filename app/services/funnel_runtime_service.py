@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
 from app.core.lead_names import normalize_name_part, split_lead_name
+from app.core.name_extraction import extract_answer_name
 from app.core.telegram_commands import (
     command_from_trigger_step,
     is_custom_command_trigger,
@@ -4229,10 +4230,13 @@ class FunnelRuntimeService:
         if validation_type == "email":
             candidate = self._extract_email(text)
             return {"valid": candidate is not None, "normalized": candidate or text}
-        if validation_type == "name":
+        if validation_type == "name" or (
+            validation_type == "text" and self._input_target_field(step) in {"name", "first_name"}
+        ):
+            candidate = extract_answer_name(text)
             return {
-                "valid": len(text) >= 2 and not text.isdigit(),
-                "normalized": text,
+                "valid": candidate is not None,
+                "normalized": candidate or text,
             }
         if validation_type == "number":
             number = self._extract_number(text)
