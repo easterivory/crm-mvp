@@ -45,6 +45,10 @@ class TelegramDeliveryError(RuntimeError):
         self.retry_after = retry_after
         self.transient = transient
         self.blocked = blocked
+        self.cannot_initiate = (
+            (error_code == 403 or status_code == 403)
+            and "bot can't initiate conversation with a user" in self.description.casefold()
+        )
 
         details = [f"method={method}"]
         if status_code is not None:

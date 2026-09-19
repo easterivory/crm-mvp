@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Float, cast, delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.bot import Bot
 from app.models.chat import Chat
@@ -1199,6 +1200,26 @@ class FunnelRepository(BaseRepository[Funnel]):
         result = await self.db.execute(select(Lead).where(Lead.id == lead_id))
         return result.scalar_one_or_none()
 
+    @staticmethod
+    def _push_delivery_allowed() -> ColumnElement[bool]:
+        suspended_at = cast(
+            ChatFunnelState.runtime_json["push_delivery_suspended"]["at_epoch"].astext,
+            Float,
+        )
+        return or_(
+            suspended_at.is_(None),
+            func.coalesce(func.extract("epoch", Chat.last_user_message_at), 0) > suspended_at,
+            func.extract("epoch", ChatFunnelState.entered_step_at) > suspended_at,
+        )
+
+    async def is_push_delivery_suspended(self, chat_id: UUID) -> bool:
+        result = await self.db.execute(
+            select(ChatFunnelState.chat_id)
+            .join(Chat, Chat.id == ChatFunnelState.chat_id)
+            .where(ChatFunnelState.chat_id == chat_id, ~self._push_delivery_allowed())
+        )
+        return result.scalar_one_or_none() is not None
+
     async def find_stuck_chats_for_push_rules(
         self,
         *,
@@ -1224,6 +1245,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                 Chat.reset_at.is_(None),
                 Chat.is_blocked.is_(False),
                 Chat.is_blocked_by_user.is_(False),
+                self._push_delivery_allowed(),
                 ChatFunnelState.entered_step_at
                 <= now - func.make_interval(0, 0, 0, 0, 0, FunnelPushRule.delay_minutes),
             )
