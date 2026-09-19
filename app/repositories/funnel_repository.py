@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
+from typing import Any
 
 from sqlalchemy import Float, cast, delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
@@ -584,15 +585,35 @@ class FunnelRepository(BaseRepository[Funnel]):
             self.db.add(self._field_mapping_from_in(version_id, mapping_in))
         await self.db.flush()
 
+    @classmethod
+    def _remap_step_targets(cls, value: Any, id_map: dict[UUID, UUID]) -> Any:
+        if isinstance(value, list):
+            return [cls._remap_step_targets(item, id_map) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {}
+        for key, item in value.items():
+            if key in {"target_step_id", "timeout_target_step_id", "fallback_target_step_id"}:
+                try:
+                    old_id = UUID(str(item))
+                except (ValueError, TypeError):
+                    result[key] = item
+                else:
+                    result[key] = str(id_map[old_id]) if old_id in id_map else item
+            else:
+                result[key] = cls._remap_step_targets(item, id_map)
+        return result
+
     async def clone_graph(self, source_version_id: UUID, target_version_id: UUID) -> None:
         steps = await self.list_steps(source_version_id)
         edges = await self.list_edges(source_version_id)
         push_rules = await self.list_push_rules(source_version_id)
         field_mappings = await self.list_field_mappings(source_version_id)
 
-        id_map: dict[UUID, UUID] = {}
+        id_map: dict[UUID, UUID] = {step.id: uuid4() for step in steps}
         for step in steps:
             cloned = FunnelStep(
+                id=id_map[step.id],
                 funnel_version_id=target_version_id,
                 key=step.key,
                 title=step.title,
@@ -600,13 +621,12 @@ class FunnelRepository(BaseRepository[Funnel]):
                 block_type=step.block_type,
                 position_x=step.position_x,
                 position_y=step.position_y,
-                config_json=dict(step.config_json or {}),
+                config_json=self._remap_step_targets(step.config_json or {}, id_map),
                 validation_json=dict(step.validation_json) if step.validation_json else None,
                 ui_schema_json=dict(step.ui_schema_json) if step.ui_schema_json else None,
             )
             self.db.add(cloned)
             await self.db.flush()
-            id_map[step.id] = cloned.id
 
         for edge in edges:
             if edge.from_step_id not in id_map or edge.to_step_id not in id_map:

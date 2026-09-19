@@ -985,6 +985,31 @@ class FunnelRuntimeService:
                 return True
         answer = (button or {}).get("value") or fallback_text
         answer = answer or fallback_text
+        if button and not button.get("target_step_id"):
+            source_key = f"choice:{button['id']}" if self._is_input_step(step) else None
+            if self._is_message_step(step) and payload_message_index is not None:
+                messages = self._message_sequence(step)
+                if 0 <= payload_message_index < len(messages):
+                    message_id = messages[payload_message_index].get("id")
+                    if message_id:
+                        source_key = f"message:{message_id}:button:{button['id']}"
+            if source_key:
+                matching = [edge for edge in await self.repo.list_edges(state.funnel_version_id)
+                            if edge.from_step_id == step.id
+                            and (edge.condition_json or {}).get("source_key") == source_key]
+                if len(matching) == 1:
+                    button = {**button, "target_step_id": str(matching[0].to_step_id)}
+                    logger.info(
+                        "Resolved funnel button through saved edge chat_id=%s version_id=%s "
+                        "step_id=%s source_key=%s target_step_id=%s",
+                        chat_id, state.funnel_version_id, step.id, source_key, button["target_step_id"],
+                    )
+        logger.info(
+            "Funnel button selected chat_id=%s version_id=%s step_id=%s message_index=%s "
+            "button_id=%s target_step_id=%s",
+            chat_id, state.funnel_version_id, step.id, payload_message_index,
+            (button or {}).get("id"), (button or {}).get("target_step_id"),
+        )
 
         if self._is_input_step(step):
             if self._is_input_prompt_pending(state.runtime_json, step):
