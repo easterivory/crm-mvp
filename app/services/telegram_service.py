@@ -202,6 +202,30 @@ class TelegramService:
         All writes happen in the caller's transaction; the caller (router)
         owns the commit.
         """
+        query = getattr(update, "inline_query", None)
+        if query is not None:
+            results = []
+            chat = await self.chat_repo.get_by_external(project_id, str(query.from_user.id), bot_id=bot_id)
+            if chat is not None and not chat.is_blocked and not chat.is_deleted and chat.reset_at is None:
+                state = await self.funnel_runtime.repo.get_chat_funnel_state(chat.id)
+                if state and state.waiting_for_answer and not state.is_paused and state.completed_at is None:
+                    step = await self.funnel_runtime.repo.get_step(state.current_step_id)
+                    if step is not None:
+                        index = self.funnel_runtime._waiting_message_index(step, state.runtime_json)
+                        buttons = self.funnel_runtime._buttons_from_step(step, message_index=index)
+                        button = self.funnel_runtime._choice_for_query_buttons(buttons, query.query)
+                        if button is not None and not query.offset:
+                            text = self.funnel_runtime._query_button_text(button)
+                            results = [{"type": "article", "id": "funnel_answer",
+                                        "title": text[:256],
+                                        "input_message_content": {"message_text": text}}]
+            token = await self.bot_repo.get_bot_token_by_id(bot_id, project_id)
+            # Inline lookup must not advance the funnel or create a user message.
+            await self.db.commit()
+            if token:
+                await self.telegram_sender.answer_inline_query(token, query.id, results)
+            return
+
         if update.my_chat_member is not None:
             if await ChannelSubscriptionService(self.db).handle_tracker_membership(
                 bot_id=bot_id,

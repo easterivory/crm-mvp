@@ -269,6 +269,15 @@ class FunnelGraphValidator:
             return False
 
         config = node.config
+        seconds = config.get("auto_advance_seconds", 60)
+        if (
+            config.get("auto_advance_enabled") is True
+            and config.get("timeout_target_step_id")
+            and isinstance(seconds, int)
+            and not isinstance(seconds, bool)
+            and 1 <= seconds <= 604800
+        ):
+            return True
         if config.get("wait_for_answer") is True:
             return True
         if self._buttons_pause_runtime(

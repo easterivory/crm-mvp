@@ -1,9 +1,12 @@
 import type { FunnelStep } from '../types'
 import {
   normalizeMessages,
+  numberValue,
+  textValue,
   type MessageConfig,
 } from '../funnelConfig'
 import MessageSequenceEditor from './MessageSequenceEditor'
+import { TargetSelect } from './ButtonListEditor'
 
 type MessageBlockSettingsProps = {
   step: FunnelStep
@@ -38,12 +41,37 @@ export default function MessageBlockSettings({
   }
 
   return (
-    <MessageSequenceEditor
-      messages={messages}
-      currentStepId={step.id}
-      projectId={projectId}
-      steps={steps}
-      onChange={updateMessages}
-    />
+    <div className="space-y-4">
+      <MessageSequenceEditor
+        messages={messages}
+        currentStepId={step.id}
+        projectId={projectId}
+        steps={steps}
+        onChange={updateMessages}
+      />
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={step.config_json.auto_advance_enabled === true}
+          className="h-4 w-4 shrink-0 rounded border-white/20 bg-background text-accent-300"
+          onChange={(event) => onConfigChange({ ...step.config_json, auto_advance_enabled: event.target.checked })} />
+        Перейти по таймеру
+      </label>
+      {step.config_json.auto_advance_enabled === true && (
+        <div className="space-y-3">
+          <label className="block text-sm">
+            Время ожидания, сек
+            <input type="number" min={1} max={604800} step={1}
+              value={numberValue(step.config_json, 'auto_advance_seconds', 60)}
+              onChange={(event) => onConfigChange({ ...step.config_json, auto_advance_seconds: Number(event.target.value) })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5" />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block">Шаг по таймеру</span>
+            <TargetSelect value={textValue(step.config_json, 'timeout_target_step_id')}
+              steps={steps} currentStepId={step.id}
+              onChange={(value) => onConfigChange({ ...step.config_json, timeout_target_step_id: value })} />
+          </label>
+        </div>
+      )}
+    </div>
   )
 }

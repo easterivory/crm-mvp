@@ -1463,6 +1463,11 @@ class TelegramSenderService:
             timeout=30.0,
         )
 
+    async def answer_inline_query(self, token: str, query_id: str, results: list[dict[str, Any]]) -> None:
+        await self._post_bot_api(token=token, method="answerInlineQuery", json_payload={
+            "inline_query_id": query_id, "results": results, "cache_time": 0, "is_personal": True,
+        })
+
     async def answer_callback_query(self, token: str, callback_query_id: str) -> None:
         try:
             async with httpx.AsyncClient(timeout=5) as client:

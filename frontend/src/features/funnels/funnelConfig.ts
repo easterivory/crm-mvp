@@ -4,7 +4,8 @@ export type ButtonConfig = {
   id: string
   label: string
   value: string
-  type: 'branch' | 'url' | 'contact'
+  type: 'branch' | 'url' | 'contact' | 'query'
+  query_text?: string
   target_step_id?: string
   url?: string
   contact_mode?: 'mini_app' | 'native'
@@ -205,12 +206,13 @@ export function normalizeButton(raw: unknown, index: number): ButtonConfig {
     rawType === 'contact' ||
     rawType === 'request_contact' ||
     item.request_contact === true ||
-    (!item.url && rawValue.trim().toLowerCase() === 'contact')
+    (rawType !== 'query' && !item.url && rawValue.trim().toLowerCase() === 'contact')
   return {
     id: String(item.id ?? `btn_${index + 1}`),
     label,
     value: isContact ? 'contact' : rawValue,
-    type: isContact ? 'contact' : rawType === 'url' || item.url ? 'url' : 'branch',
+    type: isContact ? 'contact' : rawType === 'url' || item.url ? 'url' : rawType === 'query' ? 'query' : 'branch',
+    query_text: typeof item.query_text === 'string' ? item.query_text : undefined,
     target_step_id:
       typeof item.target_step_id === 'string' ? item.target_step_id : '',
     url: !isContact && typeof item.url === 'string' ? item.url : '',
@@ -496,13 +498,23 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
     const messages = normalizeMessages(step.config_json)
     const outputs = messages.flatMap((message) =>
       message.buttons
-        .filter((button) => button.type === 'branch' || button.type === 'contact')
+        .filter((button) => button.type === 'branch' || button.type === 'contact' || button.type === 'query')
         .map((button) => ({
           key: `message:${message.id}:button:${button.id}`,
           label: button.type === 'contact' ? `Контакт · ${button.label}` : button.label,
           targetStepId: button.target_step_id,
         })),
     )
+    if (step.config_json.auto_advance_enabled === true) {
+      const answerOutputs = outputs.length > 0 ? outputs : messages.some((message) => message.wait_for_answer)
+        ? [{ key: 'message:next', label: 'После ответа', targetStepId: undefined }]
+        : []
+      return [...answerOutputs, {
+        key: 'message:timeout',
+        label: 'По таймеру',
+        targetStepId: textValue(step.config_json, 'timeout_target_step_id'),
+      }]
+    }
     if (outputs.length > 0) {
       return outputs
     }

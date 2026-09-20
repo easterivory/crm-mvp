@@ -9,6 +9,7 @@ ROOT_ADMIN_EMAIL = "superadmin@testcrm.dev"
 TELEGRAM_WEBHOOK_ALLOWED_UPDATES = (
     "message",
     "callback_query",
+    "inline_query",
     "my_chat_member",
     "chat_member",
     "chat_join_request",

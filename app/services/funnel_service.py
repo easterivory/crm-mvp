@@ -1201,6 +1201,31 @@ class FunnelService:
                     )
                 )
             if strict_config:
+                if FunnelRuntimeService._is_message_step(step) and step.config_json.get("auto_advance_enabled") is True:
+                    seconds = step.config_json.get("auto_advance_seconds", 60)
+                    if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= 604800:
+                        errors.append(self._issue(
+                            "invalid_message_timer", f"Блок «{step.title}»: время перехода должно быть целым числом от 1 до 604800 секунд.",
+                            "error", step_id=step.id,
+                        ))
+                    if not step.config_json.get("timeout_target_step_id"):
+                        errors.append(self._issue(
+                            "missing_message_timer_target", f"Блок «{step.title}»: выберите следующий шаг для перехода по таймеру.",
+                            "error", step_id=step.id,
+                        ))
+                button_groups = [FunnelRuntimeService._normalize_buttons(
+                    step.config_json.get("buttons") or step.config_json.get("choices") or step.config_json.get("options") or []
+                )]
+                if FunnelRuntimeService._is_message_step(step):
+                    button_groups.extend(FunnelRuntimeService._normalize_buttons(item.get("buttons") or item.get("choices") or [])
+                                         for item in FunnelRuntimeService._message_sequence(step))
+                for buttons in button_groups:
+                    queries = [FunnelRuntimeService._query_button_text(button)
+                               for button in buttons if button.get("type") == "query"]
+                    if any(not query or len(query) > 256 for query in queries):
+                        errors.append(self._issue("invalid_query_text", f"Блок «{step.title}»: текст Query-кнопки должен содержать от 1 до 256 символов.", "error", step_id=step.id))
+                    if len({query.casefold() for query in queries}) != len(queries):
+                        errors.append(self._issue("duplicate_query_text", f"Блок «{step.title}»: у Query-кнопок должны быть разные тексты ответа, иначе нельзя определить выбранную ветку.", "error", step_id=step.id))
                 if FunnelRuntimeService._is_message_step(step):
                     for index, item in enumerate(FunnelRuntimeService._message_sequence(step), 1):
                         text = FunnelRuntimeService._message_item_text(item)

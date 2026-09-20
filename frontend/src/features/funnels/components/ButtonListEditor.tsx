@@ -99,7 +99,7 @@ export default function ButtonListEditor({
                   : button,
               ), mode)
             }}
-            disabled={buttons.some((button) => button.type === 'url')}
+            disabled={buttons.some((button) => button.type === 'url' || button.type === 'query')}
             className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
           >
             <option value="inline">Inline под сообщением</option>
@@ -165,14 +165,14 @@ export default function ButtonListEditor({
                   ...button,
                   type,
                   target_step_id:
-                    type === 'branch' || type === 'contact'
+                    type === 'branch' || type === 'contact' || type === 'query'
                       ? button.target_step_id
                       : undefined,
                   url: type === 'url' ? button.url : undefined,
                   value: type === 'contact' ? 'contact' : button.value,
                   contact_mode: type === 'contact' ? (buttonMode === 'reply' ? 'native' : 'mini_app') : undefined,
                 }
-                const mode = type === 'url' ? 'inline' : buttonMode
+                const mode = type === 'url' || type === 'query' ? 'inline' : buttonMode
                 onChange(buttons.map((item, idx) => {
                   const updated = idx === index ? nextButton : item
                   return updated.type === 'contact'
@@ -184,6 +184,7 @@ export default function ButtonListEditor({
             >
               <option value="branch">Ветка</option>
               <option value="url">URL</option>
+              <option value="query">Query · вставить текст в Telegram</option>
               <option
                 value="contact"
                 disabled={buttons.some((item, itemIndex) => itemIndex !== index && item.type === 'contact')}
@@ -191,7 +192,15 @@ export default function ButtonListEditor({
                 Запросить номер Telegram
               </option>
             </select>
-            {button.type !== 'contact' ? (
+            {button.type === 'query' ? (
+              <input value={button.query_text ?? ''}
+                onChange={(event) => update(index, { query_text: event.target.value })}
+                maxLength={256}
+                placeholder="Текст запроса (по умолчанию название кнопки)"
+                aria-label="Текст запроса"
+                className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none" />
+            ) : null}
+            {button.type !== 'contact' && button.type !== 'query' ? (
               <input
                 value={button.value}
                 onChange={(event) => update(index, { value: event.target.value })}

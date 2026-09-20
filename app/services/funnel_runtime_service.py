@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -662,12 +662,20 @@ class FunnelRuntimeService:
             return False
         uses_account_button_fallback = await self._uses_account_button_fallback(chat_id)
 
+        if self._is_input_step(step):
+            query_choice = self._choice_for_query_buttons(self._buttons_from_step(step), text)
+            if query_choice:
+                text = self._query_button_text(query_choice)
+
         if state.waiting_for_answer and self._is_message_step(step):
             message_index = self._waiting_message_index(step, state.runtime_json)
             messages = self._message_sequence(step)
             item = messages[message_index] if message_index is not None else None
             buttons = self._buttons_from_message_item(item) if item is not None else []
             button_mode = self._message_item_button_mode(item) if item is not None else "inline"
+            query_choice = self._choice_for_query_buttons(buttons, text)
+            if query_choice:
+                text = self._query_button_text(query_choice)
             contact_button = (
                 self._contact_button(buttons)
                 if message_type == MessageType.CONTACT
@@ -675,7 +683,7 @@ class FunnelRuntimeService:
             )
             if contact_button is None and uses_account_button_fallback:
                 contact_button = self._account_contact_choice(buttons, text)
-            reply_choice = (
+            reply_choice = query_choice or (
                 (
                     self._choice_for_account_buttons(buttons, text)
                     if uses_account_button_fallback
@@ -693,6 +701,7 @@ class FunnelRuntimeService:
                 and button_mode == "inline"
                 and self._has_callback_buttons(buttons)
                 and contact_button is None
+                and query_choice is None
                 and not uses_account_button_fallback
             ):
                 logger.info(
@@ -1256,6 +1265,34 @@ class FunnelRuntimeService:
             logger.warning("Scheduled funnel job references missing step job_id=%s", job.id)
             return
 
+        if job.job_type == "message_auto_advance":
+            marker = (state.runtime_json or {}).get("message_auto_advance")
+            if (
+                not state.waiting_for_answer
+                or not isinstance(marker, dict)
+                or marker != (job.payload_json or {})
+                or self._message_auto_advance_seconds(step) <= 0
+            ):
+                logger.info("Ignoring obsolete message timer job_id=%s chat_id=%s", job.id, job.chat_id)
+                return
+            runtime_json = dict(state.runtime_json or {})
+            runtime_json.pop("message_auto_advance", None)
+            await self.repo.upsert_chat_funnel_state(
+                chat_id=job.chat_id, funnel_id=state.funnel_id,
+                funnel_version_id=state.funnel_version_id, current_step_id=step.id,
+                entered_step_at=state.entered_step_at, waiting_for_answer=False,
+                runtime_json=runtime_json,
+            )
+            next_step = await self._move_to_step_id(
+                chat_id=job.chat_id, from_step=step,
+                target_step_id=(step.config_json or {}).get("timeout_target_step_id"),
+            )
+            logger.info("Message timer fired chat_id=%s step_id=%s target_step_id=%s job_id=%s",
+                        job.chat_id, step.id, (step.config_json or {}).get("timeout_target_step_id"), job.id)
+            if next_step is not None:
+                await self._execute_from_step(chat_id=job.chat_id, step=next_step)
+            return
+
         if job.job_type == "resume_step":
             await self._execute_from_step(chat_id=job.chat_id, step=step)
             return
@@ -1694,7 +1731,10 @@ class FunnelRuntimeService:
                 self._message_item_continues_after_buttons(item)
                 and self._buttons_support_automatic_continue(buttons)
             )
-            if should_wait_for_buttons or self._message_item_waits_for_answer(item):
+            auto_advance_seconds = self._message_auto_advance_seconds(step)
+            if should_wait_for_buttons or self._message_item_waits_for_answer(item) or (
+                auto_advance_seconds > 0 and index == len(messages) - 1
+            ):
                 state = await self.repo.get_chat_funnel_state(chat_id)
                 if state is not None:
                     runtime_json = dict(state.runtime_json or {})
@@ -1702,6 +1742,9 @@ class FunnelRuntimeService:
                         "step_id": str(step.id),
                         "message_index": index,
                     }
+                    timer_marker = {"token": str(uuid4()), "message_index": index}
+                    if auto_advance_seconds > 0:
+                        runtime_json["message_auto_advance"] = timer_marker
                     await self.repo.upsert_chat_funnel_state(
                         chat_id=chat_id,
                         funnel_id=state.funnel_id,
@@ -1711,10 +1754,25 @@ class FunnelRuntimeService:
                         waiting_for_answer=True,
                         runtime_json=runtime_json,
                     )
+                    if auto_advance_seconds > 0:
+                        await self._schedule_job(
+                            chat_id=chat_id, step=step, job_type="message_auto_advance",
+                            delay_seconds=auto_advance_seconds, payload_json=timer_marker,
+                        )
                 return step
             index += 1
 
         return await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
+
+    @staticmethod
+    def _message_auto_advance_seconds(step: FunnelStep) -> int:
+        config = step.config_json or {}
+        if config.get("auto_advance_enabled") is not True or not config.get("timeout_target_step_id"):
+            return 0
+        value = config.get("auto_advance_seconds", 60)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 604800:
+            return 0
+        return value
 
     async def _send_step_message(self, *, chat_id: UUID, step: FunnelStep) -> None:
         sequence = self._message_sequence(step)
@@ -2023,6 +2081,7 @@ class FunnelRuntimeService:
             edge
             for edge in await self.repo.list_edges(state.funnel_version_id)
             if edge.from_step_id == step.id
+            and (edge.condition_json or {}).get("source_key") != "message:timeout"
         ]
         edge = self._select_edge(edges, answer)
         if edge is None:
@@ -3956,7 +4015,7 @@ class FunnelRuntimeService:
             return None
         normalized_mode = "reply" if button_mode == "reply" else "inline"
         if normalized_mode == "reply" and any(
-            button.get("type") == "url" for button in buttons
+            button.get("type") in {"url", "query"} for button in buttons
         ):
             normalized_mode = "inline"
 
@@ -3981,6 +4040,8 @@ class FunnelRuntimeService:
                 item["web_app"] = {"url": self._contact_web_app_url()}
             elif button.get("type") == "url" and button.get("url"):
                 item["url"] = button["url"]
+            elif button.get("type") == "query":
+                item["switch_inline_query_current_chat"] = self._query_button_text(button)
             else:
                 if message_index is None:
                     item["callback_data"] = f"fr:{step.id.hex}:{index}"
@@ -4047,7 +4108,7 @@ class FunnelRuntimeService:
                 is_contact = bool(
                     raw.get("request_contact") is True
                     or raw_type in {"contact", "request_contact"}
-                    or (not raw.get("url") and value.lower() == "contact")
+                    or (raw_type != "query" and not raw.get("url") and value.lower() == "contact")
                 )
                 button = {
                     "id": str(raw.get("id") or f"btn_{index + 1}"),
@@ -4059,6 +4120,7 @@ class FunnelRuntimeService:
                         else raw_type or ("url" if raw.get("url") else "branch")
                     ),
                     "target_step_id": raw.get("target_step_id"),
+                    "query_text": raw.get("query_text"),
                     "url": None if is_contact else raw.get("url"),
                     "contact_mode": (
                         "native"
@@ -4107,6 +4169,17 @@ class FunnelRuntimeService:
             for button in raw_buttons
         )
         return "reply" if config.get("button_mode") == "reply" or has_native_contact else "inline"
+
+    @staticmethod
+    def _query_button_text(button: dict[str, Any]) -> str:
+        return str(button.get("query_text") or "").strip() or str(button.get("label") or "").strip()
+
+    @classmethod
+    def _choice_for_query_buttons(cls, buttons: list[dict[str, Any]], answer: Optional[str]) -> Optional[dict[str, Any]]:
+        text = re.sub(r"^@[A-Za-z0-9_]+\s+", "", str(answer or "").strip())
+        matches = [button for button in buttons if button.get("type") == "query"
+                   and cls._query_button_text(button).casefold() == text.casefold()]
+        return matches[0] if len(matches) == 1 else None
 
     @staticmethod
     def _choice_for_buttons(
@@ -4366,7 +4439,8 @@ class FunnelRuntimeService:
         return f"+{digits}" if digits else value.strip()
 
     def _choice_for_answer(self, step: FunnelStep, answer: Any | None) -> Optional[dict[str, Any]]:
-        return self._choice_for_buttons(self._buttons_from_step(step), answer)
+        buttons = self._buttons_from_step(step)
+        return self._choice_for_query_buttons(buttons, answer) or self._choice_for_buttons(buttons, answer)
 
     async def _uses_account_button_fallback(self, chat_id: UUID) -> bool:
         chat_repo = getattr(self, "chat_repo", None)
@@ -4439,6 +4513,7 @@ class FunnelRuntimeService:
         button: Optional[dict[str, Any]] = None,
     ) -> dict:
         runtime = dict(runtime_json or {})
+        runtime.pop("message_auto_advance", None)
         runtime["last_answer"] = answer
         runtime["last_answer_step_id"] = str(step_id)
         retries = dict(runtime.get("input_retries") or {})

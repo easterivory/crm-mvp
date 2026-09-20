@@ -8,6 +8,7 @@ import {
   disconnectTelegramAccount,
   fetchTelegramAccountConnection,
   requestTelegramAccountCode,
+  resendTelegramAccountCode,
   syncTelegramAccount,
 } from '../api'
 import type { Bot, TelegramAccountConnection } from '../types'
@@ -184,7 +185,7 @@ export default function TelegramAccountConnectionPanel({ bot, projectId, onChang
         </div>
       ) : authStatus === 'awaiting_code' ? (
         <form
-          className="flex flex-col gap-2 sm:flex-row"
+          className="flex flex-col gap-2 sm:flex-row sm:flex-wrap"
           onSubmit={(event) => {
             event.preventDefault()
             if (code.trim()) void run(() => confirmTelegramAccountCode(bot.id, code.trim(), projectId))
@@ -201,6 +202,19 @@ export default function TelegramAccountConnectionPanel({ bot, projectId, onChang
           <button type="submit" disabled={busy || !code.trim()} className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 text-sm font-semibold text-[#071018] disabled:opacity-50">
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : <KeyRound size={15} />}
             Подтвердить
+          </button>
+          <button type="button" disabled={busy}
+            onClick={() => void run(async () => {
+              const next = await resendTelegramAccountCode(bot.id, projectId)
+              setCode('')
+              return next
+            })}
+            className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 px-3 text-sm text-gray-200 disabled:opacity-50">
+            <RefreshCw size={15} /> Повторить код
+          </button>
+          <button type="button" disabled={busy} onClick={() => void disconnect()}
+            className="min-h-10 shrink-0 px-3 text-sm text-gray-400 disabled:opacity-50">
+            Сбросить вход
           </button>
         </form>
       ) : authStatus === 'awaiting_password' ? (

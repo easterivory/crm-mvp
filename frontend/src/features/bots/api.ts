@@ -67,6 +67,14 @@ export async function requestTelegramAccountCode(
   return data
 }
 
+export async function resendTelegramAccountCode(botId: string, projectId?: string | null): Promise<TelegramAccountConnection> {
+  const { data } = await api.post<TelegramAccountConnection>(
+    `/bots/${botId}/telegram-account/resend-code`, {},
+    { params: telegramAccountParams(projectId) },
+  )
+  return data
+}
+
 export async function confirmTelegramAccountCode(
   botId: string,
   code: string,

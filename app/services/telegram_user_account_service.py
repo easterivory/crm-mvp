@@ -22,6 +22,7 @@ from telethon.errors import (
     SessionPasswordNeededError,
 )
 from telethon.sessions import StringSession
+from telethon.tl.functions.auth import ResendCodeRequest
 
 from app.core.config import settings
 from app.models.bot import Bot, TelegramUserConnection
@@ -135,6 +136,52 @@ class TelegramUserAccountService:
         )
         assert connection is not None
         return self._status_out(bot.id, connection)
+
+    async def resend_login_code(
+        self, *, bot_id: UUID, project_id: UUID, actor: User,
+    ) -> TelegramAccountConnectionOut:
+        await self._get_account_bot(bot_id, project_id)
+        connection = await self.connection_repo.get_by_bot_id(bot_id, for_update=True)
+        if connection is None or connection.auth_status != "awaiting_code":
+            raise HTTPException(status_code=409, detail="Сначала запросите код входа.")
+        self._ensure_auth_not_expired(connection)
+        now = datetime.now(timezone.utc)
+        updated_at = connection.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        remaining = int((updated_at + timedelta(seconds=60) - now).total_seconds())
+        if remaining >= 0:
+            raise HTTPException(status_code=429, detail=f"Повторите запрос через {remaining + 1} сек.",
+                                headers={"Retry-After": str(remaining + 1)})
+        api_hash, session, phone_code_hash = self._decrypt_login_state(connection)
+        api_id, phone = connection.api_id, connection.phone_number
+        original_hash = connection.phone_code_hash_encrypted
+        await self.connection_repo.update_by_bot_id(bot_id, last_error=None)
+        await self.db.commit()
+        client = self._client(api_id=api_id, api_hash=api_hash, session=session)
+        try:
+            await client.connect()
+            sent_code = await client(ResendCodeRequest(phone_number=phone, phone_code_hash=phone_code_hash))
+            saved_session = self._save_session(client)
+        except Exception as exc:
+            # A failed resend must not erase a still usable pending login session.
+            raise self._auth_http_error(exc) from exc
+        finally:
+            await client.disconnect()
+        current = await self.connection_repo.get_by_bot_id(bot_id, for_update=True)
+        if current is None or current.auth_status != "awaiting_code" or current.phone_code_hash_encrypted != original_hash:
+            raise HTTPException(status_code=409, detail="Состояние входа изменилось. Обновите страницу.")
+        updated = await self.connection_repo.update_by_bot_id(
+            bot_id,
+            session_encrypted=self.credentials.encrypt(saved_session),
+            phone_code_hash_encrypted=self.credentials.encrypt(sent_code.phone_code_hash),
+            auth_expires_at=now + timedelta(minutes=settings.TELEGRAM_ACCOUNT_AUTH_TTL_MINUTES),
+            last_error=None,
+        )
+        await self._audit(bot_id=bot_id, actor=actor, action_type="telegram_account_code_resent",
+                          description="Повторно запрошен код входа Telegram-аккаунта.")
+        assert updated is not None
+        return self._status_out(bot_id, updated)
 
     async def confirm_code(
         self,

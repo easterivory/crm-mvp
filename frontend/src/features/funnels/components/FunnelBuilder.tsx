@@ -200,6 +200,9 @@ function setManagedTarget(step: FunnelStep, sourceKey: string, targetStepId: str
   }
 
   if (step.step_type === 'message') {
+    if (sourceKey === 'message:timeout') {
+      return { ...step, config_json: { ...step.config_json, timeout_target_step_id: targetStepId } }
+    }
     return {
       ...step,
       config_json: {
@@ -263,6 +266,7 @@ function isConfigBackedSource(sourceKey: string) {
     (sourceKey.startsWith('message:') && sourceKey.includes(':button:')) ||
     sourceKey.startsWith('choice:') ||
     sourceKey === 'input:timeout' ||
+    sourceKey === 'message:timeout' ||
     sourceKey === 'delay:target'
   )
 }

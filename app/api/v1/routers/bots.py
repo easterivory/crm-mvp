@@ -118,6 +118,22 @@ async def request_telegram_account_code(
 
 
 @router.post(
+    "/bots/{bot_id}/telegram-account/resend-code",
+    response_model=TelegramAccountConnectionOut,
+)
+async def resend_telegram_account_code(
+    bot_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: Any = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelegramAccountConnectionOut:
+    _ensure_telegram_account_management_access(current_user)
+    return await TelegramUserAccountService(db).resend_login_code(
+        bot_id=bot_id, project_id=project_id, actor=current_user,
+    )
+
+
+@router.post(
     "/bots/{bot_id}/telegram-account/confirm-code",
     response_model=TelegramAccountConnectionOut,
 )

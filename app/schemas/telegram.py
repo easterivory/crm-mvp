@@ -146,6 +146,14 @@ class TelegramChatJoinRequest(BaseModel):
     invite_link: Optional[TelegramChatInviteLink] = None
 
 
+class TelegramInlineQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    id: str
+    from_user: TelegramUser = Field(alias="from")
+    query: str
+    offset: str = ""
+
+
 class TelegramUpdate(BaseModel):
     """
     Top-level Telegram Update object.
@@ -157,6 +165,7 @@ class TelegramUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     update_id: int
+    inline_query: Optional[TelegramInlineQuery] = None
     message: Optional[TelegramMessage] = None
     callback_query: Optional[TelegramCallbackQuery] = None
     my_chat_member: Optional[TelegramChatMemberUpdated] = None
