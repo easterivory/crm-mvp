@@ -801,6 +801,15 @@ class FunnelRuntimeService:
             if not validation["valid"]:
                 retry_count = self._input_retry_count(state.runtime_json, step.id) + 1
                 max_retries = self._input_max_retries(step)
+                logger.info(
+                    "Funnel input rejected chat_id=%s version_id=%s step_id=%s "
+                    "block_type=%s answer_type=%s target_field=%s message_type=%s "
+                    "answer_chars=%s answer_lines=%s retry=%s max_retries=%s",
+                    chat_id, state.funnel_version_id, step.id, step.block_type,
+                    self._input_answer_type(step), self._input_target_field(step),
+                    message_type, len(text or ""), len((text or "").splitlines()),
+                    retry_count, max_retries,
+                )
                 runtime_json = self._runtime_with_retry_count(
                     state.runtime_json,
                     step.id,

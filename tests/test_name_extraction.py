@@ -18,6 +18,13 @@ from app.services.funnel_runtime_service import FunnelRuntimeService
     ("Salom\nIsmim Otabek\n29 yoshdaman", "Otabek"),
     ("Азиз", "Азиз"), ("алёна", "алёна"), ("José", "José"),
     ("Анна-Мария", "Анна-Мария"),
+    ("Бахти", "Бахти"), ("бахти", "бахти"),
+    ("Бахтиёр", "Бахтиёр"), ("baxtiyor", "baxtiyor"),
+    ("Бахти\nРустили билмайман", "Бахти"),
+    ("Бахти Рустили билмайман", "Бахти"),
+    ("Salom\nBaxti\nRus tili bilmayman", "Baxti"),
+    ("Рустили билмайман", None), ("Рус тили билмайман", None),
+    ("Рустили", None), ("bilmayman", None),
     ("Мне 29 лет", None), ("Опыта нет", None), ("хочу начать", None),
     ("Иван\nПётр", None),
     ("Иван\nМария", None), ("123", None), ("@username", None),
@@ -44,3 +51,53 @@ def test_runtime_extracts_only_name_answers(config):
 
 def test_name_dictionary_covers_requested_regions_and_accents():
     assert all(name_key(name) in KNOWN_NAMES for name in ("Алёна", "José", "João", "Алишер", "Otabek"))
+
+
+@pytest.mark.parametrize("config", [{"answer_type": "name"},
+    {"answer_type": "text", "save_to": "first_name"}, {"answer_type": "text", "save_to": "name"}])
+def test_uzbek_name_step_accepts_name_without_saving_language_message(config):
+    runtime = FunnelRuntimeService.__new__(FunnelRuntimeService)
+    step = SimpleNamespace(block_type="generic_input", config_json=config)
+    assert runtime._validate_input_answer(step, "Бахти") == {"valid": True, "normalized": "Бахти"}
+    assert runtime._validate_input_answer(step, "Бахти\nРустили билмайман") == {"valid": True, "normalized": "Бахти"}
+    assert runtime._validate_input_answer(step, "Рустили билмайман")["valid"] is False
+
+
+@pytest.mark.parametrize("name", [
+    "Санёк", "Лёха", "Серёга", "Димон", "Анютка", "Катюша", "Маруся", "Светик",
+    "Надюша", "Тимоша", "Ярослава", "Демьян", "Андрюха", "Seryozha", "Yuliya", "Ksyusha",
+    "Бахти", "Baxtiyor", "Жаҳонгир", "Jakhongir", "Шохрух", "Shoxrux", "Муҳаммад",
+    "Muhammadali", "Абдурахмон", "Abdurakhmon", "Гўзал", "Go'zal", "Ўткир", "O‘tkir",
+    "Oʼtkir", "O’tkir", "Нилуфар", "Nilufar", "Lutfullo", "Shahnoza",
+    "Nacho", "Paco", "Pepe", "Lupita", "Toño", "Juampi", "Majo", "Mafer",
+    "Matías", "Jazmín", "Caterina", "Guilherme", "Joãozinho", "Zezinho", "Pedrinho",
+    "Marquinhos", "Rafinha", "Duduzinho", "Letícia", "Vinícius", "Heloísa", "Thaís",
+])
+@pytest.mark.parametrize("case", [str.lower, str.upper])
+def test_expanded_names_recognized_without_cues_and_keep_original_spelling(name, case):
+    answer = case(name)
+    assert name_key(answer) in KNOWN_NAMES
+    assert extract_answer_name(answer) == answer
+    assert extract_answer_name(f"{answer}\n29") == answer
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Привет\nдимон\nмне 29 лет", "димон"),
+    ("Salom\nshoxrux\nRus tili bilmayman", "shoxrux"),
+    ("Hola\nnacho\ntengo 29 años", "nacho"),
+    ("Olá\npedrinho\ntenho 30 anos", "pedrinho"),
+    ("serёga\n123", None),
+    ("спасибо\nне знаю", None), ("salom\nrahmat", None),
+    ("hola\ngracias", None), ("olá\nobrigado", None),
+    ("саша\nдимон", None), ("paco\nnacho", None),
+    ("@pedrinho", None), ("nacho@example.com", None),
+])
+def test_expanded_dictionary_does_not_absorb_other_messages(text, expected):
+    assert extract_answer_name(text) == expected
+
+
+def test_dictionary_has_no_accidental_mixed_alphabet_tokens():
+    import re
+
+    assert not [name for name in KNOWN_NAMES
+                if re.search(r"[a-z]", name) and re.search(r"[а-яё]", name)]
