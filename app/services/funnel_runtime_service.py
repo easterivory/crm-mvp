@@ -4268,12 +4268,15 @@ class FunnelRuntimeService:
     def _input_retry_message(step: FunnelStep) -> str:
         config = step.config_json or {}
         validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
-        return str(
-            config.get("retry_message")
-            or config.get("error_message")
-            or validation.get("error_message")
-            or "Введите корректное значение"
-        ).strip()
+        for value in (config.get("retry_message"), config.get("error_message"), validation.get("error_message")):
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        answer_type = FunnelRuntimeService._input_answer_type(step)
+        if answer_type == "name" or (
+            answer_type == "text" and FunnelRuntimeService._input_target_field(step) in {"name", "first_name"}
+        ):
+            return "Как я могу к вам обращаться? Напишите, пожалуйста, только имя."
+        return "Не удалось разобрать ответ. Пожалуйста, напишите ещё раз."
 
     @staticmethod
     def _delay_step_seconds(step: FunnelStep) -> int:

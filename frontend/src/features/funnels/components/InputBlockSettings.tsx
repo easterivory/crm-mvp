@@ -157,7 +157,7 @@ export default function InputBlockSettings({
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         <label className="block">
-          <span className="mb-1 block text-xs text-gray-500">Max retries</span>
+          <span className="mb-1 block text-xs text-gray-500">Количество повторных запросов</span>
           <input
             type="number"
             min={0}
@@ -169,8 +169,11 @@ export default function InputBlockSettings({
       </div>
 
       <label className="block">
-        <span className="mb-1 block text-xs text-gray-500">Сообщение при ошибке</span>
-        <input
+        <span className="mb-1 block text-xs text-gray-500">Ответ при нераспознанном вводе (fallback)</span>
+        <textarea
+          rows={3}
+          maxLength={4096}
+          placeholder="Например: Как я могу к вам обращаться? Напишите, пожалуйста, только имя."
           value={textValue(step.config_json, 'retry_message')}
           onChange={(event) => patchConfig({ retry_message: event.target.value })}
           className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
