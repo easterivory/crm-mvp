@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from html import escape
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -1798,6 +1799,7 @@ class FunnelRuntimeService:
             telegram_file_id=media_ref,
             broadcast_upload_id=upload_id,
             file_name=self._step_file_name(step),
+            parse_mode="HTML" if item.get("parse_mode") == "HTML" else None,
             mime_type=self._step_mime_type(step),
             reply_markup=self._reply_markup_for_step(step),
         )
@@ -1807,6 +1809,7 @@ class FunnelRuntimeService:
         if not text:
             return
         await self._create_outgoing_message(
+            parse_mode="HTML" if (step.config_json or {}).get("parse_mode") == "HTML" else None,
             chat_id=chat_id,
             text=text,
             reply_markup=self._reply_markup_for_step(step),
@@ -1914,12 +1917,13 @@ class FunnelRuntimeService:
         broadcast_upload_id: Optional[UUID] = None,
         file_name: Optional[str] = None,
         mime_type: Optional[str] = None,
+        parse_mode: str | None = None,
     ) -> None:
         chat = await self.chat_repo.get_by_id(chat_id)
         if chat is None:
             return
         normalized_type = self._normalize_message_type(message_type)
-        message_text = (await self._render_text_template(chat_id, text)).strip()
+        message_text = (await self._render_text_template(chat_id, text, html=parse_mode == "HTML")).strip()
         if broadcast_upload_id is not None and normalized_type != MessageType.TEXT:
             if chat.bot_id is None:
                 raise RuntimeError("Chat bot is not configured for funnel media send")
@@ -1938,6 +1942,7 @@ class FunnelRuntimeService:
                 raise RuntimeError("Funnel media upload file is missing from private storage")
 
             telegram_result = await self.message_service._send_media_to_telegram_by_type(
+                parse_mode=parse_mode,
                 media_type=normalized_type,
                 media=path,
                 project_id=chat.project_id,
@@ -1966,6 +1971,7 @@ class FunnelRuntimeService:
                 project_id=chat.project_id,
                 data=MessageCreate(
                     external_message_id=self.message_service._telegram_message_id(telegram_result),
+                    parse_mode=parse_mode,
                     message_type=actual_media_type,
                     sender_type=SenderType.BOT,
                     sender_id=None,
@@ -1991,6 +1997,7 @@ class FunnelRuntimeService:
             project_id=chat.project_id,
             data=MessageCreate(
                 message_type=normalized_type,
+                parse_mode=parse_mode,
                 sender_type=SenderType.BOT,
                 sender_id=None,
                 body=message_text if normalized_type == MessageType.TEXT else None,
@@ -2002,7 +2009,7 @@ class FunnelRuntimeService:
             ),
         )
 
-    async def _render_text_template(self, chat_id: UUID, text: str | None) -> str:
+    async def _render_text_template(self, chat_id: UUID, text: str | None, *, html: bool = False) -> str:
         source = str(text or "")
         if "{{" not in source:
             return source
@@ -2039,7 +2046,7 @@ class FunnelRuntimeService:
             key = match.group(1)
             if key.startswith("custom."):
                 value = custom_fields.get(key.removeprefix("custom."))
-                return "" if value is None else str(value)
+                return "" if value is None else escape(str(value)) if html else str(value)
             if key not in values:
                 return match.group(0)
             value = values[key]
@@ -2047,7 +2054,7 @@ class FunnelRuntimeService:
                 return ""
             if isinstance(value, (dict, list)):
                 return match.group(0)
-            return str(value)
+            return escape(str(value)) if html else str(value)
 
         return TEMPLATE_VARIABLE_RE.sub(replace_variable, source)
 
@@ -2065,6 +2072,7 @@ class FunnelRuntimeService:
         message_type, media_ref = self._message_item_media_payload(step, item)
         upload_id = self._message_item_upload_id(item)
         await self._create_outgoing_message(
+            parse_mode="HTML" if item.get("parse_mode") == "HTML" else None,
             chat_id=chat_id,
             text=text,
             message_type=message_type,
@@ -3742,6 +3750,7 @@ class FunnelRuntimeService:
         text = FunnelRuntimeService._step_text(step)
         legacy = {
             "id": "legacy_message",
+            "parse_mode": config.get("parse_mode"),
             "type": config.get("message_type") or config.get("type") or step.block_type,
             "text": text,
             "caption": config.get("caption"),

@@ -27,6 +27,7 @@ export type MessageMediaConfig = {
 }
 
 export type MessageConfig = {
+  parse_mode?: 'HTML' | null
   id: string
   type: string
   text: string
@@ -274,6 +275,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
       const text = String(item.text ?? item.message ?? item.message_text ?? item.caption ?? '')
       return {
         id: String(item.id ?? `msg_${index + 1}`),
+        parse_mode: item.parse_mode === 'HTML' ? 'HTML' : null,
         type,
         text,
         caption: typeof item.caption === 'string' ? item.caption : undefined,
@@ -300,6 +302,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
   return [
     {
       id: 'msg_1',
+      parse_mode: config.parse_mode === 'HTML' ? 'HTML' : null,
       type: legacyType,
       text: legacyText,
       caption: textValue(config, 'caption') || undefined,

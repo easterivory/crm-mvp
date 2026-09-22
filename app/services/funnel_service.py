@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from app.core.telegram_formatting import telegram_html
 from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -1201,6 +1202,11 @@ class FunnelService:
                     )
                 )
             if strict_config:
+                if FunnelRuntimeService._is_input_step(step) and step.config_json.get("parse_mode") == "HTML":
+                    try:
+                        telegram_html(FunnelRuntimeService._step_prompt(step))
+                    except ValueError as exc:
+                        errors.append(self._issue("invalid_telegram_formatting", f"Блок «{step.title}»: {exc}", "error", step_id=step.id))
                 if FunnelRuntimeService._is_message_step(step) and step.config_json.get("auto_advance_enabled") is True:
                     seconds = step.config_json.get("auto_advance_seconds", 60)
                     if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= 604800:
@@ -1229,6 +1235,12 @@ class FunnelService:
                 if FunnelRuntimeService._is_message_step(step):
                     for index, item in enumerate(FunnelRuntimeService._message_sequence(step), 1):
                         text = FunnelRuntimeService._message_item_text(item)
+                        if item.get("parse_mode") == "HTML":
+                            try:
+                                text, _ = telegram_html(text)
+                            except ValueError as exc:
+                                errors.append(self._issue("invalid_telegram_formatting", f"Блок «{step.title}», сообщение {index}: {exc}", "error", step_id=step.id))
+                                continue
                         message_type, _ = FunnelRuntimeService._message_item_media_payload(step, item)
                         limit = 4096 if message_type == "text" else 1024
                         prefix = f"Блок «{step.title}», сообщение {index}"

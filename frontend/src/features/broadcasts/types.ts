@@ -54,6 +54,7 @@ export type BroadcastMedia = {
 }
 
 export type BroadcastMessage = {
+  parse_mode?: 'HTML' | null
   type?: 'text' | BroadcastMediaType
   text?: string
   caption?: string

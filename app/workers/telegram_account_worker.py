@@ -18,6 +18,7 @@ from telethon.errors import FloodWaitError, RPCError
 from telethon.sessions import StringSession
 
 from app.core.config import settings
+from app.core.telegram_formatting import mtproto_entities
 from app.core.database import get_db_session
 from app.core.redis import close_redis, get_redis
 from app.models.bot import TelegramUserConnection
@@ -933,6 +934,7 @@ class TelegramAccountWorker:
                     text,
                     reply_to=self._optional_int(payload.get("reply_to_message_id")),
                     parse_mode=None,
+                    formatting_entities=mtproto_entities(payload.get("entities") or []),
                 )
             except Exception:
                 self._discard_pending(bot_id, fingerprint)
@@ -958,6 +960,7 @@ class TelegramAccountWorker:
                     supports_streaming=media_type in {"video", "video_note"},
                     reply_to=self._optional_int(payload.get("reply_to_message_id")),
                     parse_mode=None,
+                    formatting_entities=mtproto_entities(payload.get("entities") or []),
                 )
             except Exception:
                 self._discard_pending(bot_id, fingerprint)

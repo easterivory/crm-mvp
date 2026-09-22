@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from pathlib import Path
 
 
 def name_key(value: str) -> str:
@@ -237,6 +238,11 @@ Bel Bela Belinha Bia Beatriz Bibi Bebel Beta Bel Betina Bettina
 Rô Rosi Rose Roseli Rosana Rosângela Rosangela Rosi Rosinha
 Mi Mimi Mila Milena Camila Camilinha Mica Mika Rafa Rafinha Raquel
 """.split())
+
+KNOWN_NAMES = KNOWN_NAMES | frozenset(
+    name_key(name) for name in
+    (Path(__file__).resolve().parents[1] / "data/given_names/names.txt").read_text(encoding="utf-8").splitlines()
+)
 
 _WORD = r"[^\W\d_]+(?:[-'’ʻ‘ʼ][^\W\d_]+)*"
 _TOKEN = re.compile(_WORD, re.UNICODE)

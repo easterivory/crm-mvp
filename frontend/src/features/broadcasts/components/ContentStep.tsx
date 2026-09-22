@@ -1,3 +1,4 @@
+import TelegramTextEditor from '../../../components/TelegramTextEditor'
 import {
   FileText,
   Image,
@@ -267,17 +268,18 @@ export default function ContentStep({
             </div>
           </div>
         ) : null}
-        <textarea
+        <TelegramTextEditor
+          parseMode={message.parse_mode}
           rows={7}
           value={captionText}
           disabled={mediaType === 'video_note'}
-          onChange={(event) => {
+          onChange={(text, parse_mode) => {
             if (mediaType) {
-              replaceMessage({ caption: event.target.value, text: event.target.value })
+              replaceMessage({ caption: text, text, parse_mode })
               return
             }
             onSnippetSelected(null)
-            replaceMessage({ type: 'text', text: event.target.value })
+            replaceMessage({ type: 'text', text, parse_mode })
           }}
           placeholder={
             mediaType === 'video_note'

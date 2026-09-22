@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,7 @@ from app.schemas.common import OrmBase
 
 
 class MessageCreate(BaseModel):
+    parse_mode: Literal["HTML"] | None = None
     external_message_id: Optional[str] = Field(None, max_length=255)
     message_type: str = Field(default=MessageType.TEXT, max_length=30)
     sender_type: str = Field(..., max_length=20)

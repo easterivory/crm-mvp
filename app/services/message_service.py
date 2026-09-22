@@ -19,6 +19,7 @@ Security:
   rejected with 404.
 """
 import logging
+from app.core.telegram_formatting import telegram_html
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -395,6 +396,15 @@ class MessageService:
             raw_payload_json["reply_markup"] = data.reply_markup
             data = data.model_copy(update={"raw_payload_json": raw_payload_json})
 
+        if data.parse_mode == "HTML":
+            raw = dict(data.raw_payload_json or {})
+            raw["formatted_source"] = {"body": data.body, "caption": data.caption, "parse_mode": "HTML"}
+            data = data.model_copy(update={
+                "body": telegram_html(data.body)[0] if data.body is not None else None,
+                "caption": telegram_html(data.caption)[0] if data.caption is not None else None,
+                "raw_payload_json": raw,
+            })
+
         # ── 1.2 Insert inside SAVEPOINT — race-condition safe idempotency ─────
         # If a concurrent request inserted the same external_message_id between
         # our pre-check and this INSERT, the partial UNIQUE index fires and raises
@@ -663,6 +673,7 @@ class MessageService:
             bot_id=chat.bot_id,
             external_chat_id=chat.external_chat_id,
             text=data.body or "",
+            parse_mode=data.parse_mode,
             reply_markup=data.reply_markup,
             reply_parameters=await self._telegram_reply_parameters(
                 chat_id=chat.id,
@@ -713,6 +724,7 @@ class MessageService:
 
         caption = data.caption or data.body
         result = await self._send_upload_by_type(
+            parse_mode=data.parse_mode,
             upload=upload,
             path=path,
             project_id=project_id,
@@ -768,6 +780,7 @@ class MessageService:
         message_type = self._normalize_outgoing_media_type(data.message_type)
         caption = data.caption or data.body
         result = await self._send_media_to_telegram_by_type(
+            parse_mode=data.parse_mode,
             media_type=message_type,
             media=data.telegram_file_id,
             project_id=project_id,
@@ -817,8 +830,10 @@ class MessageService:
         external_chat_id: str,
         caption: str | None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict | None:
         return await self._send_media_to_telegram_by_type(
+            parse_mode=parse_mode,
             media_type=upload.media_type,
             media=path,
             project_id=project_id,
@@ -844,9 +859,11 @@ class MessageService:
         file_name: str | None,
         mime_type: str | None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict | None:
         if media_type == MessageType.PHOTO:
             return await self.telegram_sender.send_photo(
+                parse_mode=parse_mode,
                 project_id=project_id,
                 bot_id=bot_id,
                 external_chat_id=external_chat_id,
@@ -859,6 +876,7 @@ class MessageService:
             )
         if media_type == MessageType.VIDEO:
             return await self.telegram_sender.send_video(
+                parse_mode=parse_mode,
                 project_id=project_id,
                 bot_id=bot_id,
                 external_chat_id=external_chat_id,
@@ -871,6 +889,7 @@ class MessageService:
             )
         if media_type == MessageType.VOICE:
             return await self.telegram_sender.send_voice(
+                parse_mode=parse_mode,
                 project_id=project_id,
                 bot_id=bot_id,
                 external_chat_id=external_chat_id,
@@ -899,6 +918,7 @@ class MessageService:
                     detail="Не удалось подготовить ролик как Telegram-кружок. Попробуйте другой видеофайл.",
                 ) from exc
         return await self.telegram_sender.send_document(
+            parse_mode=parse_mode,
             project_id=project_id,
             bot_id=bot_id,
             external_chat_id=external_chat_id,

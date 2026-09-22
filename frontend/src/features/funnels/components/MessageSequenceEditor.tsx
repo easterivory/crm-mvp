@@ -1,3 +1,4 @@
+import TelegramTextEditor from '../../../components/TelegramTextEditor'
 import {
   ArrowDown,
   ArrowUp,
@@ -439,19 +440,21 @@ export default function MessageSequenceEditor({
               </div>
             ) : null}
 
-            <textarea
+            <TelegramTextEditor
+              parseMode={message.parse_mode}
               rows={isMedia ? 3 : 4}
               value={captionText}
               disabled={message.type === 'video_note'}
-              onChange={(event) => {
+              onChange={(text, parse_mode) => {
                 if (isMedia) {
                   update(index, {
-                    text: event.target.value,
-                    caption: event.target.value,
+                    text,
+                    caption: text,
+                    parse_mode,
                   })
                   return
                 }
-                update(index, { text: event.target.value })
+                update(index, { text, parse_mode })
               }}
               placeholder={
                 message.type === 'video_note'

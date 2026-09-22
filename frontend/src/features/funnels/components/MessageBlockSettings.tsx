@@ -29,6 +29,7 @@ export default function MessageBlockSettings({
       ...step.config_json,
       messages: nextMessages,
       text: firstMessage?.text ?? '',
+      parse_mode: firstMessage?.parse_mode ?? null,
       message_type: firstMessage?.type ?? 'text',
       media: firstMessage?.media,
       chat_action_enabled: firstMessage?.chat_action_enabled ?? false,

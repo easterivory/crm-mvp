@@ -1,4 +1,5 @@
 import type { FunnelStep } from '../types'
+import TelegramTextEditor from '../../../components/TelegramTextEditor'
 import {
   answerTypes,
   boolValue,
@@ -40,21 +41,22 @@ export default function InputBlockSettings({
         Ждать ответ пользователя
       </label>
 
-      <label className="block">
+      <div className="block">
         <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
           Prompt
         </span>
-        <textarea
+        <TelegramTextEditor
+          parseMode={step.config_json.parse_mode === 'HTML' ? 'HTML' : null}
           rows={3}
           value={
             textValue(step.config_json, 'prompt') ||
             textValue(step.config_json, 'question_text') ||
             textValue(step.config_json, 'text')
           }
-          onChange={(event) => patchConfig({ prompt: event.target.value })}
+          onChange={(prompt, parse_mode) => patchConfig({ prompt, parse_mode })}
           className="w-full resize-none rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none"
         />
-      </label>
+      </div>
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         <label className="block">

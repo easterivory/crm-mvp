@@ -101,3 +101,19 @@ def test_dictionary_has_no_accidental_mixed_alphabet_tokens():
 
     assert not [name for name in KNOWN_NAMES
                 if re.search(r"[a-z]", name) and re.search(r"[а-яё]", name)]
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ("Арслан", "Арслан"), ("арслан", "арслан"), ("АРСЛАН", "АРСЛАН"),
+    ("Арслан\n29", "Арслан"), ("Привет, меня зовут Арслан", "Арслан"),
+    ("Не знаю\nарслан", "арслан"), ("Arslan\n29", "Arslan"),
+    ("Мне нужна помощь", None), ("Денег нет", None),
+    ("Hola necesito ayuda", None), ("I need help", None),
+])
+def test_vendored_dictionary_handles_reported_name_and_rejects_prose(answer, expected):
+    assert extract_answer_name(answer) == expected
+
+
+def test_external_dictionary_is_available_offline():
+    assert len(KNOWN_NAMES) > 60000
+    assert name_key("Арслан") in KNOWN_NAMES

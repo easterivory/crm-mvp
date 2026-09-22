@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from app.core.telegram_formatting import telegram_html
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.bot_repository import BotRepository
@@ -140,8 +141,12 @@ class TelegramSenderService:
         text: str,
         reply_markup: dict | None = None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
         message_text = text.strip()
+        entities = []
+        if parse_mode == "HTML":
+            message_text, entities = telegram_html(message_text)
         if not message_text:
             await self._handle_delivery_error(
                 TelegramDeliveryError(
@@ -171,6 +176,7 @@ class TelegramSenderService:
                 payload={
                     "external_chat_id": external_chat_id,
                     "text": message_text,
+                    "entities": entities,
                     "reply_to_message_id": self._reply_message_id(reply_parameters),
                 },
             )
@@ -190,6 +196,8 @@ class TelegramSenderService:
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload: dict[str, Any] = {"chat_id": external_chat_id, "text": message_text}
+        if entities:
+            payload["entities"] = entities
         if reply_markup:
             payload["reply_markup"] = reply_markup
         if reply_parameters:
@@ -304,9 +312,11 @@ class TelegramSenderService:
         file_name: str | None = None,
         mime_type: str | None = None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendPhoto",
+            parse_mode=parse_mode,
             media_field="photo",
             project_id=project_id,
             bot_id=bot_id,
@@ -562,9 +572,11 @@ class TelegramSenderService:
         file_name: str | None = None,
         mime_type: str | None = None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendVideo",
+            parse_mode=parse_mode,
             media_field="video",
             project_id=project_id,
             bot_id=bot_id,
@@ -590,9 +602,11 @@ class TelegramSenderService:
         file_name: str | None = None,
         mime_type: str | None = None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendDocument",
+            parse_mode=parse_mode,
             media_field="document",
             project_id=project_id,
             bot_id=bot_id,
@@ -618,9 +632,11 @@ class TelegramSenderService:
         file_name: str | None = None,
         mime_type: str | None = None,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
         return await self._send_media(
             method="sendVoice",
+            parse_mode=parse_mode,
             media_field="voice",
             project_id=project_id,
             bot_id=bot_id,
@@ -716,12 +732,17 @@ class TelegramSenderService:
         timeout: float = 30.0,
         supports_caption: bool = True,
         reply_parameters: dict | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
+        caption_entities = []
+        if supports_caption and caption and parse_mode == "HTML":
+            caption, caption_entities = telegram_html(caption.strip())
         transport_type = await self._get_transport_type(project_id, bot_id)
         if transport_type == "user_mtproto":
             if bot_id is None:
                 return None
             return await self._send_account_media(
+                caption_entities=caption_entities,
                 method=method,
                 media_field=media_field,
                 project_id=project_id,
@@ -755,6 +776,8 @@ class TelegramSenderService:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 if isinstance(media, Path):
                     data: dict[str, str] = {"chat_id": external_chat_id}
+                    if caption_entities:
+                        data["caption_entities"] = json.dumps(caption_entities)
                     if caption_text:
                         data["caption"] = caption_text
                     if reply_markup:
@@ -772,6 +795,8 @@ class TelegramSenderService:
                         response = await client.post(url, data=data, files=files)
                 elif isinstance(media, bytes):
                     data = {"chat_id": external_chat_id}
+                    if caption_entities:
+                        data["caption_entities"] = json.dumps(caption_entities)
                     if caption_text:
                         data["caption"] = caption_text
                     if reply_markup:
@@ -788,6 +813,8 @@ class TelegramSenderService:
                     response = await client.post(url, data=data, files=files)
                 else:
                     payload: dict[str, Any] = {"chat_id": external_chat_id, media_field: media}
+                    if caption_entities:
+                        payload["caption_entities"] = caption_entities
                     if caption_text:
                         payload["caption"] = caption_text
                     if reply_markup:
@@ -849,6 +876,7 @@ class TelegramSenderService:
         timeout: float,
         supports_caption: bool,
         reply_parameters: dict | None,
+        caption_entities: list[dict] | None = None,
     ) -> dict[str, Any] | None:
         staged_path: Path | None = None
         if isinstance(media, bytes):
@@ -904,6 +932,7 @@ class TelegramSenderService:
                     "path": str(media_path),
                     "media_type": media_type,
                     "caption": caption_text or None,
+                    "entities": caption_entities or [],
                     "reply_to_message_id": self._reply_message_id(reply_parameters),
                 },
                 timeout_seconds=max(int(timeout) + 15, 30),

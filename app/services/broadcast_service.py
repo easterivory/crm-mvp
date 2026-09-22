@@ -5,6 +5,8 @@ import csv
 import io
 import os
 import re
+from html import escape
+from app.core.telegram_formatting import telegram_html
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -766,10 +768,11 @@ class BroadcastService:
             )
             message_type = self._broadcast_message_type(message)
             if message_type == MessageType.TEXT:
-                text = await self._render_text(str(message.get("text") or ""), broadcast, chat, lead)
+                text = await self._render_text(str(message.get("text") or ""), broadcast, chat, lead, html=message.get("parse_mode") == "HTML")
                 if not text.strip():
                     continue
                 sent = await self.telegram_sender.send_message(
+                    parse_mode=message.get("parse_mode"),
                     project_id=broadcast.project_id,
                     bot_id=broadcast.bot_id,
                     external_chat_id=chat.external_chat_id,
@@ -783,6 +786,7 @@ class BroadcastService:
                     project_id=broadcast.project_id,
                     data=MessageCreate(
                         external_message_id=self._telegram_message_id(sent),
+                        parse_mode=message.get("parse_mode"),
                         message_type=MessageType.TEXT,
                         sender_type=SenderType.BOT,
                         body=text,
@@ -812,6 +816,7 @@ class BroadcastService:
                     sender_type=SenderType.BOT,
                     body=None,
                     caption=media_result["caption"],
+                    parse_mode=message.get("parse_mode"),
                     telegram_file_id=media_result["telegram_file_id"],
                     file_name=media_result["file_name"],
                     mime_type=media_result["mime_type"],
@@ -855,6 +860,13 @@ class BroadcastService:
         messages = self._content_messages(content)
         has_sendable_content = False
         for message in messages:
+            if message.get("parse_mode") not in (None, "HTML"):
+                raise HTTPException(status_code=422, detail="Неизвестный формат текста")
+            if message.get("parse_mode") == "HTML":
+                try:
+                    telegram_html(str(message.get("caption") or message.get("text") or ""))
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
             message_type = self._broadcast_message_type(message)
             if message_type == MessageType.TEXT:
                 if str(message.get("text") or "").strip():
@@ -924,10 +936,11 @@ class BroadcastService:
         raw_caption = message.get("caption")
         if raw_caption is None:
             raw_caption = message.get("text")
-        caption = await self._render_text(str(raw_caption or ""), broadcast, chat, lead)
+        caption = await self._render_text(str(raw_caption or ""), broadcast, chat, lead, html=message.get("parse_mode") == "HTML")
 
         if message_type == MessageType.PHOTO:
             telegram_result = await self.telegram_sender.send_photo(
+                parse_mode=message.get("parse_mode"),
                 project_id=broadcast.project_id,
                 bot_id=broadcast.bot_id,
                 external_chat_id=chat.external_chat_id,
@@ -939,6 +952,7 @@ class BroadcastService:
             )
         elif message_type == MessageType.VIDEO:
             telegram_result = await self.telegram_sender.send_video(
+                parse_mode=message.get("parse_mode"),
                 project_id=broadcast.project_id,
                 bot_id=broadcast.bot_id,
                 external_chat_id=chat.external_chat_id,
@@ -950,6 +964,7 @@ class BroadcastService:
             )
         elif message_type == MessageType.VOICE:
             telegram_result = await self.telegram_sender.send_voice(
+                parse_mode=message.get("parse_mode"),
                 project_id=broadcast.project_id,
                 bot_id=broadcast.bot_id,
                 external_chat_id=chat.external_chat_id,
@@ -971,6 +986,7 @@ class BroadcastService:
             )
         elif message_type == MessageType.DOCUMENT:
             telegram_result = await self.telegram_sender.send_document(
+                parse_mode=message.get("parse_mode"),
                 project_id=broadcast.project_id,
                 bot_id=broadcast.bot_id,
                 external_chat_id=chat.external_chat_id,
@@ -1067,6 +1083,7 @@ class BroadcastService:
         broadcast: Broadcast,
         chat: Chat,
         lead: Lead | None,
+        *, html: bool = False,
     ) -> str:
         custom_fields = lead.custom_fields if lead is not None and isinstance(lead.custom_fields, dict) else {}
         project = await self.project_repo.get_active(broadcast.project_id)
@@ -1088,8 +1105,10 @@ class BroadcastService:
         def replace(match: re.Match[str]) -> str:
             key = match.group(1).strip()
             if key.startswith("custom."):
-                return str(custom_fields.get(key.removeprefix("custom."), ""))
-            return str(values.get(key, match.group(0)))
+                value = str(custom_fields.get(key.removeprefix("custom."), ""))
+            else:
+                value = str(values.get(key, match.group(0)))
+            return escape(value) if html else value
 
         return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", replace, template)
 

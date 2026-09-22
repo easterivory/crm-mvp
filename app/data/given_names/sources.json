@@ -1,0 +1,22 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/mdanina/nen-imena-dataset/38b3cad3aa123326be8bb97b0e9a3c0e5c7f54e6/data/names.json",
+    "sha256": "3f6ccc6e91c6143f0cab881dfee7efa0ac89e20002c89ec9839c70f3f869b9f3"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/mdanina/nen-imena-dataset/38b3cad3aa123326be8bb97b0e9a3c0e5c7f54e6/LICENSE",
+    "sha256": "21a0f9b22b65dc3e280367b142cc719f3d2d02c1de550a1d00833873012ba2c6"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/solvenium/names-dataset/6adf76b5b36fb7a3f498c166f02f0b51afcdf69c/dataset/Female_given_names.txt",
+    "sha256": "b0ae15736966bba94857cac891808d53b808c29c0367f414697a6a1bfac55a2f"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/solvenium/names-dataset/6adf76b5b36fb7a3f498c166f02f0b51afcdf69c/dataset/Male_given_names.txt",
+    "sha256": "b5c5ca06f14a671c1ee962bb2c8cb45e7bb3e7664220f558572bafbd668d83fe"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/solvenium/names-dataset/6adf76b5b36fb7a3f498c166f02f0b51afcdf69c/LICENSE",
+    "sha256": "c46a610bd7c1a68c0df13e3fad63f472a84682dfc99a0930aece4766d78b3e88"
+  }
+]
