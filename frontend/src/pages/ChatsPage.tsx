@@ -117,6 +117,7 @@ type Message = {
   translated_text: string | null
   original_text: string | null
   caption: string | null
+  unsupported_content?: string | null
   telegram_file_id: string | null
   file_unique_id: string | null
   file_name: string | null
@@ -259,7 +260,7 @@ const mediaLabels: Record<string, string> = {
   image: 'Фото',
   photo: 'Фото',
   sticker: 'Стикер',
-  unknown: 'Вложение',
+  unknown: 'Сообщение Telegram',
   video: 'Видео',
   video_note: 'Кружок',
   voice: 'Голосовое',
@@ -2935,7 +2936,14 @@ export default function ChatsPage() {
                             Удалено в Telegram
                           </p>
                         ) : null}
-                        {message.message_type === 'text' || message.message_type === 'system' || message.message_type === 'contact' ? (
+                        {message.message_type === 'unknown' ? (
+                          <div className="space-y-2 text-sm leading-6">
+                            <p className="whitespace-pre-wrap break-words">
+                              {message.unsupported_content || visibleBody || 'Содержимое этого сообщения не сохранилось в CRM. По этой записи нельзя определить, что отправил клиент.'}
+                            </p>
+                            {visibleCaption ? <p className="whitespace-pre-wrap break-words">{visibleCaption}</p> : null}
+                          </div>
+                        ) : message.message_type === 'text' || message.message_type === 'system' || message.message_type === 'contact' ? (
                           <p className="whitespace-pre-wrap break-words text-sm leading-6">
                             {message.message_type === 'contact' ? `Телефон: ${visibleBody || 'не указан'}` : visibleBody || ''}
                           </p>

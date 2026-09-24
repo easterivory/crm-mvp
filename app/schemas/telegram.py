@@ -1,9 +1,8 @@
 """
 Telegram Update payload schemas.
 
-Only the fields required for message processing are declared.
-Telegram sends many additional fields (via, forward_from, etc.) that are
-silently ignored via model_config extra="ignore".
+Only fields required for processing are declared. Additional message fields
+are preserved so new or unsupported message kinds are not silently lost.
 
 Python reserves `from` as a keyword, so the sender field in TelegramMessage
 is mapped via Field(alias="from") and populate_by_name=True is set so that
@@ -77,7 +76,8 @@ class TelegramContact(BaseModel):
 
 
 class TelegramMessage(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    # Preserve new Telegram message kinds for diagnostics and future rendering.
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     message_id: int
     text: Optional[str] = None

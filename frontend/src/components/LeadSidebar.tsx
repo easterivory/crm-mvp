@@ -6,6 +6,7 @@ import {
   Ban,
   Copy,
   LoaderCircle,
+  Link2,
   Palette,
   Phone,
   Plus,
@@ -51,6 +52,9 @@ type Lead = {
   tags?: Array<{ id: string; name: string; color: string }>
   external_chat_id?: string | null
   external_user_id?: string | null
+  tracking_link_id?: string | null
+  tracking_title?: string | null
+  tracking_code?: string | null
 }
 
 type LeadStatus = {
@@ -821,6 +825,28 @@ export default function LeadSidebar({
               leadId={lead.id}
               projectId={selectedProjectId ?? lead.project_id}
             />
+
+            <section aria-label="Рекламная ссылка" className="min-w-0 border-b border-white/10 pb-4">
+              <h3 className="mb-2 flex items-center gap-2 text-xs font-medium text-gray-400">
+                <Link2 size={14} className="shrink-0" />
+                Рекламная ссылка
+              </h3>
+              {lead.tracking_link_id ? (
+                <>
+                  <p className="mb-2 break-words text-sm text-gray-100 [overflow-wrap:anywhere]">
+                    {lead.tracking_title || 'Название ссылки недоступно'}
+                  </p>
+                  <CopyRow
+                    label={lead.tracking_code ? 'Код ссылки' : 'ID ссылки'}
+                    value={lead.tracking_code || lead.tracking_link_id}
+                    isCopied={copiedField === 'tracking_source'}
+                    onCopy={() => void handleCopy('tracking_source', lead.tracking_code || lead.tracking_link_id)}
+                  />
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">Источник не сохранён</p>
+              )}
+            </section>
 
             <div className="rounded-xl border border-white/5 bg-white/[0.035] p-4">
               <div className="mb-4 flex items-center gap-3">

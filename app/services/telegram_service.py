@@ -2134,6 +2134,10 @@ class TelegramService:
         source_transport: str = "bot_api",
     ) -> MessageCreate:
         raw_payload = message.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if source_transport == "bot_api":
+            # Extra Telegram fields must not populate internal transport metadata.
+            raw_payload = {key: value for key, value in raw_payload.items()
+                           if not key.startswith("_") and key not in {"mtproto_media_path", "telegram_result"}}
         raw_payload["_transport"] = source_transport
         base = {
             "external_message_id": str(message.message_id),
@@ -2198,6 +2202,7 @@ class TelegramService:
                 media_group_id=message.media_group_id,
             )
 
+        raw_payload["_unrecognized_message"] = True
         return MessageCreate(
             **base,
             message_type=MessageType.UNKNOWN,

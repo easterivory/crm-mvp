@@ -107,6 +107,17 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
     # Cannot be expressed purely through __table_args__ Index; must be in migration.
 
     @property
+    def unsupported_content(self) -> str | None:
+        from app.core.telegram_message_summary import telegram_message_summary
+
+        payload = self.raw_payload_json
+        if self.message_type != "unknown" or not isinstance(payload, dict) or not payload.get("_unrecognized_message"):
+            return None
+        summary = telegram_message_summary(payload)
+        caption = payload.get("caption")
+        return f"{summary}\n{caption}" if isinstance(caption, str) and caption else summary
+
+    @property
     def buttons(self) -> list[str]:
         payload = self.raw_payload_json if isinstance(self.raw_payload_json, dict) else {}
         reply_markup = payload.get("reply_markup")

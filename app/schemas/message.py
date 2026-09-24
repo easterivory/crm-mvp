@@ -61,6 +61,7 @@ class MessageReplyOut(BaseModel):
 
 
 class MessageOut(OrmBase):
+    unsupported_content: Optional[str] = None
     id: uuid.UUID
     chat_id: uuid.UUID
     external_message_id: Optional[str]
