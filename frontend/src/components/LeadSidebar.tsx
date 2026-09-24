@@ -55,6 +55,7 @@ type Lead = {
   tracking_link_id?: string | null
   tracking_title?: string | null
   tracking_code?: string | null
+  tracking_source?: 'chat' | 'message_history' | 'ambiguous' | null
 }
 
 type LeadStatus = {
@@ -386,8 +387,11 @@ export default function LeadSidebar({
     }
   }, [selectedProjectId])
 
+  const leadRequest = useRef(0)
   const loadLead = useCallback(async (): Promise<Lead | null> => {
+    const requestId = ++leadRequest.current
     if (!activeChatId) {
+      setIsLoading(false)
       setLead(null)
       setFirstNameDraft('')
       setLastNameDraft('')
@@ -407,6 +411,7 @@ export default function LeadSidebar({
       const { data } = await api.get<Lead>(`/leads/by-chat/${activeChatId}`, {
         params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
       })
+      if (requestId !== leadRequest.current) return null
       setLead(data)
       setFirstNameDraft(data.first_name ?? '')
       setLastNameDraft(data.last_name ?? '')
@@ -417,6 +422,7 @@ export default function LeadSidebar({
       setManagerCommentError('')
       return data
     } catch (err) {
+      if (requestId !== leadRequest.current) return null
       setLead(null)
       setFirstNameDraft('')
       setLastNameDraft('')
@@ -428,7 +434,7 @@ export default function LeadSidebar({
       setError(getErrorMessage(err))
       return null
     } finally {
-      setIsLoading(false)
+      if (requestId === leadRequest.current) setIsLoading(false)
     }
   }, [activeChatId, selectedProjectId])
 
@@ -440,6 +446,7 @@ export default function LeadSidebar({
 
   useEffect(() => {
     void loadLead()
+    return () => { leadRequest.current += 1 }
   }, [loadLead])
 
   useEffect(() => {
@@ -819,11 +826,12 @@ export default function LeadSidebar({
           </div>
         ) : null}
 
-        {lead && !isLoading ? (
+        {lead && lead.chat_id === activeChatId && !isLoading ? (
           <div className="space-y-5">
             <DuplicateWarning
+              key={lead.id}
               leadId={lead.id}
-              projectId={selectedProjectId ?? lead.project_id}
+              projectId={lead.project_id}
             />
 
             <section aria-label="Рекламная ссылка" className="min-w-0 border-b border-white/10 pb-4">
@@ -836,6 +844,9 @@ export default function LeadSidebar({
                   <p className="mb-2 break-words text-sm text-gray-100 [overflow-wrap:anywhere]">
                     {lead.tracking_title || 'Название ссылки недоступно'}
                   </p>
+                  {lead.tracking_source === 'message_history' ? (
+                    <p className="mb-2 text-xs text-gray-400">По сохранённому входу в текущем обращении</p>
+                  ) : null}
                   <CopyRow
                     label={lead.tracking_code ? 'Код ссылки' : 'ID ссылки'}
                     value={lead.tracking_code || lead.tracking_link_id}
@@ -844,7 +855,11 @@ export default function LeadSidebar({
                   />
                 </>
               ) : (
-                <p className="text-sm text-gray-500">Источник не сохранён</p>
+                <p className="text-sm text-gray-500">
+                  {lead.tracking_source === 'ambiguous'
+                    ? 'В истории несколько рекламных ссылок. Закреплённый источник не сохранён.'
+                    : 'Источник не сохранён'}
+                </p>
               )}
             </section>
 

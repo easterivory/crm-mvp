@@ -32,13 +32,15 @@ function getCancelCode(err: unknown) {
 }
 
 function formatDateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Дата неизвестна'
   return new Intl.DateTimeFormat('ru-RU', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value))
+  }).format(date)
 }
 
 function matchCopy(duplicate: DuplicateLeadDetail) {
@@ -72,6 +74,8 @@ export default function DuplicateWarning({
 }: DuplicateWarningProps) {
   const [duplicates, setDuplicates] = useState<DuplicateLeadDetail[]>([])
   const [isExpanded, setIsExpanded] = useState(false)
+  const [hasError, setHasError] = useState(false)
+  const [retry, setRetry] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -79,6 +83,7 @@ export default function DuplicateWarning({
 
     setDuplicates([])
     setIsExpanded(false)
+    setHasError(false)
 
     fetchLeadDuplicates(leadId, projectId, controller.signal)
       .then((items) => {
@@ -89,6 +94,7 @@ export default function DuplicateWarning({
       .catch((err: unknown) => {
         if (getCancelCode(err) !== 'ERR_CANCELED' && isMounted) {
           setDuplicates([])
+          setHasError(true)
         }
       })
 
@@ -96,22 +102,29 @@ export default function DuplicateWarning({
       isMounted = false
       controller.abort()
     }
-  }, [leadId, projectId])
+  }, [leadId, projectId, retry])
+
+  if (hasError) {
+    return <div role="status" className={`min-w-0 text-xs text-gray-400 ${className}`}>
+      Не удалось проверить совпадения.{' '}
+      <button type="button" onClick={() => setRetry((value) => value + 1)} className="underline underline-offset-2">Повторить</button>
+    </div>
+  }
 
   if (duplicates.length === 0) {
     return null
   }
 
   return (
-    <section className={`rounded-xl border border-amber-300/45 bg-gradient-to-r from-amber-500/20 to-orange-500/15 shadow-[0_0_28px_rgba(245,158,11,0.18)] ${className}`}>
-      <div className="animate-pulse px-4 py-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <section aria-label="Совпадения лида" className={`min-w-0 border-y border-amber-300/25 bg-amber-400/5 [overflow-wrap:anywhere] ${className}`}>
+      <div className="px-3 py-3">
+        <div className="flex min-w-0 flex-col gap-2">
           <div className="flex min-w-0 items-center gap-3">
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-200/35 bg-amber-300/15 text-amber-100">
               <AlertTriangle size={18} />
             </span>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-amber-50">⚠️ Возможный дубль</p>
+              <p className="text-sm font-semibold text-amber-50">Возможный дубль</p>
               <p className="truncate text-xs text-amber-100/75">
                 Найдено совпадений: {duplicates.length}
               </p>
@@ -120,27 +133,28 @@ export default function DuplicateWarning({
           <button
             type="button"
             onClick={() => setIsExpanded((current) => !current)}
-            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-amber-100/25 bg-black/15 px-3 text-xs font-semibold text-amber-50 transition hover:border-amber-100/55"
+            aria-expanded={isExpanded}
+            className="inline-flex min-h-8 w-full items-center justify-between gap-2 text-left text-xs font-medium text-amber-100"
           >
             {isExpanded ? 'Скрыть совпадения' : `Показать совпадения (${duplicates.length})`}
             <ChevronDown
               size={15}
-              className={`transition ${isExpanded ? 'rotate-180' : ''}`}
+              className={`shrink-0 transition ${isExpanded ? 'rotate-180' : ''}`}
             />
           </button>
         </div>
       </div>
 
       {isExpanded ? (
-        <div className="border-t border-amber-100/15 bg-black/10 px-4 py-3">
+        <div className="max-h-80 overflow-y-auto border-t border-amber-100/15 px-3 py-3">
           <div className="space-y-3">
             {duplicates.map((duplicate) => (
               <article
                 key={`${duplicate.lead_id}-${duplicate.match_type}`}
-                className="rounded-xl border border-amber-100/15 bg-[#0B0F19]/45 p-3"
+                className="min-w-0 border-b border-amber-100/15 pb-3 last:border-0 last:pb-0"
               >
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
+                <div className="flex min-w-0 flex-col gap-2">
+                  <div className="min-w-0">
                     <p className="text-sm font-semibold text-amber-50">
                       {matchCopy(duplicate)}
                     </p>
@@ -157,9 +171,9 @@ export default function DuplicateWarning({
                   Создан: {formatDateTime(duplicate.created_at)}
                 </p>
 
-                <div className="mt-3 rounded-lg border border-white/5 bg-black/15 p-3">
+                <div className="mt-3 border-t border-white/5 pt-2">
                   <p className="text-xs font-medium uppercase tracking-wide text-amber-100/70">
-                    История отправок клона
+                    История подач совпавшего лида
                   </p>
                   {duplicate.submission_history.length > 0 ? (
                     <div className="mt-2 space-y-2">

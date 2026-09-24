@@ -25,7 +25,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, true, update
+from sqlalchemy import Select, delete, func, or_, select, true, update
 from sqlalchemy.orm import aliased
 
 from app.core.constants import LeadStatusCode
@@ -35,6 +35,7 @@ from app.models.funnel import ChatFunnelState
 from app.models.lead import Lead
 from app.models.lead import LeadTag
 from app.models.lead_status import LeadStatus
+from app.models.message import Message
 from app.models.partner import LeadSubmission, PartnerIntegration
 from app.models.tracking import TrackingLink
 from app.models.user import User
@@ -418,7 +419,41 @@ class LeadRepository(BaseRepository[Lead]):
             .where(Lead.id == lead_id)
         )
         row = result.mappings().first()
-        return dict(row) if row is not None else {}
+        context = dict(row) if row is not None else {}
+        if context.get("tracking_link_id") is not None:
+            context["tracking_source"] = "chat"
+        elif row is not None:
+            # Read-only recovery from recorded attribution, never another lead or
+            # a prior lifecycle. Multiple distinct sources are deliberately ambiguous.
+            sources = await self.db.execute(self._tracking_history_query(lead_id))
+            candidates = list(sources.all())
+            if len(candidates) > 1:
+                context["tracking_source"] = "ambiguous"
+            elif len(candidates) == 1:
+                source = candidates[0]
+                context.update(tracking_link_id=source.id, tracking_code=source.code,
+                               tracking_ref_code=source.ref_code, tracking_title=source.title,
+                               tracking_source="message_history")
+        return context
+
+    @staticmethod
+    def _tracking_history_query(lead_id: UUID) -> Select:
+        return (
+            select(TrackingLink.id, TrackingLink.code, TrackingLink.ref_code, TrackingLink.title)
+            .select_from(Lead)
+            .join(Chat, Chat.id == Lead.chat_id)
+            .join(Message, Message.chat_id == Chat.id)
+            .join(TrackingLink, TrackingLink.id == Message.tracking_link_id)
+            .where(
+                Lead.id == lead_id,
+                TrackingLink.project_id == Lead.project_id,
+                TrackingLink.bot_id == Chat.bot_id,
+                Message.sender_type == "user",
+                Message.created_at >= func.coalesce(Chat.current_cycle_started_at, Chat.created_at),
+            )
+            .distinct()
+            .limit(2)
+        )
 
     async def aggregate_leads_by_status_for_date(
         self,

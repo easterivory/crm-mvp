@@ -35,6 +35,7 @@ export type Lead = {
   tracking_code?: string | null
   tracking_ref_code?: string | null
   tracking_title?: string | null
+  tracking_source?: 'chat' | 'message_history' | 'ambiguous' | null
   contact_name?: string | null
   external_chat_id?: string | null
   external_user_id?: string | null

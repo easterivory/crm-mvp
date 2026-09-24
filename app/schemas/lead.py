@@ -96,6 +96,7 @@ class LeadOut(OrmBase):
     tracking_code: Optional[str] = None
     tracking_ref_code: Optional[str] = None
     tracking_title: Optional[str] = None
+    tracking_source: Optional[Literal["chat", "message_history", "ambiguous"]] = None
     contact_name: Optional[str] = None
     external_chat_id: Optional[str] = None
     external_user_id: Optional[str] = None
