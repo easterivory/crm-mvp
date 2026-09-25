@@ -20,6 +20,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import axios from 'axios'
 
 import api from '../api/client'
+import { useTranslationLanguages } from '../features/translation/languages'
+import LanguageSettings from '../features/translation/LanguageSettings'
 import BuyersSettings from '../features/buyers/components/BuyersSettings'
 import GoogleSheetsSettings from '../features/googleSheets/components/GoogleSheetsSettings'
 import LandersSettings from '../features/landers/components/LandersSettings'
@@ -158,19 +160,6 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'googleSheets', label: 'Google Таблицы' },
   { key: 'landers', label: 'Лендинги и Домены' },
 ]
-
-const languageOptions = [
-  { value: 'ru', label: 'Русский (RU)' },
-  { value: 'en', label: 'Английский (EN)' },
-  { value: 'es', label: 'Испанский (ES)' },
-  { value: 'pt', label: 'Португальский (PT)' },
-  { value: 'ar', label: 'Арабский (AR)' },
-  { value: 'fr', label: 'Французский (FR)' },
-  { value: 'de', label: 'Немецкий (DE)' },
-  { value: 'it', label: 'Итальянский (IT)' },
-  { value: 'tr', label: 'Турецкий (TR)' },
-  { value: 'hi', label: 'Хинди (HI)' },
-] as const
 
 const translationProviderOptions: Array<{ value: TranslationProvider; label: string }> = [
   { value: 'deepl', label: 'DeepL' },
@@ -417,6 +406,7 @@ export default function SettingsPage() {
   const [translationEnabled, setTranslationEnabled] = useState(false)
   const [operatorLang, setOperatorLang] = useState('ru')
   const [defaultClientLang, setDefaultClientLang] = useState('en')
+  const languageOptions = useTranslationLanguages(operatorLang, defaultClientLang)
   const [translationProvider, setTranslationProvider] = useState<TranslationProvider>('libretranslate')
   const [translationApiKey, setTranslationApiKey] = useState('')
   const [translationBaseUrl, setTranslationBaseUrl] = useState('')
@@ -2265,6 +2255,7 @@ export default function SettingsPage() {
                   )}
                   Сохранить провайдера
                 </button>
+                <LanguageSettings />
               </div>
             </div>
             {canArchiveProject && project ? (

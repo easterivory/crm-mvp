@@ -32,6 +32,7 @@ import {
 } from 'recharts'
 
 import { fetchBots } from '../features/bots/api'
+import { TrackingTagSelector, useTrackingTagMetric } from '../features/tracking/TrackingTagMetric'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
 import type { BuyerUser } from '../features/buyers'
@@ -445,6 +446,8 @@ export default function TrackingPage() {
   const selectedBotIdForQuery =
     selectedBotIds.length === 1 ? selectedBotIds[0] : undefined
   const isMultiBotFallback = selectedBotIds.length > 1
+  const projectTagMetric = useTrackingTagMetric(selectedProjectId, dateFrom, dateTo, selectedBotIdForQuery, undefined, metrics)
+  const detailTagMetric = useTrackingTagMetric(detailLink ? selectedProjectId : null, dateFrom, dateTo, undefined, detailLink?.id, detailMetrics)
 
   const botNameById = useMemo(
     () => new Map(bots.map((bot) => [bot.id, bot.name])),
@@ -492,8 +495,9 @@ export default function TrackingPage() {
       firstDeposits: item.first_deposits,
       redeposits: item.redeposits,
       channelJoins: item.channel_joins,
+      taggedLeads: projectTagMetric.counts.get(item.date) ?? 0,
     }))
-  }, [metrics?.daily])
+  }, [metrics?.daily, projectTagMetric.counts])
 
   const detailChartData = useMemo(() => {
     return (detailMetrics?.daily ?? []).map((item) => ({
@@ -506,8 +510,9 @@ export default function TrackingPage() {
       firstDeposits: item.first_deposits,
       redeposits: item.redeposits,
       channelJoins: item.channel_joins,
+      taggedLeads: detailTagMetric.counts.get(item.date) ?? 0,
     }))
-  }, [detailMetrics?.daily])
+  }, [detailMetrics?.daily, detailTagMetric.counts])
 
   const loadPageData = useCallback(async () => {
     if (!selectedProjectId) {
@@ -1157,6 +1162,7 @@ export default function TrackingPage() {
               </div>
               <Activity size={18} className="text-accent-300" />
             </div>
+            <TrackingTagSelector metric={projectTagMetric} />
             <div className="h-64">
               {chartData.length === 0 ? (
                 <div className="flex h-full items-center justify-center rounded-xl border border-white/5 bg-white/[0.03] text-sm text-gray-500">
@@ -1165,6 +1171,7 @@ export default function TrackingPage() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartData} margin={{ left: -18, right: 8, top: 12, bottom: 0 }}>
+                    {projectTagMetric.data ? <Area type="linear" dataKey="taggedLeads" name={`Тег: ${projectTagMetric.data.tag_name}`} stroke="#f472b6" fill="transparent" strokeWidth={2} /> : null}
                     <defs>
                       <linearGradient id="startsGradient" x1="0" x2="0" y1="0" y2="1">
                         <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.35} />
@@ -2261,6 +2268,7 @@ export default function TrackingPage() {
                     </label>
                   </div>
                 </div>
+                <TrackingTagSelector metric={detailTagMetric} />
                 <div className="h-64">
                   {detailChartData.length === 0 ? (
                     <div className="flex h-full items-center justify-center rounded-xl border border-white/5 bg-background/50 text-sm text-gray-500">
@@ -2269,6 +2277,7 @@ export default function TrackingPage() {
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={detailChartData} margin={{ left: -18, right: 8, top: 12, bottom: 0 }}>
+                        {detailTagMetric.data ? <Area type="linear" dataKey="taggedLeads" name={`Тег: ${detailTagMetric.data.tag_name}`} stroke="#f472b6" fill="transparent" strokeWidth={2} /> : null}
                         <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                         <XAxis dataKey="date" stroke="rgba(255,255,255,0.35)" tickLine={false} axisLine={false} />
                         <YAxis stroke="rgba(255,255,255,0.35)" tickLine={false} axisLine={false} />

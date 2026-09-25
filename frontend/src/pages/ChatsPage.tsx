@@ -1,3 +1,4 @@
+import { translationLanguageName, useTranslationLanguages } from '../features/translation/languages'
 import {
   AlertCircle,
   ArrowLeft,
@@ -239,19 +240,6 @@ type TimelineItem =
 const CHAT_LIMIT = 50
 const MESSAGE_LIMIT = 100
 
-const languageOptions = [
-  { value: 'en', label: 'Английский', shortLabel: 'EN' },
-  { value: 'es', label: 'Испанский', shortLabel: 'ES' },
-  { value: 'pt', label: 'Португальский', shortLabel: 'PT' },
-  { value: 'ar', label: 'Арабский', shortLabel: 'AR' },
-  { value: 'ru', label: 'Русский', shortLabel: 'RU' },
-  { value: 'fr', label: 'Французский', shortLabel: 'FR' },
-  { value: 'de', label: 'Немецкий', shortLabel: 'DE' },
-  { value: 'it', label: 'Итальянский', shortLabel: 'IT' },
-  { value: 'tr', label: 'Турецкий', shortLabel: 'TR' },
-  { value: 'hi', label: 'Хинди', shortLabel: 'HI' },
-] as const
-
 const mediaLabels: Record<string, string> = {
   animation: 'Анимация',
   audio: 'Аудио',
@@ -277,8 +265,7 @@ function languageShortLabel(value: string | null | undefined) {
   if (!normalized) {
     return 'EN'
   }
-  return languageOptions.find((item) => item.value === normalized)?.shortLabel
-    ?? normalized.toUpperCase()
+  return normalized.toUpperCase()
 }
 
 function languageName(value: string | null | undefined) {
@@ -286,8 +273,7 @@ function languageName(value: string | null | undefined) {
   if (!normalized) {
     return 'Английский'
   }
-  return languageOptions.find((item) => item.value === normalized)?.label
-    ?? normalized.toUpperCase()
+  return translationLanguageName(normalized)
 }
 
 function hasText(value: string | null | undefined) {
@@ -832,6 +818,7 @@ export default function ChatsPage() {
     selectedChat?.client_lang ?? projectTranslation?.default_client_lang ?? 'en',
   ) ?? 'en'
   const clientLangLabel = languageShortLabel(effectiveClientLang)
+  const languageOptions = useTranslationLanguages(effectiveClientLang)
   const operatorLangLabel = languageShortLabel(projectTranslation?.operator_lang ?? 'ru')
   const selectedPreset = useMemo(
     () => filterPresets.find((preset) => preset.id === selectedPresetId) ?? null,

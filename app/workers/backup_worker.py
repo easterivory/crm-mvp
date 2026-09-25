@@ -36,6 +36,9 @@ class WorkerSettings:
     cron_jobs = [cron(run_tg_backup_job, hour=3, minute=0, run_at_startup=False)]
     redis_settings = backup_redis_settings()
     queue_name = BACKUP_QUEUE_NAME
+    # Dump/verification/encryption and large uploads exceed ARQ's default 300s.
+    job_timeout = settings.BACKUP_COMMAND_TIMEOUT_SECONDS * 4 + settings.BACKUP_TELEGRAM_TIMEOUT_SECONDS + 120
+    max_jobs = 1
 
 
 async def _safe_run_backup_once() -> None:

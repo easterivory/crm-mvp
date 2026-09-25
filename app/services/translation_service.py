@@ -69,6 +69,10 @@ class TranslationService:
             if config.provider == "google":
                 return await self._translate_google(text, source, target, config)
             return await self._translate_libretranslate(text, source, target, config)
+        except TranslationUnavailableError:
+            if raise_on_failure:
+                raise
+            logger.warning("Translation provider is not ready provider=%s", config.provider)
         except httpx.HTTPStatusError as exc:
             logger.warning(
                 "Translation provider returned HTTP error provider=%s status_code=%s response=%s",
@@ -128,8 +132,7 @@ class TranslationService:
         config: TranslationSettings,
     ) -> str:
         if not config.api_key:
-            logger.warning("DeepL translation API key is not configured; returning original text")
-            return text
+            raise TranslationUnavailableError("DeepL API key is not configured")
 
         payload: dict[str, Any] = {
             "text": [text],
@@ -167,8 +170,7 @@ class TranslationService:
         config: TranslationSettings,
     ) -> str:
         if not config.api_key:
-            logger.warning("Google Translate API key is not configured; returning original text")
-            return text
+            raise TranslationUnavailableError("Google Translate API key is not configured")
 
         payload = {
             "q": text,

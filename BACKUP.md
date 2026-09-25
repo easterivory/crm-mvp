@@ -147,3 +147,49 @@ docker compose run --rm backup python scripts/db_restore.py /backups/file.sql.gz
 - Use `BACKUP_ENCRYPTION_KEY` before sending archives outside the server.
 - Periodically test restore into a temporary database. A backup that has never
   been restored is only a hope, not a recovery plan.
+# Local Telegram API for the backup bot
+
+The optional `docker-compose.backup-local-api.yml` raises the backup upload limit
+to 2000 MB. It uses a digest-pinned aiogram image of the Telegram Bot API server,
+with persistent storage and no published port. Client bots keep their existing API.
+Operational alerts and log exports use the backup bot too, so the override routes
+their BACKUP endpoint to the same local server in all application containers.
+
+Use a **dedicated backup bot**, not a funnel, buyer or admin bot. Obtain application
+credentials at https://my.telegram.org/apps and add to the server `.env`:
+
+```env
+BACKUP_LOCAL_API_ID=your_numeric_api_id
+BACKUP_LOCAL_API_HASH=your_api_hash
+```
+
+Keep the backup token and destination in the existing CRM system settings. Do not
+replace client bot tokens or their webhooks. Enable during a maintenance window:
+
+```sh
+docker compose stop backup
+docker compose -f docker-compose.yml -f docker-compose.backup-local-api.yml up -d backup-telegram-api
+docker compose -f docker-compose.yml -f docker-compose.backup-local-api.yml build backup
+docker compose -f docker-compose.yml -f docker-compose.backup-local-api.yml run --rm --no-deps backup python -m scripts.backup_local_api --logout-cloud
+docker compose -f docker-compose.yml -f docker-compose.backup-local-api.yml up -d --build api worker jobs mtproto backup
+```
+
+The migration reads the effective backup token from CRM, refuses an active webhook,
+and explicitly calls cloud `logOut` once. On subsequent checks use the same command
+**without `--logout-cloud`**. Never automate cloud logout on each worker startup.
+After success, trigger a manual backup in CRM and check the resulting archive in
+Telegram, then export logs to verify both delivery paths. Test restoring the dump
+into an isolated database before treating the backup as verified recovery.
+
+Always include this override in future deploys (and any other existing overrides).
+Backups are streamed as multipart files, not loaded completely into RAM. Keep free
+disk space for the original dump and the Bot API upload/cache. Files above 2000 MB
+still fail delivery explicitly and remain on backup storage.
+
+Rollback: stop backup jobs, call local Bot API `logOut` for this dedicated token,
+stop `backup-telegram-api`, and recreate the application services without this
+override. Telegram forbids cloud login for 10 minutes after cloud logout. The cloud
+49 MB safety limit then applies again. Do not delete the backup data volumes.
+
+Official behavior: https://core.telegram.org/bots/api#using-a-local-bot-api-server
+and https://core.telegram.org/bots/api#logout.

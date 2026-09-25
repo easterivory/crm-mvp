@@ -5,7 +5,7 @@ from collections import defaultdict
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bot import Bot
@@ -14,6 +14,7 @@ from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.partner import LeadSubmission, PartnerIntegration
 from app.models.project import Project
+from app.repositories.lead_repository import LeadRepository
 from app.schemas.lead_identity import (
     DuplicateLeadDetail,
     DuplicateSubmissionConflict,
@@ -31,6 +32,9 @@ class LeadIdentityService:
         self,
         lead_id: UUID,
         project_id: UUID,
+        *,
+        visible_project_ids: list[UUID] | None = None,
+        include_context: bool = False,
     ) -> list[DuplicateLeadDetail]:
         lead, chat = await self._get_source_identity(lead_id, project_id)
         phone_digits = self.normalize_phone(lead.phone)
@@ -48,7 +52,7 @@ class LeadIdentityService:
         if not conditions:
             return []
 
-        rows = await self._fetch_duplicate_rows(lead_id, conditions)
+        rows = await self._fetch_duplicate_rows(lead_id, conditions, visible_project_ids)
         if not rows:
             return []
 
@@ -67,9 +71,21 @@ class LeadIdentityService:
             if not matched_fields:
                 continue
 
+            context = await LeadRepository(self.db).get_lead_context(row.lead_id) if include_context else {}
+
             details.append(
                 DuplicateLeadDetail(
                     lead_id=row.lead_id,
+                    project_id=row.project_id if include_context else None,
+                    chat_id=row.chat_id if include_context and not row.chat_is_deleted else None,
+                    lead_name=row.lead_name if include_context else None,
+                    username=row.username if include_context else None,
+                    telegram_id=row.external_user_id if include_context else None,
+                    bot_username=row.bot_username if include_context else None,
+                    transport_type=row.transport_type if include_context else None,
+                    tracking_title=context.get("tracking_title"),
+                    tracking_code=context.get("tracking_code"),
+                    tracking_source=context.get("tracking_source"),
                     project_name=row.project_name,
                     bot_name=row.bot_name,
                     created_at=row.created_at,
@@ -130,10 +146,19 @@ class LeadIdentityService:
             )
         return row[0], row[1]
 
-    async def _fetch_duplicate_rows(self, lead_id: UUID, conditions: list) -> list:
-        result = await self.db.execute(
+    async def _fetch_duplicate_rows(self, lead_id: UUID, conditions: list, visible_project_ids: list[UUID] | None = None) -> list:
+        result = await self.db.execute(self._duplicate_rows_query(lead_id, conditions, visible_project_ids))
+        return list(result.all())
+
+    @staticmethod
+    def _duplicate_rows_query(lead_id: UUID, conditions: list, visible_project_ids: list[UUID] | None = None) -> Select:
+        statement = (
             select(
                 Lead.id.label("lead_id"),
+                Lead.project_id,
+                Lead.name.label("lead_name"),
+                Chat.id.label("chat_id"),
+                Chat.is_deleted.label("chat_is_deleted"),
                 Lead.phone,
                 Lead.username,
                 Lead.created_at,
@@ -142,6 +167,8 @@ class LeadIdentityService:
                 Chat.external_user_id,
                 Project.name.label("project_name"),
                 Bot.name.label("bot_name"),
+                Bot.bot_username,
+                Bot.transport_type,
                 LeadStatus.code.label("status_code"),
                 LeadStatus.name.label("status_name"),
             )
@@ -153,7 +180,9 @@ class LeadIdentityService:
             .where(Lead.id != lead_id, or_(*conditions))
             .order_by(Lead.created_at.desc(), Lead.id.desc())
         )
-        return list(result.all())
+        if visible_project_ids is not None:
+            statement = statement.where(Lead.project_id.in_(visible_project_ids))
+        return statement
 
     async def _submission_history_by_lead(
         self,

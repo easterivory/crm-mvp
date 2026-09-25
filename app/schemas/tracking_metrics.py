@@ -8,6 +8,18 @@ from pydantic import BaseModel, Field
 from app.core.constants import TrackingConversionStatus
 
 
+class TrackingTagDay(BaseModel):
+    date: date
+    count: int = 0
+
+
+class TrackingTagMetrics(BaseModel):
+    tag_id: uuid.UUID
+    tag_name: str
+    total: int
+    daily: list[TrackingTagDay]
+
+
 class TrackingMetricSummary(BaseModel):
     clicks: int = 0
     starts: int = 0

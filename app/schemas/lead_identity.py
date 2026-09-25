@@ -16,6 +16,16 @@ class DuplicateSubmissionHistory(BaseModel):
 
 class DuplicateLeadDetail(BaseModel):
     lead_id: uuid.UUID
+    project_id: uuid.UUID | None = None
+    chat_id: uuid.UUID | None = None
+    lead_name: str | None = None
+    username: str | None = None
+    telegram_id: str | None = None
+    bot_username: str | None = None
+    transport_type: str | None = None
+    tracking_title: str | None = None
+    tracking_code: str | None = None
+    tracking_source: str | None = None
     project_name: str
     bot_name: str | None = None
     created_at: datetime

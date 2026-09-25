@@ -68,6 +68,16 @@ export type DuplicateSubmissionHistory = {
 
 export type DuplicateLeadDetail = {
   lead_id: string
+  project_id?: string | null
+  chat_id?: string | null
+  lead_name?: string | null
+  username?: string | null
+  telegram_id?: string | null
+  bot_username?: string | null
+  transport_type?: string | null
+  tracking_title?: string | null
+  tracking_code?: string | null
+  tracking_source?: string | null
   project_name: string
   bot_name: string | null
   created_at: string

@@ -32,6 +32,7 @@ from app.schemas.partner import LeadSubmissionPreviewOut
 from app.services.lead_identity_service import LeadIdentityService
 from app.services.lead_service import LeadService
 from app.services.partner_service import PartnerService
+from app.services.access_control import accessible_project_ids
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -216,6 +217,8 @@ async def get_lead_duplicates(
     return await LeadIdentityService(db).find_duplicates(
         lead_id=lead_id,
         project_id=project_id,
+        visible_project_ids=None if current_user.role_name == RoleName.SUPER_ADMIN else accessible_project_ids(current_user),
+        include_context=True,
     )
 
 

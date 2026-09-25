@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import asdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_root_user, get_current_user, get_db
@@ -24,6 +26,7 @@ from app.schemas.system_setting import (
     TranslationProviderConfigUpdate,
 )
 from app.services.system_setting_service import SystemSettingService
+from app.services.translation_languages import LANGUAGES_KEY, TranslationLanguage, get_languages
 from app.services.funnel_start_recovery_service import FunnelStartRecoveryService
 from app.services.backup_queue import enqueue_manual_backup
 from app.services.server_log_service import (
@@ -34,6 +37,33 @@ from app.services.server_log_service import (
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/translation/languages", response_model=list[TranslationLanguage])
+async def list_translation_languages(
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TranslationLanguage]:
+    return await get_languages(SystemSettingService(db))
+
+
+@router.post("/translation/languages", response_model=list[TranslationLanguage])
+async def add_translation_language(
+    data: TranslationLanguage,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TranslationLanguage]:
+    _ensure_settings_admin(current_user)
+    # Serialize read/modify/write, including the first catalog creation.
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": LANGUAGES_KEY})
+    service = SystemSettingService(db)
+    custom = json.loads(await service.get_value(LANGUAGES_KEY) or "{}")
+    if data.value not in custom and len(custom) >= 300:
+        raise HTTPException(status_code=422, detail="Достигнут лимит языков")
+    custom[data.value] = data.label
+    await service.set_value(LANGUAGES_KEY, json.dumps(custom, ensure_ascii=False))
+    await db.commit()
+    return await get_languages(service)
 
 
 @router.get("/buyer-bot", response_model=BuyerBotConfigOut)

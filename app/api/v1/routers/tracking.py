@@ -23,6 +23,7 @@ from app.schemas.tracking_metrics import (
     TrackingLinkMetricsResponse,
     TrackingMetricSummary,
     TrackingProjectMetricsResponse,
+    TrackingTagMetrics,
 )
 from app.services.tracking_metrics_service import TrackingMetricsService
 from app.services.tracking_service import TrackingService
@@ -267,6 +268,18 @@ async def delete_tracking_spend_v1(
         spend_id=spend_id,
         actor=current_user,
     )
+
+
+@v1_router.get("/metrics/tag", response_model=TrackingTagMetrics)
+async def get_tag_tracking_metrics(
+    project_id: UUID = Query(...), tag_id: UUID = Query(...),
+    bot_id: Optional[UUID] = Query(default=None), link_id: Optional[UUID] = Query(default=None),
+    date_from: Optional[date] = Query(default=None), date_to: Optional[date] = Query(default=None),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+) -> TrackingTagMetrics:
+    return await TrackingMetricsService(db).get_tag_metrics(
+        current_user=current_user, project_id=project_id, tag_id=tag_id, bot_id=bot_id,
+        link_id=link_id, date_from=date_from, date_to=date_to)
 
 
 @v1_router.get("/metrics/project", response_model=TrackingProjectMetricsResponse)

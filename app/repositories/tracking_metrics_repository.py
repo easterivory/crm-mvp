@@ -6,13 +6,13 @@ from decimal import Decimal
 from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import case, distinct, false, func, or_, select
+from sqlalchemy import Select, case, distinct, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode, MessageType, SenderType, TrackingCostModel
 from app.models.bot import BotStep, ChatBotState
 from app.models.chat import Chat
-from app.models.lead import Lead
+from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.partner import LeadSubmission
@@ -39,6 +39,36 @@ class TrackingMetricsRepository:
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    @classmethod
+    def tagged_leads_query(cls, *, project_id: UUID, tag_id: UUID,
+                           date_from: date, date_to: date, bot_id: UUID | None = None,
+                           link_id: UUID | None = None, buyer_id: UUID | None = None) -> Select:
+        start_at, end_at = cls._date_bounds(date_from, date_to)
+        lifecycle_at = cls._lead_lifecycle_at()
+        day = func.date(func.timezone("UTC", lifecycle_at))
+        stmt = (select(day.label("date"), func.count(distinct(Lead.id)).label("count"))
+                .select_from(Lead).join(Chat, Chat.id == Lead.chat_id)
+                .join(LeadTag, LeadTag.lead_id == Lead.id)
+                .outerjoin(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
+                .where(Lead.project_id == project_id, LeadTag.tag_id == tag_id,
+                       Lead.is_deleted.is_(False), Chat.is_deleted.is_(False), Chat.reset_at.is_(None),
+                       lifecycle_at >= start_at, lifecycle_at < end_at))
+        if bot_id is not None:
+            stmt = stmt.where(Chat.bot_id == bot_id)
+        if link_id is not None:
+            stmt = stmt.where(Chat.tracking_link_id == link_id)
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id, TrackingLink.project_id == project_id)
+        return stmt.group_by(day).order_by(day)
+
+    async def aggregate_tagged_leads(self, *, project_id: UUID, tag_id: UUID,
+                                    date_from: date, date_to: date, bot_id: UUID | None = None,
+                                    link_id: UUID | None = None, buyer_id: UUID | None = None) -> list[dict[str, Any]]:
+        result = await self.db.execute(self.tagged_leads_query(
+            project_id=project_id, tag_id=tag_id, date_from=date_from, date_to=date_to,
+            bot_id=bot_id, link_id=link_id, buyer_id=buyer_id))
+        return [dict(row) for row in result.mappings().all()]
 
     async def aggregate_clicks_by_project(
         self,

@@ -16,6 +16,7 @@ from app.repositories.channel_metrics_repository import ChannelMetricsRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.repositories.tracking_repository import TrackingLinkRepository
+from app.repositories.tag_repository import TagRepository
 from app.schemas.tracking_metrics import (
     TrackingBreakdownItem,
     TrackingDailyMetric,
@@ -24,6 +25,8 @@ from app.schemas.tracking_metrics import (
     TrackingLinkMetricsResponse,
     TrackingMetricSummary,
     TrackingProjectMetricsResponse,
+    TrackingTagMetrics,
+    TrackingTagDay,
 )
 from app.services.tracking_conversion import calculate_conversion_status
 from app.services.access_control import require_project_access
@@ -44,6 +47,32 @@ class TrackingMetricsService:
         self.metrics_repo = TrackingMetricsRepository(db)
         self.lifecycle_repo = LifecycleMetricsRepository(db)
         self.channel_metrics_repo = ChannelMetricsRepository(db)
+        self.tag_repo = TagRepository(db)
+
+    async def get_tag_metrics(self, *, current_user: User, project_id: UUID, tag_id: UUID,
+                              bot_id: UUID | None = None, link_id: UUID | None = None,
+                              date_from: date | None = None, date_to: date | None = None) -> TrackingTagMetrics:
+        date_from, date_to = self._resolve_date_range(date_from, date_to)
+        await self._ensure_project_access(current_user, project_id)
+        await self._get_active_project_or_404(project_id)
+        tag = await self.tag_repo.get_by_id_in_project(tag_id, project_id)
+        if tag is None:
+            raise HTTPException(status_code=404, detail="Tag not found in project")
+        if bot_id is not None:
+            await self._ensure_bot_in_project(bot_id, project_id)
+        buyer_id = current_user.id if current_user.role_name == RoleName.BUYER else None
+        if link_id is not None:
+            link = await self.link_repo.get_link_by_id(link_id)
+            if link is None or link.project_id != project_id or (buyer_id is not None and link.buyer_id != buyer_id):
+                raise HTTPException(status_code=404, detail="Tracking link not found")
+        rows = await self.metrics_repo.aggregate_tagged_leads(
+            project_id=project_id, tag_id=tag_id, bot_id=bot_id, link_id=link_id,
+            buyer_id=buyer_id, date_from=date_from, date_to=date_to)
+        counts = {str(row["date"]): int(row["count"]) for row in rows}
+        daily = [TrackingTagDay(date=day, count=counts.get(day.isoformat(), 0))
+                 for day in (date_from + timedelta(days=index) for index in range((date_to - date_from).days + 1))]
+        return TrackingTagMetrics(tag_id=tag.id, tag_name=tag.name,
+                                  total=sum(item.count for item in daily), daily=daily)
 
     async def get_project_metrics(
         self,
