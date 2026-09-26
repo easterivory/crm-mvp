@@ -49,3 +49,6 @@ def test_compose_override_keeps_credentials_and_routing_scoped():
         assert "TELEGRAM_API_ID" not in overrides
         assert "TELEGRAM_API_BASE_URL" not in overrides
     assert config["services"]["backup"]["depends_on"]["redis"]["condition"] == "service_healthy"
+    mount = next(volume for volume in config["services"]["api"]["volumes"] if volume["target"] == "/backups")
+    assert mount["read_only"] is True
+    assert mount["source"] == "backups_data"

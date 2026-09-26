@@ -20,6 +20,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import axios from 'axios'
 
 import api from '../api/client'
+import BackupDownloadButton from '../features/settings/BackupDownloadButton'
 import { useTranslationLanguages } from '../features/translation/languages'
 import LanguageSettings from '../features/translation/LanguageSettings'
 import BuyersSettings from '../features/buyers/components/BuyersSettings'
@@ -1692,6 +1693,7 @@ export default function SettingsPage() {
                 {isExportingLogs ? <LoaderCircle size={16} className="animate-spin" /> : <FileText size={16} />}
                 Отправить логи за 30 минут
               </button>
+              {currentUser?.is_root ? <BackupDownloadButton /> : null}
             </div>
           </form>
         ) : null}

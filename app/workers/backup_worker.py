@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from arq import cron
+from arq import cron, func
 
 from app.core.arq_queues import BACKUP_QUEUE_NAME
 from app.core.config import settings
@@ -17,6 +17,7 @@ from app.services.backup_service import (
 )
 from app.services.backup_queue import backup_redis_settings
 from app.utils.backup_manager import run_configured_telegram_backup
+from app.services.backup_download_service import DOWNLOAD_TTL_SECONDS, create_download, cleanup_downloads
 
 logger = logging.getLogger(__name__)
 configure_file_logging()
@@ -25,14 +26,24 @@ configure_file_logging()
 async def run_tg_backup_job(ctx: dict, force: bool = False) -> dict:
     """ARQ task used by both the daily cron and the Root manual trigger."""
     try:
+        await asyncio.to_thread(cleanup_downloads)
         return await run_configured_telegram_backup(force=force)
     except Exception as exc:
         logger.exception("Telegram database backup failed")
         raise BackupError(str(exc)) from exc
 
 
+async def run_download_backup_job(ctx: dict, job_id: str) -> dict:
+    try:
+        result = await asyncio.to_thread(create_download, job_id)
+        return {"file_name": result.path.name, "size_bytes": result.size_bytes, "sha256": result.sha256}
+    except Exception:
+        logger.exception("Download backup failed job_id=%s", job_id)
+        raise BackupError("Не удалось создать бэкап. Проверьте серверные логи.") from None
+
+
 class WorkerSettings:
-    functions = [run_tg_backup_job]
+    functions = [run_tg_backup_job, func(run_download_backup_job, keep_result=DOWNLOAD_TTL_SECONDS)]
     cron_jobs = [cron(run_tg_backup_job, hour=3, minute=0, run_at_startup=False)]
     redis_settings = backup_redis_settings()
     queue_name = BACKUP_QUEUE_NAME

@@ -83,6 +83,13 @@ class BackupJobOut(BaseModel):
     job_id: str
 
 
+class BackupDownloadOut(BaseModel):
+    status: Literal["queued", "in_progress", "ready", "failed"]
+    file_name: str | None = None
+    size_bytes: int | None = None
+    sha256: str | None = None
+
+
 class ServerLogExportOut(BaseModel):
     file_name: str
     size_bytes: int

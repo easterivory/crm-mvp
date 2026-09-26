@@ -4,6 +4,11 @@ import logging
 import json
 from dataclasses import asdict
 from datetime import datetime, timezone
+from uuid import UUID
+
+from arq import create_pool
+from arq.jobs import Job, JobStatus
+from fastapi.responses import FileResponse
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -17,6 +22,7 @@ from app.schemas.system_setting import (
     BuyerBotConfigOut,
     BuyerBotConfigUpdate,
     BackupJobOut,
+    BackupDownloadOut,
     FunnelStartRecoveryIn,
     FunnelStartRecoveryOut,
     ServerLogExportOut,
@@ -28,7 +34,9 @@ from app.schemas.system_setting import (
 from app.services.system_setting_service import SystemSettingService
 from app.services.translation_languages import LANGUAGES_KEY, TranslationLanguage, get_languages
 from app.services.funnel_start_recovery_service import FunnelStartRecoveryService
-from app.services.backup_queue import enqueue_manual_backup
+from app.services.backup_queue import enqueue_manual_backup, enqueue_download_backup, backup_redis_settings
+from app.services.backup_download_service import resolve_download
+from app.core.arq_queues import BACKUP_QUEUE_NAME
 from app.services.server_log_service import (
     ServerLogExportError,
     collect_recent_server_logs,
@@ -202,6 +210,63 @@ async def run_manual_backup(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Backup queue is unavailable",
         ) from exc
+
+
+@router.post("/global/backup/download", response_model=BackupJobOut, status_code=202)
+async def prepare_backup_download(
+    root: User = Depends(get_current_root_user),
+) -> BackupJobOut:
+    redis = await get_redis()
+    if not await redis.set(f"backup-download:cooldown:{root.id}", "1", nx=True, ex=60):
+        raise HTTPException(status_code=429, detail="Бэкап можно создавать не чаще одного раза в минуту")
+    try:
+        return BackupJobOut(job_id=await enqueue_download_backup())
+    except Exception as exc:
+        logger.exception("Could not enqueue backup download")
+        raise HTTPException(status_code=503, detail="Очередь бэкапов недоступна") from exc
+
+
+async def _backup_download_status(job_id: UUID) -> BackupDownloadOut:
+    redis = await create_pool(backup_redis_settings())
+    try:
+        job = Job(f"download-backup:{job_id}", redis, _queue_name=BACKUP_QUEUE_NAME)
+        result = await job.result_info()
+        if result is not None:
+            if not result.success:
+                return BackupDownloadOut(status="failed")
+            return BackupDownloadOut(status="ready", **result.result)
+        state = await job.status()
+        if state == JobStatus.not_found:
+            raise HTTPException(status_code=404, detail="Бэкап не найден или срок скачивания истёк")
+        return BackupDownloadOut(status="in_progress" if state == JobStatus.in_progress else "queued")
+    finally:
+        await redis.close()
+
+
+@router.get("/global/backup/download/{job_id}", response_model=BackupDownloadOut)
+async def backup_download_status(
+    job_id: UUID,
+    _root: User = Depends(get_current_root_user),
+) -> BackupDownloadOut:
+    return await _backup_download_status(job_id)
+
+
+@router.get("/global/backup/download/{job_id}/file")
+async def download_backup_file(
+    job_id: UUID,
+    _root: User = Depends(get_current_root_user),
+) -> FileResponse:
+    result = await _backup_download_status(job_id)
+    if result.status != "ready" or not result.file_name:
+        raise HTTPException(status_code=409, detail="Бэкап ещё не готов или завершился ошибкой")
+    try:
+        path = resolve_download(job_id, result.file_name)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=410, detail="Архив недоступен. Создайте новый бэкап.") from exc
+    return FileResponse(
+        path, filename=result.file_name, media_type="application/octet-stream",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.post("/global/logs/export", response_model=ServerLogExportOut)

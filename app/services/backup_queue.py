@@ -37,3 +37,18 @@ async def enqueue_manual_backup() -> str:
         return job.job_id
     finally:
         await redis.close()
+
+
+async def enqueue_download_backup() -> str:
+    redis = await create_pool(backup_redis_settings())
+    try:
+        job_id = str(uuid4())
+        job = await redis.enqueue_job(
+            "run_download_backup_job", job_id,
+            _job_id=f"download-backup:{job_id}", _queue_name=BACKUP_QUEUE_NAME,
+        )
+        if job is None:
+            raise RuntimeError("Could not enqueue download backup")
+        return job_id
+    finally:
+        await redis.close()

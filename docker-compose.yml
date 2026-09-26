@@ -42,6 +42,7 @@ services:
       TELEGRAM_ACCOUNT_MEDIA_STORAGE_PATH: /app/storage/telegram_account_media
     volumes:
       - ./frontend/dist:/app/frontend/dist:ro
+      - backups_data:/backups:ro
       - landers_data:/app/storage/landers
       - broadcast_uploads_data:/app/storage/broadcast_uploads
       - chat_attachments_data:/app/storage/chat_attachments

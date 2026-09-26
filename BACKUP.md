@@ -12,6 +12,35 @@ compressed `pg_dump` SQL archive, not a raw copy of the Docker volume.
 - Optional Telegram delivery to a private chat/channel
 - Optional OpenSSL encryption before local storage and Telegram delivery
 - Retention by count and age
+
+## Download To Computer
+
+Root administrators can use **Settings / System / Скачать бэкап**, next to the
+log export button. A fresh dump is created by the backup ARQ worker without any
+Telegram request, then downloaded through an authenticated API route. Telegram
+credentials, the daily backup toggle and local Telegram API are not required.
+Deploy both `api` and `backup` with the updated compose file: the API needs the
+read-only `backups_data:/backups` mount. Custom storage paths must refer to the
+same shared directory in both containers.
+
+Download artifacts live in `/backups/downloads` for 24 hours; cleanup runs on
+backup jobs and the daily cron, separately from scheduled archive retention.
+No file can be downloaded after expiry. Encryption remains enabled when
+`BACKUP_ENCRYPTION_KEY` is set; retain that key separately to restore `.enc` files.
+
+The archive includes the schema and all rows of the configured PostgreSQL
+database: projects, users and roles, leads, chats and stored messages, tags,
+funnels and runtime state, tracking/campaigns, submissions/events, integrations
+and settings stored in the database. It is a consistent database snapshot,
+not a full server image. Stored credentials make the archive sensitive.
+
+It does **not** include filesystem uploads (photos, videos, voice messages,
+landing files), `.env`, application code, server logs, Redis queues, or database
+cluster roles/grants. Message file IDs/paths and metadata are included when stored
+in the database, but the media bytes are not. Keep separate backups of storage
+volumes and deployment secrets, especially keys used for encrypted provider
+credentials and Telegram account sessions. The database archive alone is not a
+complete disaster-recovery backup of the entire installation.
 - Full gzip-stream and PostgreSQL dump-header verification
 
 ## Telegram File Limit
