@@ -133,6 +133,8 @@ class TelegramChatMemberUpdated(BaseModel):
     old_chat_member: TelegramChatMember
     new_chat_member: TelegramChatMember
     invite_link: Optional[TelegramChatInviteLink] = None
+    via_join_request: bool = False
+    via_chat_folder_invite_link: bool = False
 
 
 class TelegramChatJoinRequest(BaseModel):

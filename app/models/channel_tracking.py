@@ -32,6 +32,8 @@ class TelegramChannel(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     )
     telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    restart_funnel_on_rejoin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    start_funnel_on_direct_join: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(

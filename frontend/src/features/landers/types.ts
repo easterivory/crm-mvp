@@ -242,6 +242,8 @@ export type TelegramChannel = {
   is_active: boolean
   bot_is_admin: boolean
   can_invite_users: boolean
+  restart_funnel_on_rejoin: boolean
+  start_funnel_on_direct_join: boolean
   verified_at: string | null
   created_at: string
   updated_at: string

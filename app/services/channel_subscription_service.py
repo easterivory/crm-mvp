@@ -52,7 +52,7 @@ class ChannelSubscriptionService:
         update_id: int,
         bot_id: UUID,
         event: TelegramChatMemberUpdated,
-    ) -> bool:
+    ) -> bool | ChannelJoinRequestAction:
         channel = await self._find_channel(
             bot_id=bot_id,
             telegram_chat_id=event.chat.id,
@@ -80,6 +80,16 @@ class ChannelSubscriptionService:
         user = event.new_chat_member.user
         occurred_at = self._from_unix(event.date)
         subscription = await self._get_subscription(channel.id, user.id)
+        request_entry = bool(
+            (subscription is not None and subscription.status == "pending")
+            or getattr(event, "via_join_request", False)
+            or (event.invite_link is not None and event.invite_link.creates_join_request)
+        )
+        direct_start = bool(new_active and channel.start_funnel_on_direct_join and not request_entry)
+        entry_payload = event.model_dump(mode="json", by_alias=True)
+        if direct_start:
+            entry_payload["user_chat_id"] = user.id
+            entry_payload["_restart_funnel"] = bool(channel.restart_funnel_on_rejoin and subscription is not None and subscription.first_joined_at)
         tracking_link_id = (
             invite.tracking_link_id
             if invite is not None
@@ -109,7 +119,8 @@ class ChannelSubscriptionService:
             previous_status=event.old_chat_member.status,
             new_status=event.new_chat_member.status,
             occurred_at=occurred_at,
-            raw_payload=event.model_dump(mode="json", by_alias=True),
+            raw_payload=entry_payload,
+            auto_start_requested=direct_start,
             attribution_data=attribution_data,
         )
         if not inserted:
@@ -132,6 +143,8 @@ class ChannelSubscriptionService:
             update_id=update_id,
             occurred_at=occurred_at,
         )
+        if direct_start:
+            return ChannelJoinRequestAction(event_id=inserted.id)
         return True
 
     async def handle_join_request(
@@ -160,6 +173,10 @@ class ChannelSubscriptionService:
             invite.tracking_link_id if invite is not None else None
         )
         occurred_at = self._from_unix(event.date)
+        subscription = (await self._get_subscription(channel.id, event.from_user.id)
+                        if channel.restart_funnel_on_rejoin else None)
+        entry_payload = event.model_dump(mode="json", by_alias=True)
+        entry_payload["_restart_funnel"] = bool(channel.restart_funnel_on_rejoin and subscription is not None and subscription.first_joined_at)
         inserted = await self._insert_event(
             channel=channel,
             bot_id=bot_id,
@@ -171,7 +188,7 @@ class ChannelSubscriptionService:
             previous_status=None,
             new_status="pending",
             occurred_at=occurred_at,
-            raw_payload=event.model_dump(mode="json", by_alias=True),
+            raw_payload=entry_payload,
             attribution_data=attribution_data,
             request_message_text=request_message_text,
             auto_approve_requested=auto_approve,

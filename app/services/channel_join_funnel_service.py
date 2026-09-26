@@ -4,12 +4,14 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode
 from app.core.lead_names import compose_lead_name, normalize_name_part
 from app.models.channel_tracking import TelegramChannelSubscriptionEvent
 from app.models.chat import Chat
+from app.models.message import Message
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
 from app.services.funnel_runtime_service import FunnelRuntimeService
@@ -17,7 +19,7 @@ from app.services.funnel_runtime_service import FunnelRuntimeService
 
 @dataclass(frozen=True, slots=True)
 class ChannelJoinFunnelResult:
-    chat_id: UUID
+    chat_id: UUID | None
     started: bool
     already_started: bool = False
     error: str | None = None
@@ -25,6 +27,10 @@ class ChannelJoinFunnelResult:
 
 class ChannelJoinFunnelUnavailable(RuntimeError):
     pass
+
+
+def entry_requests_restart(payload: dict) -> bool:
+    return payload.get("_restart_funnel") is True and payload.get("_restart_applied") is not True
 
 
 class ChannelJoinFunnelService:
@@ -46,7 +52,19 @@ class ChannelJoinFunnelService:
         event: TelegramChannelSubscriptionEvent,
         user_chat_id: int,
     ) -> ChannelJoinFunnelResult:
+        if event.event_type == "join":
+            known = await self.db.scalar(select(Chat.id).join(Message, Message.chat_id == Chat.id).where(
+                Chat.project_id == event.project_id, Chat.bot_id == event.tracker_bot_id,
+                or_(Chat.external_user_id == str(event.telegram_user_id), Chat.external_chat_id == str(event.telegram_user_id)),
+                Chat.is_deleted.is_(False), Chat.is_blocked_by_user.is_(False),
+                Message.sender_type == "user",
+            ).limit(1))
+            if known is None:
+                return ChannelJoinFunnelResult(chat_id=None, started=False,
+                    error="Пропуск: вступление без заявки; нет доступного диалога с входящими сообщениями пользователя")
         chat = await self._ensure_chat(event=event, user_chat_id=user_chat_id)
+        if chat.is_deleted:
+            return ChannelJoinFunnelResult(chat_id=chat.id, started=False, error="Пропуск: чат удалён")
         await self._ensure_lead(event=event, chat_id=chat.id)
         # The CRM identity must survive even when no funnel is published yet.
         await self.db.commit()
@@ -65,6 +83,13 @@ class ChannelJoinFunnelService:
             )
 
         state = await self.runtime.repo.get_chat_funnel_state(chat.id)
+        entry = dict(event.raw_payload or {})
+        if state is not None and entry_requests_restart(entry):
+            await self.runtime.repo.delete_chat_funnel_state(chat.id)
+            entry["_restart_applied"] = True
+            event.raw_payload = entry
+            await self.db.commit()
+            state = None
         if state is not None:
             return ChannelJoinFunnelResult(
                 chat_id=chat.id,
@@ -94,7 +119,7 @@ class ChannelJoinFunnelService:
     ) -> Chat:
         external_chat_id = str(user_chat_id)
         external_user_id = str(event.telegram_user_id)
-        chat = await self.chat_repo.get_by_external(
+        chat = await self.chat_repo.get_any_by_external(
             event.project_id,
             external_chat_id,
             bot_id=event.tracker_bot_id,
@@ -111,6 +136,13 @@ class ChannelJoinFunnelService:
             and event.attribution_data_json
         )
         if chat is not None:
+            if chat.is_deleted:
+                return chat
+            if chat.reset_at is not None:
+                await self.runtime.repo.delete_chat_funnel_state(chat.id)
+                chat = await self.chat_repo.reactivate_reset_chat(
+                    chat.id, tracking_link_id=event.tracking_link_id, contact_name=contact_name,
+                ) or chat
             updates: dict[str, object] = {}
             if chat.external_chat_id != external_chat_id:
                 updates["external_chat_id"] = external_chat_id
@@ -139,7 +171,7 @@ class ChannelJoinFunnelService:
                     contact_name=contact_name,
                 )
         except IntegrityError:
-            winner = await self.chat_repo.get_by_external(
+            winner = await self.chat_repo.get_any_by_external(
                 event.project_id,
                 external_chat_id,
                 bot_id=event.tracker_bot_id,

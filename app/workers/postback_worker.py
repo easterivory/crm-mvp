@@ -386,6 +386,36 @@ async def process_channel_join_request_action_task(
     ctx: dict,
     event_id: str,
 ) -> dict:
+    from app.core.redis import get_redis
+    from redis.exceptions import LockError
+
+    try:
+        event_uuid = UUID(event_id)
+    except (TypeError, ValueError):
+        return {"status": "failed", "error": "Invalid channel event ID"}
+    async with get_db_session() as db:
+        identity = (await db.execute(select(
+            TelegramChannelSubscriptionEvent.tracker_bot_id,
+            TelegramChannelSubscriptionEvent.telegram_user_id,
+        ).where(TelegramChannelSubscriptionEvent.id == event_uuid))).one_or_none()
+    if identity is None:
+        return {"status": "skipped", "error": "Channel event not found"}
+    redis = await get_redis()
+    lock = redis.lock(f"channel-entry:{identity[0]}:{identity[1]}", timeout=900)
+    if not await lock.acquire(blocking=False):
+        if Retry is not None:
+            raise Retry(defer=3)
+        return {"status": "pending", "event_id": event_id}
+    try:
+        return await _process_channel_join_request_action(ctx, event_id)
+    finally:
+        try:
+            await lock.release()
+        except LockError:
+            logger.warning("Channel entry lock expired event_id=%s", event_id)
+
+
+async def _process_channel_join_request_action(ctx: dict, event_id: str) -> dict:
     try:
         event_uuid = UUID(event_id)
     except (TypeError, ValueError) as exc:
@@ -399,7 +429,7 @@ async def process_channel_join_request_action_task(
             .where(TelegramChannelSubscriptionEvent.id == event_uuid)
         )
         event = result.scalar_one_or_none()
-        if event is None or event.event_type != "join_request":
+        if event is None or event.event_type not in {"join_request", "join"}:
             return {"status": "skipped", "error": "Join-request event not found"}
 
         message_pending = bool(
@@ -475,7 +505,12 @@ async def process_channel_join_request_action_task(
                 funnel_error = start_result.error
                 event.request_action_error = funnel_error or message_error
                 await db.commit()
-                if funnel_error:
+                logger.info(
+                    "Channel entry funnel result event_id=%s chat_id=%s started=%s already_started=%s reason=%s",
+                    event_id, start_result.chat_id, start_result.started,
+                    getattr(start_result, "already_started", False), funnel_error,
+                )
+                if funnel_error and not funnel_error.startswith("Пропуск:"):
                     await send_operational_alert(
                         component="channel_join_funnel",
                         title="Channel join funnel did not start",
@@ -586,7 +621,7 @@ async def recover_channel_join_request_actions_task(ctx: dict) -> dict:
                 TelegramChannelSubscriptionEvent.occurred_at,
             )
             .where(
-                TelegramChannelSubscriptionEvent.event_type == "join_request",
+                TelegramChannelSubscriptionEvent.event_type.in_(("join_request", "join")),
                 TelegramChannelSubscriptionEvent.occurred_at >= message_cutoff,
                 or_(
                     and_(

@@ -151,6 +151,14 @@ export async function verifyTelegramChannel(
   return data
 }
 
+export async function updateChannelFunnelPolicy(projectId: string, channelId: string, payload: {
+  restart_funnel_on_rejoin: boolean
+  start_funnel_on_direct_join: boolean
+}): Promise<TelegramChannel> {
+  const { data } = await api.patch<TelegramChannel>(`/projects/${projectId}/telegram-channels/${channelId}/funnel-policy`, payload)
+  return data
+}
+
 export async function deleteTelegramChannel(
   projectId: string,
   channelId: string,

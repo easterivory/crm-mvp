@@ -38,6 +38,7 @@ import {
   updateProjectLander,
   uploadProjectLanderZip,
   verifyTelegramChannel,
+  updateChannelFunnelPolicy,
 } from '../api'
 import type {
   LanderType,
@@ -740,6 +741,7 @@ export default function LandersSettings({
   canManageDomains = true,
 }: LandersSettingsProps) {
   const isBuyer = useAuthStore((state) => state.user?.role_name === 'buyer')
+  const isSuperAdmin = useAuthStore((state) => state.user?.role_name === 'super_admin')
   const [domains, setDomains] = useState<ProjectDomain[]>([])
   const [landers, setLanders] = useState<ProjectLander[]>([])
   const [trackingLinks, setTrackingLinks] = useState<TrackingLinkOption[]>([])
@@ -1194,6 +1196,24 @@ export default function LandersSettings({
     }
   }
 
+  const handleChannelPolicy = async (channel: TelegramChannel, field: 'restart_funnel_on_rejoin' | 'start_funnel_on_direct_join', enabled: boolean) => {
+    if (!projectId || !isSuperAdmin || mutatingChannelId) return
+    if (enabled && !window.confirm(field === 'restart_funnel_on_rejoin'
+      ? 'При повторном вступлении текущая воронка начнётся заново. Включить?'
+      : 'Без заявки бот запустит воронку только для пользователей с доступным диалогом, которые уже писали боту. Включить?')) return
+    setMutatingChannelId(channel.id)
+    try {
+      const updated = await updateChannelFunnelPolicy(projectId, channel.id, {
+        restart_funnel_on_rejoin: channel.restart_funnel_on_rejoin ?? false,
+        start_funnel_on_direct_join: channel.start_funnel_on_direct_join ?? false,
+        [field]: enabled,
+      })
+      setChannels((items) => items.map((item) => item.id === updated.id ? updated : item))
+    } catch (err) {
+      setBanner({ tone: 'error', message: getErrorMessage(err, 'Не удалось сохранить настройки запуска.') })
+    } finally { setMutatingChannelId(null) }
+  }
+
   const handleDeleteDomain = async (domain: ProjectDomain) => {
     if (!projectId || deletingDomainId) {
       return
@@ -1636,6 +1656,20 @@ export default function LandersSettings({
                       <div className="mt-1 font-mono text-xs text-zinc-500">
                         {channel.username ? `@${channel.username.replace(/^@/, '')}` : channel.telegram_chat_id}
                       </div>
+                      {isSuperAdmin && <div className="mt-3 space-y-2 text-xs text-zinc-300">
+                        <label className="flex items-start gap-2">
+                          <input type="checkbox" checked={channel.restart_funnel_on_rejoin ?? false}
+                            disabled={Boolean(mutatingChannelId)} className="shrink-0 accent-cyan-500"
+                            onChange={(event) => void handleChannelPolicy(channel, 'restart_funnel_on_rejoin', event.target.checked)} />
+                          Перезапускать воронку при повторном вступлении
+                        </label>
+                        <label className="flex items-start gap-2">
+                          <input type="checkbox" checked={channel.start_funnel_on_direct_join ?? false}
+                            disabled={Boolean(mutatingChannelId)} className="shrink-0 accent-cyan-500"
+                            onChange={(event) => void handleChannelPolicy(channel, 'start_funnel_on_direct_join', event.target.checked)} />
+                          Запускать при вступлении без заявки
+                        </label>
+                      </div>}
                     </td>
                     <td className="px-4 py-3 text-zinc-300">
                       {trackerBot?.name ?? channel.tracker_bot_id.slice(0, 8)}

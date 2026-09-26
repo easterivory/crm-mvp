@@ -40,6 +40,8 @@ class TelegramChannelOut(OrmBase):
     is_active: bool
     bot_is_admin: bool
     can_invite_users: bool
+    restart_funnel_on_rejoin: bool = False
+    start_funnel_on_direct_join: bool = False
     verified_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -55,6 +57,14 @@ class TelegramChannelEventOut(OrmBase):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     occurred_at: datetime
+    auto_start_requested: bool = False
+    funnel_started_at: Optional[datetime] = None
+    funnel_start_error: Optional[str] = None
+
+
+class TelegramChannelPolicyUpdate(BaseModel):
+    restart_funnel_on_rejoin: bool
+    start_funnel_on_direct_join: bool
 
 
 class TelegramChannelMetricsOut(BaseModel):

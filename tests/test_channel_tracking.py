@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
 from app.core.constants import RoleName
+from app.models.channel_tracking import TelegramChannel
 from app.repositories.message_repository import MessageRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.schemas.lander import LanderTrackingCampaignCreate, ProjectLanderCreate
@@ -346,7 +347,7 @@ def test_join_request_snapshots_optional_actions() -> None:
     async def run() -> None:
         event_id = uuid4()
         tracking_link_id = uuid4()
-        channel = SimpleNamespace(id=uuid4(), project_id=uuid4())
+        channel = TelegramChannel(id=uuid4(), project_id=uuid4())
         inserted = SimpleNamespace(id=event_id)
         service = ChannelSubscriptionService(SimpleNamespace())
         service._find_channel = AsyncMock(return_value=channel)  # type: ignore[method-assign]
@@ -397,7 +398,7 @@ def test_join_request_copies_click_attribution_from_exact_invite() -> None:
             "fbp": "fb.1.1786406400000.browser-id",
             "event_source_url": "https://ads.example/l/channel?fbclid=click-id",
         }
-        channel = SimpleNamespace(id=uuid4(), project_id=uuid4())
+        channel = TelegramChannel(id=uuid4(), project_id=uuid4())
         inserted = SimpleNamespace(id=event_id)
         service = ChannelSubscriptionService(SimpleNamespace())
         service._find_channel = AsyncMock(return_value=channel)  # type: ignore[method-assign]
@@ -462,7 +463,7 @@ def test_attribution_invite_context_is_not_shared_with_another_user() -> None:
 
 def test_forwarded_attribution_invite_does_not_reuse_old_subscription_context() -> None:
     async def run() -> None:
-        channel = SimpleNamespace(id=uuid4(), project_id=uuid4())
+        channel = TelegramChannel(id=uuid4(), project_id=uuid4())
         invite = SimpleNamespace(
             tracking_link_id=uuid4(),
             is_attribution_session=True,
@@ -470,6 +471,7 @@ def test_forwarded_attribution_invite_does_not_reuse_old_subscription_context() 
             attribution_data_json={"fbc": "fb.1.original.click"},
         )
         old_subscription = SimpleNamespace(
+            status="left",
             tracking_link_id=uuid4(),
             attribution_data_json={"fbc": "fb.1.old.click"},
         )
@@ -530,6 +532,7 @@ def test_channel_join_click_attribution_replaces_an_older_channel_campaign() -> 
         new_tracking_link_id = uuid4()
         chat = SimpleNamespace(
             id=uuid4(),
+            is_deleted=False, reset_at=None,
             external_chat_id="9876543210",
             tracking_link_id=old_tracking_link_id,
             contact_name="Lead",
@@ -538,7 +541,7 @@ def test_channel_join_click_attribution_replaces_an_older_channel_campaign() -> 
         updated_chat.tracking_link_id = new_tracking_link_id
         service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
         service.chat_repo = SimpleNamespace(
-            get_by_external=AsyncMock(return_value=chat),
+            get_any_by_external=AsyncMock(return_value=chat),
             get_by_external_user=AsyncMock(),
             update_by_id=AsyncMock(return_value=updated_chat),
         )
@@ -568,13 +571,14 @@ def test_legacy_channel_join_without_click_context_keeps_existing_campaign() -> 
         old_tracking_link_id = uuid4()
         chat = SimpleNamespace(
             id=uuid4(),
+            is_deleted=False, reset_at=None,
             external_chat_id="9876543210",
             tracking_link_id=old_tracking_link_id,
             contact_name="Lead",
         )
         service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
         service.chat_repo = SimpleNamespace(
-            get_by_external=AsyncMock(return_value=chat),
+            get_any_by_external=AsyncMock(return_value=chat),
             get_by_external_user=AsyncMock(),
             update_by_id=AsyncMock(),
         )
@@ -605,7 +609,7 @@ def test_channel_join_funnel_start_is_idempotent() -> None:
         version_id = uuid4()
         service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
         service.db = SimpleNamespace(commit=AsyncMock())
-        service._ensure_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id))
+        service._ensure_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id, is_deleted=False))
         service._ensure_lead = AsyncMock()
         service.runtime = SimpleNamespace(
             get_active_published_funnel_for_bot=AsyncMock(
@@ -619,7 +623,7 @@ def test_channel_join_funnel_start_is_idempotent() -> None:
             ),
             start_funnel_for_chat=AsyncMock(),
         )
-        event = SimpleNamespace(project_id=project_id, tracker_bot_id=bot_id)
+        event = SimpleNamespace(project_id=project_id, tracker_bot_id=bot_id, event_type="join_request", raw_payload={})
 
         result = await service.start_for_join_request(
             event=event,
@@ -643,7 +647,7 @@ def test_channel_join_funnel_starts_active_tracker_funnel() -> None:
         version_id = uuid4()
         service = ChannelJoinFunnelService.__new__(ChannelJoinFunnelService)
         service.db = SimpleNamespace(commit=AsyncMock())
-        service._ensure_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id))
+        service._ensure_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id, is_deleted=False))
         service._ensure_lead = AsyncMock()
         service.runtime = SimpleNamespace(
             get_active_published_funnel_for_bot=AsyncMock(
@@ -659,7 +663,7 @@ def test_channel_join_funnel_starts_active_tracker_funnel() -> None:
             ),
             start_funnel_for_chat=AsyncMock(return_value=None),
         )
-        event = SimpleNamespace(project_id=project_id, tracker_bot_id=bot_id)
+        event = SimpleNamespace(project_id=project_id, tracker_bot_id=bot_id, event_type="join_request", raw_payload={})
 
         result = await service.start_for_join_request(
             event=event,
@@ -898,7 +902,7 @@ def test_join_request_auto_approval_survives_funnel_start_failure(
             AsyncMock(),
         )
 
-        result = await postback_worker.process_channel_join_request_action_task(
+        result = await postback_worker._process_channel_join_request_action(
             {"job_try": 1},
             str(event_id),
         )

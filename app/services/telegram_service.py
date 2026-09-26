@@ -241,11 +241,13 @@ class TelegramService:
 
         chat_member_update = getattr(update, "chat_member", None)
         if chat_member_update is not None:
-            await ChannelSubscriptionService(self.db).handle_chat_member_update(
+            action = await ChannelSubscriptionService(self.db).handle_chat_member_update(
                 update_id=update.update_id,
                 bot_id=bot_id,
                 event=chat_member_update,
             )
+            if action is not True and action is not False:
+                self._pending_channel_join_request_actions.append(action.event_id)
             return
 
         join_request_update = getattr(update, "chat_join_request", None)

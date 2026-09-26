@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user, get_db
@@ -11,6 +11,7 @@ from app.schemas.channel_tracking import (
     TelegramChannelCreate,
     TelegramChannelEventOut,
     TelegramChannelOut,
+    TelegramChannelPolicyUpdate,
 )
 from app.services.channel_tracking_service import ChannelTrackingService
 
@@ -19,6 +20,22 @@ router = APIRouter(
     prefix="/projects/{project_id}/telegram-channels",
     tags=["channel-tracking"],
 )
+
+
+@router.patch("/{channel_id}/funnel-policy", response_model=TelegramChannelOut)
+async def update_channel_funnel_policy(
+    project_id: UUID, channel_id: UUID, data: TelegramChannelPolicyUpdate,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+) -> TelegramChannelOut:
+    if current_user.role_name != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super_admin can change channel funnel policy")
+    channel = await ChannelTrackingService(db).get_channel(
+        project_id=project_id, channel_id=channel_id, require_active=True,
+    )
+    channel.restart_funnel_on_rejoin = data.restart_funnel_on_rejoin
+    channel.start_funnel_on_direct_join = data.start_funnel_on_direct_join
+    await db.flush()
+    return TelegramChannelOut.model_validate(channel)
 
 
 @router.get("", response_model=list[TelegramChannelOut])
