@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -8,13 +9,16 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode
-from app.core.lead_names import compose_lead_name, normalize_name_part
+from app.core.lead_names import compose_lead_name, normalize_name_part, resolve_lead_names
 from app.models.channel_tracking import TelegramChannelSubscriptionEvent
 from app.models.chat import Chat
 from app.models.message import Message
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
 from app.services.funnel_runtime_service import FunnelRuntimeService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +69,11 @@ class ChannelJoinFunnelService:
         chat = await self._ensure_chat(event=event, user_chat_id=user_chat_id)
         if chat.is_deleted:
             return ChannelJoinFunnelResult(chat_id=chat.id, started=False, error="Пропуск: чат удалён")
-        await self._ensure_lead(event=event, chat_id=chat.id)
+        if await self._ensure_lead(event=event, chat_id=chat.id) is False:
+            return ChannelJoinFunnelResult(
+                chat_id=chat.id, started=False,
+                error="Пропуск: карточка лида удалена или находится в мусоре",
+            )
         # The CRM identity must survive even when no funnel is published yet.
         await self.db.commit()
 
@@ -139,6 +147,8 @@ class ChannelJoinFunnelService:
             if chat.is_deleted:
                 return chat
             if chat.reset_at is not None:
+                # Restore the lead before clearing reset_at, in the same transaction.
+                await self._ensure_lead(event=event, chat_id=chat.id, reset_existing=True)
                 await self.runtime.repo.delete_chat_funnel_state(chat.id)
                 chat = await self.chat_repo.reactivate_reset_chat(
                     chat.id, tracking_link_id=event.tracking_link_id, contact_name=contact_name,
@@ -185,14 +195,41 @@ class ChannelJoinFunnelService:
         *,
         event: TelegramChannelSubscriptionEvent,
         chat_id: UUID,
-    ) -> None:
+        reset_existing: bool = False,
+    ) -> bool:
         attribution_data = (
             dict(event.attribution_data_json)
             if isinstance(getattr(event, "attribution_data_json", None), dict)
             else {}
         )
-        existing = await self.lead_repo.get_by_chat(chat_id, event.project_id)
+        existing = await self.lead_repo.get_any_by_chat(chat_id, event.project_id)
         if existing is not None:
+            if reset_existing:
+                first_name = normalize_name_part(event.first_name)
+                last_name = normalize_name_part(event.last_name)
+                name_override = (existing.custom_fields or {}).get("__crm_name_override") is True
+                if name_override:
+                    first_name, last_name = resolve_lead_names(existing)
+                fields = {key: value for key, value in {
+                    "first_name": first_name, "last_name": last_name,
+                }.items() if value}
+                if name_override:
+                    fields["__crm_name_override"] = True
+                if attribution_data:
+                    fields["fb_data"] = attribution_data
+                restored = await self.lead_repo.reset_existing_for_new_cycle(
+                    existing.id, event.project_id, username=event.username,
+                    name=compose_lead_name(first_name, last_name), custom_fields=fields,
+                )
+                if restored is None:
+                    raise ChannelJoinFunnelUnavailable("Не удалось восстановить карточку лида после сброса")
+                logger.info(
+                    "Channel entry restored reset lead project_id=%s chat_id=%s lead_id=%s event_id=%s",
+                    event.project_id, chat_id, existing.id, event.id,
+                )
+                return True
+            if existing.is_deleted or existing.is_trash:
+                return False
             existing_fields = dict(existing.custom_fields or {})
             if attribution_data and existing_fields.get("fb_data") != attribution_data:
                 existing_fields["fb_data"] = attribution_data
@@ -201,7 +238,7 @@ class ChannelJoinFunnelService:
                     event.project_id,
                     custom_fields=existing_fields,
                 )
-            return
+            return True
         status = await self.lead_repo.get_status_by_code(LeadStatusCode.NEW)
         if status is None:
             raise ChannelJoinFunnelUnavailable(
@@ -230,5 +267,8 @@ class ChannelJoinFunnelService:
                     custom_fields=custom_fields,
                 )
         except IntegrityError:
-            if await self.lead_repo.get_by_chat(chat_id, event.project_id) is None:
+            winner = await self.lead_repo.get_any_by_chat(chat_id, event.project_id)
+            if winner is None:
                 raise
+            return not winner.is_deleted and not winner.is_trash
+        return True

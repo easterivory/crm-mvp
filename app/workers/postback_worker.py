@@ -49,6 +49,17 @@ logger = logging.getLogger(__name__)
 configure_file_logging()
 
 
+def _membership_is_active(member: dict) -> bool:
+    status = member.get("status")
+    if status in {"creator", "administrator", "member"}:
+        return True
+    if status in {"left", "kicked"}:
+        return False
+    if status == "restricted" and isinstance(member.get("is_member"), bool):
+        return member["is_member"]
+    raise ValueError("Telegram returned an unknown membership status")
+
+
 async def _on_worker_startup(ctx: dict) -> None:
     _ = ctx
     await prime_operational_alert_config()
@@ -437,6 +448,7 @@ async def _process_channel_join_request_action(ctx: dict, event_id: str) -> dict
         )
         approval_requested = bool(
             event.auto_approve_requested and event.request_approved_at is None
+            and (event.raw_payload or {}).get("_approval_terminal") is not True
         )
         # Funnel delivery is attempted first while Telegram's temporary
         # user_chat_id is valid, but auto-approval is an independent setting.
@@ -570,6 +582,33 @@ async def _process_channel_join_request_action(ctx: dict, event_id: str) -> dict
                 await db.commit()
             except Exception as exc:
                 approval_error = str(exc)[:1000]
+                if "HIDE_REQUESTER_MISSING" in approval_error.upper():
+                    try:
+                        member = await sender.get_chat_member(
+                            token, chat_id=channel_chat_id, user_id=telegram_user_id,
+                        )
+                        is_member = _membership_is_active(member)
+                    except Exception as membership_exc:
+                        # A failed lookup is not evidence that the user has joined.
+                        approval_error = f"{approval_error}; membership check: {membership_exc}"[:1000]
+                    else:
+                        event.raw_payload = {**(event.raw_payload or {}), "_approval_terminal": True}
+                        if is_member:
+                            event.request_approved_at = datetime.now(timezone.utc)
+                            event.request_action_error = funnel_error or message_error
+                        else:
+                            event.request_action_error = "Заявка отсутствует или уже обработана; пользователь не состоит в канале"
+                        await db.commit()
+                        logger.info(
+                            "Channel approval resolved missing request event_id=%s user_id=%s member=%s",
+                            event_id, telegram_user_id, is_member,
+                        )
+                        return {
+                            "status": "partial" if not is_member or funnel_error or message_error else "completed",
+                            "event_id": event_id, "approved": is_member,
+                            "funnel_started": event.funnel_started_at is not None,
+                            "error": event.request_action_error,
+                        }
                 if "USER_ALREADY_PARTICIPANT" in approval_error.upper():
                     event.request_approved_at = datetime.now(timezone.utc)
                     event.request_action_error = funnel_error or message_error
@@ -631,6 +670,7 @@ async def recover_channel_join_request_actions_task(ctx: dict) -> dict:
                     and_(
                         TelegramChannelSubscriptionEvent.auto_approve_requested.is_(True),
                         TelegramChannelSubscriptionEvent.request_approved_at.is_(None),
+                        TelegramChannelSubscriptionEvent.raw_payload["_approval_terminal"].as_boolean().is_not(True),
                     ),
                     and_(
                         TelegramChannelSubscriptionEvent.auto_start_requested.is_(True),
