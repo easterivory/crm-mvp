@@ -409,7 +409,26 @@ class FunnelRepository(BaseRepository[Funnel]):
         )
 
     async def delete_chat_funnel_state(self, chat_id: UUID) -> None:
-        await self.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        state_ids = list((await self.db.scalars(
+            select(ChatFunnelState.id)
+            .where(ChatFunnelState.chat_id == chat_id)
+            .with_for_update()
+        )).all())
+        await self.db.execute(
+            update(FunnelScheduledJob)
+            .where(
+                FunnelScheduledJob.chat_id == chat_id,
+                FunnelScheduledJob.status.in_(("pending", "running")),
+            )
+            .values(status="cancelled", updated_at=func.now())
+        )
+        # Terminal jobs also reference this state; retain their history, not the FK.
+        if state_ids:
+            await self.db.execute(
+                update(FunnelScheduledJob)
+                .where(FunnelScheduledJob.funnel_state_id.in_(state_ids))
+                .values(funnel_state_id=None, updated_at=func.now())
+            )
         await self.db.execute(
             delete(ChatFunnelState).where(ChatFunnelState.chat_id == chat_id)
         )

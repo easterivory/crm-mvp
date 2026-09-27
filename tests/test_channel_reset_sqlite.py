@@ -41,7 +41,7 @@ def test_existing_identity_never_inserts_duplicate(mode):
             await connection.run_sync(Chat.__table__.create)
             await create_lead_tables(connection)
             await connection.execute(text("CREATE TABLE funnel_scheduled_jobs (chat_id CHAR(32), status TEXT, updated_at DATETIME)"))
-            await connection.execute(text("CREATE TABLE chat_funnel_states (chat_id CHAR(32))"))
+            await connection.execute(text("CREATE TABLE chat_funnel_states (id CHAR(32) PRIMARY KEY, chat_id CHAR(32))"))
         try:
             async with async_sessionmaker(engine, expire_on_commit=False)() as db:
                 now = datetime.now(timezone.utc)
