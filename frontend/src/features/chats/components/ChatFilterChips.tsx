@@ -97,9 +97,16 @@ export default function ChatFilterChips({
       key: 'date',
       label:
         filters.datePreset && filters.datePreset !== 'custom'
-          ? `Дата: ${dateLabels[filters.datePreset]}`
-          : `Дата: ${filters.dateFrom || '...'} - ${filters.dateTo || '...'}`,
+          ? `Созданы: ${dateLabels[filters.datePreset]}`
+          : `Созданы: ${filters.dateFrom || '...'} - ${filters.dateTo || '...'}`,
       remove: () => onChange({ ...filters, datePreset: '', dateFrom: '', dateTo: '' }),
+    })
+  }
+  if (filters.activityFrom || filters.activityTo) {
+    chips.push({
+      key: 'activity',
+      label: `Последняя активность: ${filters.activityFrom || '...'} - ${filters.activityTo || '...'}`,
+      remove: () => onChange({ ...filters, activityFrom: '', activityTo: '' }),
     })
   }
   if (filters.tagIds.length > 0) {

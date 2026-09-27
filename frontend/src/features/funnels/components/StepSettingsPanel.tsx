@@ -30,6 +30,8 @@ type StepSettingsPanelProps = {
   onUpdate: (stepId: string, patch: Partial<FunnelStep>) => void
   onDuplicate: (stepId: string) => void
   onDelete: (stepId: string) => void
+  section?: 'main' | 'content' | 'logic' | 'advanced'
+  onExpand?: (messageId: string) => void
 }
 
 type BuilderRef = {
@@ -48,6 +50,8 @@ export default function StepSettingsPanel({
   onUpdate,
   onDuplicate,
   onDelete,
+  section,
+  onExpand,
 }: StepSettingsPanelProps) {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
   const [tags, setTags] = useState<BuilderRef[]>([])
@@ -119,8 +123,8 @@ export default function StepSettingsPanel({
 
   return (
     <section className="space-y-4">
-      <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
-        <div className="flex items-start justify-between gap-2">
+      <div className={section && section !== 'main' ? 'hidden' : 'space-y-3'}>
+        <div className={section ? 'hidden' : 'flex items-start justify-between gap-2'}>
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold text-white">
               {stepNumber ? `#${stepNumber} · ` : ''}
@@ -193,6 +197,11 @@ export default function StepSettingsPanel({
               ))}
             </select>
           </label>
+          <label className="block text-xs text-gray-400">Внутреннее описание
+            <textarea rows={3} value={typeof step.ui_schema_json?.description === 'string' ? step.ui_schema_json.description : ''}
+              onChange={(event) => onUpdate(step.id, { ui_schema_json: { ...step.ui_schema_json, description: event.target.value } })}
+              className="mt-1 w-full rounded border border-white/10 bg-background/70 p-2 text-sm text-gray-100" />
+          </label>
         </div>
       </div>
 
@@ -202,8 +211,8 @@ export default function StepSettingsPanel({
         </div>
       ) : null}
 
-      {isSupported ? (
-        <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+      {isSupported && (!section || section === 'logic' || section === 'content') ? (
+        <div className="space-y-4">
           {step.block_type === 'generic_trigger' ? (
             <div className="space-y-3">
               <label className="block">
@@ -268,6 +277,8 @@ export default function StepSettingsPanel({
 
           {step.block_type === 'generic_message' ? (
             <MessageBlockSettings
+              section={section === 'logic' ? 'logic' : section === 'content' ? 'content' : undefined}
+              onExpand={onExpand}
               step={step}
               projectId={projectId}
               steps={steps}
@@ -812,7 +823,7 @@ export default function StepSettingsPanel({
         </div>
       ) : null}
 
-      <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+      <div className={section && section !== 'logic' ? 'hidden' : 'space-y-3'}>
         <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Outputs</p>
         {outputs.length === 0 ? (
           <p className="mt-2 text-sm text-gray-500">У блока нет исходящих связей.</p>
@@ -835,7 +846,7 @@ export default function StepSettingsPanel({
         )}
       </div>
 
-      <button
+      {(!section || section === 'advanced') && <><button
         type="button"
         onClick={() => setIsAdvancedOpen((value) => !value)}
         className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 text-left text-xs text-gray-400"
@@ -848,6 +859,7 @@ export default function StepSettingsPanel({
           Block: {step.block_type} · Step: {step.step_type}
         </div>
       ) : null}
+      </>}
     </section>
   )
 }

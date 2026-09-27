@@ -1,7 +1,9 @@
-import TelegramTextEditor from '../../../components/TelegramTextEditor'
+import TelegramTextEditor, { telegramTextPreview } from '../../../components/TelegramTextEditor'
 import {
   ArrowDown,
   ArrowUp,
+  CopyPlus,
+  Expand,
   FileText,
   Image as ImageIcon,
   LoaderCircle,
@@ -20,6 +22,7 @@ import { fetchFunnelMediaBlob, uploadFunnelMedia } from '../api'
 import type { FunnelStep } from '../types'
 import {
   configId,
+  leadFields,
   type FunnelMessageMediaType,
   type MessageMediaConfig,
   type MessageConfig,
@@ -32,6 +35,9 @@ type MessageSequenceEditorProps = {
   projectId: string
   steps: FunnelStep[]
   onChange: (messages: MessageConfig[]) => void
+  expanded?: boolean
+  onExpand?: (messageId: string) => void
+  initialMessageId?: string | null
 }
 
 const MAX_CHAT_ACTION_DURATION_SECONDS = 60
@@ -177,7 +183,15 @@ export default function MessageSequenceEditor({
   projectId,
   steps,
   onChange,
+  expanded = false,
+  onExpand,
+  initialMessageId,
 }: MessageSequenceEditorProps) {
+  const [selectedId, setSelectedId] = useState<string | null>(initialMessageId ?? null)
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+  const [draggedId, setDraggedId] = useState<string | null>(null)
+  const selected = messages.find((item) => item.id === selectedId) ?? messages[0]
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploadTarget, setUploadTarget] = useState<{
     index: number
@@ -242,10 +256,13 @@ export default function MessageSequenceEditor({
         file,
         target.mediaType as BroadcastMediaType,
       )
+      const latestIndex = messagesRef.current.findIndex((item) => item.id === message.id)
+      if (latestIndex < 0) return
+      const latestMessage = messagesRef.current[latestIndex]
       const caption = upload.media_type === 'video_note'
         ? ''
-        : message.caption ?? message.text
-      update(target.index, {
+        : latestMessage.caption ?? latestMessage.text
+      onChange(messagesRef.current.map((item) => item.id !== message.id ? item : ({ ...item,
         type: upload.media_type,
         text: caption,
         caption,
@@ -257,7 +274,7 @@ export default function MessageSequenceEditor({
           file_size: upload.file_size,
           media_type: upload.media_type,
         },
-      })
+      })))
     } catch {
       setUploadError('Не удалось загрузить файл.')
     } finally {
@@ -270,11 +287,23 @@ export default function MessageSequenceEditor({
   }
 
   return (
-    <div className="space-y-3">
+    <div className={expanded ? 'grid min-h-0 h-full grid-cols-1 overflow-y-auto lg:grid-cols-[200px_minmax(0,1fr)_minmax(240px,320px)] lg:overflow-hidden' : 'space-y-3'}>
+      {expanded ? <nav aria-label="Сообщения блока" className="space-y-2 overflow-y-auto border-r border-white/10 p-3">
+        <h3 className="mb-3 text-xs font-semibold text-gray-400">SEQUENCE</h3>
+        {messages.map((item, index) => <button key={item.id} type="button" draggable
+          onDragStart={() => setDraggedId(item.id)} onDragEnd={() => setDraggedId(null)}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => { event.preventDefault(); const from = messages.findIndex((message) => message.id === draggedId); if (from >= 0) move(from, index); setDraggedId(null) }}
+          onClick={() => setSelectedId(item.id)}
+          className={`w-full rounded border p-3 text-left ${selected?.id === item.id ? 'border-cyan-400/50 bg-cyan-400/10' : 'border-white/10'}`}>
+          <span className="block text-sm">{String(index + 1).padStart(2, '0')} · {mediaLabel(item.type)}</span>
+          <span className="text-xs text-gray-500">{item.delay_seconds} сек · {item.buttons.length} кнопок</span>
+        </button>)}
+      </nav> : null}
+      <div className={expanded ? 'min-w-0 overflow-y-auto p-4' : 'space-y-3'}>
       <div className="flex items-center justify-between gap-2">
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Sequence</p>
-          <p className="text-xs text-gray-600">Несколько сообщений внутри одного блока.</p>
         </div>
         <button
           type="button"
@@ -326,10 +355,18 @@ export default function MessageSequenceEditor({
         const hasVariables = (captionText ?? '').includes('{{')
         const fileSize = formatBytes(message.media?.file_size)
         return (
-          <div key={message.id} className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-gray-300">Сообщение {index + 1}</span>
+          <div key={message.id} className={`${expanded && selected?.id !== message.id ? 'hidden' : ''} rounded-lg border border-white/8 bg-white/[0.03] p-3 mt-3`}>
+            <div className="mb-2 flex items-center justify-between gap-2" draggable
+              onDragStart={() => setDraggedId(message.id)} onDragEnd={() => setDraggedId(null)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => { event.preventDefault(); const from = messages.findIndex((item) => item.id === draggedId); if (from >= 0) move(from, index); setDraggedId(null) }}>
+              <button type="button" onClick={() => setSelectedId(selectedId === message.id ? null : message.id)} className="min-w-0 truncate text-left text-xs font-semibold text-gray-300">{index + 1} · {mediaLabel(message.type)} · {message.delay_seconds} сек</button>
               <div className="flex gap-1">
+                {onExpand ? <button type="button" title="Открыть редактор" onClick={() => onExpand(message.id)} className="p-1 text-cyan-200"><Expand size={14} /></button> : null}
+                <button type="button" title="Дублировать сообщение" className="p-1 text-gray-300" onClick={() => {
+                  const copy = { ...structuredClone(message), id: configId('msg'), buttons: message.buttons.map((button) => ({ ...button, id: configId('btn') })) }
+                  const next = [...messages]; next.splice(index + 1, 0, copy); onChange(next); setSelectedId(copy.id)
+                }}><CopyPlus size={14} /></button>
                 <button
                   type="button"
                   disabled={index === 0}
@@ -360,6 +397,13 @@ export default function MessageSequenceEditor({
               </div>
             </div>
 
+            {!expanded && selectedId !== message.id ? <div className="block w-full min-w-0 text-left">
+              <button type="button" onClick={() => setSelectedId(message.id)} className="block w-full text-left">
+              <div className="line-clamp-3 whitespace-pre-wrap break-words text-sm text-gray-400">{message.parse_mode === 'HTML' ? telegramTextPreview(captionText) : captionText || 'Без текста'}</div>
+              </button>
+              <UploadedPhotoPreview projectId={projectId} media={message.media} />
+              <span className="mt-2 block text-xs text-gray-500">{message.buttons.length} кнопок</span>
+            </div> : <>
             <label className="block">
               <span className="mb-1 block text-xs text-gray-500">Тип сообщения</span>
               <select
@@ -441,8 +485,9 @@ export default function MessageSequenceEditor({
             ) : null}
 
             <TelegramTextEditor
+              variables={leadFields.filter(([key]) => key).map(([key, label]) => ({ label, value: `{{lead.${key}}}` }))}
               parseMode={message.parse_mode}
-              rows={isMedia ? 3 : 4}
+              rows={expanded ? 12 : isMedia ? 3 : 4}
               value={captionText}
               disabled={message.type === 'video_note'}
               onChange={(text, parse_mode) => {
@@ -585,9 +630,20 @@ export default function MessageSequenceEditor({
                 </span>
               </label>
             ) : null}
+            </>}
           </div>
         )
       })}
+      </div>
+      {expanded && selected ? <aside className="min-w-0 overflow-y-auto border-l border-white/10 bg-black/10 p-4">
+        <h3 className="mb-4 text-xs font-semibold text-gray-400">TELEGRAM</h3>
+        <div className="overflow-hidden rounded-lg border border-white/10 bg-[#182c32] p-3">
+          <UploadedPhotoPreview projectId={projectId} media={selected.media} />
+          {selected.type !== 'text' && selected.type !== 'photo' ? <div className="mb-3 flex items-center gap-2 text-sm">{mediaIcon(selected.type)}{selected.media?.file_name || mediaLabel(selected.type)}</div> : null}
+          <div className="whitespace-pre-wrap break-words text-sm leading-6 text-gray-100">{selected.parse_mode === 'HTML' ? telegramTextPreview(selected.caption ?? selected.text) : selected.caption ?? selected.text}</div>
+        </div>
+        <div className="mt-2 space-y-1">{selected.buttons.map((button) => <div key={button.id} className="break-words rounded border border-white/10 bg-white/5 px-3 py-2 text-center text-sm">{button.label}</div>)}</div>
+      </aside> : null}
     </div>
   )
 }

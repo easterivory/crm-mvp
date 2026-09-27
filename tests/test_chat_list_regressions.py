@@ -27,7 +27,7 @@ def test_chat_date_range_uses_browser_local_midnight() -> None:
     assert end == datetime(2026, 7, 7, 21, tzinfo=timezone.utc)
 
 
-def test_chat_date_filter_matches_visible_latest_activity() -> None:
+def test_chat_date_filter_matches_creation_not_latest_activity() -> None:
     repo = ChatRepository(AsyncMock())
     stmt = repo._apply_filters(
         repo._base_select(uuid4()),
@@ -50,7 +50,9 @@ def test_chat_date_filter_matches_visible_latest_activity() -> None:
     )
     sql = str(stmt.compile(dialect=postgresql.dialect()))
 
-    assert "coalesce(chats.last_message_at, chats.current_cycle_started_at, chats.created_at)" in sql
+    assert "chats.created_at >=" in sql
+    assert "chats.created_at <" in sql
+    assert "coalesce(chats.last_message_at, chats.current_cycle_started_at, chats.created_at)" not in sql
 
 
 def test_user_blocked_chat_is_not_marked_unanswered_or_sla() -> None:

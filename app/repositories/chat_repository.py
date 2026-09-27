@@ -265,6 +265,8 @@ class ChatRepository(BaseRepository[Chat]):
         lead_statuses: Sequence[str],
         funnel_state: Optional[str],
         current_step_id: Optional[UUID] = None,
+        activity_from: Optional[datetime] = None,
+        activity_to: Optional[datetime] = None,
         workspace_view: Optional[str] = None,
         viewer_id: Optional[UUID] = None,
         hide_assigned_from_all: bool = False,
@@ -345,16 +347,20 @@ class ChatRepository(BaseRepository[Chat]):
             stmt = stmt.where(Chat.tracking_link_id == tracking_link_id)
         if search_query:
             stmt = stmt.where(self._search_expr(search_query))
-        if date_from is not None or date_to is not None:
+        if date_from is not None:
+            stmt = stmt.where(Chat.created_at >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(Chat.created_at < date_to)
+        if activity_from is not None or activity_to is not None:
             activity_at = func.coalesce(
                 Chat.last_message_at,
                 Chat.current_cycle_started_at,
                 Chat.created_at,
             )
-            if date_from is not None:
-                stmt = stmt.where(activity_at >= date_from)
-            if date_to is not None:
-                stmt = stmt.where(activity_at < date_to)
+            if activity_from is not None:
+                stmt = stmt.where(activity_at >= activity_from)
+            if activity_to is not None:
+                stmt = stmt.where(activity_at < activity_to)
         if lead_statuses:
             stmt = stmt.where(
                 select(Lead.id)
@@ -761,6 +767,8 @@ class ChatRepository(BaseRepository[Chat]):
         tracking_link_id: Optional[UUID] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        activity_from: Optional[datetime] = None,
+        activity_to: Optional[datetime] = None,
         tag_ids: Sequence[UUID] | None = None,
         tag_mode: str = "any",
         lead_statuses: Sequence[str] | None = None,
@@ -793,6 +801,8 @@ class ChatRepository(BaseRepository[Chat]):
             tracking_link_id=tracking_link_id,
             date_from=date_from,
             date_to=date_to,
+            activity_from=activity_from,
+            activity_to=activity_to,
             tag_ids=tag_ids or (),
             tag_mode=tag_mode,
             lead_statuses=lead_statuses or (),
@@ -838,6 +848,8 @@ class ChatRepository(BaseRepository[Chat]):
         tracking_link_id: Optional[UUID] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        activity_from: Optional[datetime] = None,
+        activity_to: Optional[datetime] = None,
         tag_ids: Sequence[UUID] | None = None,
         tag_mode: str = "any",
         lead_statuses: Sequence[str] | None = None,
@@ -883,6 +895,8 @@ class ChatRepository(BaseRepository[Chat]):
             tracking_link_id=tracking_link_id,
             date_from=date_from,
             date_to=date_to,
+            activity_from=activity_from,
+            activity_to=activity_to,
             tag_ids=tag_ids or (),
             tag_mode=tag_mode,
             lead_statuses=lead_statuses or (),

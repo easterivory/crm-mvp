@@ -9,7 +9,7 @@ const directory = await mkdtemp(join(tmpdir(), 'crm-funnel-controls-'))
 try {
   const outfile = join(directory, 'tests.cjs')
   await build({ entryPoints: [fileURLToPath(new URL('./funnel-controls.test.tsx', import.meta.url))],
-    outfile, bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic' })
+    outfile, bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', define: { 'import.meta.env': '{}' } })
   const result = spawnSync(process.execPath, ['--test', outfile], { stdio: 'inherit' })
   process.exitCode = result.status ?? 1
 } finally {

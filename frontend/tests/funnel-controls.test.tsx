@@ -2,6 +2,49 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Children, isValidElement } from 'react'
 import ButtonListEditor from '../src/features/funnels/components/ButtonListEditor'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import MessageSequenceEditor from '../src/features/funnels/components/MessageSequenceEditor'
+import MessageBlockSettings from '../src/features/funnels/components/MessageBlockSettings'
+import { normalizeMessages } from '../src/features/funnels/funnelConfig'
+import type { FunnelStep } from '../src/features/funnels/types'
+
+const messageStep: FunnelStep = {
+  id: 'source', key: 'source', title: 'Message', step_type: 'message', block_type: 'generic_message',
+  position_x: 10, position_y: 20, validation_json: null, ui_schema_json: null,
+  config_json: { auto_advance_enabled: true, timeout_target_step_id: 'timeout', messages: [
+    { id: 'first', type: 'text', text: 'First message', buttons: [{ id: 'route', label: 'Next', type: 'branch', value: 'next', target_step_id: 'target' }] },
+    { id: 'second', type: 'text', text: 'Second message', buttons: [] },
+  ] },
+}
+
+test('expanded editor selects requested message and renders preview without changing data', () => {
+  const messages = normalizeMessages(messageStep.config_json)
+  const before = JSON.stringify(messages)
+  const html = renderToStaticMarkup(createElement(MessageSequenceEditor, {
+    messages, currentStepId: 'source', projectId: 'project', steps: [messageStep],
+    expanded: true, initialMessageId: 'second', onChange: () => { throw new Error('Render must not mutate') },
+  }))
+  assert.ok(html.includes('TELEGRAM'))
+  assert.ok(html.includes('Second message'))
+  assert.ok(html.includes('Сообщения блока'))
+  assert.equal(JSON.stringify(messages), before)
+})
+
+test('content edits preserve timer and button routes and synchronize legacy message fields', () => {
+  let result: Record<string, unknown> | undefined
+  const tree = MessageBlockSettings({ step: messageStep, projectId: 'project', steps: [messageStep], section: 'content', onConfigChange: (config) => { result = config } })
+  const editor = Children.toArray(tree.props.children).find((item) => isValidElement(item) && item.type === MessageSequenceEditor)
+  assert.ok(isValidElement(editor))
+  const props = editor.props as { onChange: (messages: ReturnType<typeof normalizeMessages>) => void }
+  const messages = normalizeMessages(messageStep.config_json)
+  messages[0].text = 'Edited'
+  props.onChange(messages)
+  assert.equal(result?.text, 'Edited')
+  assert.equal(result?.timeout_target_step_id, 'timeout')
+  assert.equal(result?.auto_advance_enabled, true)
+  assert.equal(normalizeMessages(result!)[0].buttons[0].target_step_id, 'target')
+})
 
 function selects(tree: any): any[] {
   if (!isValidElement(tree)) return []

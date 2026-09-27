@@ -9,6 +9,7 @@ import {
   MessageSquare,
   MousePointer2,
   Plus,
+  Search,
   Shuffle,
   Sparkles,
   Workflow,
@@ -47,6 +48,7 @@ const accentClass = {
 }
 
 export default function BlockLibrary({ onAdd, readOnly = false }: BlockLibraryProps) {
+  const [search, setSearch] = useState('')
   const [openGroups, setOpenGroups] = useState(() => new Set(blockGroups.map((group) => group.title)))
 
   const toggleGroup = (title: string) => {
@@ -65,17 +67,20 @@ export default function BlockLibrary({ onAdd, readOnly = false }: BlockLibraryPr
     <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-white/8 bg-[#0d1324]/92 lg:rounded-none lg:border-y-0 lg:border-l-0 lg:border-r">
       <div className="border-b border-white/8 px-4 py-3">
         <h2 className="text-sm font-semibold text-white">Блоки</h2>
-        <p className="mt-1 text-xs leading-5 text-gray-500">
-          Добавьте шаг на холст, затем настройте его в панели «Настройки».
-        </p>
+        <label className="mt-3 flex items-center gap-2 rounded border border-white/10 px-2">
+          <Search size={14} className="shrink-0 text-gray-500" />
+          <input aria-label="Поиск блоков" placeholder="Найти блок" value={search} onChange={(event) => setSearch(event.target.value)} className="h-8 min-w-0 w-full bg-transparent text-sm outline-none" />
+        </label>
       </div>
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {blockGroups.map((group) => {
-          const isOpen = openGroups.has(group.title)
+          const items = group.items.filter((item) => `${item.label} ${item.description ?? ''}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+          if (!items.length) return null
+          const isOpen = Boolean(search) || openGroups.has(group.title)
           const accent = accentClass[group.accent ?? 'cyan']
           return (
-            <section key={group.title} className="rounded-xl border border-white/8 bg-white/[0.025]">
+            <section key={group.title} className="border-b border-white/8 pb-2">
               <button
                 type="button"
                 onClick={() => toggleGroup(group.title)}
@@ -92,7 +97,7 @@ export default function BlockLibrary({ onAdd, readOnly = false }: BlockLibraryPr
 
               {isOpen ? (
                 <div className="space-y-2 px-2 pb-2">
-                  {group.items.map((item) => {
+                  {items.map((item) => {
                     const Icon = iconByBlock[item.blockType] ?? Workflow
                     return (
                       <button
@@ -104,9 +109,10 @@ export default function BlockLibrary({ onAdd, readOnly = false }: BlockLibraryPr
                           }
                         }}
                         disabled={item.disabled || readOnly}
-                        className="group flex w-full min-w-0 items-start gap-3 rounded-xl border border-white/8 bg-[#101827]/80 p-3 text-left transition hover:border-accent-300/35 hover:bg-accent-300/10 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-white/8 disabled:hover:bg-[#101827]/80"
+                        title={item.description}
+                        className="group flex w-full min-w-0 items-center gap-2 rounded px-2 py-2 text-left transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-55"
                       >
-                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${accent}`}>
+                        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded border ${accent}`}>
                           <Icon size={17} />
                         </span>
                         <span className="min-w-0 flex-1">
@@ -119,9 +125,6 @@ export default function BlockLibrary({ onAdd, readOnly = false }: BlockLibraryPr
                                 {item.badge}
                               </span>
                             ) : null}
-                          </span>
-                          <span className="mt-1 block text-xs leading-4 text-gray-500">
-                            {item.description}
                           </span>
                         </span>
                         {!item.disabled ? (

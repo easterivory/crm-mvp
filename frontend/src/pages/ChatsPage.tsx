@@ -594,6 +594,8 @@ function readChatFilters(params: URLSearchParams): ChatFiltersState {
     datePreset: isDatePreset(datePreset) ? datePreset : '',
     dateFrom: params.get('date_from') ?? '',
     dateTo: params.get('date_to') ?? '',
+    activityFrom: params.get('activity_from') ?? '',
+    activityTo: params.get('activity_to') ?? '',
     tagIds: csvOrAll(params, 'tag_ids'),
     tagMode: isTagMode(tagMode) ? tagMode : 'any',
     leadStatuses: csvOrAll(params, 'lead_statuses'),
@@ -623,6 +625,8 @@ function writeChatFilters(filters: ChatFiltersState) {
   if (filters.datePreset) params.set('date_preset', filters.datePreset)
   if (filters.dateFrom) params.set('date_from', filters.dateFrom)
   if (filters.dateTo) params.set('date_to', filters.dateTo)
+  if (filters.activityFrom) params.set('activity_from', filters.activityFrom)
+  if (filters.activityTo) params.set('activity_to', filters.activityTo)
   for (const tagId of filters.tagIds) params.append('tag_ids', tagId)
   if (filters.tagIds.length > 0 && filters.tagMode !== 'any') {
     params.set('tag_mode', filters.tagMode)
@@ -1089,6 +1093,8 @@ export default function ChatsPage() {
       if (debouncedChatFilters.dateTo) {
         params.date_to = debouncedChatFilters.dateTo
       }
+      if (debouncedChatFilters.activityFrom) params.activity_from = debouncedChatFilters.activityFrom
+      if (debouncedChatFilters.activityTo) params.activity_to = debouncedChatFilters.activityTo
       if (debouncedChatFilters.tagIds.length > 0) {
         params.tag_ids = debouncedChatFilters.tagIds.join(',')
         params.tag_mode = debouncedChatFilters.tagMode

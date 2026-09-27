@@ -12,7 +12,7 @@ import {
   Send,
   Settings2,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
 import { useNotificationStore } from '../../../shared/lib'
 import { fetchBots } from '../../bots/api'
@@ -58,6 +58,7 @@ import HoldModeToggle from './HoldModeToggle'
 import InspectorPanel from './InspectorPanel'
 import PublishReviewModal from './PublishReviewModal'
 import VersionHistoryPanel from './VersionHistoryPanel'
+import MessageBlockSettings from './MessageBlockSettings'
 
 type FunnelBuilderProps = {
   funnelId: string
@@ -292,6 +293,13 @@ export default function FunnelBuilder({
   const [isPublishOpen, setIsPublishOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'editor' | 'analytics' | 'versions'>('editor')
   const [compactPanel, setCompactPanel] = useState<CompactBuilderPanel>('canvas')
+  const [libraryCollapsed, setLibraryCollapsed] = useState(() => localStorage.getItem('funnel-library-collapsed') === 'true')
+  const [inspectorWidth, setInspectorWidth] = useState(() => Math.max(320, Math.min(720, Number(localStorage.getItem('funnel-inspector-width')) || 380)))
+  const [inspectorPinned, setInspectorPinned] = useState(false)
+  const [contentOpen, setContentOpen] = useState(false)
+  const [contentMessageId, setContentMessageId] = useState<string | null>(null)
+  useEffect(() => { localStorage.setItem('funnel-library-collapsed', String(libraryCollapsed)) }, [libraryCollapsed])
+  useEffect(() => { localStorage.setItem('funnel-inspector-width', String(inspectorWidth)) }, [inspectorWidth])
   const [analyticsData, setAnalyticsData] = useState<FunnelDropOffAnalytics | null>(null)
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false)
   const [botTransportType, setBotTransportType] = useState<'bot_api' | 'user_mtproto' | null>(null)
@@ -410,7 +418,7 @@ export default function FunnelBuilder({
           setVersions(loadedVersions)
           onVersionReady(resolvedVersionId)
           setGraph(graphWithDefaults(loadedGraph))
-          setSelectedStepId(loadedGraph.steps[0]?.id ?? null)
+          setSelectedStepId(null)
         }
       } catch {
         notify({ tone: 'error', message: 'Не удалось загрузить воронку.' })
@@ -448,12 +456,13 @@ export default function FunnelBuilder({
 
   const handleSelectStep = useCallback(
     (stepId: string | null) => {
+      if (!stepId && inspectorPinned) return
       setSelectedStepId(stepId)
       if (stepId) {
         revealCompactPanel('inspector')
       }
     },
-    [revealCompactPanel],
+    [revealCompactPanel, inspectorPinned],
   )
 
   const handleSelectEdge = useCallback(
@@ -889,6 +898,7 @@ export default function FunnelBuilder({
         return
       }
       if (event.key === 'Escape') {
+        if (contentOpen) { setContentOpen(false); return }
         setSelectedStepId(null)
         setSelectedEdgeId(null)
         return
@@ -896,6 +906,7 @@ export default function FunnelBuilder({
       if (event.key !== 'Delete' && event.key !== 'Backspace') {
         return
       }
+      if (contentOpen) return
       const target = event.target as HTMLElement | null
       if (target?.closest('input, textarea, select')) {
         return
@@ -917,7 +928,7 @@ export default function FunnelBuilder({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeVersionId, graph?.edges, removeEdge, selectedEdgeId, selectedStepId])
+  }, [activeVersionId, graph?.edges, removeEdge, selectedEdgeId, selectedStepId, contentOpen])
 
   if (isLoading || !graph || !funnel || !activeVersionId) {
     return (
@@ -1118,13 +1129,16 @@ export default function FunnelBuilder({
             })}
           </div>
 
-          <div className="grid min-h-0 flex-1 gap-3 overflow-visible p-2 sm:p-3 lg:grid-cols-[240px_minmax(0,1fr)_280px] lg:gap-0 lg:overflow-hidden lg:p-0 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+          <div className="relative grid min-h-0 flex-1 gap-3 overflow-visible p-2 sm:p-3 lg:grid-cols-[var(--library-width)_minmax(0,1fr)_var(--inspector-width)] lg:gap-0 lg:overflow-hidden lg:p-0" style={{ '--library-width': libraryCollapsed ? '40px' : '220px', '--inspector-width': selectedStep || selectedEdge ? `min(${inspectorWidth}px, 50%)` : '0px' } as CSSProperties}>
             <div
               className={`h-[min(72dvh,760px)] min-h-[420px] lg:block lg:h-full lg:min-h-0 lg:overflow-hidden ${
                 compactPanel === 'library' ? 'block' : 'hidden'
               }`}
             >
-              <BlockLibrary onAdd={addBlock} readOnly={!isEditableDraft} />
+              <div className="flex h-full min-h-0 flex-col">
+                <button type="button" title={libraryCollapsed ? 'Открыть библиотеку' : 'Свернуть библиотеку'} onClick={() => setLibraryCollapsed(!libraryCollapsed)} className="flex h-9 shrink-0 items-center justify-center border-b border-white/10 text-gray-400"><PanelLeft size={16} /></button>
+                {!libraryCollapsed && <BlockLibrary onAdd={addBlock} readOnly={!isEditableDraft} />}
+              </div>
             </div>
             <div
               className={`min-h-0 lg:block lg:overflow-hidden ${
@@ -1147,11 +1161,22 @@ export default function FunnelBuilder({
               />
             </div>
             <div
-              className={`h-[min(78dvh,820px)] min-h-[460px] lg:block lg:h-full lg:min-h-0 lg:overflow-hidden ${
+              className={`relative h-[min(78dvh,820px)] min-w-0 min-h-[460px] lg:block lg:h-full lg:min-h-0 lg:overflow-hidden ${
                 compactPanel === 'inspector' ? 'block' : 'hidden'
               }`}
             >
+              {(selectedStep || selectedEdge) && <>
+              <div role="separator" aria-label="Ширина инспектора" aria-orientation="vertical" tabIndex={0}
+                onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setInspectorWidth((width) => Math.max(320, Math.min(720, width + (event.key === 'ArrowLeft' ? 20 : -20)))) } }}
+                onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId) }}
+                onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) setInspectorWidth(Math.max(320, Math.min(720, event.currentTarget.parentElement!.getBoundingClientRect().right - event.clientX))) }}
+                onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+                className="absolute left-0 top-0 z-10 hidden h-full w-1.5 cursor-col-resize touch-none bg-white/5 hover:bg-cyan-400/50 lg:block" />
               <InspectorPanel
+                onClose={() => { setSelectedStepId(null); setSelectedEdgeId(null); setCompactPanel('canvas') }}
+                pinned={inspectorPinned}
+                onTogglePin={() => setInspectorPinned(!inspectorPinned)}
+                onExpand={selectedStep?.block_type === 'generic_message' ? (messageId) => { setContentMessageId(messageId); setContentOpen(true) } : undefined}
                 selectedStep={selectedStep}
                 projectId={projectId}
                 selectedEdge={selectedEdge}
@@ -1178,7 +1203,18 @@ export default function FunnelBuilder({
                   }
                 }}
               />
+              </>}
             </div>
+            {contentOpen && selectedStep?.block_type === 'generic_message' ? <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-[#10151e]">
+              <div className="flex shrink-0 items-center gap-3 border-b border-white/10 p-3">
+                <button type="button" onClick={() => setContentOpen(false)} className="flex items-center gap-2 text-sm text-cyan-200"><ArrowLeft size={16} />К схеме</button>
+                <h2 className="min-w-0 flex-1 truncate text-sm">{selectedStep.title} / Контент</h2>
+                <button type="button" disabled={!isEditableDraft || isSaving} onClick={() => void saveDraft()} title="Сохранить черновик" className="p-2"><Save size={17} /></button>
+              </div>
+              <fieldset disabled={!isEditableDraft} className="min-h-0 min-w-0 flex-1">
+                <MessageBlockSettings key={selectedStep.id} step={selectedStep} projectId={projectId} steps={graph.steps} section="content" expanded initialMessageId={contentMessageId} onConfigChange={(config_json) => updateStep(selectedStep.id, { config_json })} />
+              </fieldset>
+            </div> : null}
           </div>
         </>
       ) : activeTab === 'analytics' ? (

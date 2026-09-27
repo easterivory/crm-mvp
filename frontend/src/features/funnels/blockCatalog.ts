@@ -218,20 +218,25 @@ export const blockGroups: BlockMenuGroup[] = [
     ],
   },
   {
-    title: 'CRM',
+    title: 'Действия',
     accent: 'emerald',
     items: universalBlocks.filter((item) =>
-      ['generic_crm_action', 'set_lead_status', 'generic_operator', 'manager_review', 'generic_finish'].includes(
+      ['generic_crm_action', 'set_lead_status', 'generic_operator', 'manager_review'].includes(
         item.blockType,
       ),
     ),
   },
   {
-    title: 'ИИ и интеграции',
+    title: 'Интеграции',
     accent: 'violet',
     items: universalBlocks.filter((item) =>
       ['ai_response', 'generic_integration'].includes(item.blockType),
     ),
+  },
+  {
+    title: 'Служебные',
+    accent: 'rose',
+    items: universalBlocks.filter((item) => item.blockType === 'generic_finish'),
   },
 ]
 

@@ -16,6 +16,8 @@ export type ChatFiltersState = {
   datePreset: ChatDatePreset
   dateFrom: string
   dateTo: string
+  activityFrom: string
+  activityTo: string
   tagIds: string[]
   tagMode: ChatTagMode
   leadStatuses: string[]
@@ -62,6 +64,8 @@ export const EMPTY_CHAT_FILTERS: ChatFiltersState = {
   datePreset: '',
   dateFrom: '',
   dateTo: '',
+  activityFrom: '',
+  activityTo: '',
   tagIds: [],
   tagMode: 'any',
   leadStatuses: [],
@@ -82,6 +86,7 @@ export function countActiveChatFilters(filters: ChatFiltersState) {
   return [
     filters.q,
     filters.dateFrom || filters.dateTo,
+    filters.activityFrom || filters.activityTo,
     filters.tagIds.length > 0 ? 'tags' : '',
     ...filters.leadStatuses,
     filters.trackingLinkId,

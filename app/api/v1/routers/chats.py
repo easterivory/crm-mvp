@@ -104,6 +104,8 @@ async def list_chats(
     tracking_link_id: Optional[UUID] = Query(default=None),
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
+    activity_from: Optional[date] = Query(default=None),
+    activity_to: Optional[date] = Query(default=None),
     timezone_offset_minutes: int = Query(default=0, ge=-840, le=840),
     tag_ids: Optional[str] = Query(default=None),
     tag_ids_array: Optional[list[UUID]] = Query(default=None, alias="tag_ids[]"),
@@ -139,7 +141,8 @@ async def list_chats(
       - bot_ids=<csv>    — only chats for multiple bots
       - q=<text>         — search lead/chat/tracking/message fields
       - tracking_link_id=<uuid> — only chats attributed to a link
-      - date_from/date_to — filter by the visible latest chat activity
+      - date_from/date_to — filter by chat creation date
+      - activity_from/activity_to — filter by latest chat activity
       - timezone_offset_minutes — browser UTC offset used for local date boundaries
       - tag_ids=<csv>    — only chats whose lead has selected tags
       - tag_mode=any|all — tag matching mode
@@ -154,6 +157,9 @@ async def list_chats(
         date_from,
         date_to,
         timezone_offset_minutes=timezone_offset_minutes,
+    )
+    activity_from_dt, activity_to_dt = ChatService.date_range_to_datetimes(
+        activity_from, activity_to, timezone_offset_minutes=timezone_offset_minutes,
     )
     filters = ChatFilters(
         q=q,
@@ -170,6 +176,8 @@ async def list_chats(
         tracking_link_id=tracking_link_id,
         date_from=date_from_dt,
         date_to=date_to_dt,
+        activity_from=activity_from_dt,
+        activity_to=activity_to_dt,
         tag_ids=_merge_uuid_values(
             _parse_uuid_csv(tag_ids, "tag_ids"),
             tag_ids_array,

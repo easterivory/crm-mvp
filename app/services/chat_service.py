@@ -118,6 +118,8 @@ class ChatService:
             tracking_link_id=filters.tracking_link_id,
             date_from=filters.date_from,
             date_to=filters.date_to,
+            activity_from=filters.activity_from,
+            activity_to=filters.activity_to,
             tag_ids=filters.tag_ids,
             tag_mode=filters.tag_mode,
             lead_statuses=filters.lead_statuses,

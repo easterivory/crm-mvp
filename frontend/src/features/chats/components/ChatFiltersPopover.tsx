@@ -77,6 +77,8 @@ function withoutSearch(filters: ChatFiltersState) {
     dateFrom: '',
     datePreset: '' as ChatDatePreset,
     dateTo: '',
+    activityFrom: '',
+    activityTo: '',
     funnelState: '' as ChatFiltersState['funnelState'],
     hasUnansweredIncoming: false,
     isHotLead: false,
@@ -358,7 +360,7 @@ export default function ChatFiltersPopover({
           </section>
 
           <section className="space-y-2">
-            <span className="text-xs font-medium text-gray-400">Дата</span>
+            <span className="text-xs font-medium text-gray-400">Дата создания чата</span>
             <div className="grid grid-cols-2 gap-2">
               {datePresets.map((preset) => (
                 <button
@@ -397,6 +399,24 @@ export default function ChatFiltersPopover({
                 </label>
               </div>
             ) : null}
+          </section>
+
+          <section className="space-y-2">
+            <span className="text-xs font-medium text-gray-400">Последняя активность</span>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="min-w-0 text-xs text-gray-500">
+                С
+                <input type="date" value={draft.activityFrom || ''}
+                  onChange={(event) => setDraft({ ...draft, activityFrom: event.target.value })}
+                  className="crm-date-input mt-1 h-9 w-full min-w-0 rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200" />
+              </label>
+              <label className="min-w-0 text-xs text-gray-500">
+                По
+                <input type="date" value={draft.activityTo || ''}
+                  onChange={(event) => setDraft({ ...draft, activityTo: event.target.value })}
+                  className="crm-date-input mt-1 h-9 w-full min-w-0 rounded-lg border border-white/10 bg-background/70 px-2 text-sm text-gray-200" />
+              </label>
+            </div>
           </section>
 
           <SelectableChipGroup

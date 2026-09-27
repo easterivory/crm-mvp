@@ -13,6 +13,10 @@ type MessageBlockSettingsProps = {
   projectId: string
   steps: FunnelStep[]
   onConfigChange: (config: Record<string, unknown>) => void
+  section?: 'content' | 'logic'
+  expanded?: boolean
+  onExpand?: (messageId: string) => void
+  initialMessageId?: string | null
 }
 
 export default function MessageBlockSettings({
@@ -20,6 +24,10 @@ export default function MessageBlockSettings({
   projectId,
   steps,
   onConfigChange,
+  section,
+  expanded = false,
+  onExpand,
+  initialMessageId,
 }: MessageBlockSettingsProps) {
   const messages = normalizeMessages(step.config_json)
 
@@ -42,14 +50,18 @@ export default function MessageBlockSettings({
   }
 
   return (
-    <div className="space-y-4">
-      <MessageSequenceEditor
+    <div className={expanded ? 'h-full min-h-0' : 'space-y-4'}>
+      {section !== 'logic' && <MessageSequenceEditor
         messages={messages}
         currentStepId={step.id}
         projectId={projectId}
         steps={steps}
         onChange={updateMessages}
-      />
+        expanded={expanded}
+        onExpand={onExpand}
+        initialMessageId={initialMessageId}
+      />}
+      {section !== 'content' && <>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={step.config_json.auto_advance_enabled === true}
           className="h-4 w-4 shrink-0 rounded border-white/20 bg-background text-accent-300"
@@ -73,6 +85,7 @@ export default function MessageBlockSettings({
           </label>
         </div>
       )}
+      </>}
     </div>
   )
 }

@@ -9,13 +9,14 @@ type Props = {
   rows?: number
   placeholder?: string
   className?: string
+  variables?: Array<{ label: string; value: string }>
 }
 
 const escapeText = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const documentFor = (text: string) => new DOMParser().parseFromString(text, 'text/html')
 const plainText = (text: string) => documentFor(text).body.textContent ?? ''
 
-function preview(text: string): ReactNode {
+export function telegramTextPreview(text: string): ReactNode {
   const render = (node: ChildNode, key: number): ReactNode => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent
     if (!(node instanceof Element)) return null
@@ -35,7 +36,7 @@ function preview(text: string): ReactNode {
   return Array.from(documentFor(text).body.childNodes).map(render)
 }
 
-export default function TelegramTextEditor({ value, parseMode, onChange, disabled, rows = 4, placeholder, className }: Props) {
+export default function TelegramTextEditor({ value, parseMode, onChange, disabled, rows = 4, placeholder, className, variables }: Props) {
   const input = useRef<HTMLTextAreaElement>(null)
   const selection = useRef({ start: 0, end: 0 })
   const [link, setLink] = useState<string | null>(null)
@@ -59,6 +60,17 @@ export default function TelegramTextEditor({ value, parseMode, onChange, disable
   ]
   const validLink = link !== null && /^(https?:\/\/|tg:\/\/|mailto:)\S+$/i.test(link)
   return <div className="min-w-0 space-y-2">
+    {variables?.length ? <select aria-label="Вставить переменную" value="" disabled={disabled}
+      onChange={(event) => {
+        const variable = event.target.value
+        if (!variable) return
+        const { start, end } = selection.current
+        onChange(value.slice(0, start) + variable + value.slice(end), parseMode ?? null)
+        requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(start + variable.length, start + variable.length) })
+      }} className="h-8 max-w-full rounded border border-white/10 bg-background px-2 text-xs text-gray-300">
+      <option value="">Вставить переменную</option>
+      {variables.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+    </select> : null}
     <label className="flex items-center gap-2 text-xs text-gray-400">
       <input type="checkbox" checked={enabled} disabled={disabled}
         onChange={(event) => { setLink(null); onChange(event.target.checked ? escapeText(value) : plainText(value), event.target.checked ? 'HTML' : null) }} />
@@ -83,6 +95,6 @@ export default function TelegramTextEditor({ value, parseMode, onChange, disable
       onSelect={(event) => { selection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }}
       onChange={(event) => onChange(event.target.value, enabled ? 'HTML' : null)}
       className={className ?? 'w-full resize-y rounded-lg border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none disabled:opacity-60'} />
-    {enabled && <div className="min-w-0 whitespace-pre-wrap break-words border-t border-white/10 pt-2 text-sm text-gray-200" aria-label="Предпросмотр сообщения">{preview(value)}</div>}
+    {enabled && <div className="min-w-0 whitespace-pre-wrap break-words border-t border-white/10 pt-2 text-sm text-gray-200" aria-label="Предпросмотр сообщения">{telegramTextPreview(value)}</div>}
   </div>
 }

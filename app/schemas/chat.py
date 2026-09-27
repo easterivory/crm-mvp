@@ -144,6 +144,8 @@ class ChatFilters(BaseModel):
     tracking_link_id: Optional[uuid.UUID] = None
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
+    activity_from: Optional[datetime] = None
+    activity_to: Optional[datetime] = None
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     tag_mode: str = "any"
     lead_statuses: list[str] = Field(default_factory=list)
