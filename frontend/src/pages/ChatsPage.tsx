@@ -721,6 +721,8 @@ export default function ChatsPage() {
   const [isSnippetsLoading, setIsSnippetsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isPreparingTranslation, setIsPreparingTranslation] = useState(false)
+  const draftTranslationAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => draftTranslationAbortRef.current?.abort(), [])
   const [translatedDraftOriginal, setTranslatedDraftOriginal] = useState<string | null>(null)
   const [translatingMessageId, setTranslatingMessageId] = useState<string | null>(null)
   const [isUpdatingChatLanguage, setIsUpdatingChatLanguage] = useState(false)
@@ -1791,6 +1793,9 @@ export default function ChatsPage() {
   useEffect(() => {
     setAttachment(null)
     setDraft('')
+    draftTranslationAbortRef.current?.abort()
+    draftTranslationAbortRef.current = null
+    setIsPreparingTranslation(false)
     setIsAttachmentMenuOpen(false)
     setIsSnippetsOpen(false)
     setSnippetSearch('')
@@ -1899,6 +1904,8 @@ export default function ChatsPage() {
       return
     }
 
+    const controller = new AbortController()
+    draftTranslationAbortRef.current = controller
     setIsPreparingTranslation(true)
     try {
       const { data } = await api.post<TranslationPreview>(
@@ -1906,11 +1913,15 @@ export default function ChatsPage() {
         { text },
         {
           params: selectedProjectId ? { project_id: selectedProjectId } : undefined,
+          signal: controller.signal,
+          timeout: 30000,
         },
       )
+      if (controller.signal.aborted) return
       setTranslatedDraftOriginal(data.original_text)
       setDraft(normalizeTranslationForChat(data.translated_text))
     } catch (err) {
+      if (controller.signal.aborted) return
       if (isTelegramUserBlockError(err) && selectedChatId) {
         setChats((current) => current.map((chat) => (
           chat.id === selectedChatId ? { ...chat, is_blocked_by_user: true } : chat
@@ -1918,7 +1929,10 @@ export default function ChatsPage() {
       }
       notify({ tone: 'error', message: getErrorMessage(err) })
     } finally {
-      setIsPreparingTranslation(false)
+      if (draftTranslationAbortRef.current === controller) {
+        draftTranslationAbortRef.current = null
+        setIsPreparingTranslation(false)
+      }
     }
   }
 
@@ -3222,11 +3236,10 @@ export default function ChatsPage() {
               type="button"
               onClick={() => void handleTranslateDraft()}
               disabled={
-                !selectedChat
-                || !draft.trim()
+                !selectedChatId
+                || (!draft.trim() && translatedDraftOriginal === null)
                 || isSending
                 || isPreparingTranslation
-                || projectTranslation?.is_translation_enabled === false
               }
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 text-xs font-medium text-sky-50 transition hover:border-sky-300/40 disabled:cursor-not-allowed disabled:opacity-50"
               title={translatedDraftOriginal
