@@ -33,6 +33,7 @@ import {
 
 import { fetchBots } from '../features/bots/api'
 import { TrackingTagSelector, useTrackingTagMetric } from '../features/tracking/TrackingTagMetric'
+import TrafficQualitySettings from '../features/tracking/TrafficQualitySettings'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
 import type { BuyerUser } from '../features/buyers'
@@ -2167,6 +2168,12 @@ export default function TrackingPage() {
               </button>
             </div>
           </form>
+          {['super_admin', 'admin'].includes(currentRole) ? (
+            <details className="mt-4 border-t border-white/10 pt-3">
+              <summary className="cursor-pointer text-sm">Алерты качества трафика</summary>
+              <TrafficQualitySettings key={editingLink.id} projectId={editingLink.project_id} linkId={editingLink.id} />
+            </details>
+          ) : null}
         </Modal>
       ) : null}
 

@@ -40,6 +40,7 @@ from app.models.channel_tracking import (  # noqa: F401
 )
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend  # noqa: F401
 from app.models.tracking_alert import TrackingConversionAlertState  # noqa: F401
+from app.models.traffic_quality import TrafficQualitySettings, TrafficQualityOverride, TrafficQualityState, TrafficQualityDelivery, TrafficQualityAcknowledgement  # noqa: F401
 from app.models.funnel import (  # noqa: F401
     ChatFunnelState,
     Funnel,

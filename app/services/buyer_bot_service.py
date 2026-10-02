@@ -48,6 +48,7 @@ from app.models.user import User
 from app.schemas.telegram import TelegramCallbackQuery, TelegramMessage, TelegramUpdate
 from app.schemas.tracking import normalize_fb_capi_token, normalize_fb_pixel_id
 from app.services.telegram_chart_service import render_stats_chart
+from app.services.buyer_tracking_workspace import BuyerTrackingWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ MAIN_MENU_INLINE_MARKUP: dict[str, Any] = {
             {"text": "Статистика", "callback_data": "menu:stats"},
         ],
         [{"text": "Воронка отвалов", "callback_data": "menu:funnel"}],
+        [{"text": "Алерты качества", "callback_data": "menu:quality"}],
         [{"text": "Facebook Pixel", "callback_data": "menu:pixel"}],
         [{"text": "Сменить проект", "callback_data": "menu:project"}],
     ]
@@ -384,6 +386,8 @@ class BuyerBotService:
             return
 
         state = await self.state_store.get(chat_id)
+        if await BuyerTrackingWorkspace(self).message(chat_id, buyer, text):
+            return
         if state and state.get("state") == STATE_CREATE_LINK_NAME:
             await self._finish_create_link(chat_id, buyer, text)
             return
@@ -420,6 +424,8 @@ class BuyerBotService:
             return
 
         data = callback_query.data
+        if await BuyerTrackingWorkspace(self).callback(chat_id, buyer, data):
+            return
         if data.startswith("menu:"):
             await self._handle_menu_callback(chat_id, buyer, data.removeprefix("menu:"))
             return
@@ -474,6 +480,9 @@ class BuyerBotService:
             return
 
     async def _handle_menu_callback(self, chat_id: int, buyer: User, action: str) -> None:
+        if action == "quality":
+            await self._run_project_action(chat_id, buyer, "quality")
+            return
         if action == "create_link":
             await self._run_project_action(chat_id, buyer, "create_link")
             return
@@ -1167,49 +1176,10 @@ class BuyerBotService:
 
     async def _send_links(self, chat_id: int, buyer: User) -> None:
         project_id = await self._active_project_id(chat_id, buyer)
-        links = await self._list_buyer_links(buyer.id, limit=20, project_id=project_id)
-        if not links:
-            await self.telegram.send_message(
-                chat_id,
-                "У тебя пока нет ссылок. Нажми «Создать ссылку» или отправь /create_link.",
-                reply_markup=MAIN_MENU_INLINE_MARKUP,
-            )
+        if project_id is None:
+            await self._prompt_project_selection(chat_id, buyer, "links")
             return
-
-        lines = ["Твои ссылки:"]
-        for index, link in enumerate(links, start=1):
-            invite_link = canonicalize_telegram_web_link(
-                link.invite_link
-            ) or self._build_client_start_link(
-                link.bot.bot_username if link.bot else None,
-                link.code or link.ref_code,
-            )
-            active_lander = next(
-                (lander for lander in link.landers if lander.is_active),
-                None,
-            )
-            if link.fb_campaign_enabled and active_lander is not None:
-                host = (
-                    active_lander.domain.domain_name
-                    if active_lander.domain is not None
-                    else settings.LANDER_TECH_DOMAIN
-                )
-                display_link = build_lander_public_url(
-                    host=host,
-                    slug=active_lander.slug,
-                    utm_defaults=effective_campaign_utm_defaults(
-                        active_lander.utm_defaults_json,
-                        tracking_code=link.code or link.ref_code,
-                        is_facebook_campaign=True,
-                    ),
-                )
-                kind = "FB"
-            else:
-                display_link = invite_link
-                kind = "Tracking"
-            lines.append(f"{index}. [{kind}] {link.title or link.name}\n{display_link}")
-
-        await self.telegram.send_message(chat_id, "\n\n".join(lines), reply_markup=MAIN_MENU_INLINE_MARKUP)
+        await BuyerTrackingWorkspace(self).links(chat_id, buyer, project_id)
 
     async def _start_spend(self, chat_id: int, buyer: User, project_id: UUID) -> None:
         links = await self._list_buyer_links(
@@ -1516,20 +1486,20 @@ class BuyerBotService:
         project_id: UUID,
     ) -> None:
         if action == "create_link":
-            await self._start_create_link(chat_id, project_id)
+            await BuyerTrackingWorkspace(self).start(chat_id, buyer, project_id)
         elif action == "fb_campaign":
-            await self._start_facebook_campaign(chat_id, buyer, project_id)
+            await BuyerTrackingWorkspace(self).start(chat_id, buyer, project_id, facebook=True)
         elif action == "spend":
             await self._start_spend(chat_id, buyer, project_id)
         elif action == "stats":
-            await self._send_stats(chat_id, buyer, project_id)
+            await BuyerTrackingWorkspace(self).stats(chat_id, buyer, project_id)
+        elif action == "quality":
+            await BuyerTrackingWorkspace(self).alerts(chat_id, buyer, project_id)
+        elif action == "links":
+            await BuyerTrackingWorkspace(self).links(chat_id, buyer, project_id)
         elif action in {"chart_7", "chart_30"}:
-            await self._send_stats_chart(
-                chat_id,
-                buyer,
-                project_id,
-                days=30 if action == "chart_30" else 7,
-            )
+            await BuyerTrackingWorkspace(self).stats(chat_id, buyer, project_id,
+                days=30 if action == "chart_30" else 7, chart=True)
         elif action == "funnel":
             await self._send_funnel(chat_id, buyer, project_id)
         else:

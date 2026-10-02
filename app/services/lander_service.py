@@ -107,6 +107,43 @@ class LanderService:
         await self.db.refresh(lander)
         return lander.custom_html_path
 
+    async def copy_custom_assets(self, *, source_id: UUID, target_id: UUID, project_id: UUID) -> None:
+        """Copy an authorized template into independent storage for a new lander."""
+        source = await self._get_lander_for_project(source_id, project_id)
+        target = await self._get_lander_for_project(target_id, project_id)
+        if source.id == target.id or source.type != "custom_upload" or target.type != "custom_upload":
+            raise ValueError("Некорректная пара лендингов для копирования")
+        directory = (await self._custom_lander_directory(source)).resolve()
+        allowed_roots = (self.storage_root.resolve(), Path("static/landers").resolve())
+        if not any(directory.is_relative_to(root) for root in allowed_roots):
+            raise ValueError("Некорректный путь к шаблону")
+        target_slug = self._safe_slug(target.slug)
+        destination = self.storage_root.resolve() / target_slug
+
+        def copy():
+            files = list(directory.rglob("*"))
+            if len(files) > 10000 or any(path.is_symlink() for path in files):
+                raise ValueError("Шаблон содержит слишком много файлов или символические ссылки")
+            if sum(path.stat().st_size for path in files if path.is_file()) > 200 * 1024 * 1024:
+                raise ValueError("Размер шаблона превышает 200 МБ")
+            self._validate_custom_index_contract(directory / "index.html")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = Path(tempfile.mkdtemp(prefix=f".{target_slug}-copy-", dir=destination.parent))
+            try:
+                shutil.copytree(directory, temporary, dirs_exist_ok=True)
+                # The target slug was allocated for this new campaign only.
+                # A failed earlier transaction may have left its files behind.
+                if destination.exists():
+                    raise ValueError("Директория новой кампании уже существует; создайте новую форму")
+                temporary.rename(destination)
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+
+        await asyncio.to_thread(copy)
+        target.custom_html_path = destination.as_posix()
+        await self.db.flush()
+
     async def resolve_lander_request(self, host: str, slug: str) -> ProjectLander:
         normalized_host = self.normalize_host(host)
         normalized_slug = self._safe_slug(slug)

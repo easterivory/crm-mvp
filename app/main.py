@@ -8,6 +8,7 @@ from starlette.requests import Request
 
 from app.api import spa, telegram_contact
 from app.api.v1.routers import (
+    traffic_quality,
     analytics,
     ai,
     assignments,
@@ -120,6 +121,7 @@ app.include_router(bots.router, prefix=_v1_prefix)
 app.include_router(broadcasts.router, prefix=_v1_prefix)
 app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
+app.include_router(traffic_quality.router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
 app.include_router(ai.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)

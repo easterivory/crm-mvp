@@ -17,6 +17,7 @@ from app.models.tag import Tag, random_tag_color
 from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.lead_event_service import LeadEventService
 from app.services.lead_scoring_service import LeadScoringService
+from app.services.traffic_quality_service import TrafficQualityService
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ class TagService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Tag not found",
             )
+        await TrafficQualityService(self.db).ensure_tag_unused(project_id, tag_id)
         deleted = await self.tag_repo.delete_from_project(tag_id, project_id)
         if not deleted:
             raise HTTPException(

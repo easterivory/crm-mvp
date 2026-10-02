@@ -24,6 +24,7 @@ import BackupDownloadButton from '../features/settings/BackupDownloadButton'
 import { useTranslationLanguages } from '../features/translation/languages'
 import LanguageSettings from '../features/translation/LanguageSettings'
 import BuyersSettings from '../features/buyers/components/BuyersSettings'
+import TrafficQualitySettings from '../features/tracking/TrafficQualitySettings'
 import GoogleSheetsSettings from '../features/googleSheets/components/GoogleSheetsSettings'
 import LandersSettings from '../features/landers/components/LandersSettings'
 import PartnersSettings from '../features/partners/components/PartnersSettings'
@@ -36,6 +37,7 @@ type TabKey =
   | 'project'
   | 'team'
   | 'buyers'
+  | 'trafficQuality'
   | 'statuses'
   | 'tags'
   | 'partners'
@@ -155,6 +157,7 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'project', label: 'Проект' },
   { key: 'team', label: 'Команда' },
   { key: 'buyers', label: 'Баеры' },
+  { key: 'trafficQuality', label: 'Качество трафика' },
   { key: 'statuses', label: 'Статусы' },
   { key: 'tags', label: 'Теги' },
   { key: 'partners', label: 'Партнёры' },
@@ -456,6 +459,7 @@ export default function SettingsPage() {
         if (tab.key === 'project') {
           return canManageProject
         }
+        if (tab.key === 'trafficQuality') return canManageProject
         if (tab.key === 'partners') {
           return canManageProject
         }
@@ -2534,6 +2538,9 @@ export default function SettingsPage() {
 
         {!isLoading && activeTab === 'buyers' ? (
           <BuyersSettings projectId={activeProjectId} />
+        ) : null}
+        {!isLoading && activeTab === 'trafficQuality' && canManageProject ? (
+          <TrafficQualitySettings key={activeProjectId} projectId={activeProjectId} />
         ) : null}
 
         {!isLoading && activeTab === 'statuses' ? (
