@@ -26,6 +26,8 @@ from app.schemas.tracking_metrics import (
     TrackingTagMetrics,
 )
 from app.services.tracking_metrics_service import TrackingMetricsService
+from app.services.tracking_step_metrics_service import TrackingStepMetricsService
+from app.services.tracking_cohort_service import TrackingCohortService
 from app.services.tracking_service import TrackingService
 
 router = APIRouter(prefix="/tracking-links", tags=["tracking"])
@@ -274,18 +276,44 @@ async def delete_tracking_spend_v1(
 async def get_tag_tracking_metrics(
     project_id: UUID = Query(...), tag_id: UUID = Query(...),
     bot_id: Optional[UUID] = Query(default=None), link_id: Optional[UUID] = Query(default=None),
+    buyer_id: Optional[UUID] = Query(default=None),
     date_from: Optional[date] = Query(default=None), date_to: Optional[date] = Query(default=None),
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
 ) -> TrackingTagMetrics:
     return await TrackingMetricsService(db).get_tag_metrics(
         current_user=current_user, project_id=project_id, tag_id=tag_id, bot_id=bot_id,
-        link_id=link_id, date_from=date_from, date_to=date_to)
+        link_id=link_id, date_from=date_from, date_to=date_to, buyer_id=buyer_id)
+
+
+@v1_router.get("/metrics/step-options")
+async def tracking_step_options(project_id: UUID, bot_id: Optional[UUID] = None,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id)
+
+
+@v1_router.get("/metrics/cohort-conversion")
+async def tracking_cohort_conversion(project_id: UUID, source: str = Query(max_length=100), target: str = Query(max_length=100),
+    bot_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingCohortService(db).get(current_user, project_id, source, target, bot_id=bot_id,
+        buyer_id=buyer_id, link_id=link_id, date_from=date_from, date_to=date_to)
+
+
+@v1_router.get("/metrics/step")
+async def tracking_step_metrics(project_id: UUID, step_id: UUID, bot_id: Optional[UUID] = None,
+    link_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStepMetricsService(db).get(current_user, project_id, step_id, bot_id=bot_id,
+        link_id=link_id, buyer_id=buyer_id, date_from=date_from, date_to=date_to)
 
 
 @v1_router.get("/metrics/project", response_model=TrackingProjectMetricsResponse)
 async def get_project_tracking_metrics_v1(
     project_id: UUID = Query(...),
     bot_id: Optional[UUID] = Query(default=None),
+    buyer_id: Optional[UUID] = Query(default=None),
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
     current_user: User = Depends(get_current_user),
@@ -295,6 +323,7 @@ async def get_project_tracking_metrics_v1(
         current_user=current_user,
         project_id=project_id,
         bot_id=bot_id,
+        buyer_id=buyer_id,
         date_from=date_from,
         date_to=date_to,
     )

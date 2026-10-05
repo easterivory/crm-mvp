@@ -49,9 +49,18 @@ class TrackingMetricsService:
         self.channel_metrics_repo = ChannelMetricsRepository(db)
         self.tag_repo = TagRepository(db)
 
+    @staticmethod
+    def resolve_buyer_filter(current_user: User, buyer_id: UUID | None) -> UUID | None:
+        if current_user.role_name == RoleName.BUYER:
+            if buyer_id is not None and buyer_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Доступна только собственная статистика")
+            return current_user.id
+        return buyer_id
+
     async def get_tag_metrics(self, *, current_user: User, project_id: UUID, tag_id: UUID,
                               bot_id: UUID | None = None, link_id: UUID | None = None,
-                              date_from: date | None = None, date_to: date | None = None) -> TrackingTagMetrics:
+                              date_from: date | None = None, date_to: date | None = None,
+                              buyer_id: UUID | None = None) -> TrackingTagMetrics:
         date_from, date_to = self._resolve_date_range(date_from, date_to)
         await self._ensure_project_access(current_user, project_id)
         await self._get_active_project_or_404(project_id)
@@ -60,7 +69,7 @@ class TrackingMetricsService:
             raise HTTPException(status_code=404, detail="Tag not found in project")
         if bot_id is not None:
             await self._ensure_bot_in_project(bot_id, project_id)
-        buyer_id = current_user.id if current_user.role_name == RoleName.BUYER else None
+        buyer_id = self.resolve_buyer_filter(current_user, buyer_id)
         if link_id is not None:
             link = await self.link_repo.get_link_by_id(link_id)
             if link is None or link.project_id != project_id or (buyer_id is not None and link.buyer_id != buyer_id):
@@ -81,6 +90,7 @@ class TrackingMetricsService:
         bot_id: UUID | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
+        buyer_id: UUID | None = None,
     ) -> TrackingProjectMetricsResponse:
         date_from, date_to = self._resolve_date_range(date_from, date_to)
         await self._ensure_project_access(current_user, project_id)
@@ -88,7 +98,7 @@ class TrackingMetricsService:
         lead_status_codes = self._tracking_lead_status_codes(project)
         if bot_id is not None:
             await self._ensure_bot_in_project(bot_id, project_id)
-        buyer_id = current_user.id if current_user.role_name == RoleName.BUYER else None
+        buyer_id = self.resolve_buyer_filter(current_user, buyer_id)
 
         link_rows = await self.metrics_repo.get_link_metrics_rows(
             project_id=project_id,

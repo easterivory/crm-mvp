@@ -25,6 +25,7 @@ type TrackingLinksParams = {
 type ProjectMetricsParams = TrackingDateRangeParams & {
   project_id: string
   bot_id?: string
+  buyer_id?: string
 }
 
 type SpendListParams = TrackingDateRangeParams

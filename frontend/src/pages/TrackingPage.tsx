@@ -1,5 +1,4 @@
 import {
-  Activity,
   Archive,
   BarChart3,
   CalendarDays,
@@ -15,24 +14,14 @@ import {
   RotateCcw,
   Search,
   Trash2,
-  TrendingUp,
   WalletCards,
 } from 'lucide-react'
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 
 import { fetchBots } from '../features/bots/api'
-import { TrackingTagSelector, useTrackingTagMetric } from '../features/tracking/TrackingTagMetric'
+import TrackingOverview from '../features/tracking/TrackingOverview'
 import TrafficQualitySettings from '../features/tracking/TrafficQualitySettings'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
@@ -77,7 +66,7 @@ const DEFAULT_BASE_CONVERSION_RATE = '10.0'
 const DEFAULT_MIN_SAMPLE_SIZE = '500'
 const DEFAULT_COST_MODEL: TrackingCostModel = 'cpm'
 const dateInputClassName = 'crm-date-input h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-gray-100 outline-none transition focus:border-accent-300/60'
-const modalDateInputClassName = 'crm-date-input h-10 w-full rounded-xl border border-white/10 bg-background/70 px-3 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2'
+const modalDateInputClassName = `${dateInputClassName} w-full`
 
 const zeroSummary: TrackingMetricSummary = {
   clicks: 0,
@@ -169,10 +158,6 @@ function formatPercent(value: string | number | null | undefined) {
   return `${toNumber(value).toFixed(1)}%`
 }
 
-function ratioPercent(numerator: number, denominator: number) {
-  return denominator > 0 ? `${((numerator / denominator) * 100).toFixed(1)}%` : '0.0%'
-}
-
 function unitCost(spend: string | number | null | undefined, units: number) {
   return units > 0 ? toNumber(spend) / units : 0
 }
@@ -262,7 +247,7 @@ function conversionHelperText(
   minSampleSize: number,
 ) {
   if (status === 'insufficient_data') {
-    return `${formatNumber(conversionSampleSize(summary))}/${formatNumber(minSampleSize)} кликов`
+    return `${formatNumber(conversionSampleSize(summary))}/${formatNumber(minSampleSize)} ${summary.clicks > 0 ? 'кликов' : 'стартов'}`
   }
   if (status === 'low_cr') {
     return `Конверсия ниже цели ${formatBenchmarkPercent(baseConversionRate)}`
@@ -273,27 +258,10 @@ function conversionHelperText(
   return ''
 }
 
-function formatShortDate(value: string) {
-  return new Intl.DateTimeFormat('ru-RU', {
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(`${value}T00:00:00`))
-}
-
-function metricCard(label: string, value: string, helper?: string) {
-  return (
-    <div className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
-      <p className="text-xs uppercase tracking-[0.18em] text-gray-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
-      {helper ? <p className="mt-1 text-xs text-gray-500">{helper}</p> : null}
-    </div>
-  )
-}
-
 function miniMetric(label: string, value: string) {
   return (
     <div className="min-w-0">
-      <p className="text-xs uppercase tracking-[0.16em] text-gray-500">{label}</p>
+      <p className="break-words text-xs text-gray-400">{label}</p>
       <p className="mt-1 truncate text-lg font-semibold text-white">{value}</p>
     </div>
   )
@@ -363,6 +331,9 @@ function funnelList(items: FunnelStepMetric[]) {
 
 export default function TrackingPage() {
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const [buyerFilter, setBuyerFilter] = useState('')
+  const requestVersion = useRef(0)
   const { selectedProjectId, selectedBotIds } = useProjectBotSelection()
   const currentRole = useAuthStore((state) => state.user?.role_name ?? '')
   const isBuyer = currentRole === 'buyer'
@@ -377,6 +348,7 @@ export default function TrackingPage() {
   const [dateTo, setDateTo] = useState(todayIso())
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('active')
   const [search, setSearch] = useState('')
+  useEffect(() => { setBuyerFilter('') }, [selectedProjectId])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -447,9 +419,6 @@ export default function TrackingPage() {
   const selectedBotIdForQuery =
     selectedBotIds.length === 1 ? selectedBotIds[0] : undefined
   const isMultiBotFallback = selectedBotIds.length > 1
-  const projectTagMetric = useTrackingTagMetric(selectedProjectId, dateFrom, dateTo, selectedBotIdForQuery, undefined, metrics)
-  const detailTagMetric = useTrackingTagMetric(detailLink ? selectedProjectId : null, dateFrom, dateTo, undefined, detailLink?.id, detailMetrics)
-
   const botNameById = useMemo(
     () => new Map(bots.map((bot) => [bot.id, bot.name])),
     [bots],
@@ -473,49 +442,21 @@ export default function TrackingPage() {
 
   const filteredLinks = useMemo(() => {
     const query = search.trim().toLowerCase()
+    const scoped = links.filter(link => !buyerFilter || link.buyer_id === buyerFilter)
     if (!query) {
-      return links
+      return scoped
     }
 
-    return links.filter((link) => {
+    return scoped.filter((link) => {
       return [link.code, link.title, link.buyer_name ?? '']
         .join(' ')
         .toLowerCase()
         .includes(query)
     })
-  }, [links, search])
-
-  const chartData = useMemo(() => {
-    return (metrics?.daily ?? []).map((item) => ({
-      date: formatShortDate(item.date),
-      clicks: item.clicks,
-      starts: item.starts,
-      leads: item.leads,
-      submitted: item.submitted_leads,
-      registrations: item.registrations,
-      firstDeposits: item.first_deposits,
-      redeposits: item.redeposits,
-      channelJoins: item.channel_joins,
-      taggedLeads: projectTagMetric.counts.get(item.date) ?? 0,
-    }))
-  }, [metrics?.daily, projectTagMetric.counts])
-
-  const detailChartData = useMemo(() => {
-    return (detailMetrics?.daily ?? []).map((item) => ({
-      date: formatShortDate(item.date),
-      clicks: item.clicks,
-      starts: item.starts,
-      leads: item.leads,
-      submitted: item.submitted_leads,
-      registrations: item.registrations,
-      firstDeposits: item.first_deposits,
-      redeposits: item.redeposits,
-      channelJoins: item.channel_joins,
-      taggedLeads: detailTagMetric.counts.get(item.date) ?? 0,
-    }))
-  }, [detailMetrics?.daily, detailTagMetric.counts])
+  }, [links, search, buyerFilter])
 
   const loadPageData = useCallback(async () => {
+    const version = ++requestVersion.current
     if (!selectedProjectId) {
       setBots([])
       setChannels([])
@@ -528,13 +469,16 @@ export default function TrackingPage() {
 
     setIsLoading(true)
     setError('')
+    setMetrics(null)
 
     try {
       const isActive =
         activeFilter === 'all' ? undefined : activeFilter === 'active'
+      if (!dateFrom || !dateTo || dateFrom > dateTo) throw new Error('Укажите корректный период')
       const params = {
         project_id: selectedProjectId,
         bot_id: selectedBotIdForQuery,
+        buyer_id: buyerFilter || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       }
@@ -562,6 +506,12 @@ export default function TrackingPage() {
         fetchTelegramChannels(selectedProjectId),
       ])
 
+      while (linkResponse.items.length < linkResponse.total) {
+        const next = await fetchTrackingLinks({ project_id: selectedProjectId, bot_id: selectedBotIdForQuery, is_active: isActive, limit: 100, offset: linkResponse.items.length })
+        if (!next.items.length || version !== requestVersion.current) break
+        linkResponse.items.push(...next.items)
+      }
+      if (version !== requestVersion.current) return
       setBots(botItems)
       setChannels(channelItems)
       setLinks(linkResponse.items)
@@ -569,9 +519,9 @@ export default function TrackingPage() {
       setMetrics(projectMetrics)
       setBuyers(buyerUsers)
     } catch (err) {
-      setError(getErrorMessage(err, 'Could not load tracking data.'))
+      if (version === requestVersion.current) setError(getErrorMessage(err, err instanceof Error ? err.message : 'Не удалось загрузить статистику'))
     } finally {
-      setIsLoading(false)
+      if (version === requestVersion.current) setIsLoading(false)
     }
   }, [
     activeFilter,
@@ -581,6 +531,7 @@ export default function TrackingPage() {
     selectedProjectId,
     isBuyer,
     canManageFacebookCampaigns,
+    buyerFilter,
   ])
 
   const loadDetail = useCallback(
@@ -989,7 +940,6 @@ export default function TrackingPage() {
     )
   }
 
-  const summary = metrics?.summary ?? zeroSummary
   const isGambling = metrics?.project_format === 'gambling'
   const detailIsGambling = detailMetrics?.project_format === 'gambling'
   const detailIsChannel = detailMetrics?.destination_type === 'channel'
@@ -1012,22 +962,27 @@ export default function TrackingPage() {
     Number(unattributedSummary.redeposits || 0) > 0
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/5 bg-[#0B0F19]/80 text-gray-200 shadow-card">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#181c1f]/85 text-gray-200 shadow-card backdrop-blur-xl">
       <header className="shrink-0 border-b border-white/5 px-5 py-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.25em] text-accent-300/70">
-              Трафик
-            </p>
             <h1 className="mt-1 text-2xl font-semibold text-white">
               Трекинг
             </h1>
             <p className="mt-1 text-sm text-gray-500">
-              Расходы, конверсии и аналитика ссылок для выбранного скоупа.
+              Ссылки, баеры и путь до результата
             </p>
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
+            {!isBuyer && <label className="block"><span className="mb-1 block text-xs text-gray-400">Баер</span>
+              <select aria-label="Баер" value={buyerFilter} onChange={e => setBuyerFilter(e.target.value)} className={`${dateInputClassName} max-w-52`}>
+                <option value="">Все баеры</option>{buyers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select></label>}
+            <label className="block"><span className="mb-1 block text-xs text-gray-400">Период</span>
+              <select aria-label="Быстрый выбор периода" className={dateInputClassName} value="" onChange={e => { if (e.target.value) { setDateFrom(daysAgoIso(Number(e.target.value) - 1)); setDateTo(todayIso()) } }}>
+                <option value="">Выбрать</option><option value="1">Сегодня</option><option value="7">7 дней</option><option value="30">30 дней</option>
+              </select></label>
             <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
                 С
@@ -1104,30 +1059,9 @@ export default function TrackingPage() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className={`grid gap-4 md:grid-cols-2 ${isGambling ? 'xl:grid-cols-8' : 'xl:grid-cols-6'}`}>
-          {metricCard('Клики', formatNumber(summary.clicks))}
-          {metricCard('Старты', formatNumber(summary.starts))}
-          {metricCard('Лиды', formatNumber(summary.leads), `CR ${formatPercent(summary.cr_to_lead)}`)}
-          {isGambling ? (
-            <>
-              {metricCard('Регистрации', formatNumber(summary.registrations), `CR ${formatPercent(summary.cr_to_registration)}`)}
-              {metricCard('FD', formatNumber(summary.first_deposits), `CR ${formatPercent(summary.cr_registration_to_deposit)}`)}
-              {metricCard('RD', formatNumber(summary.redeposits), `CR ${formatPercent(summary.cr_deposit_to_redeposit)}`)}
-            </>
-          ) : metricCard('Отправлены', formatNumber(summary.submitted_leads), `CR ${formatPercent(summary.cr_to_submit)}`)}
-          {metricCard('Расход', formatMoney(summary.spend))}
-          {metricCard('CPL', formatMoney(summary.cpl), isGambling ? `CPFD ${formatMoney(summary.cpfd)}` : `CPSL ${formatMoney(summary.cpsl)}`)}
-        </div>
-
-        {hasChannelTraffic ? (
-          <div className="mt-4 grid gap-3 rounded-xl border border-cyan-300/15 bg-cyan-400/[0.045] p-4 sm:grid-cols-2 lg:grid-cols-5">
-            {miniMetric('Заявки в каналы', formatNumber(summary.channel_join_requests))}
-            {miniMetric('Подписки', formatNumber(summary.channel_joins))}
-            {miniMetric('Активные', formatNumber(summary.channel_active_subscribers))}
-            {miniMetric('Отписки', formatNumber(summary.channel_leaves))}
-            {miniMetric('Клик → подписка', formatPercent(summary.cr_click_to_channel_join))}
-          </div>
-        ) : null}
+        {metrics && selectedProjectId && <TrackingOverview key={`${user?.id}:${selectedProjectId}:overview`} projectId={selectedProjectId} userId={user?.id ?? 'user'}
+          botId={selectedBotIdForQuery} buyerId={buyerFilter || undefined} dateFrom={dateFrom} dateTo={dateTo}
+          gambling={isGambling} channel={hasChannelTraffic} summary={metrics.summary} daily={metrics.daily} refreshToken={metrics} loading={isLoading} />}
 
         {isGambling && (metrics?.lifecycle_sources?.length ?? 0) > 0 ? (
           <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-surface px-4 py-3 shadow-card">
@@ -1147,120 +1081,6 @@ export default function TrackingPage() {
             ))}
           </div>
         ) : null}
-
-        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-white">Динамика трафика</h2>
-                <p className="text-sm text-gray-500">
-                  {hasChannelTraffic
-                    ? 'Клики, подписки на каналы и показатели ботов'
-                    : isGambling
-                      ? 'Клики, старты, лиды, регистрации и депозиты'
-                      : 'Клики, старты, лиды и подачи'}
-                </p>
-              </div>
-              <Activity size={18} className="text-accent-300" />
-            </div>
-            <TrackingTagSelector metric={projectTagMetric} />
-            <div className="h-64">
-              {chartData.length === 0 ? (
-                <div className="flex h-full items-center justify-center rounded-xl border border-white/5 bg-white/[0.03] text-sm text-gray-500">
-                  Данных по дням пока нет.
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData} margin={{ left: -18, right: 8, top: 12, bottom: 0 }}>
-                    {projectTagMetric.data ? <Area type="linear" dataKey="taggedLeads" name={`Тег: ${projectTagMetric.data.tag_name}`} stroke="#f472b6" fill="transparent" strokeWidth={2} /> : null}
-                    <defs>
-                      <linearGradient id="startsGradient" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#22d3ee" stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="leadsGradient" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                    <XAxis dataKey="date" stroke="rgba(255,255,255,0.35)" tickLine={false} axisLine={false} />
-                    <YAxis stroke="rgba(255,255,255,0.35)" tickLine={false} axisLine={false} />
-                    <Tooltip
-                      contentStyle={{
-                        background: '#0B0F19',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 12,
-                        color: '#e5e7eb',
-                      }}
-                    />
-                    <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="url(#startsGradient)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="url(#leadsGradient)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
-                    {hasChannelTraffic ? (
-                      <Area type="monotone" dataKey="channelJoins" name="Подписки в каналы" stroke="#2dd4bf" fill="transparent" strokeWidth={2} />
-                    ) : null}
-                    {isGambling ? (
-                      <>
-                        <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
-                        <Area type="monotone" dataKey="firstDeposits" name="FD" stroke="#fb7185" fill="transparent" strokeWidth={2} />
-                        <Area type="monotone" dataKey="redeposits" name="RD" stroke="#f97316" fill="transparent" strokeWidth={2} />
-                      </>
-                    ) : (
-                      <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
-                    )}
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-white/5 bg-surface p-4 shadow-card">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-500/10 text-accent-200">
-                <TrendingUp size={18} />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-white">Конверсия</p>
-                <p className="text-xs text-gray-500">Конверсионная цепочка проекта</p>
-              </div>
-            </div>
-            <p className="mt-5 text-4xl font-semibold text-white">
-              {formatPercent(isGambling ? summary.cr_to_registration : summary.cr_to_lead)}
-            </p>
-            <div className="mt-5 space-y-3 text-sm">
-              <div className="flex justify-between text-gray-400">
-                <span>Клик → старт</span>
-                <span>{ratioPercent(summary.starts, summary.clicks)}</span>
-              </div>
-              <div className="flex justify-between text-gray-400">
-                <span>Старт → лид</span>
-                <span>{formatPercent(summary.cr_to_lead)}</span>
-              </div>
-              {isGambling ? (
-                <>
-                  <div className="flex justify-between text-gray-400">
-                    <span>Старт → регистрация</span>
-                    <span>{formatPercent(summary.cr_to_registration)}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-400">
-                    <span>Регистрация → FD</span>
-                    <span>{formatPercent(summary.cr_registration_to_deposit)}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-400">
-                    <span>FD → RD</span>
-                    <span>{formatPercent(summary.cr_deposit_to_redeposit)}</span>
-                  </div>
-                </>
-              ) : (
-                <div className="flex justify-between text-gray-400">
-                  <span>Лид → подача</span>
-                  <span>{formatPercent(summary.cr_to_submit)}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
 
         <div className="mt-5 flex flex-col gap-3 rounded-xl border border-white/5 bg-surface p-4 shadow-card md:flex-row md:items-center md:justify-between">
           <div className="relative min-w-0 flex-1">
@@ -1302,7 +1122,7 @@ export default function TrackingPage() {
           </div>
         ) : null}
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="mt-5 grid min-w-0 grid-cols-1 gap-4">
           {hasUnattributedTraffic ? (
             <article className="rounded-xl border border-amber-300/20 bg-amber-500/10 p-4 transition">
               <div className="flex items-start justify-between gap-4">
@@ -1388,7 +1208,7 @@ export default function TrackingPage() {
             return (
               <article
                 key={link.id}
-                className={`rounded-xl border p-4 transition ${conversionCardClass(conversionStatus)}`}
+                className={`min-w-0 rounded-lg border p-4 transition ${conversionCardClass(conversionStatus)}`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -1466,35 +1286,16 @@ export default function TrackingPage() {
                   </div>
                 </div>
 
-                <div className={`mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-4 ${isChannelLink ? 'md:grid-cols-4 xl:grid-cols-8' : isGambling ? 'md:grid-cols-6' : 'md:grid-cols-4'}`}>
-                  {isChannelLink ? (
-                    <>
-                      {miniMetric('Клики', formatNumber(linkSummary.clicks))}
-                      {miniMetric('Подписки', formatNumber(linkSummary.channel_joins))}
-                      {miniMetric('Старты', formatNumber(linkSummary.starts))}
-                      {miniMetric('Рег', formatNumber(linkSummary.registrations))}
-                      {miniMetric('FD', formatNumber(linkSummary.first_deposits))}
-                      {miniMetric('RD', formatNumber(linkSummary.redeposits))}
-                      {miniMetric('Активные', formatNumber(linkSummary.channel_active_subscribers))}
-                      {miniMetric('Расход', formatMoney(linkSummary.spend))}
-                    </>
-                  ) : isGambling ? (
-                    <>
-                      {miniMetric('Старты', formatNumber(linkSummary.starts))}
-                      {miniMetric('Лиды', formatNumber(linkSummary.leads))}
-                      {miniMetric('Рег', formatNumber(linkSummary.registrations))}
-                      {miniMetric('FD', formatNumber(linkSummary.first_deposits))}
-                      {miniMetric('RD', formatNumber(linkSummary.redeposits))}
-                      {miniMetric('Расход', formatMoney(linkSummary.spend))}
-                    </>
-                  ) : (
-                    <>
-                      {miniMetric('Старты', formatNumber(linkSummary.starts))}
-                      {miniMetric('Лиды', formatNumber(linkSummary.leads))}
-                      {miniMetric('Расход', formatMoney(linkSummary.spend))}
-                      {miniMetric('CPL', formatMoney(linkSummary.cpl))}
-                    </>
-                  )}
+                <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-white/10 py-4 md:grid-cols-4 xl:grid-cols-7">
+                  {isChannelLink && miniMetric('Подписки', formatNumber(linkSummary.channel_joins))}
+                  {miniMetric('Старты в личке', formatNumber(linkSummary.starts))}
+                  {miniMetric('Лиды', formatNumber(linkSummary.leads))}
+                  {isGambling ? <>
+                    {miniMetric('Регистрации', formatNumber(linkSummary.registrations))}
+                    {miniMetric('ФД', formatNumber(linkSummary.first_deposits))}
+                    {miniMetric('РД', formatNumber(linkSummary.redeposits))}
+                  </> : miniMetric('Поданные', formatNumber(linkSummary.submitted_leads))}
+                  {miniMetric('Расход', formatMoney(linkSummary.spend))}
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
@@ -2199,128 +2000,11 @@ export default function TrackingPage() {
 
           {detailMetrics ? (
             <div className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-                {detailIsChannel ? (
-                  <>
-                    {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
-                    {metricCard('Заявки', formatNumber(detailMetrics.summary.channel_join_requests))}
-                    {metricCard('Подписки', formatNumber(detailMetrics.summary.channel_joins))}
-                    {metricCard('Старты бота', formatNumber(detailMetrics.summary.starts))}
-                    {metricCard('Регистрации', formatNumber(detailMetrics.summary.registrations))}
-                    {metricCard('FD', formatNumber(detailMetrics.summary.first_deposits))}
-                    {metricCard('RD', formatNumber(detailMetrics.summary.redeposits))}
-                    {metricCard('Активные', formatNumber(detailMetrics.summary.channel_active_subscribers))}
-                    {metricCard('Отписки', formatNumber(detailMetrics.summary.channel_leaves))}
-                    {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
-                    {metricCard('Цена подписки', formatMoney(unitCost(detailMetrics.summary.spend, detailMetrics.summary.channel_joins)))}
-                    {metricCard('Клик → подписка', formatPercent(detailMetrics.summary.cr_click_to_channel_join))}
-                    {metricCard('Подписка → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.channel_joins))}
-                  </>
-                ) : (
-                  <>
-                    {metricCard('Клики', formatNumber(detailMetrics.summary.clicks))}
-                    {metricCard('Старты', formatNumber(detailMetrics.summary.starts))}
-                    {metricCard('Лиды', formatNumber(detailMetrics.summary.leads))}
-                    {detailIsGambling ? (
-                      <>
-                        {metricCard('Регистрации', formatNumber(detailMetrics.summary.registrations))}
-                        {metricCard('FD', formatNumber(detailMetrics.summary.first_deposits))}
-                        {metricCard('RD', formatNumber(detailMetrics.summary.redeposits))}
-                      </>
-                    ) : metricCard('Отправлены', formatNumber(detailMetrics.summary.submitted_leads))}
-                    {metricCard('Расход', formatMoney(detailMetrics.summary.spend))}
-                    {metricCard('CPL', formatMoney(detailMetrics.summary.cpl))}
-                    {metricCard(detailIsGambling ? 'CPFD' : 'CPSL', formatMoney(detailIsGambling ? detailMetrics.summary.cpfd : detailMetrics.summary.cpsl))}
-                    {metricCard('Клик → старт', ratioPercent(detailMetrics.summary.starts, detailMetrics.summary.clicks))}
-                    {metricCard('Старт → лид', formatPercent(detailMetrics.summary.cr_to_lead))}
-                    {detailIsGambling ? (
-                      <>
-                        {metricCard('Старт → рег', formatPercent(detailMetrics.summary.cr_to_registration))}
-                        {metricCard('Рег → FD', formatPercent(detailMetrics.summary.cr_registration_to_deposit))}
-                        {metricCard('FD → RD', formatPercent(detailMetrics.summary.cr_deposit_to_redeposit))}
-                      </>
-                    ) : metricCard('Лид → подача', formatPercent(detailMetrics.summary.cr_to_submit))}
-                  </>
-                )}
-              </div>
+              {selectedProjectId && <TrackingOverview key={`${user?.id}:${selectedProjectId}:${detailLink?.id}`} projectId={selectedProjectId} userId={user?.id ?? 'user'}
+                linkId={detailLink?.id} dateFrom={dateFrom} dateTo={dateTo} gambling={detailIsGambling}
+                channel={detailIsChannel} summary={detailMetrics.summary} daily={detailMetrics.daily} refreshToken={detailMetrics} loading={isDetailLoading} />}
 
-              <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
-                <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-white">Детализация по дням</h3>
-                    <CalendarDays size={18} className="text-accent-300" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:w-auto">
-                    <label className="block">
-                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
-                        С
-                      </span>
-                      <input
-                        type="date"
-                        value={dateFrom}
-                        onChange={(event) => setDateFrom(event.target.value)}
-                        className={modalDateInputClassName}
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
-                        По
-                      </span>
-                      <input
-                        type="date"
-                        value={dateTo}
-                        onChange={(event) => setDateTo(event.target.value)}
-                        className={modalDateInputClassName}
-                      />
-                    </label>
-                  </div>
-                </div>
-                <TrackingTagSelector metric={detailTagMetric} />
-                <div className="h-64">
-                  {detailChartData.length === 0 ? (
-                    <div className="flex h-full items-center justify-center rounded-xl border border-white/5 bg-background/50 text-sm text-gray-500">
-                      Данных по дням пока нет.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={detailChartData} margin={{ left: -18, right: 8, top: 12, bottom: 0 }}>
-                        {detailTagMetric.data ? <Area type="linear" dataKey="taggedLeads" name={`Тег: ${detailTagMetric.data.tag_name}`} stroke="#f472b6" fill="transparent" strokeWidth={2} /> : null}
-                        <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                        <XAxis dataKey="date" stroke="rgba(255,255,255,0.35)" tickLine={false} axisLine={false} />
-                        <YAxis stroke="rgba(255,255,255,0.35)" tickLine={false} axisLine={false} />
-                        <Tooltip
-                          contentStyle={{
-                            background: '#0B0F19',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: 12,
-                            color: '#e5e7eb',
-                          }}
-                        />
-                        <Area type="monotone" dataKey="clicks" name="Клики" stroke="#fbbf24" fill="transparent" strokeWidth={2} />
-                        {detailIsChannel ? (
-                          <Area type="monotone" dataKey="channelJoins" name="Подписки" stroke="#2dd4bf" fill="#2dd4bf22" strokeWidth={2} />
-                        ) : (
-                          <>
-                            <Area type="monotone" dataKey="starts" stroke="#22d3ee" fill="#22d3ee22" strokeWidth={2} />
-                            <Area type="monotone" dataKey="leads" stroke="#a855f7" fill="#a855f722" strokeWidth={2} />
-                            {detailIsGambling ? (
-                              <>
-                                <Area type="monotone" dataKey="registrations" name="Регистрации" stroke="#34d399" fill="transparent" strokeWidth={2} />
-                                <Area type="monotone" dataKey="firstDeposits" name="FD" stroke="#fb7185" fill="transparent" strokeWidth={2} />
-                                <Area type="monotone" dataKey="redeposits" name="RD" stroke="#f97316" fill="transparent" strokeWidth={2} />
-                              </>
-                            ) : (
-                              <Area type="monotone" dataKey="submitted" name="Подано" stroke="#34d399" fill="transparent" strokeWidth={2} />
-                            )}
-                          </>
-                        )}
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  )}
-                </div>
-              </div>
-
-              {!detailIsChannel && detailIsGambling && detailMetrics.lifecycle_sources.length > 0 ? (
+              {detailIsGambling && detailMetrics.lifecycle_sources.length > 0 ? (
                 <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                   <div className="mb-3">
                     <h3 className="font-semibold text-white">Источники событий</h3>
@@ -2346,14 +2030,14 @@ export default function TrackingPage() {
                 </div>
               ) : null}
 
-              {!detailIsChannel ? <div>
+              <div>
                 <div>
-                  <h3 className="mb-3 font-semibold text-white">Шаги воронки</h3>
+                  <h3 className="mb-3 font-semibold text-white">Текущее распределение по шагам</h3>
                   {funnelList(detailMetrics.funnel_steps)}
                 </div>
-              </div> : null}
+              </div>
 
-              {!detailIsChannel ? <div>
+              <div>
                 <div className="mb-3">
                   <h3 className="font-semibold text-white">Аудитория ссылки</h3>
                   <p className="mt-1 text-sm text-gray-500">
@@ -2382,7 +2066,7 @@ export default function TrackingPage() {
                     {breakdownList(detailMetrics.card_breakdown ?? [], 'Данных о карте пока нет.')}
                   </div>
                 </div>
-              </div> : null}
+              </div>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.03] p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
