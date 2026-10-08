@@ -77,6 +77,7 @@ async def create_ai_provider(
             key: value.model_dump(mode="json")
             for key, value in data.pricing.items()
         },
+        model_options_json={key: value.model_dump(exclude_none=True) for key, value in data.model_options.items()},
         created_by_user_id=current_user.id,
     )
     await db.commit()
@@ -95,7 +96,9 @@ async def update_ai_provider(
     current = await repo.get_connection(connection_id)
     if current is None:
         raise HTTPException(status_code=404, detail="AI provider connection not found")
-    values = data.model_dump(exclude_unset=True, exclude={"api_key", "clear_api_key", "pricing"})
+    values = data.model_dump(exclude_unset=True, exclude={"api_key", "clear_api_key", "pricing", "model_options"})
+    if data.model_options is not None:
+        values["model_options_json"] = {key: value.model_dump(exclude_none=True) for key, value in data.model_options.items()}
     if data.pricing is not None:
         values["pricing_json"] = {
             key: value.model_dump(mode="json")
@@ -373,6 +376,7 @@ def _provider_out(connection: AIProviderConnection) -> AIProviderConnectionOut:
         request_timeout_seconds=connection.request_timeout_seconds,
         supports_json_mode=connection.supports_json_mode,
         pricing=connection.pricing_json or {},
+        model_options=connection.model_options_json or {},
         has_api_key=bool(connection.encrypted_api_key),
         api_key_mask=mask,
         created_at=connection.created_at,
@@ -392,6 +396,7 @@ def _provider_snapshot(connection: AIProviderConnection) -> AIProviderSnapshot:
         request_timeout_seconds=connection.request_timeout_seconds,
         supports_json_mode=connection.supports_json_mode,
         pricing_json=dict(connection.pricing_json or {}),
+        model_options_json=dict(connection.model_options_json or {}),
     )
 
 

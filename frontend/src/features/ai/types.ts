@@ -1,5 +1,11 @@
 export type AIAPIStyle = 'openai_compatible' | 'gemini'
 
+export type AIModelOptions = {
+  token_parameter?: 'max_tokens' | 'max_completion_tokens' | null
+  supports_temperature?: boolean | null
+  supports_json_mode?: boolean | null
+}
+
 export type AIModelPricing = {
   input_usd_per_million: number | string
   output_usd_per_million: number | string
@@ -16,6 +22,7 @@ export type AIProviderConnection = {
   request_timeout_seconds: number
   supports_json_mode: boolean
   pricing: Record<string, AIModelPricing>
+  model_options: Record<string, AIModelOptions>
   has_api_key: boolean
   api_key_mask: string | null
   created_at: string
@@ -39,6 +46,7 @@ export type AIProviderConnectionInput = {
   request_timeout_seconds: number
   supports_json_mode: boolean
   pricing: Record<string, AIModelPricing>
+  model_options: Record<string, AIModelOptions>
 }
 
 export type AIProjectSettings = {
@@ -125,6 +133,8 @@ export type AIUsageConnectionSummary = {
 }
 
 export type AIUsageSummary = {
+  reserved_cost_usd: number | string
+  unsettled_requests: number
   date_from: string
   date_to: string
   requests: number

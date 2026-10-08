@@ -791,15 +791,18 @@ class FunnelRepository(BaseRepository[Funnel]):
         paused_at: datetime | None = None,
         paused_by_user_id: UUID | None = None,
     ) -> Optional[ChatFunnelState]:
+        values = dict(
+            is_paused=is_paused,
+            paused_at=paused_at if is_paused else None,
+            paused_by_user_id=paused_by_user_id if is_paused else None,
+            updated_at=func.now(),
+        )
+        if is_paused:
+            values["runtime_json"] = ChatFunnelState.runtime_json.op("-")("ai_execution")
         result = await self.db.execute(
             update(ChatFunnelState)
             .where(ChatFunnelState.chat_id == chat_id)
-            .values(
-                is_paused=is_paused,
-                paused_at=paused_at if is_paused else None,
-                paused_by_user_id=paused_by_user_id if is_paused else None,
-                updated_at=func.now(),
-            )
+            .values(**values)
         )
         if result.rowcount == 0:
             return None

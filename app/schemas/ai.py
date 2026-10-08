@@ -11,12 +11,19 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 AIAPIStyle = Literal["openai_compatible", "gemini"]
 
 
+class AIModelOptions(BaseModel):
+    token_parameter: Optional[Literal["max_tokens", "max_completion_tokens"]] = None
+    supports_temperature: Optional[bool] = None
+    supports_json_mode: Optional[bool] = None
+
+
 class AIModelPricing(BaseModel):
     input_usd_per_million: Decimal = Field(ge=0, max_digits=14, decimal_places=6)
     output_usd_per_million: Decimal = Field(ge=0, max_digits=14, decimal_places=6)
 
 
 class AIProviderConnectionCreate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     name: str = Field(min_length=1, max_length=120)
     provider: str = Field(min_length=1, max_length=50, pattern=r"^[a-z0-9_-]+$")
     api_style: AIAPIStyle = "openai_compatible"
@@ -27,6 +34,7 @@ class AIProviderConnectionCreate(BaseModel):
     request_timeout_seconds: int = Field(default=20, ge=1, le=120)
     supports_json_mode: bool = True
     pricing: dict[str, AIModelPricing] = Field(default_factory=dict)
+    model_options: dict[str, AIModelOptions] = Field(default_factory=dict, max_length=500)
 
     @field_validator("name", "api_key")
     @classmethod
@@ -48,8 +56,14 @@ class AIProviderConnectionCreate(BaseModel):
     def validate_pricing(cls, value: dict[str, AIModelPricing]) -> dict[str, AIModelPricing]:
         return _normalized_pricing(value)
 
+    @field_validator("model_options")
+    @classmethod
+    def validate_model_options(cls, value: dict[str, AIModelOptions]) -> dict[str, AIModelOptions]:
+        return _normalized_model_options(value)
+
 
 class AIProviderConnectionUpdate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     provider: Optional[str] = Field(
         default=None,
@@ -66,6 +80,7 @@ class AIProviderConnectionUpdate(BaseModel):
     request_timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
     supports_json_mode: Optional[bool] = None
     pricing: Optional[dict[str, AIModelPricing]] = None
+    model_options: Optional[dict[str, AIModelOptions]] = Field(default=None, max_length=500)
 
     @field_validator("name", "api_key")
     @classmethod
@@ -90,6 +105,11 @@ class AIProviderConnectionUpdate(BaseModel):
     ) -> Optional[dict[str, AIModelPricing]]:
         return _normalized_pricing(value) if value is not None else None
 
+    @field_validator("model_options")
+    @classmethod
+    def validate_model_options(cls, value: Optional[dict[str, AIModelOptions]]) -> Optional[dict[str, AIModelOptions]]:
+        return _normalized_model_options(value) if value is not None else None
+
     @model_validator(mode="after")
     def validate_api_key_action(self):
         if self.api_key is not None and self.clear_api_key:
@@ -98,6 +118,7 @@ class AIProviderConnectionUpdate(BaseModel):
 
 
 class AIProviderConnectionOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
     id: UUID
     name: str
     provider: str
@@ -108,6 +129,7 @@ class AIProviderConnectionOut(BaseModel):
     request_timeout_seconds: int
     supports_json_mode: bool
     pricing: dict[str, AIModelPricing]
+    model_options: dict[str, AIModelOptions] = Field(default_factory=dict)
     has_api_key: bool
     api_key_mask: Optional[str]
     created_at: datetime
@@ -244,6 +266,8 @@ class AIUsageSummaryOut(BaseModel):
     failed_requests: int
     total_tokens: int
     estimated_cost_usd: Decimal
+    reserved_cost_usd: Decimal = Decimal(0)
+    unsettled_requests: int = 0
     unknown_cost_requests: int
     average_latency_ms: int
     by_model: list[AIUsageModelSummary]
@@ -272,10 +296,18 @@ class AIResponsePayload(BaseModel):
 
 
 def _normalized_http_url(value: str) -> str:
-    normalized = value.strip().rstrip("/")
-    if not normalized.lower().startswith(("https://", "http://")):
-        raise ValueError("base_url must start with https:// or http://")
-    return normalized
+    from app.core.ai_provider_security import validate_provider_url
+    return validate_provider_url(value)
+
+
+def _normalized_model_options(value: dict[str, AIModelOptions]) -> dict[str, AIModelOptions]:
+    result: dict[str, AIModelOptions] = {}
+    for key, options in value.items():
+        name = key.strip()
+        if not name or len(name) > 255 or name in result:
+            raise ValueError("Model names must be unique and between 1 and 255 characters")
+        result[name] = options
+    return result
 
 
 def _optional_text(value: Optional[str]) -> Optional[str]:

@@ -35,6 +35,10 @@ Run `tests/test_funnel_disappearing_messages.py` against an isolated PostgreSQL
 using `CRM_TEST_POSTGRES_URL`. No Telegram responses are substituted.
 These tests cover configuration defaults, marker persistence, cross-chat and
 sender protection, reset/age guards, real missing-token refusal and history.
+The regression test also reproduces cycle-field expiration after the real chat
+timestamp update, checks fully expired chat objects, and runs with and without
+transaction release before Telegram. Lifecycle checks use explicit async SQL;
+cleanup never implicitly loads attributes from an expired chat object.
 
 Before release, use a test bot with a published three-screen funnel:
 photo + two inline branches -> different photo/text/buttons -> final text.

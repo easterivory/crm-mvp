@@ -5,13 +5,13 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import SenderType
-from app.models.ai import AIProjectSettings, AIProviderConnection
+from app.models.ai import AIBudgetReservation, AIProjectSettings, AIProviderConnection
 from app.models.funnel import FunnelStep
 from app.repositories.ai_repository import AIRepository
 from app.repositories.chat_repository import ChatRepository
@@ -29,6 +29,7 @@ from app.services.ai_gateway_service import (
     AIGatewayService,
     AIProviderSnapshot,
 )
+from app.services.ai_budget_service import AIBudgetService
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,16 @@ SENSITIVE_FIELD_PARTS = (
     "token",
     "authorization",
 )
+
+
+def ai_output_value_type(field_key: str | None, configured_type: str) -> str:
+    if field_key == "age":
+        return "number"
+    if field_key == "has_card":
+        return "boolean"
+    if field_key in {"name", "phone", "username", "country", "call_time_text", "preferred_call_time"}:
+        return "text"
+    return configured_type
 
 
 @dataclass(frozen=True)
@@ -91,6 +102,7 @@ class AIResponseExecutionService:
         *,
         chat_id: UUID,
         step: FunnelStep,
+        still_current: Callable[[], Awaitable[bool]] | None = None,
     ) -> AIResponseExecutionOutcome:
         config = dict(step.config_json or {})
         step_id = step.id
@@ -195,6 +207,9 @@ class AIResponseExecutionService:
                 settings=settings_snapshot,
             )
 
+        if still_current is not None and not await still_current():
+            return self._failed_outcome(code="stale_execution", message="AI step changed",
+                                        fallback_message="", fallback_route=fallback_route)
         primary = await self.ai_repo.get_connection(
             primary_connection_id,
             active_only=True,
@@ -236,6 +251,9 @@ class AIResponseExecutionService:
 
         fallback_connection_id = settings_snapshot.fallback_connection_id
         fallback_model = settings_snapshot.fallback_model
+        if still_current is not None and not await still_current():
+            return self._failed_outcome(code="stale_execution", message="AI step changed",
+                                        fallback_message="", fallback_route=fallback_route)
         if fallback_connection_id is not None and fallback_model:
             fallback = await self.ai_repo.get_connection(
                 fallback_connection_id,
@@ -349,6 +367,17 @@ class AIResponseExecutionService:
             await self.db.commit()
             return error, None
 
+        reservation = None
+        if budget_requires_pricing:
+            try:
+                reservation = await AIBudgetService(self.db).reserve(
+                    project_id, AIBudgetService.request_reserve(
+                        snapshot, model, system_prompt, messages, max_output_tokens,
+                    ),
+                )
+            except AIGatewayError as exc:
+                await self.db.commit()
+                return exc, None
         if self.db.in_transaction():
             await self.db.commit()
         result: AIGatewayResult | None = None
@@ -388,6 +417,7 @@ class AIResponseExecutionService:
                 step_id=step_id,
                 used_fallback=used_fallback,
                 error=exc,
+                reservation=reservation,
             )
             await self.db.commit()
             return exc, None
@@ -405,6 +435,13 @@ class AIResponseExecutionService:
                 code="provider_execution_error",
                 retriable=True,
             )
+            if result is not None:
+                error.latency_ms = result.latency_ms
+                error.prompt_tokens = result.prompt_tokens
+                error.completion_tokens = result.completion_tokens
+                error.total_tokens = result.total_tokens
+                error.estimated_cost_usd = result.estimated_cost_usd
+                error.provider_request_id = result.provider_request_id
             await self._write_failed_usage(
                 connection_id=connection_id,
                 provider=provider,
@@ -419,6 +456,7 @@ class AIResponseExecutionService:
                 step_id=step_id,
                 used_fallback=used_fallback,
                 error=error,
+                reservation=reservation,
             )
             await self.db.commit()
             return error, None
@@ -444,7 +482,10 @@ class AIResponseExecutionService:
             estimated_cost_usd=result.estimated_cost_usd,
             latency_ms=result.latency_ms,
             provider_request_id=result.provider_request_id,
+            **({"created_at": reservation.created_at} if reservation is not None else {}),
         )
+        if reservation is not None and result.estimated_cost_usd is not None:
+            reservation.settled = True
         await self.db.commit()
         return None, result
 
@@ -464,6 +505,7 @@ class AIResponseExecutionService:
         step_id: UUID,
         used_fallback: bool,
         error: AIGatewayError,
+        reservation: AIBudgetReservation | None = None,
     ) -> None:
         await self.ai_repo.create_usage_log(
             project_id=project_id,
@@ -487,7 +529,10 @@ class AIResponseExecutionService:
             provider_request_id=error.provider_request_id,
             error_code=error.code,
             error_message=str(error)[:1000],
+            **({"created_at": reservation.created_at} if reservation is not None else {}),
         )
+        if reservation is not None and error.estimated_cost_usd is not None:
+            reservation.settled = True
 
     async def _budget_error(
         self,
@@ -496,10 +541,7 @@ class AIResponseExecutionService:
         now = datetime.now(timezone.utc)
         if settings.daily_budget_usd is not None:
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            daily_total = await self.ai_repo.usage_cost_total(
-                project_id=settings.project_id,
-                created_from=day_start,
-            )
+            daily_total = await AIBudgetService(self.db).allocated(settings.project_id, day_start)
             if daily_total >= settings.daily_budget_usd:
                 return "Daily AI budget has been reached"
         if settings.monthly_budget_usd is not None:
@@ -510,10 +552,7 @@ class AIResponseExecutionService:
                 second=0,
                 microsecond=0,
             )
-            monthly_total = await self.ai_repo.usage_cost_total(
-                project_id=settings.project_id,
-                created_from=month_start,
-            )
+            monthly_total = await AIBudgetService(self.db).allocated(settings.project_id, month_start)
             if monthly_total >= settings.monthly_budget_usd:
                 return "Monthly AI budget has been reached"
         return None
@@ -650,7 +689,9 @@ class AIResponseExecutionService:
         missing = {
             key
             for key in required_keys
-            if response.extracted_data.get(key) in {None, ""}
+            if response.extracted_data.get(key) is None
+            or (isinstance(response.extracted_data.get(key), str)
+                and not response.extracted_data[key].strip())
         }
         if missing:
             raise AIGatewayError(
@@ -658,6 +699,32 @@ class AIResponseExecutionService:
                 code="required_extracted_data_missing",
                 retriable=True,
             )
+        for item in output_fields:
+            value = response.extracted_data.get(str(item["response_key"]))
+            if value is None:
+                continue
+            value_type = ai_output_value_type(item.get("lead_field_key"), item.get("value_type", "text"))
+            valid = False
+            if value_type == "number" and isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                try:
+                    number = Decimal(str(value).replace(",", "."))
+                    valid = number.is_finite() and abs(number) < Decimal("1e18")
+                    if item.get("lead_field_key") == "age":
+                        valid = valid and number == number.to_integral_value() and 0 <= number <= 120
+                except ArithmeticError:
+                    pass
+            elif value_type == "boolean":
+                valid = isinstance(value, bool) or (
+                    isinstance(value, str) and value.strip().lower() in
+                    {"true", "false", "yes", "no", "1", "0", "да", "нет"}
+                )
+            else:
+                limits = {"name": 255, "phone": 50, "username": 255, "country": 100,
+                          "call_time_text": 255, "preferred_call_time": 255}
+                valid = isinstance(value, str) and len(value) <= limits.get(item.get("lead_field_key"), 4096)
+            if not valid:
+                raise AIGatewayError("Model returned an invalid extracted field type or value",
+                                     code="invalid_extracted_data", retriable=True)
 
     @staticmethod
     def _route_options(config: dict[str, Any]) -> list[dict[str, str]]:
@@ -698,7 +765,7 @@ class AIResponseExecutionService:
                 {
                     "response_key": response_key,
                     "lead_field_key": lead_field_key,
-                    "value_type": str(item.get("value_type") or "text"),
+                    "value_type": ai_output_value_type(lead_field_key, str(item.get("value_type") or "text")),
                     "required": item.get("required") is True,
                 }
             )
@@ -744,6 +811,7 @@ class AIResponseExecutionService:
             request_timeout_seconds=connection.request_timeout_seconds,
             supports_json_mode=connection.supports_json_mode,
             pricing_json=dict(connection.pricing_json or {}),
+            model_options_json=dict(getattr(connection, "model_options_json", None) or {}),
         )
 
     def _success_outcome(
@@ -756,7 +824,9 @@ class AIResponseExecutionService:
     ) -> AIResponseExecutionOutcome:
         messages = list(response.messages)
         if config.get("split_messages") is False:
-            messages = ["\n\n".join(messages)]
+            messages = self._telegram_chunks("\n\n".join(messages))
+        else:
+            messages = [chunk for message in messages for chunk in self._telegram_chunks(message)]
         min_delay_ms = self._bounded_int(
             config.get("min_delay_ms"),
             settings.min_delay_ms,
@@ -790,6 +860,22 @@ class AIResponseExecutionService:
             max_delay_ms=max_delay_ms,
         )
 
+    @staticmethod
+    def _telegram_chunks(text: str) -> list[str]:
+        chunks: list[str] = []
+        current: list[str] = []
+        units = 0
+        for character in text:
+            size = 2 if ord(character) > 0xFFFF else 1
+            if units + size > 4096:
+                chunks.append("".join(current))
+                current, units = [], 0
+            current.append(character)
+            units += size
+        if current:
+            chunks.append("".join(current))
+        return chunks
+
     def _failed_outcome(
         self,
         *,
@@ -801,7 +887,7 @@ class AIResponseExecutionService:
     ) -> AIResponseExecutionOutcome:
         return AIResponseExecutionOutcome(
             success=False,
-            messages=[fallback_message] if fallback_message else [],
+            messages=self._telegram_chunks(fallback_message) if fallback_message else [],
             extracted_data={},
             route_key=fallback_route,
             used_fallback=False,
@@ -847,7 +933,7 @@ class AIResponseExecutionService:
 
     @staticmethod
     def _uuid_or_none(value: Any) -> UUID | None:
-        if value in {None, ""}:
+        if value is None or value == "":
             return None
         try:
             return value if isinstance(value, UUID) else UUID(str(value))

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 
-from app.models.ai import AIProjectSettings, AIProviderConnection, AIUsageLog
+from app.models.ai import AIBudgetReservation, AIProjectSettings, AIProviderConnection, AIUsageLog
 from app.repositories.base import BaseRepository
 
 
@@ -253,7 +253,17 @@ class AIRepository:
             )
             .order_by(func.count(AIUsageLog.id).desc())
         )
+        reservations = (await self.db.execute(
+            select(func.count(AIBudgetReservation.id),
+                   func.coalesce(func.sum(AIBudgetReservation.amount_usd), 0))
+            .where(AIBudgetReservation.project_id == project_id,
+                   AIBudgetReservation.created_at >= date_from,
+                   AIBudgetReservation.created_at < date_to,
+                   AIBudgetReservation.settled.is_(False))
+        )).one()
         return {
+            "unsettled_requests": int(reservations[0]),
+            "reserved_cost_usd": Decimal(reservations[1]),
             "requests": int(row[0] or 0),
             "successful_requests": int(row[1] or 0),
             "failed_requests": int(row[2] or 0),

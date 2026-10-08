@@ -93,6 +93,9 @@ class AIProviderConnection(
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    model_options_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"),
+    )
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -303,3 +306,17 @@ class AIUsageLog(Base, UUIDPrimaryKey, TimestampMixin):
     connection: Mapped[Optional[AIProviderConnection]] = relationship(
         "AIProviderConnection"
     )
+
+
+class AIBudgetReservation(Base, UUIDPrimaryKey, TimestampMixin):
+    """Unsettled or uncertain billable requests remain charged against budgets."""
+    __tablename__ = "ai_budget_reservations"
+    __table_args__ = (
+        Index("ix_ai_budget_reservations_project_created", "project_id", "created_at"),
+        CheckConstraint("amount_usd >= 0", name="ck_ai_budget_reservations_amount"),
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False,
+    )
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    settled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

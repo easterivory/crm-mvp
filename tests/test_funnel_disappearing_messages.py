@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.constants import SenderType
@@ -15,6 +15,7 @@ from app.models.chat import Chat
 from app.models.funnel import Funnel, FunnelVersion, FunnelStep
 from app.models.message import Message
 from app.models.project import Project
+from app.repositories.chat_repository import ChatRepository
 from app.repositories.funnel_repository import FunnelRepository
 from app.repositories.message_repository import MessageRepository
 from app.services.funnel_disappearing_message_service import FunnelDisappearingMessageService, MARKER
@@ -34,7 +35,8 @@ def test_legacy_and_sequence_config_are_opt_in():
 
 
 @pytest.mark.skipif(not os.getenv("CRM_TEST_POSTGRES_URL"), reason="Disposable PostgreSQL required")
-def test_real_database_screen_lifecycle_and_history():
+@pytest.mark.parametrize("release_before_network", [False, True])
+def test_real_database_screen_lifecycle_and_history(release_before_network):
     async def run():
         url = os.environ["CRM_TEST_POSTGRES_URL"]
         schema = "screens_" + uuid4().hex
@@ -82,7 +84,9 @@ def test_real_database_screen_lifecycle_and_history():
                     external_message_id="5", body="Reply", created_at=now)
                 db.add_all([first, second, expired, user, manager])
                 await db.flush()
-                service = FunnelDisappearingMessageService(db, TelegramSenderService(db))
+                service = FunnelDisappearingMessageService(db, TelegramSenderService(
+                    db, release_transaction_before_network=release_before_network,
+                ))
                 await service.after_delivery(chat=chat, message=first)
                 assert MARKER not in state.runtime_json  # old funnels do not acquire a marker
                 await service.after_delivery(chat=chat, message=first, disappear_after_next=True)
@@ -92,10 +96,20 @@ def test_real_database_screen_lifecycle_and_history():
                 for marker in (None, "broken", str(uuid4()), str(expired.id), str(user.id), str(manager.id)):
                     assert await service.candidate(chat, marker, now=now) is None
                 assert await service.candidate(foreign, str(first.id), now=now) is None
+                # Reproduce the production path: saving the replacement expires
+                # the cycle column because update_timestamps uses a SQL CASE.
+                chat_id = chat.id
+                await ChatRepository(db).update_timestamps(chat_id, SenderType.BOT, now)
+                assert "current_cycle_started_at" in inspect(chat).expired_attributes
+                assert (await service.candidate(chat, str(first.id), now=now)).id == first.id
+                # The service must also tolerate an expired destination object.
+                db.expire(chat)
+                assert (await service.candidate(chat, str(first.id), now=now)).id == first.id
                 # No bot token is configured: exercise the real sender's refusal path.
                 await service.after_delivery(chat=chat, message=second, disappear_after_next=True)
                 assert first.deleted_at is None
                 assert state.runtime_json[MARKER] == str(second.id)
+                await db.refresh(chat)
                 chat.current_cycle_started_at = now + timedelta(seconds=1)
                 assert await service.candidate(chat, str(second.id), now=now) is None
                 await service.after_delivery(chat=chat, message=second)

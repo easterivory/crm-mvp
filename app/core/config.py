@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Provider credentials are encrypted at rest. Set a dedicated value in
     # production; SECRET_KEY remains a compatible fallback for existing installs.
     AI_CREDENTIAL_ENCRYPTION_KEY: Optional[str] = None
+    # Explicit origins for self-hosted providers, e.g. http://ollama:11434.
+    AI_TRUSTED_PROVIDER_ORIGINS: str = ""
     # MTProto sessions and API hashes are encrypted separately from bot tokens.
     # SECRET_KEY remains a backwards-compatible fallback for installations that
     # have not provisioned the dedicated key yet.

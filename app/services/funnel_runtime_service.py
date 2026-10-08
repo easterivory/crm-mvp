@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from html import escape
@@ -37,7 +38,13 @@ from app.repositories.tracking_repository import TrackingLinkRepository
 from app.schemas.message import MessageCreate
 from app.services.chat_audit_service import ChatAuditService
 from app.services.audit_service import AuditService
-from app.services.ai_response_execution_service import AIResponseExecutionService
+from app.services.ai_response_execution_service import (
+    AIResponseExecutionService,
+    AIResponseExecutionOutcome,
+    ai_output_value_type,
+)
+from app.services.ai_delivery_state_service import AIDeliveryStateService
+from app.services.operational_alert_service import send_operational_alert
 from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.facebook_campaign_service import FacebookCampaignService
@@ -1276,6 +1283,13 @@ class FunnelRuntimeService:
             logger.warning("Scheduled funnel job references missing step job_id=%s", job.id)
             return
 
+        if job.job_type in {"ai_response", "ai_response_delivery"}:
+            expected_visit = (job.payload_json or {}).get("ai_visit")
+            if ((job.funnel_state_id is not None and state.id != job.funnel_state_id)
+                or (expected_visit is not None and expected_visit != AIDeliveryStateService.visit(state))):
+                logger.info("Ignoring stale AI visit job_id=%s chat_id=%s", job.id, job.chat_id)
+                return
+
         if job.job_type == "message_auto_advance":
             marker = (state.runtime_json or {}).get("message_auto_advance")
             if (
@@ -1326,6 +1340,7 @@ class FunnelRuntimeService:
             await self._execute_ai_response_job(
                 chat_id=job.chat_id,
                 step=step,
+                job_id=job.id,
             )
             return
 
@@ -1359,6 +1374,7 @@ class FunnelRuntimeService:
                     minimum=0,
                     maximum=30000,
                 ),
+                execution_id=payload.get("execution_id"),
             )
             return
 
@@ -1847,6 +1863,8 @@ class FunnelRuntimeService:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None:
             return None
+        if job_type == "ai_response":
+            payload_json = {**payload_json, "ai_visit": AIDeliveryStateService.visit(state)}
         await self.repo.cancel_scheduled_jobs_for_chat(
             chat_id=chat_id,
             job_type=job_type,
@@ -1921,12 +1939,14 @@ class FunnelRuntimeService:
         mime_type: Optional[str] = None,
         parse_mode: str | None = None,
         disappear_after_next: bool = False,
+        render_template: bool = True,
     ) -> None:
         chat = await self.chat_repo.get_by_id(chat_id)
         if chat is None:
             return
         normalized_type = self._normalize_message_type(message_type)
-        message_text = (await self._render_text_template(chat_id, text, html=parse_mode == "HTML")).strip()
+        message_text = ((await self._render_text_template(chat_id, text, html=parse_mode == "HTML"))
+                        if render_template else text).strip()
         if broadcast_upload_id is not None and normalized_type != MessageType.TEXT:
             if chat.bot_id is None:
                 raise RuntimeError("Chat bot is not configured for funnel media send")
@@ -2888,12 +2908,50 @@ class FunnelRuntimeService:
         *,
         chat_id: UUID,
         step: FunnelStep,
+        job_id: UUID | None = None,
     ) -> None:
         step_id = step.id
+        delivery = AIDeliveryStateService(self.db)
+        started = await delivery.begin(chat_id, step, job_id)
+        if started is None:
+            return
+        execution_id, marker = started
+        if marker.get("outcome"):
+            outcome = AIResponseExecutionOutcome(**marker["outcome"])
+            await self._deliver_ai_response_and_continue(
+                chat_id=chat_id, step=step, messages=outcome.messages,
+                route_key=outcome.route_key, start_index=int(marker.get("next_index", 0)),
+                typing_delay_per_char_ms=outcome.typing_delay_per_char_ms,
+                min_delay_ms=outcome.min_delay_ms, max_delay_ms=outcome.max_delay_ms,
+                execution_id=execution_id,
+            )
+            return
+        # begin() persists a new marker; a previous generating marker means the
+        # worker died with unknown provider billing. Never issue a blind second call.
+        if marker.get("generation_started"):
+            await self._pause_uncertain_ai(chat_id, step_id, execution_id, "generation interrupted")
+            return
+        state = await delivery.current(chat_id, step_id, execution_id)
+        if state is None:
+            return
+        marker["generation_started"] = True
+        delivery.write(state, marker)
+        await self.db.commit()
+
+        async def still_current() -> bool:
+            active = await delivery.current(chat_id, step_id, execution_id)
+            await self.db.commit()
+            return active is not None
+
         outcome = await AIResponseExecutionService(self.db).execute(
             chat_id=chat_id,
             step=step,
+            still_current=still_current,
         )
+        if not await delivery.save_outcome(chat_id, step_id, execution_id, outcome):
+            logger.info("Discarded stale AI result chat_id=%s step_id=%s execution_id=%s",
+                        chat_id, step_id, execution_id)
+            return
         refreshed_step = await self.repo.get_step(step_id)
         if refreshed_step is None:
             logger.warning(
@@ -2946,6 +3004,30 @@ class FunnelRuntimeService:
             typing_delay_per_char_ms=outcome.typing_delay_per_char_ms,
             min_delay_ms=outcome.min_delay_ms,
             max_delay_ms=outcome.max_delay_ms,
+            execution_id=execution_id,
+        )
+
+    async def _pause_uncertain_ai(self, chat_id: UUID, step_id: UUID,
+                                  execution_id: str, reason: str) -> None:
+        delivery = AIDeliveryStateService(self.db)
+        state = await delivery.current(chat_id, step_id, execution_id)
+        if state is None:
+            return
+        marker = dict(state.runtime_json["ai_execution"])
+        marker.update(status="uncertain", error=reason)
+        delivery.write(state, marker)
+        state.is_paused = True
+        state.paused_at = datetime.now(timezone.utc)
+        step = await self.repo.get_step(step_id)
+        if step is not None:
+            await self._log_runtime_step(chat_id=chat_id, step=step, status="failed",
+                                         error_message=f"ai_delivery_uncertain: {reason}")
+        await self.db.commit()
+        await send_operational_alert(
+            component="ai_funnel", title="AI step paused: delivery or billing requires review",
+            details={"chat_id": str(chat_id), "step_id": str(step_id),
+                     "execution_id": execution_id, "reason": reason},
+            dedupe_key=f"ai-uncertain:{execution_id}",
         )
 
     async def _deliver_ai_response_and_continue(
@@ -2959,8 +3041,38 @@ class FunnelRuntimeService:
         typing_delay_per_char_ms: int,
         min_delay_ms: int,
         max_delay_ms: int,
+        execution_id: str | None = None,
     ) -> None:
         step_id = step.id
+        delivery = AIDeliveryStateService(self.db)
+        state = await delivery.current(chat_id, step_id, execution_id)
+        if state is None:
+            return
+        if execution_id is None:
+            # Adopt delivery jobs queued before the safety update without regenerating.
+            legacy_key = sha256(json.dumps([messages, route_key], ensure_ascii=True).encode()).hexdigest()
+            previous = dict((state.runtime_json or {}).get("ai_execution") or {})
+            same_visit = (previous.get("step_id") == str(step_id)
+                          and previous.get("visit") == delivery.visit(state)
+                          and previous.get("state_id") == str(state.id))
+            if same_visit:
+                if previous.get("legacy_delivery_key") != legacy_key:
+                    return
+                execution_id = str(previous["id"])
+            else:
+                execution_id = str(uuid4())
+                delivery.write(state, {
+                    "id": execution_id, "state_id": str(state.id), "step_id": str(step_id),
+                    "version_id": str(state.funnel_version_id), "visit": delivery.visit(state),
+                    "status": "ready", "next_index": start_index, "inflight_index": None,
+                    "legacy_delivery_key": legacy_key,
+                })
+                await self.db.commit()
+        marker = dict(state.runtime_json["ai_execution"])
+        if marker.get("inflight_index") is not None:
+            await self._pause_uncertain_ai(chat_id, step_id, execution_id, "message acknowledgement missing")
+            return
+        start_index = max(start_index, int(marker.get("next_index", 0)))
         chat = await self.chat_repo.get_by_id(chat_id)
         if chat is None:
             return
@@ -2975,6 +3087,8 @@ class FunnelRuntimeService:
         effective_max_delay = max(max_delay_ms, min_delay_ms)
 
         for index in range(max(start_index, 0), len(normalized_messages)):
+            if await delivery.current(chat_id, step_id, execution_id) is None:
+                return
             message = normalized_messages[index]
             delay_ms = min(
                 max(
@@ -2993,18 +3107,39 @@ class FunnelRuntimeService:
                     action="typing",
                 )
                 await asyncio.sleep(delay_ms / 1000)
+            state = await delivery.current(chat_id, step_id, execution_id)
+            if state is None:
+                return
+            marker = dict(state.runtime_json["ai_execution"])
+            marker.update(status="delivering", inflight_index=index)
+            delivery.write(state, marker)
+            await self.db.commit()
             try:
                 await self._create_outgoing_message(
                     chat_id=chat_id,
                     text=message,
                     reply_markup=None,
+                    render_template=False,
                 )
             except TelegramDeliveryError as exc:
+                # Timeouts/5xx can mean Telegram accepted the message. Retrying
+                # would duplicate it; an explicit rejection (e.g. 429) is safe.
+                await self.db.rollback()
+                if exc.status_code is None or exc.status_code >= 500:
+                    await self._pause_uncertain_ai(chat_id, step_id, execution_id, "Telegram delivery ambiguous")
+                    return
+                state = await delivery.current(chat_id, step_id, execution_id)
+                if state is not None:
+                    marker = dict(state.runtime_json["ai_execution"])
+                    marker.update(status="ready", inflight_index=None)
+                    delivery.write(state, marker)
+                    await self.db.commit()
                 raise FunnelRuntimeDeliveryError(
                     exc,
                     retry_step_id=step_id,
                     retry_job_type="ai_response_delivery",
                     retry_payload={
+                        "execution_id": execution_id,
                         "messages": normalized_messages,
                         "message_index": index,
                         "route_key": route_key,
@@ -3013,9 +3148,18 @@ class FunnelRuntimeService:
                         "max_delay_ms": max_delay_ms,
                     },
                 ) from exc
-            if self.release_transaction_before_external_io and self.db.in_transaction():
+            state = await delivery.current(chat_id, step_id, execution_id)
+            if state is None:
                 await self.db.commit()
+                return
+            marker = dict(state.runtime_json["ai_execution"])
+            marker.update(status="ready", next_index=index + 1, inflight_index=None)
+            delivery.write(state, marker)
+            await self.db.commit()
 
+        state = await delivery.current(chat_id, step_id, execution_id)
+        if state is None:
+            return
         refreshed_step = await self.repo.get_step(step_id)
         if refreshed_step is None:
             return
@@ -3089,6 +3233,7 @@ class FunnelRuntimeService:
     ) -> Any:
         if value is None:
             return None
+        value_type = ai_output_value_type(field_key, value_type)
         if field_key == "phone":
             return self._normalize_phone(str(value))
         if value_type == "number":

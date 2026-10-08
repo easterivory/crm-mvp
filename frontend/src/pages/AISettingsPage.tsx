@@ -45,6 +45,14 @@ type PricingRow = {
   output: string
 }
 
+type ModelOptionRow = {
+  id: string
+  model: string
+  tokenParameter: 'auto' | 'max_tokens' | 'max_completion_tokens'
+  temperature: 'auto' | 'yes' | 'no'
+  jsonMode: 'auto' | 'yes' | 'no'
+}
+
 type ProviderDraft = {
   id: string | null
   preset: string
@@ -59,6 +67,7 @@ type ProviderDraft = {
   timeout: string
   supportsJsonMode: boolean
   pricingRows: PricingRow[]
+  modelOptionRows: ModelOptionRow[]
 }
 
 const providerPresets = [
@@ -136,6 +145,7 @@ function emptyProviderDraft(): ProviderDraft {
     timeout: '20',
     supportsJsonMode: true,
     pricingRows: [],
+    modelOptionRows: [],
   }
 }
 
@@ -158,6 +168,12 @@ function providerDraftFromConnection(connection: AIProviderConnection): Provider
     isActive: connection.is_active,
     timeout: String(connection.request_timeout_seconds),
     supportsJsonMode: connection.supports_json_mode,
+    modelOptionRows: Object.entries(connection.model_options ?? {}).map(([model, options]) => ({
+      id: crypto.randomUUID(), model,
+      tokenParameter: options.token_parameter ?? 'auto',
+      temperature: options.supports_temperature == null ? 'auto' : options.supports_temperature ? 'yes' : 'no',
+      jsonMode: options.supports_json_mode == null ? 'auto' : options.supports_json_mode ? 'yes' : 'no',
+    })),
     pricingRows: Object.entries(connection.pricing).map(([model, pricing]) => ({
       id: crypto.randomUUID(),
       model,
@@ -417,6 +433,19 @@ export default function AISettingsPage() {
         output_usd_per_million: outputPrice,
       }
     }
+    const modelOptions: AIProviderConnectionInput['model_options'] = {}
+    for (const row of providerDraft.modelOptionRows) {
+      const model = row.model.trim()
+      if (!model || modelOptions[model]) {
+        setError('Укажите уникальное название модели в параметрах совместимости.')
+        return
+      }
+      modelOptions[model] = {
+        token_parameter: row.tokenParameter === 'auto' ? null : row.tokenParameter,
+        supports_temperature: row.temperature === 'auto' ? null : row.temperature === 'yes',
+        supports_json_mode: row.jsonMode === 'auto' ? null : row.jsonMode === 'yes',
+      }
+    }
     const payload: AIProviderConnectionInput = {
       name: providerDraft.name.trim(),
       provider: providerDraft.provider.trim().toLowerCase(),
@@ -427,6 +456,7 @@ export default function AISettingsPage() {
       request_timeout_seconds: timeout,
       supports_json_mode: providerDraft.supportsJsonMode,
       pricing,
+      model_options: modelOptions,
     }
     if (providerDraft.apiKey.trim()) {
       payload.api_key = providerDraft.apiKey.trim()
@@ -856,7 +886,12 @@ export default function AISettingsPage() {
                   </div>
                   {usageSummary.unknown_cost_requests > 0 ? (
                     <div className="border-t border-amber-300/15 bg-amber-300/[0.06] px-4 py-3 text-sm text-amber-100">
-                      Для {usageSummary.unknown_cost_requests} вызовов цена модели не настроена, поэтому итоговый расход неполный.
+                      Для {usageSummary.unknown_cost_requests} вызовов нет подтверждённой стоимости. Итоговый расход неполный.
+                    </div>
+                  ) : null}
+                  {usageSummary.unsettled_requests > 0 ? (
+                    <div className="border-t border-amber-300/15 px-4 py-3 text-sm text-amber-100">
+                      Резерв бюджета: {money(usageSummary.reserved_cost_usd, 6)} · Запросов без подтверждённого расхода: {usageSummary.unsettled_requests}
                     </div>
                   ) : null}
                   {(usageSummary.by_connection ?? []).length > 0 ? (
@@ -1271,6 +1306,47 @@ function ProviderEditor({
           {draft.pricingRows.length === 0 ? (
             <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-gray-500">Цены не заданы.</p>
           ) : null}
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-white/10 pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="text-sm font-semibold text-white">Совместимость моделей</h4>
+          <button type="button" title="Добавить параметры модели"
+            onClick={() => onChange({ ...draft, modelOptionRows: [...draft.modelOptionRows,
+              { id: crypto.randomUUID(), model: '', tokenParameter: 'auto', temperature: 'auto', jsonMode: 'auto' }] })}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-gray-200">
+            <Plus size={15} />
+          </button>
+        </div>
+        <div className="mt-3 space-y-3">
+          {draft.modelOptionRows.map((row) => {
+            const change = (patch: Partial<ModelOptionRow>) => onChange({ ...draft,
+              modelOptionRows: draft.modelOptionRows.map((item) => item.id === row.id ? { ...item, ...patch } : item) })
+            return <div key={row.id} className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_40px]">
+              <label className="min-w-0 text-xs text-gray-400">Модель
+                <input value={row.model} onChange={(event) => change({ model: event.target.value })} className={fieldClass} />
+              </label>
+              <label className="min-w-0 text-xs text-gray-400">Лимит токенов
+                <select value={row.tokenParameter} onChange={(event) => change({ tokenParameter: event.target.value as ModelOptionRow['tokenParameter'] })} className={fieldClass}>
+                  <option value="auto">Авто</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option>
+                </select>
+              </label>
+              <label className="min-w-0 text-xs text-gray-400">Temperature
+                <select value={row.temperature} onChange={(event) => change({ temperature: event.target.value as ModelOptionRow['temperature'] })} className={fieldClass}>
+                  <option value="auto">Авто</option><option value="yes">Да</option><option value="no">Нет</option>
+                </select>
+              </label>
+              <label className="min-w-0 text-xs text-gray-400">JSON mode
+                <select value={row.jsonMode} onChange={(event) => change({ jsonMode: event.target.value as ModelOptionRow['jsonMode'] })} className={fieldClass}>
+                  <option value="auto">Авто</option><option value="yes">Да</option><option value="no">Нет</option>
+                </select>
+              </label>
+              <button type="button" title="Удалить параметры модели"
+                onClick={() => onChange({ ...draft, modelOptionRows: draft.modelOptionRows.filter((item) => item.id !== row.id) })}
+                className="inline-flex h-11 w-10 self-end items-center justify-center rounded-lg border border-red-300/15 text-red-200"><Trash2 size={14} /></button>
+            </div>
+          })}
         </div>
       </div>
 

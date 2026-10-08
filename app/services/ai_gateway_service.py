@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Sequence
 from urllib.parse import quote
@@ -13,6 +13,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.schemas.ai import AIResponsePayload
+from app.core.ai_provider_security import provider_request
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class AIProviderSnapshot:
     request_timeout_seconds: int
     supports_json_mode: bool
     pricing_json: dict[str, Any]
+    model_options_json: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,21 @@ class AIGatewayResult:
 
 class AIGatewayService:
     """Protocol adapter for current and future model catalogues."""
+
+    @staticmethod
+    def model_options(connection: AIProviderSnapshot, model: str) -> dict[str, Any]:
+        reasoning = connection.provider == "openai" and bool(
+            re.match(r"^(?:o[134](?:-|$)|gpt-5(?:[.-]|$))", model)
+        )
+        options = {
+            "token_parameter": "max_completion_tokens" if reasoning else "max_tokens",
+            "supports_temperature": not reasoning,
+            "supports_json_mode": connection.supports_json_mode,
+        }
+        overrides = connection.model_options_json.get(model, {})
+        if isinstance(overrides, dict):
+            options.update({key: value for key, value in overrides.items() if value is not None})
+        return options
 
     async def execute(
         self,
@@ -105,7 +122,15 @@ class AIGatewayService:
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
                 )
-                content, usage = self._gemini_content_and_usage(payload)
+                raw_usage = payload.get("usageMetadata") or {}
+                if not isinstance(raw_usage, dict):
+                    raw_usage = {}
+                output_count = self._optional_int(raw_usage.get("candidatesTokenCount"))
+                thought_count = self._optional_int(raw_usage.get("thoughtsTokenCount"))
+                usage = {"prompt_tokens": raw_usage.get("promptTokenCount"),
+                         "completion_tokens": ((output_count or 0) + (thought_count or 0)
+                                               if output_count is not None else None),
+                         "total_tokens": raw_usage.get("totalTokenCount")}
             else:
                 payload, request_id = await self._call_openai_compatible(
                     connection=connection,
@@ -115,7 +140,9 @@ class AIGatewayService:
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
                 )
-                content, usage = self._openai_content_and_usage(payload)
+                usage = payload.get("usage") or {}
+                if not isinstance(usage, dict):
+                    usage = {}
         except AIGatewayError as exc:
             if exc.latency_ms is None:
                 exc.latency_ms = int((time.monotonic() - started_at) * 1000)
@@ -140,6 +167,8 @@ class AIGatewayService:
             completion_tokens=completion_tokens,
         )
         try:
+            content, _ = (self._gemini_content_and_usage(payload) if connection.api_style == "gemini"
+                          else self._openai_content_and_usage(payload))
             response = self._parse_response(content)
         except AIGatewayError as exc:
             exc.latency_ms = latency_ms
@@ -163,21 +192,15 @@ class AIGatewayService:
         self,
         connection: AIProviderSnapshot,
     ) -> list[str]:
-        timeout = httpx.Timeout(float(connection.request_timeout_seconds))
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                if connection.api_style == "gemini":
-                    response = await client.get(
-                        f"{connection.base_url.rstrip('/')}/models",
-                        params={"key": connection.api_key},
-                    )
-                else:
-                    response = await client.get(
-                        f"{connection.base_url.rstrip('/')}/models",
-                        headers=self._bearer_headers(connection.api_key),
-                    )
-                self._raise_for_provider_status(response)
-                payload = response.json()
+            response = await provider_request(
+                "GET", f"{connection.base_url.rstrip('/')}/models",
+                timeout=float(connection.request_timeout_seconds),
+                headers=({"x-goog-api-key": connection.api_key} if connection.api_style == "gemini"
+                         else self._bearer_headers(connection.api_key)),
+            )
+            self._raise_for_provider_status(response)
+            payload = response.json()
         except AIGatewayError:
             raise
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -232,23 +255,22 @@ class AIGatewayService:
                     for item in messages
                 ],
             ],
-            "temperature": temperature,
-            "max_tokens": max_output_tokens,
         }
-        if connection.supports_json_mode:
+        options = self.model_options(connection, model)
+        payload[options["token_parameter"]] = max_output_tokens
+        if options["supports_temperature"]:
+            payload["temperature"] = temperature
+        if options["supports_json_mode"]:
             payload["response_format"] = {"type": "json_object"}
 
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(float(connection.request_timeout_seconds))
-            ) as client:
-                response = await client.post(
-                    f"{connection.base_url.rstrip('/')}/chat/completions",
-                    headers=self._bearer_headers(connection.api_key),
-                    json=payload,
-                )
-                self._raise_for_provider_status(response)
-                return response.json(), response.headers.get("x-request-id")
+            response = await provider_request(
+                "POST", f"{connection.base_url.rstrip('/')}/chat/completions",
+                timeout=float(connection.request_timeout_seconds),
+                headers=self._bearer_headers(connection.api_key), json=payload,
+            )
+            self._raise_for_provider_status(response)
+            return response.json(), response.headers.get("x-request-id")
         except AIGatewayError:
             raise
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -283,10 +305,12 @@ class AIGatewayService:
             if str(item.get("content") or "").strip()
         ]
         generation_config: dict[str, Any] = {
-            "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
         }
-        if connection.supports_json_mode:
+        options = self.model_options(connection, model)
+        if options["supports_temperature"]:
+            generation_config["temperature"] = temperature
+        if options["supports_json_mode"]:
             generation_config["responseMimeType"] = "application/json"
         payload: dict[str, Any] = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -294,19 +318,14 @@ class AIGatewayService:
             "generationConfig": generation_config,
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(float(connection.request_timeout_seconds))
-            ) as client:
-                response = await client.post(
-                    (
-                        f"{connection.base_url.rstrip('/')}/models/"
-                        f"{quote(normalized_model, safe='-._/')}:generateContent"
-                    ),
-                    params={"key": connection.api_key},
-                    json=payload,
-                )
-                self._raise_for_provider_status(response)
-                return response.json(), response.headers.get("x-request-id")
+            response = await provider_request(
+                "POST", f"{connection.base_url.rstrip('/')}/models/"
+                f"{quote(normalized_model, safe='-._')}:generateContent",
+                timeout=float(connection.request_timeout_seconds),
+                headers={"x-goog-api-key": connection.api_key}, json=payload,
+            )
+            self._raise_for_provider_status(response)
+            return response.json(), response.headers.get("x-request-id")
         except AIGatewayError:
             raise
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -414,6 +433,10 @@ class AIGatewayService:
             output_rate = Decimal(str(pricing.get("output_usd_per_million") or 0))
         except Exception:
             return None
+        if not all(rate.is_finite() and rate >= 0 for rate in (input_rate, output_rate)):
+            return None
+        if (input_rate > 0 and prompt_tokens is None) or (output_rate > 0 and completion_tokens is None):
+            return None
         million = Decimal("1000000")
         return (
             Decimal(prompt_tokens or 0) * input_rate
@@ -436,8 +459,9 @@ class AIGatewayService:
     @staticmethod
     def _optional_int(value: Any) -> int | None:
         try:
-            return int(value) if value is not None else None
-        except (TypeError, ValueError):
+            parsed = int(value) if value is not None and not isinstance(value, bool) else None
+            return parsed if parsed is not None and 0 <= parsed <= 2_147_483_647 else None
+        except (TypeError, ValueError, OverflowError):
             return None
 
     @staticmethod
@@ -453,17 +477,8 @@ class AIGatewayService:
         elif status_code == 400:
             code = "provider_request_rejected"
         message = f"Provider returned HTTP {status_code}"
-        try:
-            payload = response.json()
-            raw_error = payload.get("error") if isinstance(payload, dict) else None
-            if isinstance(raw_error, dict):
-                safe_message = str(raw_error.get("message") or "").strip()
-            else:
-                safe_message = str(raw_error or "").strip()
-            if safe_message:
-                message = f"{message}: {safe_message[:500]}"
-        except ValueError:
-            pass
+        # Provider error bodies can echo credentials and customer prompts.
+        # Persist only protocol diagnostics; request IDs are recorded separately.
         raise AIGatewayError(
             message,
             code=code,
