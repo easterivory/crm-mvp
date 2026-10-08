@@ -1,21 +1,26 @@
 """Pure validation and real PostgreSQL tests; no provider or database mocks."""
 import asyncio
+import gzip
 import importlib.util
 import json
 import os
+import zlib
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.ai_provider_security import validate_provider_url, provider_request
+from app.core.ai_provider_security import (
+    _buffered_decoded_response, validate_provider_url, provider_request,
+)
 from app.core.config import settings
 from app.models import Base, Bot, Chat, Funnel, FunnelStep, FunnelVersion, Project
 from app.models.ai import (
@@ -58,6 +63,28 @@ def snapshot(**changes):
             **changes,
         }
     )
+
+
+@pytest.mark.parametrize("encoding", [None, "gzip", "deflate"])
+def test_buffered_provider_response_does_not_decode_compression_twice(encoding):
+    body = json.dumps({"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}).encode()
+    wire_body = gzip.compress(body) if encoding == "gzip" else (
+        zlib.compress(body) if encoding == "deflate" else body
+    )
+    headers = {"content-type": "application/json", "x-request-id": "request-1"}
+    if encoding:
+        headers["content-encoding"] = encoding
+    response = httpx.Response(
+        200, headers=headers, content=wire_body,
+        request=httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/test:generateContent"),
+    )
+    buffered = _buffered_decoded_response(response, response.content)
+    assert buffered.json() == json.loads(body)
+    assert buffered.content == body
+    assert buffered.headers["content-length"] == str(len(body))
+    assert "content-encoding" not in buffered.headers
+    assert buffered.headers["x-request-id"] == "request-1"
+    assert buffered.request == response.request
 
 
 @pytest.mark.parametrize(

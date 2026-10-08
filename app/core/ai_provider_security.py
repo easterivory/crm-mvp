@@ -63,6 +63,17 @@ async def provider_request(
         raise httpx.ReadTimeout("AI provider request exceeded its deadline") from exc
 
 
+def _buffered_decoded_response(response: httpx.Response, body: bytes) -> httpx.Response:
+    # aiter_bytes has already decompressed the body. Retaining the wire encoding
+    # would make the buffered Response try to decompress the same bytes again.
+    headers = httpx.Headers(response.headers)
+    headers.pop("content-encoding", None)
+    headers.pop("content-length", None)
+    return httpx.Response(
+        response.status_code, headers=headers, content=body, request=response.request,
+    )
+
+
 async def _pinned_request(
     method: str, url: str, *, timeout: float, **kwargs
 ) -> httpx.Response:
@@ -106,12 +117,7 @@ async def _pinned_request(
                         body.extend(chunk)
                         if len(body) > 2 * 1024 * 1024:
                             raise ValueError("AI provider response exceeds 2 MiB")
-                    return httpx.Response(
-                        response.status_code,
-                        headers=response.headers,
-                        content=bytes(body),
-                        request=response.request,
-                    )
+                    return _buffered_decoded_response(response, bytes(body))
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 last_error = exc
     assert last_error is not None
