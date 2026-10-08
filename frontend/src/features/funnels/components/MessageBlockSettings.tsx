@@ -44,6 +44,7 @@ export default function MessageBlockSettings({
       chat_action_duration_seconds: firstMessage?.chat_action_duration_seconds ?? 3,
       wait_for_answer: firstMessage?.wait_for_answer ?? false,
       continue_after_buttons: firstMessage?.continue_after_buttons ?? false,
+      disappear_after_next: firstMessage?.disappear_after_next ?? false,
       button_mode: firstMessage?.button_mode ?? 'inline',
       buttons: firstMessage?.buttons ?? [],
     })

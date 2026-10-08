@@ -544,6 +544,13 @@ export default function MessageSequenceEditor({
               </span>
             </label>
 
+            <label className="mt-3 flex items-center gap-3 text-sm text-gray-100">
+              <input type="checkbox" checked={message.disappear_after_next === true}
+                onChange={(event) => update(index, { disappear_after_next: event.target.checked })}
+                className="h-4 w-4 shrink-0 rounded border-white/20 bg-background text-accent-300" />
+              Удалять после отправки следующего сообщения воронки
+            </label>
+
             <label className="mt-2 block">
               <span className="mb-1 block text-xs text-gray-500">Задержка перед сообщением, сек</span>
               <input

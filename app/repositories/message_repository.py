@@ -17,7 +17,7 @@ class MessageRepository(BaseRepository[Message]):
 
     @staticmethod
     def history_visibility_expr() -> ColumnElement[bool]:
-        # Tombstones belong in account history, not in funnel input/metrics queries.
+        # Account and disappearing-screen tombstones are history, not funnel input.
         account_chat = (
             select(Chat.id)
             .join(Bot, Bot.id == Chat.bot_id)
@@ -25,7 +25,9 @@ class MessageRepository(BaseRepository[Message]):
             .correlate(Message)
             .exists()
         )
-        return or_(Message.deleted_at.is_(None), account_chat)
+        return or_(Message.deleted_at.is_(None), account_chat,
+            (Message.sender_type == SenderType.BOT)
+            & (Message.raw_payload_json["funnel_screen_deleted"].astext == "true"))
 
     async def list_by_chat(
         self,

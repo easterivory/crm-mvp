@@ -37,6 +37,7 @@ export type MessageConfig = {
   chat_action_duration_seconds: number
   wait_for_answer?: boolean
   continue_after_buttons?: boolean
+  disappear_after_next?: boolean
   button_mode: ButtonDisplayMode
   buttons: ButtonConfig[]
   media?: MessageMediaConfig
@@ -290,6 +291,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
             ? item.wait_for_answer
             : item.waitForAnswer === true,
         continue_after_buttons: item.continue_after_buttons === true,
+        disappear_after_next: item.disappear_after_next === true,
         button_mode: item.button_mode === 'reply' ? 'reply' : 'inline',
         buttons: normalizeButtons(item.buttons),
         ...(media ? { media } : {}),
@@ -311,6 +313,7 @@ export function normalizeMessages(config: Record<string, unknown>): MessageConfi
       chat_action_duration_seconds: numberValue(config, 'chat_action_duration_seconds', 3),
       wait_for_answer: boolValue(config, 'wait_for_answer', false),
       continue_after_buttons: boolValue(config, 'continue_after_buttons', false),
+      disappear_after_next: boolValue(config, 'disappear_after_next', false),
       button_mode: config.button_mode === 'reply' ? 'reply' : 'inline',
       buttons: normalizeButtons(config.buttons),
       ...(legacyMedia ? { media: legacyMedia } : {}),

@@ -42,6 +42,7 @@ from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
 from app.services.facebook_campaign_service import FacebookCampaignService
 from app.services.funnel_block_registry import is_supported_lead_field_key
+from app.services.funnel_disappearing_message_service import FunnelDisappearingMessageService
 from app.services.funnel_job_queue import (
     enqueue_funnel_chat_action,
     enqueue_funnel_scheduled_job,
@@ -1793,6 +1794,7 @@ class FunnelRuntimeService:
         if not text and media_ref is None and upload_id is None:
             return
         await self._create_outgoing_message(
+            disappear_after_next=item.get("disappear_after_next") is True,
             chat_id=chat_id,
             text=text,
             message_type=media_type,
@@ -1918,6 +1920,7 @@ class FunnelRuntimeService:
         file_name: Optional[str] = None,
         mime_type: Optional[str] = None,
         parse_mode: str | None = None,
+        disappear_after_next: bool = False,
     ) -> None:
         chat = await self.chat_repo.get_by_id(chat_id)
         if chat is None:
@@ -1966,7 +1969,7 @@ class FunnelRuntimeService:
                     telegram_result,
                 )
             )
-            await self.message_service.create_message(
+            delivered = await self.message_service.create_message(
                 chat_id=chat_id,
                 project_id=chat.project_id,
                 data=MessageCreate(
@@ -1990,9 +1993,12 @@ class FunnelRuntimeService:
                 ),
                 send_to_telegram=False,
             )
+            await FunnelDisappearingMessageService(self.db, self.telegram_sender).after_delivery(
+                chat=chat, message=delivered, disappear_after_next=disappear_after_next,
+            )
             return
 
-        await self.message_service.create_message(
+        delivered = await self.message_service.create_message(
             chat_id=chat_id,
             project_id=chat.project_id,
             data=MessageCreate(
@@ -2007,6 +2013,9 @@ class FunnelRuntimeService:
                 mime_type=mime_type,
                 reply_markup=reply_markup,
             ),
+        )
+        await FunnelDisappearingMessageService(self.db, self.telegram_sender).after_delivery(
+            chat=chat, message=delivered, disappear_after_next=disappear_after_next,
         )
 
     async def _render_text_template(self, chat_id: UUID, text: str | None, *, html: bool = False) -> str:
@@ -2072,6 +2081,7 @@ class FunnelRuntimeService:
         message_type, media_ref = self._message_item_media_payload(step, item)
         upload_id = self._message_item_upload_id(item)
         await self._create_outgoing_message(
+            disappear_after_next=item.get("disappear_after_next") is True,
             parse_mode="HTML" if item.get("parse_mode") == "HTML" else None,
             chat_id=chat_id,
             text=text,
@@ -3759,6 +3769,7 @@ class FunnelRuntimeService:
             "chat_action_duration_seconds": config.get("chat_action_duration_seconds") or 0,
             "wait_for_answer": bool(config.get("wait_for_answer")),
             "continue_after_buttons": config.get("continue_after_buttons") is True,
+            "disappear_after_next": config.get("disappear_after_next") is True,
             "button_mode": "reply" if config.get("button_mode") == "reply" else "inline",
             "buttons": config.get("buttons") or [],
             "media": config.get("media"),
