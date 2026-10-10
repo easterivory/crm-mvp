@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +11,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.constants import MessageType, RoleName
+from app.core.constants import MessageType
 from app.models.scheduled_message import ScheduledMessage
 from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
@@ -17,6 +19,9 @@ from app.repositories.scheduled_message_repository import ScheduledMessageReposi
 from app.schemas.scheduled_message import ScheduledMessageOut
 from app.services.access_control import require_project_access
 from app.services.message_service import MessageService
+from app.services.chat_photo_album import AlbumPhoto, prepare_album
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduledMessageService:
@@ -41,6 +46,7 @@ class ScheduledMessageService:
         file_bytes: bytes | None = None,
         file_name: str | None = None,
         mime_type: str | None = None,
+        album_photos: list[AlbumPhoto] | None = None,
     ) -> ScheduledMessageOut:
         await self.message_service._ensure_operator_can_send(actor.id, project_id)
         chat = await self.chat_repo.get_active(chat_id, project_id)
@@ -54,9 +60,15 @@ class ScheduledMessageService:
             raise HTTPException(status_code=422, detail="Unsupported scheduled media type")
         normalized_text = (text or "").strip() or None
         normalized_original_text = (original_text or "").strip() or None
+        if album_photos is not None:
+            album_photos = await asyncio.to_thread(prepare_album, album_photos)
+            if normalized_type != MessageType.PHOTO or file_id or file_bytes is not None:
+                raise HTTPException(status_code=422, detail="Album cannot include a single attachment")
+            if normalized_text and len(normalized_text.encode("utf-16-le")) // 2 > 1024:
+                raise HTTPException(status_code=422, detail="Подпись к альбому не должна превышать 1024 символа.")
         if normalized_type == MessageType.TEXT and not normalized_text:
             raise HTTPException(status_code=422, detail="Text message cannot be empty")
-        if normalized_type != MessageType.TEXT and not file_id and not file_bytes:
+        if normalized_type != MessageType.TEXT and not file_id and not file_bytes and not album_photos:
             raise HTTPException(status_code=422, detail="Media message requires an attachment")
         if file_id and file_bytes:
             raise HTTPException(status_code=422, detail="Media message cannot include both file_id and file bytes")
@@ -73,7 +85,17 @@ class ScheduledMessageService:
             path.write_bytes(file_bytes)
             storage_path = str(path)
 
+        album_files = None
         try:
+            if album_photos:
+                storage_dir = Path(settings.CHAT_ATTACHMENT_STORAGE_PATH) / str(project_id) / "scheduled"
+                await asyncio.to_thread(storage_dir.mkdir, parents=True, exist_ok=True)
+                album_files = []
+                for photo in album_photos:
+                    name = os.path.basename(photo.file_name)
+                    path = storage_dir / f"{uuid4().hex}{Path(name).suffix or '.jpg'}"
+                    album_files.append({"storage_path": str(path), "file_name": name, "mime_type": photo.mime_type})
+                    await asyncio.to_thread(path.write_bytes, photo.content)
             scheduled = await self.repo.create_scheduled_message(
                 project_id=project_id,
                 chat_id=chat_id,
@@ -86,12 +108,15 @@ class ScheduledMessageService:
                 storage_path=storage_path,
                 file_name=safe_file_name if file_bytes is not None else None,
                 mime_type=(mime_type or "application/octet-stream") if file_bytes is not None else None,
-                file_size=len(file_bytes) if file_bytes is not None else None,
+                file_size=sum(len(photo.content) for photo in album_photos) if album_photos else len(file_bytes) if file_bytes is not None else None,
                 auto_translate=auto_translate,
+                album_files=album_files,
             )
         except Exception:
             if storage_path:
                 Path(storage_path).unlink(missing_ok=True)
+            for photo in album_files or []:
+                Path(photo["storage_path"]).unlink(missing_ok=True)
             raise
         return ScheduledMessageOut.model_validate(scheduled)
 
@@ -125,41 +150,73 @@ class ScheduledMessageService:
         if item is None or item.chat_id != chat_id:
             raise HTTPException(status_code=404, detail="Scheduled message not found")
         await self.message_service._ensure_operator_can_send(actor.id, project_id)
-        if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN} and item.created_by_user_id != actor.id:
-            raise HTTPException(status_code=403, detail="You can cancel only your scheduled messages")
+        paths = [entry["storage_path"] for entry in item.album_files or []]
+        if item.storage_path:
+            paths.append(item.storage_path)
         if not await self.repo.cancel(item.id, project_id):
             raise HTTPException(status_code=422, detail="Scheduled message cannot be cancelled")
-        if item.storage_path:
-            Path(item.storage_path).unlink(missing_ok=True)
+        # Persist cancellation before removing files the delivery worker could use.
+        await self.db.commit()
+        await self._remove_files(paths, scheduled_message_id)
+        logger.info("Scheduled message cancelled message_id=%s chat_id=%s actor_id=%s", scheduled_message_id, chat_id, actor.id)
 
     async def process_due_messages(self, *, limit: int = 100) -> int:
         processed = 0
-        for item in await self.repo.list_due(datetime.now(timezone.utc), limit=limit):
-            await self.repo.mark_running(item.id)
+        due_ids = [item.id for item in await self.repo.list_due(datetime.now(timezone.utc), limit=limit)]
+        await self.db.commit()
+        for item_id in due_ids:
+            if not await self.repo.mark_running(item_id):
+                await self.db.rollback()
+                continue
+            await self.db.commit()
+            item = await self.db.get(ScheduledMessage, item_id, populate_existing=True)
+            if item is None:
+                continue
             try:
-                file_bytes = Path(item.storage_path).read_bytes() if item.storage_path else None
-                sent = await self.message_service.send_message_to_client(
-                    chat_id=item.chat_id,
-                    project_id=item.project_id,
-                    operator_id=item.created_by_user_id,
-                    text=item.text,
-                    media_type=item.media_type,
-                    file_id=item.file_id,
-                    file_bytes=file_bytes,
-                    file_name=item.file_name,
-                    mime_type=item.mime_type,
-                    original_text=item.original_text,
-                    auto_translate=item.auto_translate,
-                )
+                if item.album_files:
+                    photos = [AlbumPhoto(await asyncio.to_thread(Path(entry["storage_path"]).read_bytes),
+                                         entry["file_name"], entry["mime_type"]) for entry in item.album_files]
+                    sent = (await self.message_service.send_photo_album_to_client(
+                        chat_id=item.chat_id, project_id=item.project_id, operator_id=item.created_by_user_id,
+                        photos=photos, text=item.text, original_text=item.original_text, auto_translate=item.auto_translate,
+                    ))[0]
+                else:
+                    file_bytes = Path(item.storage_path).read_bytes() if item.storage_path else None
+                    sent = await MessageService(self.db, release_transaction_before_telegram=True).send_message_to_client(
+                        chat_id=item.chat_id,
+                        project_id=item.project_id,
+                        operator_id=item.created_by_user_id,
+                        text=item.text,
+                        media_type=item.media_type,
+                        file_id=item.file_id,
+                        file_bytes=file_bytes,
+                        file_name=item.file_name,
+                        mime_type=item.mime_type,
+                        original_text=item.original_text,
+                        auto_translate=item.auto_translate,
+                    )
             except Exception as exc:
-                await self.repo.mark_failed(item.id, str(exc))
+                await self.db.rollback()
+                await self.repo.mark_failed(item_id, str(exc))
+                await self.db.commit()
                 continue
 
-            await self.repo.mark_sent(item.id, sent.id)
+            await self.repo.mark_sent(item_id, sent.id)
+            await self.db.commit()
+            paths = [entry["storage_path"] for entry in item.album_files or []]
             if item.storage_path:
-                Path(item.storage_path).unlink(missing_ok=True)
+                paths.append(item.storage_path)
+            await self._remove_files(paths, item_id)
             processed += 1
         return processed
+
+    @staticmethod
+    async def _remove_files(paths: list[str], message_id: UUID) -> None:
+        for path in paths:
+            try:
+                await asyncio.to_thread(Path(path).unlink, missing_ok=True)
+            except OSError:
+                logger.warning("Scheduled attachment cleanup failed message_id=%s", message_id)
 
     @staticmethod
     def _max_media_size(media_type: str) -> int:

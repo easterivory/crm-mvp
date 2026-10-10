@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -42,8 +43,9 @@ from app.services.operational_alert_service import send_operational_alert
 from app.services.telegram_account_credential_service import (
     TelegramAccountCredentialService,
 )
-from app.services.telegram_account_gateway import TELEGRAM_ACCOUNT_COMMAND_QUEUE
+from app.services.telegram_account_gateway import TELEGRAM_ACCOUNT_COMMAND_QUEUE, TELEGRAM_ACCOUNT_AVATAR_QUEUE
 from app.services.telegram_service import TelegramService
+from app.services.chat_avatar_cache import avatar_thumbnail
 
 
 logger = logging.getLogger(__name__)
@@ -64,10 +66,14 @@ class TelegramAccountWorker:
         await self._recover_interrupted_commands(redis)
         supervisor = asyncio.create_task(self._supervise_connections())
         commands = asyncio.create_task(self._consume_commands())
+        avatars = asyncio.create_task(self._consume_avatar_commands())
         try:
-            await asyncio.gather(supervisor, commands)
+            await asyncio.gather(supervisor, commands, avatars)
         finally:
             self._stopping.set()
+            for task in (supervisor, commands, avatars):
+                task.cancel()
+            await asyncio.gather(supervisor, commands, avatars, return_exceptions=True)
             for task in self.connection_tasks.values():
                 task.cancel()
             await asyncio.gather(*self.connection_tasks.values(), return_exceptions=True)
@@ -874,6 +880,32 @@ class TelegramAccountWorker:
             )
         return TelegramMessage(**payload)
 
+    async def _consume_avatar_commands(self) -> None:
+        # Cosmetic downloads have their own queue; never delay outgoing replies.
+        redis = await get_redis()
+        while not self._stopping.is_set():
+            item = await redis.blpop(TELEGRAM_ACCOUNT_AVATAR_QUEUE, timeout=1)
+            if item is None:
+                continue
+            request_id = None
+            try:
+                command = json.loads(item[1])
+                request_id = str(command["request_id"])
+                if time.time() >= float(command["expires_at"]):
+                    continue
+                if command.get("operation") != "get_chat_avatar":
+                    raise ValueError("Invalid avatar operation")
+                async with asyncio.timeout(min(15, max(0.1, float(command["expires_at"]) - time.time()))):
+                    result = await self._execute_command(UUID(command["bot_id"]), "get_chat_avatar", command["payload"])
+                envelope = {"ok": True, "result": result}
+            except Exception as exc:
+                logger.info("MTProto avatar unavailable request_id=%s error_type=%s", request_id, type(exc).__name__)
+                envelope = {"ok": False, "error": "Avatar temporarily unavailable", "transient": True}
+            if request_id:
+                response_key = f"crm:telegram-account:response:{request_id}"
+                await redis.rpush(response_key, json.dumps(envelope, ensure_ascii=True))
+                await redis.expire(response_key, 120)
+
     async def _consume_commands(self) -> None:
         redis = await get_redis()
         while not self._stopping.is_set():
@@ -922,6 +954,13 @@ class TelegramAccountWorker:
         peer = await self._resolve_peer(client, bot_id, str(payload.get("external_chat_id") or ""))
         peer_id = int(payload.get("external_chat_id"))
 
+        if operation == "get_chat_avatar":
+            content = await client.download_profile_photo(peer, file=bytes, download_big=False)
+            if not content:
+                return {"content": None}
+            thumbnail = await asyncio.to_thread(avatar_thumbnail, content)
+            return {"content": base64.b64encode(thumbnail).decode("ascii")}
+
         if operation == "send_message":
             text = str(payload.get("text") or "").strip()
             if not text:
@@ -940,6 +979,35 @@ class TelegramAccountWorker:
                 self._discard_pending(bot_id, fingerprint)
                 raise
             return self._sent_result(message, peer_id=peer_id, media_type="text")
+
+        if operation == "send_photo_album":
+            paths = [Path(value) for value in payload.get("paths", [])]
+            if not 2 <= len(paths) <= 10 or any(not path.is_file() for path in paths):
+                raise ValueError("Outgoing MTProto album is invalid")
+            caption = str(payload.get("caption") or "").strip()
+            captions = [caption] + [""] * (len(paths) - 1)
+            fingerprints = [self._fingerprint(peer_id, text, "photo") for text in captions]
+            for fingerprint in fingerprints:
+                self._add_pending(bot_id, fingerprint)
+            try:
+                messages = await client.send_file(
+                    peer, file=[str(path) for path in paths], caption=captions,
+                    force_document=False, parse_mode=None,
+                    reply_to=self._optional_int(payload.get("reply_to_message_id")),
+                )
+            except Exception:
+                for fingerprint in fingerprints:
+                    self._discard_pending(bot_id, fingerprint)
+                raise
+            results = []
+            for message, path in zip(messages, paths, strict=True):
+                local_path = await self._preserve_outgoing_media(
+                    source=path, bot_id=bot_id, peer_id=peer_id, message_id=int(message.id),
+                )
+                result = self._sent_result(message, peer_id=peer_id, media_type="photo", local_path=local_path)
+                result["media_group_id"] = str(message.grouped_id) if message.grouped_id else None
+                results.append(result)
+            return {"messages": results}
 
         if operation == "send_media":
             path = Path(str(payload.get("path") or ""))

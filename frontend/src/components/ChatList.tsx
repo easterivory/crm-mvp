@@ -1,4 +1,4 @@
-import { ArrowDownWideNarrow, Ban, Database, LoaderCircle, RefreshCw, RotateCcw, Star, UserRound } from 'lucide-react'
+import { ArrowDownWideNarrow, Ban, Database, LoaderCircle, RefreshCw, RotateCcw, Star } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
@@ -8,6 +8,7 @@ import ChatQuickFilters from '../features/chats/components/ChatQuickFilters'
 import ChatSearchBar from '../features/chats/components/ChatSearchBar'
 import type { ChatFilterPreset, ChatFiltersState, FilterOption } from '../features/chats/types'
 import { countActiveChatFilters } from '../features/chats/types'
+import ChatAvatar from './ChatAvatar'
 
 export type Chat = {
   id: string
@@ -121,15 +122,6 @@ function formatDateTime(value: string | null) {
 
 function getChatTitle(chat: Chat) {
   return chat.contact_name || `Telegram ${chat.external_chat_id}`
-}
-
-function getInitials(label: string) {
-  return label
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('')
 }
 
 function getLifecycleLabel(chat: Chat) {
@@ -543,9 +535,7 @@ export default function ChatList({
                 className="flex min-w-0 flex-1 gap-3 p-4 pr-1 text-left"
               >
               <div className="relative shrink-0">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-accent-300/20 bg-accent-400/10 text-sm font-semibold text-accent-200 shadow-glow-accent">
-                  {getInitials(title) || <UserRound size={18} />}
-                </div>
+                <ChatAvatar chatId={chat.id} projectId={chat.project_id} name={title} />
                 {isUnread ? (
                   <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-surface bg-sky-300 shadow-[0_0_12px_rgba(125,211,252,0.9)]" />
                 ) : null}

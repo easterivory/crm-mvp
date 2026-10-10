@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
@@ -48,6 +48,7 @@ class ScheduledMessage(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     file_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     mime_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    album_files: Mapped[Optional[list[dict]]] = mapped_column(JSONB, nullable=True)
     auto_translate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", server_default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -55,3 +56,7 @@ class ScheduledMessage(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     sent_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
+
+    @property
+    def album_count(self) -> int:
+        return len(self.album_files or [])

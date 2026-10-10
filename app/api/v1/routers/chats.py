@@ -11,7 +11,7 @@ from datetime import date
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
@@ -43,6 +43,7 @@ from app.schemas.funnel import (
 from app.services.chat_filter_preset_service import ChatFilterPresetService
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_service import ChatService
+from app.services.chat_avatar_service import ChatAvatarService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -342,6 +343,25 @@ async def get_chat(
         project_id=project_id,
         actor=current_user,
     )
+
+
+@router.get("/{chat_id}/avatar", response_class=Response)
+async def get_chat_avatar(
+    chat_id: UUID,
+    background_tasks: BackgroundTasks,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    content = await ChatAvatarService(db).get_avatar(
+        chat_id=chat_id, project_id=project_id, background_tasks=background_tasks,
+    )
+    headers = {"Cache-Control": "private, max-age=3600", "Vary": "Authorization",
+               "X-Content-Type-Options": "nosniff"}
+    if content is None:
+        headers["Cache-Control"] = "private, max-age=300"
+        return Response(status_code=204, headers=headers)
+    return Response(content=content, media_type="image/jpeg", headers=headers)
 
 
 @router.patch("/{chat_id}/favorite", response_model=ChatOut)

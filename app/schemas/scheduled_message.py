@@ -16,6 +16,7 @@ class ScheduledMessageOut(OrmBase):
     text: Optional[str]
     original_text: Optional[str]
     media_type: str
+    album_count: int = 0
     file_name: Optional[str]
     mime_type: Optional[str]
     file_size: Optional[int]

@@ -13,6 +13,7 @@ from app.core.redis import get_redis
 
 
 TELEGRAM_ACCOUNT_COMMAND_QUEUE = "crm:telegram-account:commands"
+TELEGRAM_ACCOUNT_AVATAR_QUEUE = "crm:telegram-account:avatars"
 logger = logging.getLogger(__name__)
 
 
@@ -49,10 +50,14 @@ class TelegramAccountGateway:
         redis = None
         try:
             redis = await get_redis()
-            await redis.rpush(
-                TELEGRAM_ACCOUNT_COMMAND_QUEUE,
-                json.dumps(command, ensure_ascii=True, separators=(",", ":")),
-            )
+            encoded_command = json.dumps(command, ensure_ascii=True, separators=(",", ":"))
+            if operation == "get_chat_avatar":
+                async with redis.pipeline(transaction=True) as pipeline:
+                    pipeline.rpush(TELEGRAM_ACCOUNT_AVATAR_QUEUE, encoded_command)
+                    pipeline.ltrim(TELEGRAM_ACCOUNT_AVATAR_QUEUE, -256, -1)
+                    await pipeline.execute()
+            else:
+                await redis.rpush(TELEGRAM_ACCOUNT_COMMAND_QUEUE, encoded_command)
             response = await redis.blpop(response_key, timeout=timeout)
         except Exception as exc:
             raise TelegramAccountGatewayError(

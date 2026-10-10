@@ -23,6 +23,7 @@ from app.schemas.scheduled_message import ScheduledMessageOut
 from app.services.message_service import MessageService
 from app.services.project_snippet_service import ProjectSnippetService
 from app.services.scheduled_message_service import ScheduledMessageService
+from app.services.chat_photo_album import AlbumPhoto
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 media_router = APIRouter(prefix="/messages", tags=["messages"])
@@ -129,6 +130,24 @@ async def create_message(
         original_text=original_text,
         auto_translate=auto_translate,
         reply_to_message_id=reply_to_message_id,
+    )
+
+
+@router.post("/album", response_model=list[MessageOut], status_code=status.HTTP_201_CREATED)
+async def create_photo_album(
+    chat_id: UUID, request: Request,
+    project_id: UUID = Depends(get_current_project_id), current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[MessageOut]:
+    _ensure_message_write_access(current_user)
+    service = MessageService(db)
+    await service._ensure_operator_can_send(current_user.id, project_id)
+    payload, photos = await _read_album_request(request)
+    return await service.send_photo_album_to_client(
+        chat_id=chat_id, project_id=project_id, operator_id=current_user.id, photos=photos,
+        text=_optional_text(payload.get("text")), original_text=_optional_text(payload.get("original_text")),
+        auto_translate=_optional_bool(request.query_params.get("auto_translate", payload.get("auto_translate")), default=False),
+        reply_to_message_id=_optional_uuid(payload.get("reply_to_message_id"), "reply_to_message_id"),
     )
 
 
@@ -321,6 +340,27 @@ async def schedule_chat_message(
     )
 
 
+@scheduled_router.post("/album", response_model=ScheduledMessageOut, status_code=status.HTTP_201_CREATED)
+async def schedule_chat_photo_album(
+    chat_id: UUID, request: Request,
+    project_id: UUID = Depends(get_current_project_id), current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ScheduledMessageOut:
+    _ensure_message_write_access(current_user)
+    await MessageService(db)._ensure_operator_can_send(current_user.id, project_id)
+    payload, photos = await _read_album_request(request)
+    try:
+        scheduled_at = datetime.fromisoformat(str(payload.get("scheduled_at") or "").replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="scheduled_at must be an ISO datetime") from exc
+    return await ScheduledMessageService(db).schedule_message(
+        chat_id=chat_id, project_id=project_id, actor=current_user, scheduled_at=scheduled_at,
+        media_type=MessageType.PHOTO, album_photos=photos,
+        text=_optional_text(payload.get("text")), original_text=_optional_text(payload.get("original_text")),
+        auto_translate=_optional_bool(payload.get("auto_translate"), default=False),
+    )
+
+
 @scheduled_router.get("", response_model=list[ScheduledMessageOut])
 async def list_scheduled_chat_messages(
     chat_id: UUID,
@@ -354,6 +394,21 @@ async def cancel_scheduled_chat_message(
     )
 
 
+async def _read_album_request(request: Request) -> tuple[dict, list[AlbumPhoto]]:
+    if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+        raise HTTPException(status_code=415, detail="Album requires multipart/form-data")
+    async with request.form(max_files=10, max_fields=10) as form:
+        uploads = form.getlist("files")
+        if not 2 <= len(uploads) <= 10 or any(not isinstance(upload, StarletteUploadFile) for upload in uploads):
+            raise HTTPException(status_code=422, detail="Выберите от 2 до 10 фотографий.")
+        if any(isinstance(value, StarletteUploadFile) and key != "files" for key, value in form.multi_items()):
+            raise HTTPException(status_code=422, detail="Unexpected album attachment field")
+        photos = [AlbumPhoto(await _read_upload_bytes(upload, MessageType.PHOTO, max_bytes=min(settings.CHAT_PHOTO_MAX_MB, 10) * 1024 * 1024),
+                             upload.filename or "photo.jpg", upload.content_type or "image/jpeg") for upload in uploads]
+        payload = {key: value for key, value in form.multi_items() if key != "files"}
+    return payload, photos
+
+
 async def _read_message_request(request: Request) -> tuple[dict, StarletteUploadFile | None]:
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("application/json"):
@@ -377,8 +432,8 @@ async def _read_message_request(request: Request) -> tuple[dict, StarletteUpload
     raise HTTPException(status_code=415, detail="Unsupported message request content type")
 
 
-async def _read_upload_bytes(upload: StarletteUploadFile, media_type: str) -> bytes:
-    max_size = _max_direct_upload_size(media_type)
+async def _read_upload_bytes(upload: StarletteUploadFile, media_type: str, *, max_bytes: int | None = None) -> bytes:
+    max_size = max_bytes if max_bytes is not None else _max_direct_upload_size(media_type)
     chunks: list[bytes] = []
     size = 0
     while chunk := await upload.read(1024 * 1024):

@@ -18,6 +18,7 @@ Security:
   write. A client that passes an arbitrary chat_id from another project is
   rejected with 404.
 """
+import asyncio
 import logging
 from app.core.telegram_formatting import telegram_html
 import os
@@ -44,6 +45,7 @@ from app.repositories.user_repository import UserRepository
 from app.schemas.message import MessageCreate, MessageOut, MessageReplyOut, MessageUploadOut
 from app.services.access_control import has_project_access
 from app.services.chat_service import ChatService
+from app.services.chat_photo_album import AlbumPhoto, prepare_album
 from app.services.telegram_sender import TelegramSenderService
 from app.services.translation_service import TranslationService, TranslationUnavailableError
 from app.utils.video_processor import VideoProcessingError
@@ -253,6 +255,59 @@ class MessageService:
             message.id,
         )
         return message
+
+    async def send_photo_album_to_client(
+        self, *, chat_id: UUID, project_id: UUID, operator_id: UUID,
+        photos: list[AlbumPhoto], text: str | None = None, original_text: str | None = None,
+        auto_translate: bool = False, reply_to_message_id: UUID | None = None,
+    ) -> list[MessageOut]:
+        photos = await asyncio.to_thread(prepare_album, photos)
+        await self._ensure_operator_can_send(operator_id, project_id)
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found in this project")
+        self._raise_if_bot_blocked_by_user(chat)
+        if chat.bot_id is None:
+            raise HTTPException(status_code=422, detail="У чата не настроен бот для отправки.")
+        bot_id, external_chat_id = chat.bot_id, chat.external_chat_id
+        reply_parameters = await self._telegram_reply_parameters(
+            chat_id=chat_id, project_id=project_id, reply_to_message_id=reply_to_message_id,
+        )
+        caption = (text or "").strip() or None
+        translated_original = None
+        if caption:
+            if len(caption.encode("utf-16-le")) // 2 > 1024:
+                raise HTTPException(status_code=422, detail="Подпись к альбому не должна превышать 1024 символа.")
+            caption, translated_original = await self._translate_outgoing_text_for_chat(
+                chat=chat, project_id=project_id, text=caption, auto_translate=auto_translate,
+            )
+            if len(caption.encode("utf-16-le")) // 2 > 1024:
+                raise HTTPException(status_code=422, detail="Подпись к альбому не должна превышать 1024 символа.")
+        # Finish validation before external delivery; never hold chat locks while uploading.
+        await self.db.commit()
+        sender = TelegramSenderService(self.db, release_transaction_before_network=True)
+        results = await sender.send_photo_album(
+            project_id=project_id, bot_id=bot_id, external_chat_id=external_chat_id,
+            photos=photos, caption=caption, reply_parameters=reply_parameters,
+        )
+        if not results or len(results) != len(photos):
+            await self._raise_if_bot_blocked_after_send(chat_id, project_id)
+            raise HTTPException(status_code=502, detail="Telegram не подтвердил отправку альбома. Проверьте диалог перед повторной отправкой.")
+        messages = []
+        for index, (photo, result) in enumerate(zip(photos, results, strict=True)):
+            file_id, unique_id, size = self._extract_telegram_media_metadata(MessageType.PHOTO, result)
+            messages.append(await self.create_message(chat_id, project_id, MessageCreate(
+                external_message_id=self._telegram_message_id(result), message_type=MessageType.PHOTO,
+                sender_type=SenderType.MANAGER, sender_id=operator_id, operator_id=operator_id,
+                caption=caption if index == 0 else None,
+                original_text=((original_text or "").strip() or translated_original) if index == 0 else None,
+                telegram_file_id=file_id, file_unique_id=unique_id, file_size=size or len(photo.content),
+                file_name=photo.file_name, mime_type=photo.mime_type,
+                media_group_id=str(result["media_group_id"]) if result.get("media_group_id") else None,
+                reply_to_message_id=reply_to_message_id, raw_payload_json={"telegram_result": result},
+            ), send_to_telegram=False))
+        logger.info("Operator photo album sent chat_id=%s operator_id=%s photo_count=%s", chat_id, operator_id, len(messages))
+        return messages
 
     async def preview_outgoing_translation(
         self,

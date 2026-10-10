@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.bot_repository import BotRepository
 from app.services.chat_user_block_service import ChatUserBlockService
+from app.services.chat_photo_album import AlbumPhoto, photo_album_form
 from app.services.telegram_account_gateway import (
     TelegramAccountGateway,
     TelegramAccountGatewayError,
@@ -328,6 +329,49 @@ class TelegramSenderService:
             mime_type=mime_type,
             reply_parameters=reply_parameters,
         )
+
+    async def send_photo_album(
+        self, *, project_id: UUID, bot_id: UUID, external_chat_id: str,
+        photos: list[AlbumPhoto], caption: str | None, reply_parameters: dict | None,
+    ) -> list[dict[str, Any]] | None:
+        transport = await self._get_transport_type(project_id, bot_id)
+        if transport == "user_mtproto":
+            paths: list[Path] = []
+            try:
+                for photo in photos:
+                    paths.append(await self.account_gateway.stage_bytes(photo.content, file_name=photo.file_name))
+                result = await self._invoke_account_gateway(
+                    method="sendMediaGroup", project_id=project_id, bot_id=bot_id,
+                    external_chat_id=external_chat_id, operation="send_photo_album",
+                    payload={"external_chat_id": external_chat_id, "paths": [str(path) for path in paths],
+                             "caption": caption, "reply_to_message_id": self._reply_message_id(reply_parameters)},
+                    timeout_seconds=120,
+                )
+                return result.get("messages") if result else None
+            finally:
+                for path in paths:
+                    path.unlink(missing_ok=True)
+        token = await self._get_token(project_id, bot_id)
+        if not token:
+            return None
+        data, files = photo_album_form(photos, external_chat_id, caption, reply_parameters)
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                response = await client.post(f"https://api.telegram.org/bot{token}/sendMediaGroup", data=data, files=files)
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            if (response.is_success and isinstance(payload, dict) and payload.get("ok") is True
+                    and isinstance(payload.get("result"), list)
+                    and len(payload["result"]) == len(photos)
+                    and all(isinstance(item, dict) for item in payload["result"])):
+                return payload["result"]
+            error = self._response_delivery_error(method="sendMediaGroup", response=response, payload=payload)
+        except httpx.HTTPError as exc:
+            error = TelegramDeliveryError(method="sendMediaGroup", description=f"Request failed ({type(exc).__name__})", transient=True)
+        await self._handle_delivery_error(error, project_id=project_id, bot_id=bot_id, external_chat_id=external_chat_id)
+        return None
 
     async def edit_message_reply_markup(
         self,

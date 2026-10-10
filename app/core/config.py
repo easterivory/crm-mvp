@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     CHAT_PHOTO_MAX_MB: int = 10
     CHAT_VIDEO_MAX_MB: int = 50
     CHAT_DOCUMENT_MAX_MB: int = 20
+    CHAT_AVATAR_STORAGE_PATH: str = "storage/chat_avatars"
+    CHAT_AVATAR_CACHE_MAX_MB: int = 200
+    CHAT_AVATAR_CACHE_SECONDS: int = 86400
+    CHAT_AVATAR_CACHE_MAX_ENTRIES: int = 10000
 
     # Google Sheets export
     GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None

@@ -47,6 +47,8 @@ import { useSearchParams } from 'react-router-dom'
 
 import api from '../api/client'
 import ChatList, { Chat } from '../components/ChatList'
+import ChatAvatar from '../components/ChatAvatar'
+import PhotoAlbumDraft from '../components/PhotoAlbumDraft'
 import LeadSidebar from '../components/LeadSidebar'
 import { fetchBots, type Bot as BotRecord } from '../features/bots'
 import {
@@ -194,6 +196,7 @@ type ScheduledMessage = {
   media_type: 'text' | OutgoingMediaType
   file_name: string | null
   status: 'pending' | 'running' | 'sent' | 'failed' | 'cancelled'
+  album_count?: number
   last_error: string | null
   created_by_user_id: string
 }
@@ -727,6 +730,7 @@ export default function ChatsPage() {
   const [translatingMessageId, setTranslatingMessageId] = useState<string | null>(null)
   const [isUpdatingChatLanguage, setIsUpdatingChatLanguage] = useState(false)
   const [attachment, setAttachment] = useState<ChatAttachmentDraft | null>(null)
+  const [albumPhotos, setAlbumPhotos] = useState<File[]>([])
   const [attachmentMode, setAttachmentMode] = useState<OutgoingMediaType>('document')
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false)
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null)
@@ -1793,6 +1797,7 @@ export default function ChatsPage() {
   useEffect(() => {
     setAttachment(null)
     setDraft('')
+    setAlbumPhotos([])
     draftTranslationAbortRef.current?.abort()
     draftTranslationAbortRef.current = null
     setIsPreparingTranslation(false)
@@ -1960,51 +1965,67 @@ export default function ChatsPage() {
         auto_translate: options.autoTranslate ?? false,
       }
       const originalText = (options.originalText ?? translatedDraftOriginal)?.trim()
-      const { data } = attachment
-        ? await api.post<Message>(
-            `/chats/${selectedChatId}/messages`,
-            (() => {
-              const formData = new FormData()
-              formData.append('media_type', attachment.media_type)
-              formData.append('file', attachment.file, attachment.file.name)
-              if (text) {
-                formData.append('text', text)
-              }
-              if (originalText) {
-                formData.append('original_text', originalText)
-              }
-              if (replyingToMessage) {
-                formData.append('reply_to_message_id', replyingToMessage.id)
-              }
-              return formData
-            })(),
-            { params },
-          )
-        : snippetMedia
+      let sentMessages: Message[]
+      if (albumPhotos.length > 1) {
+        const formData = new FormData()
+        albumPhotos.forEach((file) => formData.append('files', file, file.name))
+        if (text) formData.append('text', text)
+        if (originalText) formData.append('original_text', originalText)
+        if (replyingToMessage) formData.append('reply_to_message_id', replyingToMessage.id)
+        const { data } = await api.post<Message[]>(`/chats/${selectedChatId}/messages/album`, formData, { params })
+        sentMessages = data
+      } else {
+        const { data } = attachment
           ? await api.post<Message>(
               `/chats/${selectedChatId}/messages`,
-              {
-                snippet_id: snippetMedia.id,
-                text,
-                ...(originalText ? { original_text: originalText } : {}),
-                ...(replyingToMessage ? { reply_to_message_id: replyingToMessage.id } : {}),
-              },
+              (() => {
+                const formData = new FormData()
+                formData.append('media_type', attachment.media_type)
+                formData.append('file', attachment.file, attachment.file.name)
+                if (text) {
+                  formData.append('text', text)
+                }
+                if (originalText) {
+                  formData.append('original_text', originalText)
+                }
+                if (replyingToMessage) {
+                  formData.append('reply_to_message_id', replyingToMessage.id)
+                }
+                return formData
+              })(),
               { params },
             )
-        : await api.post<Message>(
-            `/chats/${selectedChatId}/messages`,
-            {
-              media_type: 'text',
-              text,
-              ...(originalText ? { original_text: originalText } : {}),
-              ...(replyingToMessage ? { reply_to_message_id: replyingToMessage.id } : {}),
-            },
-            { params },
-          )
+          : snippetMedia
+            ? await api.post<Message>(
+                `/chats/${selectedChatId}/messages`,
+                {
+                  snippet_id: snippetMedia.id,
+                  text,
+                  ...(originalText ? { original_text: originalText } : {}),
+                  ...(replyingToMessage ? { reply_to_message_id: replyingToMessage.id } : {}),
+                },
+                { params },
+              )
+            : await api.post<Message>(
+                `/chats/${selectedChatId}/messages`,
+                {
+                  media_type: 'text',
+                  text,
+                  ...(originalText ? { original_text: originalText } : {}),
+                  ...(replyingToMessage ? { reply_to_message_id: replyingToMessage.id } : {}),
+                },
+                { params },
+              )
+        sentMessages = [data]
+      }
+      if (selectedChatIdRef.current !== selectedChatId) {
+        void loadWorkspaceCounts()
+        return true
+      }
       shouldAutoScrollMessagesRef.current = true
-      latestLoadedMessageIdRef.current = data.id
-      setMessageTotal((current) => current + 1)
-      setMessages((current) => sortMessagesByDate([...current, data]))
+      latestLoadedMessageIdRef.current = sentMessages[sentMessages.length - 1].id
+      setMessageTotal((current) => current + sentMessages.length)
+      setMessages((current) => sortMessagesByDate([...current, ...sentMessages]))
       setChats((current) => current.map((chat) => (
         chat.id === selectedChatId
           ? { ...chat, has_restarted_bot: false, is_read: true, unread: false }
@@ -2261,6 +2282,7 @@ export default function ChatsPage() {
 
   const clearAttachment = () => {
     setAttachment(null)
+    setAlbumPhotos([])
     setIsAttachmentMenuOpen(false)
     if (attachmentPreviewUrl) {
       window.URL.revokeObjectURL(attachmentPreviewUrl)
@@ -2286,31 +2308,36 @@ export default function ChatsPage() {
     }
   }
 
-  const handleAttachmentSelected = (file: File | null | undefined) => {
-    if (!file || !selectedChatId) {
+  const handleAttachmentSelected = (files: File[], mediaType = attachmentMode) => {
+    if (!files.length || !selectedChatId) {
       return
     }
-    setAttachmentFromFile(file, attachmentMode)
+    if (files.length > 10 || (files.length > 1 && (mediaType !== 'photo' || files.some((file) => !file.type.startsWith('image/'))))) {
+      notify({ tone: 'error', message: 'Можно выбрать до 10 фотографий. Другие вложения отправляются по одному.' })
+      return
+    }
+    setAttachmentFromFile(files[0], mediaType)
+    if (files.length > 1) setAlbumPhotos(files)
   }
 
   const handleAttachmentDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDraggingAttachment(false)
-    const file = event.dataTransfer.files?.[0]
-    if (file) {
-      setAttachmentFromFile(file, inferAttachmentMediaType(file))
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length) {
+      handleAttachmentSelected(files, inferAttachmentMediaType(files[0]))
     }
   }
 
   const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const file = Array.from(event.clipboardData.files).find((item) =>
+    const files = Array.from(event.clipboardData.files).filter((item) =>
       item.type.startsWith('image/'),
     )
-    if (!file) {
+    if (!files.length) {
       return
     }
     event.preventDefault()
-    setAttachmentFromFile(file, 'photo')
+    handleAttachmentSelected(files, 'photo')
   }
 
   const handleResetChat = async () => {
@@ -2468,7 +2495,15 @@ export default function ChatsPage() {
     setIsScheduling(true)
     try {
       const params = selectedProjectId ? { project_id: selectedProjectId } : undefined
-      if (attachment) {
+      if (albumPhotos.length > 1) {
+        const formData = new FormData()
+        formData.append('scheduled_at', scheduledAt.toISOString())
+        formData.append('auto_translate', 'false')
+        albumPhotos.forEach((file) => formData.append('files', file, file.name))
+        if (text) formData.append('text', text)
+        if (translatedDraftOriginal) formData.append('original_text', translatedDraftOriginal)
+        await api.post(`/chats/${selectedChatId}/scheduled-messages/album`, formData, { params })
+      } else if (attachment) {
         const formData = new FormData()
         formData.append('scheduled_at', scheduledAt.toISOString())
         formData.append('media_type', attachment.media_type)
@@ -2506,6 +2541,10 @@ export default function ChatsPage() {
           },
           { params },
         )
+      }
+      if (selectedChatIdRef.current !== selectedChatId) {
+        notify({ tone: 'success', message: 'Сообщение запланировано.' })
+        return
       }
       setDraft('')
       setTranslatedDraftOriginal(null)
@@ -2663,6 +2702,7 @@ export default function ChatsPage() {
                 >
                   <ArrowLeft size={16} />
                 </button>
+                <ChatAvatar chatId={selectedChat.id} projectId={selectedChat.project_id} name={getChatTitle(selectedChat)} />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h2 className="truncate text-base font-semibold text-white">
@@ -3117,7 +3157,7 @@ export default function ChatsPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs text-gray-200">
-                        {item.file_name ?? item.text ?? 'Сообщение'}
+                        {item.album_count ? `Альбом · ${item.album_count} фото` : item.file_name ?? item.text ?? 'Сообщение'}
                       </p>
                       <p className={`truncate text-[11px] ${item.status === 'failed' ? 'text-red-200' : 'text-gray-500'}`}>
                         {item.status === 'failed'
@@ -3177,7 +3217,9 @@ export default function ChatsPage() {
               </button>
             </div>
           ) : null}
-          {attachment ? (
+          {albumPhotos.length > 1 ? (
+            <PhotoAlbumDraft files={albumPhotos} onRemove={(index) => handleAttachmentSelected(albumPhotos.filter((_, itemIndex) => itemIndex !== index), 'photo')} />
+          ) : attachment ? (
             <div className="mb-3 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
               {attachment.media_type === 'photo' && attachmentPreviewUrl ? (
                 <img
@@ -3258,9 +3300,10 @@ export default function ChatsPage() {
             <input
               ref={attachmentInputRef}
               type="file"
+              multiple={attachmentMode === 'photo'}
               accept={attachmentModes.find((mode) => mode.type === attachmentMode)?.accept ?? '*/*'}
               className="hidden"
-              onChange={(event) => handleAttachmentSelected(event.target.files?.[0])}
+              onChange={(event) => handleAttachmentSelected(Array.from(event.target.files ?? []))}
             />
             <div className="relative shrink-0">
               <button
@@ -3585,7 +3628,7 @@ export default function ChatsPage() {
               />
             </label>
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-gray-300">
-              {attachment
+              {albumPhotos.length > 1 ? `Альбом · ${albumPhotos.length} фото` : attachment
                 ? `${mediaLabels[attachment.media_type]}: ${attachment.file_name}`
                 : snippetMedia
                   ? `${mediaLabels[snippetMedia.type]}: ${snippetMedia.name}`
@@ -3606,7 +3649,7 @@ export default function ChatsPage() {
                 {scheduledMessages.filter((item) => item.status === 'pending').map((item) => (
                   <div key={item.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-gray-200">{item.file_name ?? item.text ?? 'Сообщение'}</p>
+                      <p className="truncate text-sm text-gray-200">{item.album_count ? `Альбом · ${item.album_count} фото` : item.file_name ?? item.text ?? 'Сообщение'}</p>
                       <p className="text-xs text-gray-500">{new Date(item.scheduled_at).toLocaleString()}</p>
                     </div>
                     <button type="button" onClick={() => void handleCancelScheduledMessage(item.id)} disabled={cancellingScheduledMessageId === item.id} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-gray-400 transition hover:border-red-300/40 hover:text-red-100 disabled:opacity-50" title="Отменить">
