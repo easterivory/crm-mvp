@@ -35,6 +35,10 @@ def test_avatar_thumbnail_is_small_safe_jpeg_without_original_metadata():
         assert image.mode == "RGB"
         assert not image.getexif()
     assert len(thumbnail) < 64 * 1024
+    preview = avatar_thumbnail(image_bytes(), 512)
+    with Image.open(io.BytesIO(preview)) as image:
+        assert image.size == (512, 256)
+    assert len(preview) <= 64 * 1024
     with pytest.raises((ValueError, OSError)):
         avatar_thumbnail(b"not an image")
     with pytest.raises(ValueError):
@@ -99,6 +103,10 @@ def test_cached_avatar_scope_and_chat_state_are_read_only(tmp_path):
                 key = hashlib.sha256(f"{project.id}:{bot.id}:123:123".encode()).hexdigest()
                 thumbnail = avatar_thumbnail(image_bytes())
                 await service.cache.put(key, thumbnail, ttl=86400)
+                assert await service.get_avatar(chat_id=chat.id, project_id=project.id) == thumbnail
+                preview = avatar_thumbnail(image_bytes(), 512)
+                await service.cache.put(key + ":preview", preview, ttl=86400)
+                assert await service.get_avatar(chat_id=chat.id, project_id=project.id, preview=True) == preview
                 assert await service.get_avatar(chat_id=chat.id, project_id=project.id) == thumbnail
                 with pytest.raises(HTTPException) as denied:
                     await service.get_avatar(chat_id=chat.id, project_id=uuid4())

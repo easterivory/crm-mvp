@@ -15,6 +15,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_project_id, get_current_user, get_db
+from app.api.v1.routers.dialog_exports import router as dialog_exports_router
 from app.core.constants import RoleName
 from app.models.user import User
 from app.repositories.funnel_repository import FunnelRepository
@@ -47,6 +48,8 @@ from app.services.chat_avatar_service import ChatAvatarService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
+
+router.include_router(dialog_exports_router)
 
 CHAT_TRACE_ROLES = {
     RoleName.SUPER_ADMIN,
@@ -349,12 +352,13 @@ async def get_chat(
 async def get_chat_avatar(
     chat_id: UUID,
     background_tasks: BackgroundTasks,
+    preview: bool = Query(default=False),
     project_id: UUID = Depends(get_current_project_id),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     content = await ChatAvatarService(db).get_avatar(
-        chat_id=chat_id, project_id=project_id, background_tasks=background_tasks,
+        chat_id=chat_id, project_id=project_id, background_tasks=background_tasks, preview=preview,
     )
     headers = {"Cache-Control": "private, max-age=3600", "Vary": "Authorization",
                "X-Content-Type-Options": "nosniff"}
@@ -445,6 +449,30 @@ async def get_chat_funnel_control(
         chat_id=chat_id,
         project_id=project_id,
     )
+    return ChatFunnelControlOut.model_validate(control)
+
+
+@router.post("/{chat_id}/funnel-pause", response_model=ChatFunnelControlOut)
+async def pause_chat_funnel(
+    chat_id: UUID,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatFunnelControlOut:
+    _ensure_chat_trace_access(current_user)
+    runtime = FunnelRuntimeService(db)
+    try:
+        paused = await runtime.pause_for_manager_takeover(
+            chat_id=chat_id, project_id=project_id, actor=current_user,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if not paused:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="У чата нет активной воронки для перехвата.",
+        )
+    control = await runtime.get_manager_funnel_control(chat_id=chat_id, project_id=project_id)
     return ChatFunnelControlOut.model_validate(control)
 
 

@@ -36,7 +36,7 @@ class ChatAvatarService:
         )
 
     async def get_avatar(self, *, chat_id: UUID, project_id: UUID,
-                         background_tasks: BackgroundTasks | None = None) -> bytes | None:
+                         background_tasks: BackgroundTasks | None = None, preview: bool = False) -> bytes | None:
         row = (await self.db.execute(select(
             Chat.bot_id, Chat.external_user_id, Chat.external_chat_id,
         ).join(Project, Project.id == Chat.project_id).where(
@@ -47,6 +47,8 @@ class ChatAvatarService:
             raise HTTPException(status_code=404, detail="Chat not found")
         bot_id, user_id, external_chat_id = row
         key = hashlib.sha256(f"{project_id}:{bot_id}:{user_id}:{external_chat_id}".encode()).hexdigest()
+        if preview:
+            key += ":preview"
         # Snapshot scalars, then finish DB work before any external request.
         await self.db.commit()
         cached = None
@@ -55,7 +57,7 @@ class ChatAvatarService:
             if cached is not None and cached[1]:
                 return cached[0]
             if cached and cached[0] and background_tasks is not None:
-                background_tasks.add_task(refresh_chat_avatar, chat_id, project_id)
+                background_tasks.add_task(refresh_chat_avatar, chat_id, project_id, preview)
                 return cached[0]
             async with asyncio.timeout(25):
                 redis = await get_redis()
@@ -72,7 +74,7 @@ class ChatAvatarService:
                         token = await repo.get_bot_token_by_id(bot_id, project_id) if bot_id and transport == "bot_api" else None
                         await self.db.commit()
                         try:
-                            content = await self._fetch(transport, token, bot_id, user_id, external_chat_id)
+                            content = await self._fetch(transport, token, bot_id, user_id, external_chat_id, preview=preview)
                         except Exception as exc:
                             logger.info("Chat avatar unavailable chat_id=%s error_type=%s", chat_id, type(exc).__name__)
                             content = cached[0] if cached else None
@@ -89,18 +91,18 @@ class ChatAvatarService:
             logger.info("Chat avatar cache unavailable chat_id=%s error_type=%s", chat_id, type(exc).__name__)
             return cached[0] if cached else None
 
-    async def _fetch(self, transport, token, bot_id, user_id, external_chat_id) -> bytes | None:
+    async def _fetch(self, transport, token, bot_id, user_id, external_chat_id, *, preview: bool = False) -> bytes | None:
         if transport == "user_mtproto" and bot_id:
             result = await TelegramAccountGateway().invoke(
                 bot_id=bot_id, operation="get_chat_avatar",
-                payload={"external_chat_id": external_chat_id}, timeout_seconds=15,
+                payload={"external_chat_id": external_chat_id, "preview": preview}, timeout_seconds=15,
             )
             encoded = result.get("content")
             if not encoded:
                 return None
             if not isinstance(encoded, str) or len(encoded) > 100000:
                 raise ValueError("Avatar response exceeds limit")
-            return await asyncio.to_thread(avatar_thumbnail, base64.b64decode(encoded, validate=True))
+            return await asyncio.to_thread(avatar_thumbnail, base64.b64decode(encoded, validate=True), 512 if preview else 128)
         if transport != "bot_api" or not token or not str(user_id).isdigit():
             return None
         sender = TelegramSenderService(self.db)
@@ -110,15 +112,15 @@ class ChatAvatarService:
         sizes = [item for item in photos[0] if isinstance(item, dict) and item.get("file_id")]
         if not sizes:
             return None
-        smallest = min(sizes, key=lambda item: int(item.get("width") or 0) * int(item.get("height") or 0))
+        smallest = (max if preview else min)(sizes, key=lambda item: int(item.get("width") or 0) * int(item.get("height") or 0))
         info = await sender.get_file(token, smallest["file_id"])
         content = await sender.download_file(token, info["file_path"], max_bytes=MAX_SOURCE_BYTES)
-        return await asyncio.to_thread(avatar_thumbnail, content)
+        return await asyncio.to_thread(avatar_thumbnail, content, 512 if preview else 128)
 
 
-async def refresh_chat_avatar(chat_id: UUID, project_id: UUID) -> None:
+async def refresh_chat_avatar(chat_id: UUID, project_id: UUID, preview: bool = False) -> None:
     try:
         async with get_db_session() as db:
-            await ChatAvatarService(db).get_avatar(chat_id=chat_id, project_id=project_id)
+            await ChatAvatarService(db).get_avatar(chat_id=chat_id, project_id=project_id, preview=preview)
     except Exception as exc:
         logger.info("Chat avatar background refresh unavailable chat_id=%s error_type=%s", chat_id, type(exc).__name__)

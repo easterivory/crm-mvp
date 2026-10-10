@@ -184,7 +184,9 @@ class MessageService:
                 reply_to_message_id=reply_to_message_id,
                 raw_payload_json={"telegram_result": result},
             )
-            message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
+            message = await self.create_message(
+                chat_id, project_id, data, send_to_telegram=False, pause_funnel_after_delivery=True,
+            )
             logger.info(
                 "Operator message sent chat_id=%s operator_id=%s media_type=%s message_id=%s",
                 chat_id,
@@ -246,7 +248,9 @@ class MessageService:
             reply_to_message_id=reply_to_message_id,
             raw_payload_json={"telegram_result": result},
         )
-        message = await self.create_message(chat_id, project_id, data, send_to_telegram=False)
+        message = await self.create_message(
+            chat_id, project_id, data, send_to_telegram=False, pause_funnel_after_delivery=True,
+        )
         logger.info(
             "Operator message sent chat_id=%s operator_id=%s media_type=%s message_id=%s",
             chat_id,
@@ -305,7 +309,7 @@ class MessageService:
                 file_name=photo.file_name, mime_type=photo.mime_type,
                 media_group_id=str(result["media_group_id"]) if result.get("media_group_id") else None,
                 reply_to_message_id=reply_to_message_id, raw_payload_json={"telegram_result": result},
-            ), send_to_telegram=False))
+            ), send_to_telegram=False, pause_funnel_after_delivery=True))
         logger.info("Operator photo album sent chat_id=%s operator_id=%s photo_count=%s", chat_id, operator_id, len(messages))
         return messages
 
@@ -362,6 +366,7 @@ class MessageService:
         send_to_telegram: bool = True,
         auto_translate: bool = True,
         translate_incoming: bool = True,
+        pause_funnel_after_delivery: bool = False,
     ) -> MessageOut:
         """
         Atomically (within one DB transaction):
@@ -427,24 +432,28 @@ class MessageService:
             )
 
         upload_id_for_sent_mark = data.upload_id
+        delivered_to_telegram = pause_funnel_after_delivery
         if send_to_telegram and self._is_outgoing_media_upload(data):
             data = await self._send_media_upload_to_telegram(
                 project_id=project_id,
                 chat=chat,
                 data=data,
             )
+            delivered_to_telegram = True
         elif send_to_telegram and self._is_outgoing_media_file_id(data):
             data = await self._send_media_file_id_to_telegram(
                 project_id=project_id,
                 chat=chat,
                 data=data,
             )
+            delivered_to_telegram = True
         elif send_to_telegram and self._is_outgoing_text(data):
             data = await self._send_text_to_telegram(
                 project_id=project_id,
                 chat=chat,
                 data=data,
             )
+            delivered_to_telegram = True
 
         if data.reply_markup:
             raw_payload_json = dict(data.raw_payload_json or {})
@@ -521,6 +530,14 @@ class MessageService:
 
         if data.sender_type == SenderType.MANAGER:
             await self.bot_repo.disable_bot_for_chat(chat_id)
+            if delivered_to_telegram:
+                # Importing history must not interrupt the current scenario.
+                from app.services.funnel_runtime_service import FunnelRuntimeService
+
+                await FunnelRuntimeService(self.db).pause_for_manager_reply(
+                    chat_id=chat_id, project_id=project_id,
+                    actor_id=data.operator_id, message_id=message.id,
+                )
 
         return await self._message_out(message)
 

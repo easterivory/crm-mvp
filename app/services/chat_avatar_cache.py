@@ -13,7 +13,7 @@ MAX_THUMBNAIL_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 
 
-def avatar_thumbnail(content: bytes) -> bytes:
+def avatar_thumbnail(content: bytes, max_size: int = 128) -> bytes:
     if not content or len(content) > MAX_SOURCE_BYTES:
         raise ValueError("Avatar source exceeds limit")
     with Image.open(io.BytesIO(content)) as image:
@@ -21,9 +21,21 @@ def avatar_thumbnail(content: bytes) -> bytes:
             raise ValueError("Avatar dimensions exceed limit")
         image.seek(0)
         image = ImageOps.exif_transpose(image)
-        image.thumbnail((128, 128))
+        size = 512 if max_size == 512 else 128
+        image.thumbnail((size, size))
         output = io.BytesIO()
-        image.convert("RGB").save(output, format="JPEG", quality=80, optimize=True)
+        image = image.convert("RGB")
+        for quality in (80, 65, 50):
+            output.seek(0)
+            output.truncate()
+            image.save(output, format="JPEG", quality=quality, optimize=True)
+            if output.tell() <= MAX_THUMBNAIL_BYTES:
+                break
+        if output.tell() > MAX_THUMBNAIL_BYTES:
+            image.thumbnail((128, 128))
+            output.seek(0)
+            output.truncate()
+            image.save(output, format="JPEG", quality=80, optimize=True)
     result = output.getvalue()
     if len(result) > MAX_THUMBNAIL_BYTES:
         raise ValueError("Avatar thumbnail exceeds limit")

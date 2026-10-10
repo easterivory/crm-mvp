@@ -1,4 +1,4 @@
-import { ArrowDownWideNarrow, Ban, Database, LoaderCircle, RefreshCw, RotateCcw, Star } from 'lucide-react'
+import { ArrowDownWideNarrow, Ban, Database, Download, LoaderCircle, RefreshCw, RotateCcw, Star } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import ChatFilterButton from '../features/chats/components/ChatFilterButton'
@@ -99,6 +99,7 @@ type ChatListProps = {
   onFiltersChange: (filters: ChatFiltersState) => void
   onLoadMore: () => void
   onRefresh: () => void
+  onExport?: () => void
   onResetFilters: () => void
   onSavePreset: (name: string, isShared: boolean, filters: ChatFiltersState) => void
   onSelectChat: (chatId: string) => void
@@ -257,6 +258,7 @@ export default function ChatList({
   onFiltersChange,
   onLoadMore,
   onRefresh,
+  onExport,
   onResetFilters,
   onSavePreset,
   onSelectChat,
@@ -376,6 +378,7 @@ export default function ChatList({
               </p>
             ) : null}
           </div>
+          {onExport && <button type="button" title="Экспорт диалогов" aria-label="Экспорт диалогов" onClick={onExport} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 hover:text-white"><Download size={16} /></button>}
           <button
             type="button"
             title="Обновить чаты"
@@ -529,17 +532,17 @@ export default function ChatList({
                   : 'hover:bg-white/[0.035]'
               }`}
             >
+              <div className="relative ml-4 mt-4 shrink-0 self-start">
+                <ChatAvatar chatId={chat.id} projectId={chat.project_id} name={title} onEmptyClick={() => onSelectChat(chat.id)} />
+                {isUnread ? (
+                  <span className="pointer-events-none absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-surface bg-sky-300 shadow-[0_0_12px_rgba(125,211,252,0.9)]" />
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={() => onSelectChat(chat.id)}
-                className="flex min-w-0 flex-1 gap-3 p-4 pr-1 text-left"
+                className="flex min-w-0 flex-1 p-4 pl-3 pr-1 text-left"
               >
-              <div className="relative shrink-0">
-                <ChatAvatar chatId={chat.id} projectId={chat.project_id} name={title} />
-                {isUnread ? (
-                  <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-surface bg-sky-300 shadow-[0_0_12px_rgba(125,211,252,0.9)]" />
-                ) : null}
-              </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-1.5">

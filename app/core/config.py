@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     CHAT_AVATAR_STORAGE_PATH: str = "storage/chat_avatars"
     CHAT_AVATAR_CACHE_MAX_MB: int = 200
     CHAT_AVATAR_CACHE_SECONDS: int = 86400
+    DIALOG_EXPORT_MAX_MB: int = 500
+    DIALOG_EXPORT_STORAGE_MAX_MB: int = 2048
+    DIALOG_EXPORT_PART_MB: int = 20
     CHAT_AVATAR_CACHE_MAX_ENTRIES: int = 10000
 
     # Google Sheets export

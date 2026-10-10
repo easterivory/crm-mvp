@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   Link2,
   Palette,
+  Pause,
   Phone,
   Plus,
   RefreshCw,
@@ -117,6 +118,7 @@ type LeadSidebarProps = {
   hasActiveScope: boolean
   isChatBlocked: boolean
   isUpdatingChatBlock?: boolean
+  funnelStateKey?: string
   currentUserId: string | null
   currentUserRole: string | null
   onSetBlocked?: (isBlocked: boolean) => void
@@ -247,6 +249,7 @@ export default function LeadSidebar({
   hasActiveScope,
   isChatBlocked,
   isUpdatingChatBlock = false,
+  funnelStateKey = '',
   currentUserId,
   currentUserRole,
   onSetBlocked,
@@ -282,6 +285,10 @@ export default function LeadSidebar({
   const [selectedReturnStepId, setSelectedReturnStepId] = useState('')
   const [isFunnelControlLoading, setIsFunnelControlLoading] = useState(false)
   const [isResumingFunnel, setIsResumingFunnel] = useState(false)
+  const [isPausingFunnel, setIsPausingFunnel] = useState(false)
+  const funnelControlScopeRef = useRef('')
+  const funnelControlRequestSeqRef = useRef(0)
+  funnelControlScopeRef.current = `${selectedProjectId}:${activeChatId}`
   const [funnelTraceRefreshKey, setFunnelTraceRefreshKey] = useState(0)
   const [leadEventType, setLeadEventType] = useState<'registration' | 'deposit' | 'redeposit'>('registration')
   const [leadEventAmount, setLeadEventAmount] = useState('')
@@ -487,9 +494,12 @@ export default function LeadSidebar({
   }, [lead, managerCommentDraft, selectedProjectId])
 
   const loadFunnelControl = useCallback(async () => {
+    const requestSeq = ++funnelControlRequestSeqRef.current
+    const scope = funnelControlScopeRef.current
     if (!activeChatId || !selectedProjectId) {
       setFunnelControl(null)
       setSelectedReturnStepId('')
+      setIsFunnelControlLoading(false)
       return
     }
 
@@ -498,6 +508,7 @@ export default function LeadSidebar({
       const { data } = await api.get<FunnelControl>(`/chats/${activeChatId}/funnel-control`, {
         params: { project_id: selectedProjectId },
       })
+      if (requestSeq !== funnelControlRequestSeqRef.current || scope !== funnelControlScopeRef.current) return
       setFunnelControl(data)
       setSelectedReturnStepId((current) => {
         if (current && data.steps.some((step) => step.id === current)) {
@@ -506,16 +517,19 @@ export default function LeadSidebar({
         return data.current_step_id ?? data.steps[0]?.id ?? ''
       })
     } catch {
+      if (requestSeq !== funnelControlRequestSeqRef.current || scope !== funnelControlScopeRef.current) return
       setFunnelControl(null)
       setSelectedReturnStepId('')
     } finally {
-      setIsFunnelControlLoading(false)
+      if (requestSeq === funnelControlRequestSeqRef.current && scope === funnelControlScopeRef.current) {
+        setIsFunnelControlLoading(false)
+      }
     }
   }, [activeChatId, selectedProjectId])
 
   useEffect(() => {
     void loadFunnelControl()
-  }, [loadFunnelControl])
+  }, [loadFunnelControl, funnelStateKey])
 
   const handleStatusChange = async (nextStatusId: string) => {
     if (!lead || nextStatusId === lead.status_id || isUpdatingStatus) {
@@ -600,12 +614,37 @@ export default function LeadSidebar({
     }
   }
 
+  const handlePauseFunnel = async () => {
+    if (!activeChatId || !selectedProjectId || isPausingFunnel || isResumingFunnel) return
+    if (!window.confirm('Перехватить диалог? Воронка будет приостановлена, её ожидающие отправки отменены.')) return
+    const scope = funnelControlScopeRef.current
+    ++funnelControlRequestSeqRef.current
+    setIsFunnelControlLoading(false)
+    setIsPausingFunnel(true)
+    setError('')
+    try {
+      const { data } = await api.post<FunnelControl>(
+        `/chats/${activeChatId}/funnel-pause`, {},
+        { params: { project_id: selectedProjectId } },
+      )
+      if (scope !== funnelControlScopeRef.current) return
+      setFunnelControl(data)
+      setFunnelTraceRefreshKey((current) => current + 1)
+      onLeadStatusChanged?.()
+    } catch (err) {
+      if (scope === funnelControlScopeRef.current) setError(getErrorMessage(err))
+    } finally {
+      setIsPausingFunnel(false)
+    }
+  }
+
   const handleResumeFunnel = async (mode: 'approve' | 'step') => {
     if (
       !activeChatId
       || !selectedProjectId
       || (mode === 'step' && !selectedReturnStepId)
       || isResumingFunnel
+      || isPausingFunnel
     ) {
       return
     }
@@ -1252,11 +1291,22 @@ export default function LeadSidebar({
                 </div>
 
                 <div className="mt-3 space-y-3">
+                  {!funnelControl.is_paused && ['super_admin', 'admin', 'manager', 'operator'].includes(currentUserRole ?? '') ? (
+                    <button
+                      type="button"
+                      onClick={() => void handlePauseFunnel()}
+                      disabled={isPausingFunnel || isResumingFunnel || (currentUserRole === 'manager' && lead.manager_id !== currentUserId)}
+                      className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-sm font-semibold text-yellow-50 transition hover:bg-yellow-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isPausingFunnel ? <LoaderCircle size={16} className="animate-spin" /> : <Pause size={16} />}
+                      Перехватить диалог
+                    </button>
+                  ) : null}
                   {funnelControl.is_manual_review ? (
                     <button
                       type="button"
                       onClick={() => void handleResumeFunnel('approve')}
-                      disabled={isResumingFunnel}
+                      disabled={isResumingFunnel || isPausingFunnel}
                       className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/50 hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isResumingFunnel ? <LoaderCircle size={16} className="animate-spin" /> : <Check size={16} />}
@@ -1275,7 +1325,7 @@ export default function LeadSidebar({
                     <select
                       value={selectedReturnStepId}
                       onChange={(event) => setSelectedReturnStepId(event.target.value)}
-                      disabled={isFunnelControlLoading || isResumingFunnel}
+                      disabled={isFunnelControlLoading || isResumingFunnel || isPausingFunnel}
                       className="w-full rounded-xl border border-white/10 bg-background/70 px-3 py-2 text-base text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60 md:text-sm"
                     >
                       {funnelControl.steps.map((step) => (
@@ -1287,7 +1337,7 @@ export default function LeadSidebar({
                     <button
                       type="button"
                       onClick={() => void handleResumeFunnel('step')}
-                      disabled={!selectedReturnStepId || isResumingFunnel}
+                      disabled={!selectedReturnStepId || isResumingFunnel || isPausingFunnel}
                       className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-accent-300/25 bg-accent-300/10 px-3 py-2 text-sm font-semibold text-accent-50 transition hover:border-accent-300/50 hover:bg-accent-300/15 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isResumingFunnel ? <LoaderCircle size={16} className="animate-spin" /> : <RotateCcw size={16} />}

@@ -38,6 +38,7 @@ from app.repositories.tracking_repository import TrackingLinkRepository
 from app.schemas.message import MessageCreate
 from app.services.chat_audit_service import ChatAuditService
 from app.services.audit_service import AuditService
+from app.services.access_control import require_project_access
 from app.services.ai_response_execution_service import (
     AIResponseExecutionService,
     AIResponseExecutionOutcome,
@@ -349,6 +350,9 @@ class FunnelRuntimeService:
         chat_id: UUID,
         project_id: UUID,
         actor_id: UUID,
+        reason: str = "manager_assignment",
+        note: str | None = None,
+        message_id: UUID | None = None,
     ) -> bool:
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None or state.completed_at is not None:
@@ -369,9 +373,56 @@ class FunnelRuntimeService:
             entity_type=EntityType.CHAT,
             entity_id=chat_id,
             actor_id=actor_id,
-            meta={"funnel_id": str(state.funnel_id), "step_id": str(state.current_step_id)},
+            meta={
+                "funnel_id": str(state.funnel_id),
+                "step_id": str(state.current_step_id),
+                "reason": reason,
+                **({"message_id": str(message_id)} if message_id is not None else {}),
+            },
+        )
+        if note is not None:
+            await self.chat_audit.log_event(
+                chat_id=chat_id, project_id=project_id, user_id=actor_id,
+                event_type=ChatEventType.NOTE_ADDED, new_value=note,
+            )
+        logger.info(
+            "Funnel paused reason=%s project_id=%s chat_id=%s actor_id=%s step_id=%s message_id=%s",
+            reason, project_id, chat_id, actor_id, state.current_step_id, message_id,
         )
         return True
+
+    async def pause_for_manager_takeover(
+        self, *, chat_id: UUID, project_id: UUID, actor: User,
+    ) -> bool:
+        require_project_access(actor, project_id)
+        if actor.role_name not in {
+            RoleName.SUPER_ADMIN, RoleName.ADMIN, RoleName.MANAGER, RoleName.OPERATOR,
+        }:
+            raise PermissionError("This role cannot pause funnels.")
+        chat = await self.chat_repo.get_active(chat_id, project_id)
+        if chat is None:
+            return False
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if actor.role_name == RoleName.MANAGER and (lead is None or lead.manager_id != actor.id):
+            raise PermissionError("Only the assigned manager can pause this funnel.")
+
+        return await self.pause_for_manager_assignment(
+            chat_id=chat_id, project_id=project_id, actor_id=actor.id,
+            reason="manager_takeover",
+            note="Воронка приостановлена: менеджер перехватил диалог для ручного ответа.",
+        )
+
+    async def pause_for_manager_reply(
+        self, *, chat_id: UUID, project_id: UUID, actor_id: UUID, message_id: UUID,
+    ) -> bool:
+        """Called after an authorized CRM reply is delivered and persisted."""
+        if await self.chat_repo.get_active(chat_id, project_id) is None:
+            return False
+        return await self.pause_for_manager_assignment(
+            chat_id=chat_id, project_id=project_id, actor_id=actor_id,
+            reason="manager_reply", message_id=message_id,
+            note="Воронка приостановлена: менеджер отправил ручной ответ.",
+        )
 
     async def pause_for_user_block(self, chat_id: UUID) -> bool:
         state = await self.repo.get_chat_funnel_state(chat_id)

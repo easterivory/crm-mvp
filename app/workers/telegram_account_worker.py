@@ -955,10 +955,11 @@ class TelegramAccountWorker:
         peer_id = int(payload.get("external_chat_id"))
 
         if operation == "get_chat_avatar":
-            content = await client.download_profile_photo(peer, file=bytes, download_big=False)
+            preview = payload.get("preview") is True
+            content = await client.download_profile_photo(peer, file=bytes, download_big=preview)
             if not content:
                 return {"content": None}
-            thumbnail = await asyncio.to_thread(avatar_thumbnail, content)
+            thumbnail = await asyncio.to_thread(avatar_thumbnail, content, 512 if preview else 128)
             return {"content": base64.b64encode(thumbnail).decode("ascii")}
 
         if operation == "send_message":

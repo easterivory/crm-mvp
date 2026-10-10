@@ -100,6 +100,27 @@ services:
       redis:
         condition: service_healthy
 
+  exports:
+    build: .
+    restart: unless-stopped
+    command: arq app.workers.dialog_export_worker.WorkerSettings
+    env_file:
+      - .env
+    environment:
+      APP_SERVICE_NAME: exports
+      LOG_STORAGE_PATH: /app/storage/logs
+      CHAT_ATTACHMENT_STORAGE_PATH: /app/storage/chat_attachments
+      DATABASE_POOL_SIZE: 2
+      DATABASE_MAX_OVERFLOW: 2
+    volumes:
+      - chat_attachments_data:/app/storage/chat_attachments
+      - logs_data:/app/storage/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   backup:
     build: .
     restart: unless-stopped

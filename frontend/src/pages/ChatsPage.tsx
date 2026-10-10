@@ -47,6 +47,7 @@ import { useSearchParams } from 'react-router-dom'
 
 import api from '../api/client'
 import ChatList, { Chat } from '../components/ChatList'
+import DialogExportModal from '../components/DialogExportModal'
 import ChatAvatar from '../components/ChatAvatar'
 import PhotoAlbumDraft from '../components/PhotoAlbumDraft'
 import LeadSidebar from '../components/LeadSidebar'
@@ -841,6 +842,7 @@ export default function ChatsPage() {
     return JSON.stringify(normalizeChatFilters(selectedPreset.filters_json)) !== JSON.stringify(chatFilters)
   }, [chatFilters, selectedPreset])
   const canManageSharedPresets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
+  const [isExportOpen, setIsExportOpen] = useState(false)
   const canCreateSnippets = user?.role_name === 'manager' || user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const canDeleteSnippets = user?.role_name === 'admin' || user?.role_name === 'super_admin'
   const isBuyer = user?.role_name === 'buyer'
@@ -2037,6 +2039,9 @@ export default function ChatsPage() {
       setTranslatedDraftOriginal(null)
       setReplyingToMessage(null)
       await loadChats()
+      if (selectedChatIdRef.current === selectedChatId) {
+        void loadSelectedChat(selectedChatId)
+      }
       void loadWorkspaceCounts()
       return true
     } catch (err) {
@@ -2629,12 +2634,14 @@ export default function ChatsPage() {
 
   return (
     <section className="relative grid h-full min-h-0 grid-cols-1 gap-0 overflow-hidden text-gray-200 md:gap-4 md:grid-cols-[minmax(250px,35%)_minmax(0,1fr)] lg:grid-cols-[minmax(250px,25%)_minmax(0,50%)_minmax(250px,25%)]">
+      {isExportOpen && selectedProjectId && <DialogExportModal key={selectedProjectId} projectId={selectedProjectId} bots={bots} initialBotId={selectedBotIds.length === 1 ? selectedBotIds[0] : undefined} onClose={() => setIsExportOpen(false)} />}
       <div
         className={`h-full min-h-0 overflow-hidden ${
           selectedChat ? 'hidden md:block' : ''
         }`}
       >
         <ChatList
+          onExport={canManageSharedPresets && selectedProjectId ? () => setIsExportOpen(true) : undefined}
           chats={chats}
           currentUserId={user?.id ?? null}
           canManageSharedPresets={canManageSharedPresets}
@@ -3494,6 +3501,7 @@ export default function ChatsPage() {
           activeBotName={selectedChatBot?.name ?? botScopeLabel}
           activeBotTransportType={selectedChatTransportType}
           activeChatId={selectedChatId}
+          funnelStateKey={`${selectedChat?.lifecycle_status}:${selectedChat?.current_step_id}`}
           hasActiveScope={Boolean(selectedProjectId)}
           isChatBlocked={Boolean(selectedChat?.is_blocked)}
           isUpdatingChatBlock={isUpdatingChatBlock}
@@ -3774,6 +3782,7 @@ export default function ChatsPage() {
               activeBotName={selectedChatBot?.name ?? botScopeLabel}
               activeBotTransportType={selectedChatTransportType}
               activeChatId={selectedChatId}
+              funnelStateKey={`${selectedChat?.lifecycle_status}:${selectedChat?.current_step_id}`}
               hasActiveScope={Boolean(selectedProjectId)}
               isChatBlocked={Boolean(selectedChat?.is_blocked)}
               isUpdatingChatBlock={isUpdatingChatBlock}

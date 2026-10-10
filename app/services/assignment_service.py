@@ -9,6 +9,7 @@ Design decisions
 - A manager must belong to the same project as the lead. Assigning a user
   from a different project raises 403.
 - Passing manager_id=None explicitly unassigns the current manager.
+- Assignment does not pause or resume automation; takeover is explicit.
 
 Audit log entries
 -----------------
@@ -183,15 +184,6 @@ class AssignmentService:
                 ),
             },
         )
-
-        if manager_id is not None:
-            from app.services.funnel_runtime_service import FunnelRuntimeService
-
-            await FunnelRuntimeService(self.db).pause_for_manager_assignment(
-                chat_id=lead.chat_id,
-                project_id=project_id,
-                actor_id=actor_id,
-            )
 
         return await self._lead_out(updated)
 
