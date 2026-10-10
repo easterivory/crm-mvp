@@ -17,6 +17,7 @@ from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.partner import LeadSubmission
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
+from app.repositories.tracking_start_query import is_first_project_start, is_telegram_start
 from app.services.tracking_cost_service import calculate_tracking_spend
 
 
@@ -30,7 +31,7 @@ class TrackingMetricsRepository:
 
     Sources of truth:
     - clicks: TrackingEvent.clicks grouped by TrackingEvent.created_at.
-    - starts: unique Chat rows with an incoming Telegram /start message.
+    - starts: first incoming Telegram /start per Telegram user within a project.
     - leads: Lead rows filtered by configured project lead statuses.
     - submitted: the first successful LeadSubmission for each lead.
     - demographic breakdowns: active leads grouped by fields stored on Lead.
@@ -182,7 +183,7 @@ class TrackingMetricsRepository:
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
+                is_first_project_start(),
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
@@ -209,7 +210,7 @@ class TrackingMetricsRepository:
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
+                is_first_project_start(),
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
@@ -234,7 +235,7 @@ class TrackingMetricsRepository:
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
+                is_first_project_start(),
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
@@ -867,7 +868,7 @@ class TrackingMetricsRepository:
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
+                is_first_project_start(),
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
@@ -1127,7 +1128,7 @@ class TrackingMetricsRepository:
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
+                is_first_project_start(),
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
@@ -1321,7 +1322,7 @@ class TrackingMetricsRepository:
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
+                is_first_project_start(),
                 Message.created_at >= start_at,
                 Message.created_at < end_at,
             )
@@ -1517,8 +1518,7 @@ class TrackingMetricsRepository:
 
     @staticmethod
     def _is_start_message():
-        command = func.split_part(func.lower(func.trim(Message.body)), " ", 1)
-        return or_(command == "/start", command.like("/start@%"))
+        return is_telegram_start()
 
     @staticmethod
     def _step_label(step_type: str, config: dict[str, Any] | None) -> str:

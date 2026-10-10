@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import delete, distinct, func, or_, select, update
+from sqlalchemy import delete, distinct, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,7 @@ from app.models.tracking import TrackingEvent
 from app.models.tracking import TrackingLink
 from app.models.tracking import TrackingSpend
 from app.repositories.base import BaseRepository
+from app.repositories.tracking_start_query import is_first_project_start
 
 
 class TrackingLinkRepository(BaseRepository[TrackingLink]):
@@ -191,26 +192,20 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
     async def get_traffic_stats(self, project_id: UUID):
         chat_counts = (
             select(
-                Chat.tracking_link_id.label("tracking_link_id"),
+                Message.tracking_link_id.label("tracking_link_id"),
                 func.count(distinct(Chat.id)).label("chat_clicks"),
             )
             .join(Message, Message.chat_id == Chat.id)
             .where(
                 Chat.project_id == project_id,
-                Chat.tracking_link_id.is_not(None),
+                Message.tracking_link_id.is_not(None),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
-                or_(
-                    func.split_part(func.lower(func.trim(Message.body)), " ", 1)
-                    == "/start",
-                    func.split_part(func.lower(func.trim(Message.body)), " ", 1).like(
-                        "/start@%"
-                    ),
-                ),
+                is_first_project_start(),
             )
-            .group_by(Chat.tracking_link_id)
+            .group_by(Message.tracking_link_id)
             .subquery()
         )
         lead_counts = (
