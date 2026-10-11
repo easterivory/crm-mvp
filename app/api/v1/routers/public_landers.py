@@ -146,6 +146,7 @@ async def resolve_channel_attribution_invite(
     context.pop("event_source_url", None)
     context["fbp"] = payload.get("_fbp") or payload.get("fbp")
     context["fbc"] = payload.get("_fbc") or payload.get("fbc")
+    context["ttp"] = payload.get("_ttp") or payload.get("ttp")
     try:
         invite_url = await LanderService(db).resolve_channel_click_target(
             host=_request_host(request),
@@ -251,10 +252,19 @@ async def update_lander_bridge(
     context["fbp"] = payload.get("_fbp") or payload.get("fbp")
     context["fbc"] = payload.get("_fbc") or payload.get("fbc")
     context["event_source_url"] = payload.get("event_source_url")
+    context["ttp"] = payload.get("_ttp") or payload.get("ttp")
     updated = await LanderService(db).utm_bridge.update_lander_start_context(
         start_key,
         browser_context=context,
     )
+    if updated and payload.get("crm_tiktok_source") in {"page_view", "telegram_click"}:
+        from app.services.tiktok_event_service import TikTokEventService
+        refreshed = await LanderService(db).utm_bridge.load_lander_start(start_key)
+        if refreshed:
+            await TikTokEventService(db).browser_event(
+                link_id=lander.tracking_link.id, source=payload["crm_tiktok_source"],
+                start_key=start_key, context=refreshed[1],
+            )
     return {"updated": updated}
 
 
@@ -314,6 +324,9 @@ def _browser_context_from_request(request: Request) -> dict[str, str]:
         client_ip = request.client.host
 
     context: dict[str, str] = {}
+    ttp = request.cookies.get("_ttp")
+    if ttp:
+        context["ttp"] = ttp
     fbp = request.cookies.get("_fbp")
     if fbp:
         context["fbp"] = fbp

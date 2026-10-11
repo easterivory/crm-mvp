@@ -23,6 +23,7 @@ import { useNavigate } from 'react-router-dom'
 import { fetchBots } from '../features/bots/api'
 import TrackingOverview from '../features/tracking/TrackingOverview'
 import TrafficQualitySettings from '../features/tracking/TrafficQualitySettings'
+import TikTokSettings from '../features/tracking/TikTokSettings'
 import type { Bot } from '../features/bots/types'
 import { fetchBuyers } from '../features/buyers'
 import type { BuyerUser } from '../features/buyers'
@@ -1265,6 +1266,7 @@ export default function TrackingPage() {
                     ) : null}
                   </div>
                   <div className="flex shrink-0 gap-2">
+                    {canManageFacebookCampaigns && selectedProjectId && <TikTokSettings link={link} projectId={selectedProjectId} />}
                     <button
                       type="button"
                       onClick={() => link.fb_campaign_enabled

@@ -197,7 +197,16 @@ class LanderAdminService:
         actor: User,
     ) -> ProjectLanderOut:
         await self._ensure_lander_project_access(actor=actor, project_id=project_id)
-        if actor.role_name == RoleName.BUYER and (
+        buyer_tiktok_link = None
+        if actor.role_name == RoleName.BUYER and data.tracking_link_id is not None:
+            from app.models.tiktok import TikTokIntegration
+            buyer_tiktok_link = await self.db.scalar(
+                select(TrackingLink.id).join(TikTokIntegration, TikTokIntegration.tracking_link_id == TrackingLink.id).where(
+                    TrackingLink.id == data.tracking_link_id, TrackingLink.project_id == project_id,
+                    TrackingLink.buyer_id == actor.id, TikTokIntegration.enabled.is_(True),
+                )
+            )
+        if actor.role_name == RoleName.BUYER and buyer_tiktok_link is None and (
             data.campaign is None or data.tracking_link_id is not None
         ):
             raise HTTPException(

@@ -143,6 +143,15 @@ class LeadEventService:
             event_type=ChatEventType.NOTE_ADDED,
             new_value=self._event_log_text(event),
         )
+        from app.services.tiktok_event_service import TikTokEventService
+        source_event = {"registration": "registration", "deposit": "sale", "redeposit": "resale"}.get(normalized_event_type)
+        if source_event:
+            await TikTokEventService(self.db).mapped_event(
+                lead_id=lead.id, source_event=source_event, event_reference=str(event.id),
+                event_time=int(event.occurred_at.timestamp()),
+                extra_custom_data={**({"value": float(amount)} if amount is not None else {}),
+                                   **({"currency": normalized_currency} if normalized_currency else {})},
+            )
         return event, True
 
     async def record_manual_event(

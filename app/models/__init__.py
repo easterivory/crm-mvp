@@ -5,6 +5,7 @@ Order matters for forward-reference resolution.
 """
 
 from app.models.base import Base  # noqa: F401
+from app.models.tiktok import TikTokDelivery, TikTokIntegration  # noqa: F401
 from app.models.project import Project  # noqa: F401
 from app.models.system_setting import SystemSetting  # noqa: F401
 from app.models.google_sheets import ProjectGoogleSheetsConfig  # noqa: F401

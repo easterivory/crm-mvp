@@ -193,17 +193,30 @@ class LanderService:
             query_params,
             browser_context=enriched_browser_context,
         )
+        from app.services.tiktok_event_service import TikTokEventService
+        tiktok = await TikTokEventService(self.db).config(lander.tracking_link_id)
+        tiktok_enabled = bool(tiktok and tiktok.enabled)
         pixel_markup = self._render_pixel_markup(
             lander.pixels_json,
             lander.meta_events_json,
             tracking_link=lander.tracking_link,
             browser_event_seed=browser_event_seed,
             bridge_url=f"/l/{lander.slug}/bridge/{start_key}",
-            channel_invite_url=self._channel_attribution_endpoint(
+            channel_invite_url=(f"/l/{lander.slug}/channel-invite/{start_key}" if tiktok_enabled and lander.tracking_link.destination_type == "channel" else self._channel_attribution_endpoint(
                 lander,
                 start_key,
-            ),
+            )),
         )
+
+        if tiktok_enabled:
+            if not pixel_markup:
+                pixel_markup = self._render_meta_event_bridge(
+                    [], [], browser_event_seed, f"/l/{lander.slug}/bridge/{start_key}",
+                    f"/l/{lander.slug}/channel-invite/{start_key}" if lander.tracking_link.destination_type == "channel" else None,
+                )
+            from app.services.tiktok_lander import render_tiktok_pixel
+            pixel_markup += render_tiktok_pixel(tiktok.pixel_id, tiktok.mappings_json,
+                                               f"/l/{lander.slug}/bridge/{start_key}", start_key, lander.tracking_link_id)
 
         if lander.type == self.DEFAULT_TG_REDIRECT:
             rendered_html = self._render_default_redirect_html(
@@ -248,7 +261,10 @@ class LanderService:
             or not str(tracking_link.fb_pixel_id or "").strip()
             or not str(tracking_link.fb_capi_token or "").strip()
         ):
-            return static_invite
+            from app.services.tiktok_event_service import TikTokEventService
+            tiktok = await TikTokEventService(self.db).config(tracking_link.id)
+            if not (tiktok and tiktok.enabled):
+                return static_invite
 
         bridge = await self.utm_bridge.load_lander_start(start_key)
         expected_code = (tracking_link.code or tracking_link.ref_code or "").strip()
@@ -868,6 +884,8 @@ class LanderService:
             "fbc",
             "fbclid",
             "fbp",
+            "ttclid",
+            "ttp",
             "lander_event_seed",
             "placement",
             "site_source_name",
@@ -1031,7 +1049,7 @@ class LanderService:
             "function crmFacebookContextPayload(){var cookies={};"
             "String(document.cookie||'').split(';').forEach(function(item){"
             "var parts=item.split('=');var key=String(parts.shift()||'').trim();"
-            "if(key==='_fbp'||key==='_fbc'){cookies[key]=decodeURIComponent(parts.join('=')||'');}});"
+            "if(key==='_fbp'||key==='_fbc'||key==='_ttp'){cookies[key]=decodeURIComponent(parts.join('=')||'');}});"
             "cookies.event_source_url=window.location.href;return cookies;}"
             "window.__crmSyncFacebookContext=window.__crmSyncFacebookContext||(function(){"
             "var pending=null;return function(){"

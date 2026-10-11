@@ -265,6 +265,9 @@ class UtmBridgeService:
             fbc = f"fb.1.{int(time.time() * 1000)}.{fbclid}"
 
         context: dict[str, str] = {}
+        ttp = cls._clean_context_value(browser_context.get("ttp") or browser_context.get("_ttp"), 500)
+        if ttp:
+            context["ttp"] = ttp
         if fbp is not None:
             context["fbp"] = fbp
         if fbc is not None:

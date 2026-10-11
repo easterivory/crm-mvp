@@ -797,9 +797,13 @@ def _redis_settings_from_url() -> Any:
     )
 
 
+from app.workers.tiktok_worker import deliver_tiktok_outbox_task
+
+
 class WorkerSettings:
     """ARQ compatibility settings."""
     functions = [
+        deliver_tiktok_outbox_task,
         send_lead_postback,
         auto_submit_lead_task,
         export_lead_to_sheets_task,
@@ -820,6 +824,7 @@ class WorkerSettings:
     on_startup = _on_worker_startup
     cron_jobs = (
         [
+            cron(deliver_tiktok_outbox_task, second={0, 15, 30, 45}, run_at_startup=True),
             cron(recover_missed_funnel_starts_task, second=20, run_at_startup=True),
             cron(
                 recover_channel_join_request_actions_task,

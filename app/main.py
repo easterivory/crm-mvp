@@ -34,6 +34,7 @@ from app.api.v1.routers import (
     tags,
     telegram,
     tracking,
+    tiktok,
     users,
 )
 from app.core.config import settings
@@ -121,6 +122,7 @@ app.include_router(bots.router, prefix=_v1_prefix)
 app.include_router(broadcasts.router, prefix=_v1_prefix)
 app.include_router(tracking.router, prefix=_v1_prefix)
 app.include_router(tracking.v1_router, prefix=_v1_prefix)
+app.include_router(tiktok.router, prefix=_v1_prefix)
 app.include_router(traffic_quality.router, prefix=_v1_prefix)
 app.include_router(analytics.router, prefix=_v1_prefix)
 app.include_router(ai.router, prefix=_v1_prefix)

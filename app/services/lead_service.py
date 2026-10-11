@@ -55,7 +55,7 @@ from app.schemas.lead import (
 )
 from app.services.audit_service import AuditService
 from app.services.chat_audit_service import ChatAuditService
-from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.advertising_event_service import AdvertisingEventService
 from app.services.google_sheets_trigger_service import GoogleSheetsTriggerService
 from app.services.lead_scoring_service import LeadScoringService
 
@@ -70,7 +70,7 @@ class LeadService:
         self.chat_audit = ChatAuditService(db)
         self.scoring = LeadScoringService(db)
         self.google_sheets_trigger = GoogleSheetsTriggerService(db)
-        self.facebook_campaign = FacebookCampaignService(db)
+        self.facebook_campaign = AdvertisingEventService(db)
 
     # ── Status transition ──────────────────────────────────────────────────────
 

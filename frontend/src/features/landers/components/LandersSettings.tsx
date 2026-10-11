@@ -423,6 +423,7 @@ function cloneEventMappings(mappings: FacebookEventMapping[]): FacebookEventMapp
 }
 
 type FacebookEventMappingsEditorProps = {
+  provider?: 'Meta' | 'TikTok'
   mappings: FacebookEventMapping[]
   sourceEvents: FacebookSourceEvent[]
   statuses: FacebookLeadStatusTrigger[]
@@ -431,7 +432,8 @@ type FacebookEventMappingsEditorProps = {
   onChange: (mappings: FacebookEventMapping[]) => void
 }
 
-function FacebookEventMappingsEditor({
+export function FacebookEventMappingsEditor({
+  provider = 'Meta',
   mappings,
   sourceEvents,
   statuses,
@@ -545,7 +547,7 @@ function FacebookEventMappingsEditor({
                   {source?.label ?? mapping.source_event}
                 </span>
                 <span className="mt-0.5 block text-xs text-zinc-500">
-                  {source?.delivery === 'browser' ? 'Pixel · браузер' : 'CAPI · сервер'}
+                  {provider === 'TikTok' ? 'Events API · сервер' : source?.delivery === 'browser' ? 'Pixel · браузер' : 'CAPI · сервер'}
                   {' · '}{isChannelMembershipEvent
                     ? mapping.source_event === 'channel_subscribe'
                       ? 'Фактическое вступление по инвайту кампании'
@@ -555,9 +557,9 @@ function FacebookEventMappingsEditor({
               </span>
             </label>
             <label className="block min-w-0">
-              <span className="mb-1 block text-xs text-zinc-500">Meta event</span>
+              <span className="mb-1 block text-xs text-zinc-500">{provider} event</span>
               <input
-                list="facebook-standard-events"
+                list={provider === 'TikTok' ? 'tiktok-standard-events' : 'facebook-standard-events'}
                 value={mapping.event_name}
                 disabled={!mapping.enabled}
                 onChange={(event) => patchMapping(index, { event_name: event.target.value })}
@@ -655,7 +657,7 @@ function FacebookEventMappingsEditor({
                         </select>
                         {trigger.type === 'funnel_action' ? (
                           <div className="flex min-h-10 min-w-0 items-center rounded-md border border-white/5 bg-white/[0.025] px-3 text-sm text-zinc-400">
-                            Вызывается блоком «Отправить FB-событие»
+                            {provider === 'TikTok' ? 'Вызывается CRM-действием воронки' : 'Вызывается блоком «Отправить FB-событие»'}
                           </div>
                         ) : (
                           <select

@@ -340,11 +340,11 @@ class BuyerFacebookCampaignAccessTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status_code, 404)
 
-    async def test_buyer_cannot_attach_lander_to_an_existing_link(self) -> None:
+    async def test_buyer_cannot_create_lander_without_campaign_or_enabled_tiktok_link(self) -> None:
         service = LanderAdminService.__new__(LanderAdminService)
         service._ensure_lander_project_access = AsyncMock()
         actor = SimpleNamespace(id=uuid4(), role_name=RoleName.BUYER)
-        data = SimpleNamespace(campaign=None, tracking_link_id=uuid4())
+        data = SimpleNamespace(campaign=None, tracking_link_id=None)
 
         with self.assertRaises(HTTPException) as raised:
             await service.create_lander(

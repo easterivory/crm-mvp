@@ -537,6 +537,11 @@ class ChannelSubscriptionService:
     ) -> None:
         if tracking_link_id is None:
             return
+        from app.services.tiktok_event_service import TikTokEventService
+        await TikTokEventService(self.db).channel_event(
+            tracking_link_id=tracking_link_id, channel=channel, user=user,
+            source_event=source_event, update_id=update_id, occurred_at=occurred_at,
+        )
         try:
             from app.services.facebook_channel_event_service import (
                 FacebookChannelEventService,

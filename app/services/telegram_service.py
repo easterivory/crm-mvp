@@ -81,7 +81,7 @@ from app.services.channel_join_request_queue import (
 from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_lease_service import ChatLeaseService
 from app.services.funnel_runtime_service import FunnelRuntimeService
-from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.advertising_event_service import AdvertisingEventService
 from app.services.funnel_start_queue import enqueue_funnel_start
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
@@ -970,7 +970,7 @@ class TelegramService:
         if lead_id is None:
             return
         try:
-            await FacebookCampaignService(self.db).enqueue_mapped_event(
+            await AdvertisingEventService(self.db).enqueue_mapped_event(
                 lead_id=lead_id,
                 source_event=source_event,
                 event_reference=event_reference,

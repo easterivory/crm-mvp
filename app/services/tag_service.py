@@ -14,7 +14,7 @@ from app.repositories.tag_repository import TagRepository
 from app.schemas.tag import TagCreate, TagOut, TagUpdate
 from app.models.lead import Lead
 from app.models.tag import Tag, random_tag_color
-from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.advertising_event_service import AdvertisingEventService
 from app.services.lead_event_service import LeadEventService
 from app.services.lead_scoring_service import LeadScoringService
 from app.services.traffic_quality_service import TrafficQualityService
@@ -29,7 +29,7 @@ class TagService:
         self.tag_repo = TagRepository(db)
         self.lead_repo = LeadRepository(db)
         self.project_repo = ProjectRepository(db)
-        self.facebook_campaign = FacebookCampaignService(db)
+        self.facebook_campaign = AdvertisingEventService(db)
         self.lead_events = LeadEventService(db)
         self.scoring = LeadScoringService(db)
 

@@ -48,7 +48,7 @@ from app.services.ai_delivery_state_service import AIDeliveryStateService
 from app.services.operational_alert_service import send_operational_alert
 from app.services.facebook_capi_queue import enqueue_facebook_capi_event
 from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPIService
-from app.services.facebook_campaign_service import FacebookCampaignService
+from app.services.advertising_event_service import AdvertisingEventService
 from app.services.funnel_block_registry import is_supported_lead_field_key
 from app.services.funnel_disappearing_message_service import FunnelDisappearingMessageService
 from app.services.funnel_job_queue import (
@@ -157,7 +157,7 @@ class FunnelRuntimeService:
             release_transaction_before_network=release_transaction_before_external_io,
         )
         self.audit = AuditService(db)
-        self.facebook_campaign = FacebookCampaignService(db)
+        self.facebook_campaign = AdvertisingEventService(db)
 
     async def get_published_funnel_for_bot(self, bot_id: UUID) -> Optional[FunnelVersion]:
         return await self.repo.get_published_for_bot(bot_id)
@@ -2622,7 +2622,7 @@ class FunnelRuntimeService:
                             if chat is not None and chat.current_cycle_started_at is not None
                             else str(chat.id if chat is not None else chat_id)
                         )
-                        queued_job_id = await FacebookCampaignService(
+                        queued_job_id = await AdvertisingEventService(
                             self.db
                         ).enqueue_mapped_event(
                             lead_id=lead.id,
