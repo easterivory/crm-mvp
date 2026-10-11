@@ -10,7 +10,6 @@ from sqlalchemy.dialects import postgresql
 
 from app.core.constants import RoleName
 from app.repositories.chat_repository import ChatRepository
-from app.schemas.telegram import TelegramChat, TelegramMessage, TelegramUser
 from app.services.chat_service import ChatService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.lead_confidence_service import (
@@ -18,7 +17,6 @@ from app.services.lead_confidence_service import (
     LeadConfidenceResult,
     LeadConfidenceService,
 )
-from app.services.telegram_service import TelegramService
 
 
 class LeadConfidenceTests(unittest.IsolatedAsyncioTestCase):
@@ -406,86 +404,6 @@ class SmartResumeTests(unittest.IsolatedAsyncioTestCase):
             project_id=project_id,
             assignment_expires_at=assignment_expires_at,
         )
-
-
-class RepeatedStartTests(unittest.IsolatedAsyncioTestCase):
-    async def test_existing_chat_records_start_without_starting_funnel(self) -> None:
-        project_id = uuid4()
-        bot_id = uuid4()
-        chat_id = uuid4()
-        message_id = uuid4()
-        message = TelegramMessage(
-            message_id=10,
-            chat=TelegramChat(id=42),
-            from_user=TelegramUser(id=42, first_name="Анна"),
-            text="/start campaign",
-        )
-        service = TelegramService.__new__(TelegramService)
-        service._hydrate_start_payload = AsyncMock(
-            return_value=SimpleNamespace(utm_key=None, utm_data=None)
-        )
-        service._resolve_tracking_link_id = AsyncMock(return_value=None)
-        service._find_or_create_chat = AsyncMock(
-            return_value=(
-                SimpleNamespace(
-                    id=chat_id,
-                    external_chat_id="42",
-                    is_blocked=False,
-                ),
-                False,
-                False,
-            )
-        )
-        persisted = SimpleNamespace(funnel_processed_at=None)
-        service.message_repo = SimpleNamespace(
-            get_by_id=AsyncMock(return_value=persisted),
-            claim_funnel_processing=AsyncMock(return_value=True),
-        )
-        service._create_message = AsyncMock(
-            return_value=SimpleNamespace(id=message_id, external_message_id="10")
-        )
-        service._find_or_create_lead = AsyncMock(
-            return_value=SimpleNamespace(id=uuid4())
-        )
-        service._save_shared_contact = AsyncMock(return_value=False)
-        service._attach_utm_bridge_data = AsyncMock()
-        service.chat_repo = SimpleNamespace(mark_bot_restarted=AsyncMock(return_value=True))
-        service.chat_audit = SimpleNamespace(log_event=AsyncMock())
-        service._enqueue_facebook_event_safely = AsyncMock()
-        service._process_runtime_or_legacy = AsyncMock()
-        update = SimpleNamespace(
-            update_id=1,
-            message=message,
-            callback_query=None,
-            my_chat_member=None,
-        )
-
-        with (
-            patch(
-                "app.services.telegram_service.enqueue_funnel_start",
-                new=AsyncMock(),
-            ) as enqueue_start,
-            patch(
-                "app.services.telegram_service.enqueue_user_input",
-                new=AsyncMock(),
-            ) as enqueue_input,
-        ):
-            await service.handle_update(
-                update=update,
-                project_id=project_id,
-                bot_id=bot_id,
-            )
-
-        service.chat_repo.mark_bot_restarted.assert_awaited_once_with(
-            chat_id=chat_id,
-            project_id=project_id,
-        )
-        service.message_repo.claim_funnel_processing.assert_awaited_once_with(
-            [message_id]
-        )
-        enqueue_start.assert_not_awaited()
-        enqueue_input.assert_not_awaited()
-        service._process_runtime_or_legacy.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -351,6 +351,14 @@ class MessageRepository(BaseRepository[Message]):
         )
         return result.rowcount == len(unique_ids)
 
+    async def defer_funnel_processing(self, message_ids: list[UUID]) -> None:
+        """Release this execution's reserved input while the next step is delayed."""
+        if message_ids:
+            await self.db.execute(
+                update(Message).where(Message.id.in_(message_ids))
+                .values(funnel_processed_at=None)
+            )
+
     async def create_message(
         self,
         *,

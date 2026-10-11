@@ -724,7 +724,6 @@ async def process_user_input_task(
                 trigger_message_id=message_uuid,
             )
             await db.commit()
-        return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
     except Exception as exc:
         logger.exception(
             "Debounced Telegram input task failed chat_id=%s message_id=%s",
@@ -732,6 +731,11 @@ async def process_user_input_task(
             trigger_message_id,
         )
         raise RuntimeError(str(exc)) from exc
+
+    # Commit the engagement transition before retrying its following input.
+    if result.startswith("pending_runtime:") and Retry is not None:
+        raise Retry(defer=int(result.split(":", 1)[1]))
+    return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
 
 
 async def process_funnel_start_task(

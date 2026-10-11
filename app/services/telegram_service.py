@@ -38,6 +38,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +55,8 @@ from app.core.lead_names import compose_lead_name, normalize_name_part, resolve_
 from app.core.telegram_commands import extract_telegram_command
 from app.models.chat import Chat
 from app.models.lead import Lead
+from app.models.funnel import FunnelScheduledJob
+from app.models.message import Message
 from app.repositories.bot_repository import BotRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lead_repository import LeadRepository
@@ -443,6 +446,12 @@ class TelegramService:
                 )
             return
         if is_start_command and not should_start_runtime:
+            persisted_start = await self.message_repo.get_by_id(message_id)
+            if persisted_start is not None:
+                persisted_start.raw_payload_json = {
+                    **(persisted_start.raw_payload_json or {}), "crm_repeated_start": True,
+                }
+                await self.db.flush()
             await self.chat_repo.mark_bot_restarted(
                 chat_id=chat_id,
                 project_id=project_id,
@@ -454,16 +463,17 @@ class TelegramService:
                 event_type=ChatEventType.NOTE_ADDED,
                 new_value="Пользователь повторно запустил бота",
             )
-            await self.message_repo.claim_funnel_processing([message_id])
             logger.info(
-                "Repeated Telegram /start recorded without restarting funnel "
+                "Repeated Telegram /start recorded and queued as engagement "
                 "project_id=%s bot_id=%s chat_id=%s message_id=%s",
                 project_id,
                 bot_id,
                 chat_id,
                 message_id,
             )
-            return
+            if chat_lead_import_id is not None:
+                await self.message_repo.claim_funnel_processing([message_id])
+                return
 
         should_start_account_runtime = bool(
             not is_bot_api
@@ -574,7 +584,7 @@ class TelegramService:
             project_id=project_id,
             bot_id=bot_id,
             user_message=msg,
-            start_requested=False,
+            start_requested=is_start_command,
             fresh_lifecycle=False,
         )
 
@@ -1275,7 +1285,10 @@ class TelegramService:
             start_requested,
         )
         if start_requested:
-            await self.bot_engine.initialize_chat(chat.id, project_id)
+            if fresh_lifecycle:
+                await self.bot_engine.initialize_chat(chat.id, project_id)
+            else:
+                logger.info("Repeated start ignored by legacy engine chat_id=%s", chat.id)
         else:
             await self.bot_engine.process_chat(chat.id, user_message=user_message)
 
@@ -1310,6 +1323,10 @@ class TelegramService:
             return "already_processed"
 
         batch_ids = [item.id for item in batch]
+        if any((getattr(item, "raw_payload_json", None) or {}).get("crm_repeated_start")
+               or (getattr(item, "raw_payload_json", None) or {}).get("crm_after_repeated_start")
+               for item in batch):
+            await self.funnel_runtime.repo.lock_chat_for_runtime(chat_id)
         if not await self.message_repo.claim_funnel_processing(batch_ids):
             return "already_processing"
 
@@ -1342,38 +1359,84 @@ class TelegramService:
             )
             return "processed"
 
-        start_index = next(
-            (
-                index
-                for index, item in enumerate(batch)
-                if getattr(item, "transport_source", "bot_api") == "bot_api"
+        # Commands are boundaries, not part of a combined field answer. Process
+        # every segment in order so text before/after /start is never discarded.
+        input_batch = []
+        after_repeat = False
+        for item in batch:
+            is_start = (
+                getattr(item, "transport_source", "bot_api") == "bot_api"
                 and self._is_start_command(item.body)
-            ),
-            None,
-        )
-        input_batch = batch
-        if start_index is not None:
-            start_message = batch[start_index]
+            )
+            if not is_start:
+                if after_repeat:
+                    item.raw_payload_json = {**(item.raw_payload_json or {}), "crm_after_repeated_start": True}
+                input_batch.append(item)
+                continue
+            if input_batch:
+                deferred = await self._defer_input_after_repeated_start(chat, input_batch, batch)
+                if deferred:
+                    return deferred
+                await self._process_debounced_segment(chat, input_batch)
+                input_batch = []
+            payload = getattr(item, "raw_payload_json", None) or {}
+            fresh = payload.get("crm_repeated_start") is not True
+            after_repeat = after_repeat or not fresh
             await self._process_runtime_or_legacy(
-                chat=chat,
-                project_id=chat.project_id,
-                bot_id=chat.bot_id,
-                user_message=MessageOut.model_validate(start_message),
-                start_requested=True,
-                fresh_lifecycle=True,
+                chat=chat, project_id=chat.project_id, bot_id=chat.bot_id,
+                user_message=MessageOut.model_validate(item),
+                start_requested=True, fresh_lifecycle=fresh,
             )
-            input_batch = batch[start_index + 1 :]
-            logger.warning(
-                "Recovered pending /start from debounced input chat_id=%s "
-                "start_message_id=%s trailing_messages=%s",
-                chat_id,
-                start_message.id,
-                len(input_batch),
+            logger.info(
+                "Debounced start processed chat_id=%s message_id=%s fresh_lifecycle=%s",
+                chat_id, item.id, fresh,
             )
+        if input_batch:
+            deferred = await self._defer_input_after_repeated_start(chat, input_batch, batch)
+            if deferred:
+                return deferred
+            await self._process_debounced_segment(chat, input_batch)
+        return "processed"
 
-        if not input_batch:
-            return "processed"
+    async def _defer_input_after_repeated_start(
+        self, chat: Chat, segment: list[Message], batch: list[Message],
+    ) -> str | None:
+        marked = any((getattr(item, "raw_payload_json", None) or {}).get("crm_after_repeated_start")
+                     for item in segment)
+        if not marked and any(self._is_start_command(item.body)
+                              and not (getattr(item, "raw_payload_json", None) or {}).get("crm_repeated_start")
+                              for item in batch):
+            return None
+        state = await self.funnel_runtime.repo.get_chat_funnel_state(chat.id)
+        if state is None or state.is_paused or state.completed_at is not None:
+            return None
+        if not marked and (state.runtime_json or {}).get("last_engagement", {}).get("type") != "repeated_start":
+            return None
+        step = await self.funnel_runtime.repo.get_step(state.current_step_id)
+        if step is None:
+            return None
+        pending_prompt = self.funnel_runtime._is_input_prompt_pending(state.runtime_json, step)
+        if state.waiting_for_answer and not pending_prompt:
+            return None
+        run_at = await self.db.scalar(select(FunnelScheduledJob.run_at).where(
+            FunnelScheduledJob.chat_id == chat.id,
+            FunnelScheduledJob.funnel_state_id == state.id,
+            FunnelScheduledJob.step_id == step.id,
+            FunnelScheduledJob.status.in_(["pending", "running"]),
+        ).order_by(FunnelScheduledJob.run_at).limit(1))
+        if run_at is None:
+            return None
+        if run_at.tzinfo is None:
+            run_at = run_at.replace(tzinfo=timezone.utc)
+        delay = max(3, int((run_at - datetime.now(timezone.utc)).total_seconds()) + 2)
+        remaining = batch[batch.index(segment[0]):]
+        await self.message_repo.defer_funnel_processing([item.id for item in remaining])
+        await self.db.flush()
+        logger.info("Preserving input after repeated start until scheduled step chat_id=%s step_id=%s messages=%s retry_seconds=%s",
+                    chat.id, step.id, len(remaining), delay)
+        return f"pending_runtime:{delay}"
 
+    async def _process_debounced_segment(self, chat: Chat, input_batch: list[Message]) -> None:
         chunks = [
             str(item.body or item.caption or item.message_type).strip()
             for item in input_batch
@@ -1393,11 +1456,10 @@ class TelegramService:
         )
         logger.info(
             "Debounced Telegram input processed chat_id=%s messages=%s chars=%s",
-            chat_id,
+            chat.id,
             len(input_batch),
             len(combined_text),
         )
-        return "processed"
 
     async def process_queued_funnel_start(
         self,
@@ -1611,6 +1673,9 @@ class TelegramService:
 
         if start_requested:
             if status_name == "not_started":
+                if (user_message.raw_payload_json or {}).get("crm_repeated_start") is True:
+                    logger.info("Repeated start has no active lifecycle chat_id=%s", chat.id)
+                    return
                 await self.bot_repo.reset_chat_state(chat.id)
                 await self.funnel_runtime.start_funnel_for_chat(
                     chat_id=chat.id,
@@ -1620,12 +1685,10 @@ class TelegramService:
                 )
                 return
 
+            outcome = await self.funnel_runtime.process_repeated_start(chat_id=chat.id)
             logger.info(
-                "Ignoring repeated /start because funnel is %s chat_id=%s "
-                "funnel_version_id=%s",
-                status_name,
-                chat.id,
-                active_funnel_version_id,
+                "Repeated start engagement handled chat_id=%s version_id=%s state=%s outcome=%s",
+                chat.id, active_funnel_version_id, status_name, outcome,
             )
             return
 

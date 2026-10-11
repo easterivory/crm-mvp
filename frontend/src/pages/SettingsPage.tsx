@@ -21,6 +21,7 @@ import axios from 'axios'
 
 import api from '../api/client'
 import BackupDownloadButton from '../features/settings/BackupDownloadButton'
+import InfoBotSettings from '../features/settings/InfoBotSettings'
 import { useTranslationLanguages } from '../features/translation/languages'
 import LanguageSettings from '../features/translation/LanguageSettings'
 import BuyersSettings from '../features/buyers/components/BuyersSettings'
@@ -1626,6 +1627,7 @@ export default function SettingsPage() {
                   className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500 transition placeholder:text-zinc-600 focus:ring-2"
                 />
               </label>
+              <InfoBotSettings />
             </div>
 
             <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">

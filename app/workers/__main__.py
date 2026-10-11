@@ -1,5 +1,5 @@
 """
-Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|scheduled|postback|buyer|admin|backup|mtproto|all]
+Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|scheduled|postback|buyer|admin|info|backup|mtproto|all]
 
 Each worker is an independent asyncio loop.
 Running 'all' starts both workers concurrently in the same process.
@@ -11,6 +11,7 @@ Usage:
     python -m app.workers broadcast  # broadcast send worker only
     python -m app.workers postback  # partner postback worker only
     python -m app.workers buyer  # buyer Telegram bot polling worker only
+    python -m app.workers info   # super-admin info bot only
     python -m app.workers backup  # scheduled database backups only
     python -m app.workers mtproto # dedicated Telegram work-account process
     python -m app.workers all     # shared workers (default in Docker)
@@ -70,6 +71,10 @@ def main() -> None:
         from app.workers.admin_bot import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "info":
+        from app.workers.info_bot import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "backup":
         from app.workers.backup_worker import run_loop
         asyncio.run(run_loop())
@@ -83,6 +88,7 @@ def main() -> None:
         from app.workers.broadcast_worker import run_loop as broadcast_loop
         from app.workers.buyer_bot import run_loop as buyer_loop
         from app.workers.admin_bot import run_loop as admin_loop
+        from app.workers.info_bot import run_loop as info_loop
         from app.workers.funnel_scheduled_worker import run_loop as funnel_loop
         from app.workers.funnel_push_worker import run_loop as push_loop
         from app.workers.postback_worker import run_loop as postback_loop
@@ -101,13 +107,14 @@ def main() -> None:
                 postback_loop(),
                 buyer_loop(),
                 admin_loop(),
+                info_loop(),
             )
 
         asyncio.run(run_all())
 
     else:
         logger.error(
-            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | backup | mtproto | all",
+            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | info | backup | mtproto | all",
             mode,
         )
         sys.exit(1)

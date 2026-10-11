@@ -695,6 +695,57 @@ class FunnelRuntimeService:
             return None
         return await self.move_to_next_step(chat_id=chat_id, edge_id=edge.id)
 
+    async def process_repeated_start(self, *, chat_id: UUID) -> str:
+        """Treat /start as engagement, never as a field value or a button choice."""
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        if state is None or state.completed_at is not None:
+            return "inactive"
+        if state.is_paused:
+            return "paused"
+        if not state.waiting_for_answer:
+            return "not_waiting"
+        step = await self.repo.get_step(state.current_step_id)
+        if step is None or not self._is_message_step(step):
+            return "data_answer_required"
+        mappings = await self.repo.list_field_mappings(state.funnel_version_id)
+        if any(mapping.step_id == step.id for mapping in mappings):
+            return "data_answer_required"
+        index = self._waiting_message_index(step, state.runtime_json)
+        messages = self._message_sequence(step)
+        if index is None or index >= len(messages):
+            return "not_waiting_for_message"
+        remaining = index + 1 < len(messages)
+        edges = [edge for edge in await self.repo.list_edges(state.funnel_version_id)
+                 if edge.from_step_id == step.id]
+        default = next((edge for edge in edges if
+                        (edge.condition_json or {}).get("source_key") in {"message:next", "message:default"}
+                        or not edge.condition_json), None)
+        if edges and default is None:
+            return "button_choice_required"
+        if remaining and default is not None and any(edge.id != default.id for edge in edges):
+            return "button_choice_required"
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
+        runtime = dict(state.runtime_json or {})
+        runtime.pop("message_auto_advance", None)
+        runtime["last_engagement"] = {"type": "repeated_start", "step_id": str(step.id),
+                                      "at": datetime.now(timezone.utc).isoformat()}
+        await self.repo.upsert_chat_funnel_state(
+            chat_id=chat_id, funnel_id=state.funnel_id, funnel_version_id=state.funnel_version_id,
+            current_step_id=step.id, entered_step_at=state.entered_step_at,
+            waiting_for_answer=False, runtime_json=runtime,
+        )
+        await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
+        if remaining:
+            next_step = await self._execute_message_sequence(chat_id=chat_id, step=step, start_index=index + 1)
+        elif default is not None:
+            next_step = await self.move_to_next_step(chat_id=chat_id, edge_id=default.id)
+        else:
+            await self._mark_completed(chat_id, step=step)
+            next_step = None
+        if next_step is not None and next_step.id != step.id:
+            await self._execute_from_step(chat_id=chat_id, step=next_step)
+        return "continued"
+
     async def process_incoming_message(
         self,
         *,
