@@ -43,3 +43,20 @@
 .tracking-journey-people { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--glass-border); }
 .tracking-pagination { align-items: center; justify-content: end; margin-top: 16px; font-size: 12px; }
 @media(max-width:600px) { .tracking-ratio-controls { grid-template-columns: minmax(0,1fr); gap: 10px; } .tracking-ratio-controls > svg { display: none; } .tracking-chart { height: 240px; } .tracking-kpi { padding: 12px; } }
+.journey-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 20px 0; border-bottom: 1px solid rgba(255,255,255,.12); }
+.journey-summary > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.journey-summary span { color: var(--text-muted, #9ca3af); font-size: 13px; overflow-wrap: anywhere; }
+.journey-summary strong { font-size: 26px; }
+.journey-dynamics { width: 100%; min-width: 0; height: 360px; }
+.journey-dynamics .recharts-legend-item { max-width: 100%; overflow-wrap: anywhere; }
+.journey-stage-editor { padding: 16px 0; border-block: 1px solid rgba(255,255,255,.15); }
+.journey-stage-editor fieldset { padding: 0; border: 0; min-width: 0; }
+.journey-stage-setting { padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,.1); }
+.journey-stage-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 10px; max-height: 200px; overflow-y: auto; margin-top: 12px; }
+.journey-stage-choices label { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.journey-stage-choices input { flex: 0 0 16px; width: 16px; height: 16px; margin-top: 2px; }
+@media (max-width: 640px) {
+  .journey-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .journey-summary strong { font-size: 22px; }
+  .journey-dynamics { height: 420px; }
+}

@@ -30,6 +30,8 @@ from app.services.tracking_step_metrics_service import TrackingStepMetricsServic
 from app.services.tracking_cohort_service import TrackingCohortService
 from app.services.tracking_service import TrackingService
 from app.services.tracking_journey_service import TrackingJourneyService
+from app.services.tracking_stage_journey_service import TrackingStageJourneyService
+from app.schemas.tracking_journey import JourneyConfig
 
 router = APIRouter(prefix="/tracking-links", tags=["tracking"])
 v1_router = APIRouter(prefix="/tracking", tags=["tracking"])
@@ -301,6 +303,42 @@ async def tracking_journey(project_id: UUID, funnel_id: UUID,
     return await TrackingJourneyService(db).report(current_user, project_id, funnel_id,
         bot_id=bot_id, buyer_id=buyer_id, link_id=link_id, date_from=date_from, date_to=date_to,
         idle_hours=idle_hours)
+
+
+@v1_router.get("/journey/config")
+async def journey_config(project_id: UUID, funnel_id: UUID,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStageJourneyService(db).configuration(current_user, project_id, funnel_id)
+
+
+@v1_router.put("/journey/config")
+async def save_journey_config(data: JourneyConfig, project_id: UUID, funnel_id: UUID,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStageJourneyService(db).save(current_user, project_id, funnel_id, data)
+
+
+@v1_router.get("/metrics/stage-journey")
+async def stage_journey(project_id: UUID, funnel_id: UUID,
+    bot_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    granularity: Literal["day", "week", "month"] = "day",
+    sources_offset: int = Query(default=0, ge=0), sources_limit: int = Query(default=50, ge=1, le=100),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStageJourneyService(db).report(current_user, project_id, funnel_id,
+        bot_id=bot_id, buyer_id=buyer_id, link_id=link_id, date_from=date_from, date_to=date_to, granularity=granularity,
+        sources_offset=sources_offset, sources_limit=sources_limit)
+
+
+@v1_router.get("/metrics/stage-journey/chats")
+async def stage_journey_chats(project_id: UUID, funnel_id: UUID, stage_id: UUID,
+    bucket: Literal["reached", "remaining", "stalled"] = "reached",
+    bot_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStageJourneyService(db).chats(current_user, project_id, funnel_id, stage_id,
+        bucket=bucket, limit=limit, offset=offset, bot_id=bot_id, buyer_id=buyer_id,
+        link_id=link_id, date_from=date_from, date_to=date_to)
 
 
 @v1_router.get("/metrics/journey/chats")

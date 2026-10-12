@@ -147,7 +147,7 @@ export default function TrackingOverview(props: Props) {
   return <div className="tracking-overview">
     <div className="tracking-actions tracking-view-tabs" role="tablist" aria-label="Вид статистики">
       <button type="button" role="tab" aria-selected={mode === 'overview'} onClick={() => setMode('overview')}>Обзор</button>
-      <button type="button" role="tab" aria-selected={mode === 'journey'} onClick={() => setMode('journey')}>Прохождение воронки</button>
+      <button type="button" role="tab" aria-selected={mode === 'journey'} onClick={() => setMode('journey')}>Движение по этапам</button>
     </div>
     {mode === 'journey' ? <TrackingJourney {...props} /> : <>
     <div className="tracking-tools">
