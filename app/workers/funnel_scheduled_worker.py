@@ -19,6 +19,7 @@ from app.services.funnel_runtime_service import (
     FUNNEL_CHAT_ACTION_MAX_DURATION_SECONDS,
     FUNNEL_CHAT_ACTION_REFRESH_SECONDS,
     FunnelRuntimeDeliveryError,
+    FunnelRuntimeLockError,
     FunnelRuntimeService,
 )
 from app.services.operational_alert_service import (
@@ -316,7 +317,7 @@ async def _resolve_delivery_failure(
         return {"status": "persistence_failed", "failure_status_persisted": False}
 
 
-async def _execute_claimed_job(job_id: UUID) -> dict[str, Any]:
+async def _execute_claimed_job(job_id: UUID, *, _lock_retry_attempt: int = 0) -> dict[str, Any]:
     try:
         async with get_db_session() as db:
             try:
@@ -353,6 +354,15 @@ async def _execute_claimed_job(job_id: UUID) -> dict[str, Any]:
                 await _rollback_session(db)
                 raise
     except Exception as exc:
+        if isinstance(exc, FunnelRuntimeLockError) and _lock_retry_attempt < 2:
+            logger.warning(
+                "Retrying scheduled runtime entry after DB conflict "
+                "job_id=%s chat_id=%s sqlstate=%s retry=%s max_retries=2 "
+                "external_io_started=False",
+                job_id, exc.chat_id, exc.sqlstate, _lock_retry_attempt + 1,
+            )
+            await asyncio.sleep(0.25 * (2 ** _lock_retry_attempt))
+            return await _execute_claimed_job(job_id, _lock_retry_attempt=_lock_retry_attempt + 1)
         error = _error_text(exc)
         logger.exception("Funnel scheduled job failed job_id=%s", job_id)
         telegram_error = _telegram_delivery_error(exc)
@@ -394,6 +404,13 @@ async def _execute_claimed_job(job_id: UUID) -> dict[str, Any]:
                 if key not in {"status", "failure_status_persisted"}
             },
         }
+        if isinstance(exc, FunnelRuntimeLockError):
+            alert_details.update({
+                "chat_id": exc.chat_id,
+                "database_sqlstate": exc.sqlstate,
+                "database_lock_retries": _lock_retry_attempt,
+                "external_io_started": False,
+            })
         if telegram_error is not None:
             alert_details.update(_delivery_alert_details(telegram_error))
         await send_operational_alert(

@@ -40,18 +40,25 @@ from app.schemas.funnel import (
 class FunnelRepository(BaseRepository[Funnel]):
     model = Funnel
 
+    async def _lock_chat_row(self, chat_id: UUID) -> bool:
+        # Incoming messages already update Chat before entering the runtime.
+        # Keep the same order even after a commit before external I/O.
+        result = await self.db.execute(
+            select(Chat.id).where(Chat.id == chat_id).with_for_update()
+        )
+        return result.scalar_one_or_none() is not None
+
     async def lock_chat_for_runtime(self, chat_id: UUID) -> bool:
-        """Serialize one chat's runtime without changing row-lock order."""
+        """Acquire Chat before the advisory lock and funnel state."""
+        if not await self._lock_chat_row(chat_id):
+            return False
         high = chat_id.int >> 64
         low = chat_id.int & ((1 << 64) - 1)
         lock_key = high ^ low
         if lock_key >= 1 << 63:
             lock_key -= 1 << 64
         await self.db.execute(select(func.pg_advisory_xact_lock(lock_key)))
-        result = await self.db.execute(
-            select(Chat.id).where(Chat.id == chat_id)
-        )
-        return result.scalar_one_or_none() is not None
+        return True
 
     async def list_by_project(
         self,
@@ -393,6 +400,7 @@ class FunnelRepository(BaseRepository[Funnel]):
         await self.db.execute(stmt.values(status="archived", updated_at=func.now()))
 
     async def reset_chat_funnel_state(self, chat_id: UUID) -> None:
+        await self._lock_chat_row(chat_id)
         await self.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
         await self.db.execute(
             update(ChatFunnelState)
@@ -409,6 +417,7 @@ class FunnelRepository(BaseRepository[Funnel]):
         )
 
     async def delete_chat_funnel_state(self, chat_id: UUID) -> None:
+        await self._lock_chat_row(chat_id)
         state_ids = list((await self.db.scalars(
             select(ChatFunnelState.id)
             .where(ChatFunnelState.chat_id == chat_id)
@@ -761,6 +770,7 @@ class FunnelRepository(BaseRepository[Funnel]):
         return refreshed
 
     async def get_chat_funnel_state(self, chat_id: UUID) -> Optional[ChatFunnelState]:
+        await self._lock_chat_row(chat_id)
         result = await self.db.execute(
             select(ChatFunnelState)
             .where(ChatFunnelState.chat_id == chat_id)
@@ -774,6 +784,7 @@ class FunnelRepository(BaseRepository[Funnel]):
         chat_id: UUID,
         runtime_json: dict,
     ) -> Optional[ChatFunnelState]:
+        await self._lock_chat_row(chat_id)
         result = await self.db.execute(
             update(ChatFunnelState)
             .where(ChatFunnelState.chat_id == chat_id)
@@ -791,6 +802,7 @@ class FunnelRepository(BaseRepository[Funnel]):
         paused_at: datetime | None = None,
         paused_by_user_id: UUID | None = None,
     ) -> Optional[ChatFunnelState]:
+        await self._lock_chat_row(chat_id)
         values = dict(
             is_paused=is_paused,
             paused_at=paused_at if is_paused else None,

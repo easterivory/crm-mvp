@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.funnel import ChatFunnelState, FunnelStep
+from app.models.chat import Chat
 from app.services.ai_response_execution_service import AIResponseExecutionOutcome
 
 
@@ -18,6 +19,7 @@ class AIDeliveryStateService:
     async def current(
         self, chat_id: UUID, step_id: UUID, execution_id: str | None = None
     ) -> ChatFunnelState | None:
+        await self.db.execute(select(Chat.id).where(Chat.id == chat_id).with_for_update())
         state = (
             await self.db.execute(
                 select(ChatFunnelState)

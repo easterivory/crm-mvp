@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import DBAPIError
 
 from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
@@ -97,6 +98,15 @@ FUNNEL_CHAT_ACTIONS = frozenset(
         "upload_document",
     }
 )
+
+
+class FunnelRuntimeLockError(RuntimeError):
+    """A retryable DB conflict before any scheduled runtime action executes."""
+
+    def __init__(self, error: DBAPIError, chat_id: UUID) -> None:
+        super().__init__(str(error))
+        self.chat_id = chat_id
+        self.sqlstate = getattr(error.orig, "sqlstate", None)
 
 
 class FunnelRuntimeDeliveryError(RuntimeError):
@@ -1364,7 +1374,13 @@ class FunnelRuntimeService:
         return True
 
     async def process_scheduled_job(self, job: FunnelScheduledJob) -> None:
-        state = await self.repo.get_chat_funnel_state(job.chat_id)
+        chat_id = job.chat_id
+        try:
+            state = await self.repo.get_chat_funnel_state(chat_id)
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) in {"40P01", "40001"}:
+                raise FunnelRuntimeLockError(exc, chat_id) from exc
+            raise
         if (
             state is None
             or state.completed_at is not None

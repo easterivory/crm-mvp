@@ -19,9 +19,11 @@ def test_reset_detaches_all_jobs_with_foreign_keys_enforced(commit):
         try:
             async with engine.begin() as conn:
                 await conn.execute(text("PRAGMA foreign_keys=ON"))
+                await conn.execute(text("CREATE TABLE chats (id CHAR(32) PRIMARY KEY)"))
                 await conn.execute(text("CREATE TABLE chat_funnel_states (id CHAR(32) PRIMARY KEY, chat_id CHAR(32))"))
                 await conn.execute(text("CREATE TABLE funnel_scheduled_jobs (id INTEGER PRIMARY KEY, chat_id CHAR(32), funnel_state_id CHAR(32) REFERENCES chat_funnel_states(id), status TEXT, updated_at DATETIME)"))
                 for chat, state in [(chat_id, state_id), (other_chat_id, other_state_id)]:
+                    await conn.execute(text("INSERT INTO chats VALUES (:chat)"), {"chat": chat.hex})
                     await conn.execute(text("INSERT INTO chat_funnel_states VALUES (:state,:chat)"), {"state": state.hex, "chat": chat.hex})
                     for status in statuses:
                         await conn.execute(text("INSERT INTO funnel_scheduled_jobs (chat_id,funnel_state_id,status) VALUES (:chat,:state,:status)"), {"chat": chat.hex, "state": state.hex, "status": status})
