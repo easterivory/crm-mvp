@@ -35,18 +35,25 @@ class JourneyStage(BaseModel):
 
 
 class JourneyConfig(BaseModel):
-    stages: list[JourneyStage] = Field(min_length=2, max_length=20)
+    stages: list[JourneyStage] = Field(min_length=1, max_length=400)
+    mode: Literal["stages", "steps"] = "stages"
     idle_hours: int = Field(default=24, ge=1, le=8760)
     scope: Literal["bot", "funnel"] = "bot"
 
     @model_validator(mode="after")
     def valid_stages(self):
+        if self.mode == "stages" and not 2 <= len(self.stages) <= 20:
+            raise ValueError("Настройте от 2 до 20 этапов")
         if len({stage.id for stage in self.stages}) != len(self.stages):
             raise ValueError("Идентификаторы этапов должны быть уникальными")
         if self.stages[0].source != "start" or any(s.source == "start" for s in self.stages[1:]):
             raise ValueError("Первый этап — старт, он может быть только один")
         if self.stages[0].role != "regular":
             raise ValueError("Старт не может быть этапом предложения или итоговым этапом")
+        if self.mode == "steps":
+            if any(s.role != "regular" or s.source != "entered" for s in self.stages[1:]):
+                raise ValueError("Обзор шагов содержит только входы на шаги")
+            return self
         if self.stages[-1].role != "outcome" or sum(s.role == "outcome" for s in self.stages) != 1:
             raise ValueError("Последний этап — единственный итоговый этап по тегу")
         if sum(s.role == "offer" for s in self.stages) > 1:

@@ -52,6 +52,19 @@ def test_stage_config_requires_tag_outcome_unique_ids_and_valid_sources():
         JourneyConfig.model_validate(data)
 
 
+def test_automatic_step_configuration_includes_more_than_twenty_steps_without_fake_vip():
+    funnel_id = uuid4()
+    options = [{"funnel_id": funnel_id, "key": f"step-{i}", "title": f"Шаг {i}", "number": i, "version_number": 1}
+               for i in range(1, 31)]
+    data = TrackingStageJourneyService.default_configuration(options, funnel_id)
+    config = JourneyConfig.model_validate(data)
+    assert config.mode == "steps" and len(config.stages) == 31
+    assert all(stage.role == "regular" for stage in config.stages)
+    assert data == TrackingStageJourneyService.default_configuration(options, funnel_id)
+    with pytest.raises(ValidationError):
+        JourneyConfig.model_validate({**data, "mode": "stages"})
+
+
 @pytest.mark.skipif(not os.getenv("CRM_TEST_POSTGRES_URL"), reason="Disposable PostgreSQL required")
 def test_stage_journey_real_database_and_migration():
     async def run():
@@ -123,6 +136,24 @@ def test_stage_journey_real_database_and_migration():
                 buyer = await db.get(User, buyer.id); buyer.role = await db.get(Role, buyer_role.id)
                 service = TrackingStageJourneyService(db)
                 config = make_config(["age", "offer"], vip.id)
+                automatic = await service.configuration(actor, project.id, funnel.id)
+                assert automatic["config"]["mode"] == "steps" and automatic["is_default"]
+                assert len(automatic["config"]["stages"]) == 3
+                default_filters = dict(date_from=arrival.date(), date_to=now.date())
+                default_report = await service.report(actor, project.id, funnel.id, **default_filters)
+                assert [stage["reached"] for stage in default_report["items"]] == [5, 3, 2]
+                assert default_report["outcomes"] is None and default_report["conversion"] is None
+                assert default_report["items"][-1]["remaining"] == 2
+                automatic2 = await service.configuration(actor, project.id, funnel.id)
+                assert automatic2["config"] == automatic["config"]
+                await service.save(actor, project.id, funnel.id, JourneyConfig.model_validate(automatic["config"]))
+                extra_step = FunnelStep(funnel_version_id=version.id, key="new-default-step", title="Новый шаг",
+                    step_type="message", block_type="message", config_json={}, position_x=0, position_y=2)
+                db.add(extra_step); await db.flush()
+                refreshed_default = await service.configuration(actor, project.id, funnel.id)
+                assert len(refreshed_default["config"]["stages"]) == 4
+                assert refreshed_default["config"]["stages"][-1]["step_refs"][0]["key"] == extra_step.key
+                await db.delete(extra_step); await db.flush()
                 preview_step = await db.get(FunnelStep, steps[1].id)
                 preview_step.config_json = {"api_key": "must-not-be-exposed", "messages": [
                     {"type": "photo", "text": "Описание предложения", "buttons": [{"label": "Продолжить", "url": "https://example.org/private"}]},

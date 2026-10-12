@@ -5,6 +5,17 @@ Open Tracking, select project/bot/buyer and acquisition dates, then choose
 separate vacancies report. The same tab is available inside a link's details,
 where its link filter remains applied.
 
+Without a saved configuration, the tab opens an automatic `Все шаги` overview
+of the selected funnel's published/archived stable steps (up to 399). It needs
+no tag or VIP configuration and never treats the last technical step as VIP.
+Automatic mode resolves steps again after publication; saved custom stages are
+not replaced. `Вид` switches between this overview and custom stages.
+The vacancies preset selects existing exact-name tags, including `Шаг 1` through
+`Шаг 4`, HOT, HOT HOT and VIP. Missing matches remain unselected rather than
+being guessed from generic message/question titles. Selecting tags or steps
+fills the stage name; manually edited names stay unchanged. The name-reset
+button restores the name from the selected sources.
+
 An administrator selects `Настроить этапы`, optionally chooses the vacancies
 preset, and binds its stages to stable step keys or tag IDs. Entry and accepted
 answer are distinct conditions. The last stage is a tag-based outcome (e.g. VIP),

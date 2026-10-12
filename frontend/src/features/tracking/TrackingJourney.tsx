@@ -99,6 +99,8 @@ export default function TrackingJourney(props: Scope) {
     ...Object.fromEntries(day.items.map(stage => [stage.id, stage[chartBucket]])) })) || []
   const outcome = report?.items[report.items.length - 1]?.name
   const selectedFunnel = options.find(option => option.funnel_id === funnelId)
+  const automaticMode = catalogue?.config?.mode === 'steps'
+  const hasOutcome = report?.items.some(s => s.role === 'outcome')
   return <section className="tracking-journey" aria-label="Движение по этапам">
     <div className="tracking-journey-filters">
       <label>Воронка<select aria-label="Воронка для анализа" value={funnelId} onChange={e => setFunnelId(e.target.value)}>
@@ -119,8 +121,8 @@ export default function TrackingJourney(props: Scope) {
     {loading ? <p role="status">Загрузка…</p> : !catalogue?.config ? <p className="tracking-muted">Этапы и итоговый тег не настроены</p> : report && <>
       <div className="journey-summary">
         <div><span>Новые люди</span><strong>{number(report.people)}</strong></div>
-        <div><span>{outcome}</span><strong>{number(report.outcomes)}</strong></div>
-        <div><span>Первый приход → {outcome}</span><strong>{percent(report.conversion)}</strong></div>
+        {report.items.some(s => s.role === 'outcome') && <><div><span>{outcome}</span><strong>{number(report.outcomes)}</strong></div>
+        <div><span>Первый приход → {outcome}</span><strong>{percent(report.conversion)}</strong></div></>}
         {report.items.some(s => s.role === 'offer') && <div><span>Предложение → {outcome}</span><strong>{percent(report.offer_conversion)}</strong></div>}
       </div>
       <div className="tracking-journey-filters"><span className="tracking-muted">Первый приход: {props.dateFrom} — {props.dateTo} · МСК</span>
@@ -130,7 +132,7 @@ export default function TrackingJourney(props: Scope) {
       <div className="tracking-table-scroll"><table className="tracking-journey-table"><thead><tr><th>Этап</th>
         {columns.map(column => <th key={column.id}>{column.title}</th>)}<th>Перешли на следующий</th><th>Конверсия дальше</th><th>Ещё не перешли, %</th>
       </tr></thead><tbody>{report.items.map(row => <tr key={row.id}>
-        <th scope="row"><strong>#{row.number} · {row.name}</strong></th>
+        <th scope="row"><strong>{automaticMode ? row.name : `#${row.number} · ${row.name}`}</strong></th>
         {columns.map(column => <td key={column.id}><button type="button" disabled={!row[column.id]}
           aria-label={`${row.name}: ${column.title}, ${row[column.id]}`}
           onClick={() => { setDetail({ stage: row, bucket: column.id }); setOffset(0) }}>{number(row[column.id])}</button></td>)}
@@ -144,16 +146,16 @@ export default function TrackingJourney(props: Scope) {
         <LineChart data={chart} margin={{ top: 12, right: 16, bottom: 8, left: 0 }}><CartesianGrid strokeDasharray="3 3" opacity={0.15} />
           <XAxis dataKey="date" tickFormatter={value => new Date(`${value}T12:00:00+03:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} />
           <YAxis allowDecimals={false} width={40} /><Tooltip /><Legend height={90} wrapperStyle={{ maxHeight: 90, overflowY: 'auto' }} />
-          {report.items.map((stage, index) => <Line key={stage.id} dataKey={stage.id} name={`#${stage.number} ${stage.name}`}
+          {report.items.map((stage, index) => <Line key={stage.id} dataKey={stage.id} name={automaticMode ? stage.name : `#${stage.number} ${stage.name}`}
             stroke={palette[index % palette.length]} strokeWidth={2} dot={chart.length < 32} isAnimationActive={false} />)}
         </LineChart></ResponsiveContainer>}</div>
       <h3>Источники</h3>
       <div className="tracking-table-scroll"><table className="tracking-journey-table"><thead><tr><th>Ссылка</th><th>Новые люди</th>
-        {report.items.slice(1).map(s => <th key={s.id}>#{s.number} {s.name}</th>)}<th>Первый приход → итог</th><th>Предложение → итог</th></tr></thead>
+        {report.items.slice(1).map(s => <th key={s.id}>{automaticMode ? s.name : `#${s.number} ${s.name}`}</th>)}{hasOutcome && <><th>Первый приход → итог</th><th>Предложение → итог</th></>}</tr></thead>
         <tbody>{report.sources.map(source => <tr key={source.link_id || 'organic'}><th>
           {source.link_id ? <button type="button" disabled={!!props.linkId} onClick={() => setSourceId(source.link_id!)}>{source.title || source.code}</button> : 'Без рекламной ссылки'}
           {source.code && <span className="tracking-muted">{source.code}</span>}</th><td>{number(source.people)}</td>
-          {source.items.slice(1).map(s => <td key={s.id}>{number(s.reached)}</td>)}<td>{percent(source.conversion)}</td><td>{percent(source.offer_conversion)}</td></tr>)}</tbody>
+          {source.items.slice(1).map(s => <td key={s.id}>{number(s.reached)}</td>)}{hasOutcome && <><td>{percent(source.conversion)}</td><td>{percent(source.offer_conversion)}</td></>}</tr>)}</tbody>
       </table></div>
       {report.sources_total > 50 && <div className="tracking-actions tracking-pagination">
         <button type="button" title="Предыдущие источники" aria-label="Предыдущие источники" disabled={!sourceOffset} onClick={() => setSourceOffset(n => Math.max(0, n - 50))}><ChevronLeft size={17} /></button>

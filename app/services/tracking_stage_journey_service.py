@@ -1,6 +1,6 @@
 """Configurable, person-deduplicated journey; independent of funnel execution."""
 from datetime import datetime, time, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid5, NAMESPACE_URL
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -18,7 +18,7 @@ from app.models.tag import Tag
 from app.models.tracking import TrackingLink
 from app.models.tracking_journey import LeadTagHistory, TrackingJourneyConfig
 from app.repositories.tracking_start_query import is_telegram_start
-from app.schemas.tracking_journey import JourneyConfig
+from app.schemas.tracking_journey import JourneyConfig, JourneyStage
 from app.services.tracking_step_metrics_service import TrackingStepMetricsService
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -40,6 +40,18 @@ class TrackingStageJourneyService:
         self.steps = TrackingStepMetricsService(db)
         self.metrics = self.steps.metrics
 
+    @staticmethod
+    def default_configuration(options, funnel_id):
+        own_steps = sorted((o for o in options if o["funnel_id"] == funnel_id), key=lambda o: (-o["version_number"], o["number"]))
+        if len(own_steps) > 399:
+            return None
+        return JourneyConfig(mode="steps", scope="funnel", stages=[
+            JourneyStage(id=uuid5(NAMESPACE_URL, f"journey:{funnel_id}:start"), name="Первый приход", source="start"),
+            *[JourneyStage(id=uuid5(NAMESPACE_URL, f"journey:{funnel_id}:step:{o['key']}"),
+                name=f"#{o['number']} · {o['title']}"[:80], source="entered",
+                step_refs=[{"funnel_id": funnel_id, "key": o["key"]}]) for o in own_steps]
+        ]).model_dump(mode="json")
+
     async def configuration(self, actor, project_id, funnel_id, *, include_catalogue=True):
         await self.metrics._ensure_project_access(actor, project_id)
         await self.metrics._get_active_project_or_404(project_id)
@@ -52,22 +64,40 @@ class TrackingStageJourneyService:
             .execution_options(populate_existing=True))
         if saved and saved.project_id != project_id:
             raise HTTPException(404, "Настройки этапов не найдены в проекте")
-        result = {"config": saved.config_json if saved else None,
+        options = None
+        if saved and saved.config_json.get("mode", "stages") != "steps":
+            config_data = saved.config_json
+        else:
+            options = await self.steps.options(actor, project_id, found.bot_id)
+            config_data = self.default_configuration(options, funnel_id)
+            if config_data is None and not include_catalogue:
+                raise HTTPException(422, "В обзоре поддерживается до 399 шагов; настройте отдельные этапы")
+            if saved and config_data is not None:
+                config_data.update({"scope": saved.config_json.get("scope", "funnel"),
+                                    "idle_hours": saved.config_json.get("idle_hours", 24)})
+        result = {"config": config_data, "is_default": saved is None,
                   "can_edit": actor.role_name in {RoleName.ADMIN, RoleName.SUPER_ADMIN}}
         if not include_catalogue:
             return result
-        options = [o for o in await self.steps.options(actor, project_id, found.bot_id)]
+        if options is None:
+            options = await self.steps.options(actor, project_id, found.bot_id)
         tags = (await self.db.execute(select(Tag.id, Tag.name).where(Tag.project_id == project_id).order_by(Tag.name))).mappings().all()
         legacy = await self.db.scalar(select(exists(select(LeadTagHistory.id)
             .join(Lead, Lead.id == LeadTagHistory.lead_id)
             .where(Lead.project_id == project_id, LeadTagHistory.source == "legacy_snapshot"))))
-        return {**result, "steps": options, "tags": tags, "has_legacy_tag_snapshot": legacy}
+        return {**result, "default_config": self.default_configuration(options, funnel_id),
+                "steps": options, "tags": tags, "has_legacy_tag_snapshot": legacy}
 
     async def save(self, actor, project_id, funnel_id, config: JourneyConfig):
-        catalogue = await self.configuration(actor, project_id, funnel_id, include_catalogue=False)
-        if not catalogue["can_edit"]:
+        await self.metrics._ensure_project_access(actor, project_id)
+        await self.metrics._get_active_project_or_404(project_id)
+        if actor.role_name not in {RoleName.ADMIN, RoleName.SUPER_ADMIN}:
             raise HTTPException(403, "Настройка этапов доступна администратору")
-        bot_id = await self.db.scalar(select(Funnel.bot_id).where(Funnel.id == funnel_id))
+        found = (await self.db.execute(select(Funnel.bot_id).where(Funnel.id == funnel_id, Funnel.project_id == project_id,
+            exists(select(FunnelVersion.id).where(FunnelVersion.funnel_id == Funnel.id, FunnelVersion.status != "draft"))))).one_or_none()
+        if found is None:
+            raise HTTPException(404, "Опубликованная воронка не найдена")
+        bot_id = found.bot_id
         options = await self.steps.options(actor, project_id, bot_id)
         references = {(s["funnel_id"], s["key"]) for s in options}
         keys = {key for owner, key in references if owner == funnel_id}
@@ -214,7 +244,9 @@ class TrackingStageJourneyService:
         columns = [func.count().label("people")]
         for i in range(len(config.stages)):
             source = wide.c[f"s{i}"]
-            remaining = and_(wide.c.last_stage == i, wide.c[f"s{len(config.stages)-1}"].is_(None))
+            remaining = wide.c.last_stage == i
+            if config.stages[-1].role == "outcome":
+                remaining = and_(remaining, wide.c[f"s{len(config.stages)-1}"].is_(None))
             columns += [count(source.is_not(None)).label(f"reached{i}"), count(remaining).label(f"remaining{i}"),
                         count(and_(remaining, wide.c.stalled)).label(f"stalled{i}")]
             if i < len(config.stages) - 1:
@@ -235,8 +267,9 @@ class TrackingStageJourneyService:
                 "conversion": ratio(onward, reached) if onward is not None else None,
                 "not_yet_next": reached - onward if onward is not None else None})
         offer = next((i for i, s in enumerate(config.stages) if s.role == "offer"), None)
-        return {"people": row["people"], "outcomes": items[-1]["reached"],
-                "conversion": ratio(items[-1]["reached"], row["people"]),
+        has_outcome = config.stages[-1].role == "outcome"
+        return {"people": row["people"], "outcomes": items[-1]["reached"] if has_outcome else None,
+                "conversion": ratio(items[-1]["reached"], row["people"]) if has_outcome else None,
                 "offer_conversion": ratio(row.get("offer_outcome", 0), row[f"reached{offer}"]) if offer is not None else None,
                 "items": items}
 
@@ -286,7 +319,9 @@ class TrackingStageJourneyService:
             raise HTTPException(404, "Этап не найден")
         condition = wide.c[f"s{index}"].is_not(None)
         if bucket != "reached":
-            condition = and_(wide.c.last_stage == index, wide.c[f"s{len(config.stages)-1}"].is_(None))
+            condition = wide.c.last_stage == index
+            if config.stages[-1].role == "outcome":
+                condition = and_(condition, wide.c[f"s{len(config.stages)-1}"].is_(None))
             if bucket == "stalled":
                 condition = and_(condition, wide.c.stalled)
         selected = select(wide.c.chat_id, wide.c.tracking_link_id, wide.c[f"s{index}"].label("stage_at")).where(condition).cte("stage_selection")
