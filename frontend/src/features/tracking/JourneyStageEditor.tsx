@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Save, Trash2, X } from 'lucide-react'
 import api from '../../api/client'
+import TrackingStepPreview, { JourneyStepOption, stepLabel } from './TrackingStepPreview'
 
 export type Stage = { id: string; name: string; source: 'start' | 'entered' | 'answered' | 'tag';
   step_keys: string[]; step_refs: { funnel_id: string; key: string }[]; tag_ids: string[]; role: 'regular' | 'offer' | 'outcome' }
 export type JourneyConfig = { stages: Stage[]; idle_hours: number; scope: 'bot' | 'funnel' }
 export type Catalogue = { config: JourneyConfig | null; can_edit: boolean; has_legacy_tag_snapshot: boolean;
-  steps: { funnel_id: string; key: string; name: string }[]; tags: { id: string; name: string }[] }
+  steps: JourneyStepOption[]; tags: { id: string; name: string }[] }
 const makeStage = (name: string, source: Stage['source'], role: Stage['role'] = 'regular'): Stage =>
   ({ id: crypto.randomUUID(), name, source, role, step_keys: [], step_refs: [], tag_ids: [] })
 const emptyConfig = (): JourneyConfig => ({ idle_hours: 24, scope: 'bot',
@@ -74,16 +75,16 @@ export default function JourneyStageEditor({ projectId, funnelId, catalogue, onS
         {stage.source !== 'start' && <><input aria-label={`${stage.name}: поиск шага или тега`} placeholder="Поиск шага или тега"
           value={search[stage.id] || ''} onChange={e => setSearch({ ...search, [stage.id]: e.target.value })} />
         <div className="journey-stage-choices">
-          {(stage.source === 'tag' ? catalogue.tags.map(t => ({ id: t.id, name: t.name, ref: null })) : catalogue.steps
+          {(stage.source === 'tag' ? catalogue.tags.map(t => ({ id: t.id, name: t.name, ref: null, step: null })) : catalogue.steps
             .filter(s => draft.scope === 'bot' || s.funnel_id === funnelId)
-            .map(s => ({ id: JSON.stringify([s.funnel_id, s.key]), name: s.name, ref: { funnel_id: s.funnel_id, key: s.key } })))
+            .map(s => ({ id: JSON.stringify([s.funnel_id, s.key]), name: stepLabel(s), step: s, ref: { funnel_id: s.funnel_id, key: s.key } })))
             .filter(option => option.name.toLocaleLowerCase().includes((search[stage.id] || '').toLocaleLowerCase()))
-            .map(option => <label key={option.id}><input type="checkbox"
+            .map(option => <div className="journey-stage-choice" key={option.id}><label><input type="checkbox"
               checked={option.ref ? stage.step_refs.some(r => r.funnel_id === option.ref!.funnel_id && r.key === option.ref!.key) : stage.tag_ids.includes(option.id)} onChange={e => {
                 if (option.ref) change(index, { step_refs: e.target.checked ? [...stage.step_refs, option.ref] :
                   stage.step_refs.filter(r => r.funnel_id !== option.ref!.funnel_id || r.key !== option.ref!.key) })
                 else change(index, { tag_ids: e.target.checked ? [...stage.tag_ids, option.id] : stage.tag_ids.filter(id => id !== option.id) })
-              }} />{option.name}</label>)}
+              }} />{option.name}</label>{option.step && <TrackingStepPreview projectId={projectId} step={option.step} />}</div>)}
         </div></>}
       </div>)}
       <div className="tracking-actions">

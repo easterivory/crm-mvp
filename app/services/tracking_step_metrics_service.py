@@ -6,9 +6,11 @@ from fastapi import HTTPException
 from sqlalchemy import distinct, exists, func, select
 
 from app.models.chat import Chat
+from app.models.bot import Bot
 from app.models.funnel import Funnel, FunnelVersion, FunnelStep, FunnelStepLog
 from app.models.lead import Lead
 from app.models.tracking import TrackingLink
+from app.core.telegram_formatting import telegram_html
 from app.services.tracking_metrics_service import TrackingMetricsService
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 
@@ -27,9 +29,10 @@ class TrackingStepMetricsService:
         # identity of each stable step key within its own funnel.
         stmt = (select(FunnelStep.id, FunnelStep.key, FunnelStep.title, Funnel.name, Funnel.id.label("funnel_id"),
                        Funnel.bot_id, FunnelVersion.version_number, FunnelVersion.id.label("version_id"),
-                       FunnelStep.position_x, FunnelStep.position_y)
+                       FunnelStep.position_x, FunnelStep.position_y, Bot.name.label("bot_name"), Bot.bot_username)
                 .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
                 .join(Funnel, Funnel.id == FunnelVersion.funnel_id)
+                .outerjoin(Bot, Bot.id == Funnel.bot_id)
                 .where(Funnel.project_id == project_id, FunnelVersion.status != "draft")
                 .order_by(Funnel.name, Funnel.id, FunnelVersion.version_number.desc(),
                           FunnelStep.position_y, FunnelStep.position_x, FunnelStep.id))
@@ -45,8 +48,50 @@ class TrackingStepMetricsService:
                 number = numbers[row.version_id]
                 result.append({"id": row.id, "name": f"{row.name} · v{row.version_number} · #{number} · {row.title}",
                     "bot_id": row.bot_id, "funnel_id": row.funnel_id, "funnel_name": row.name,
+                    "bot_name": row.bot_name, "bot_username": row.bot_username,
                     "version_number": row.version_number, "number": number, "key": row.key, "title": row.title})
         return result
+
+    async def preview(self, actor, project_id, step_id):
+        await self.metrics._ensure_project_access(actor, project_id)
+        await self.metrics._get_active_project_or_404(project_id)
+        row = (await self.db.execute(select(FunnelStep, Funnel.name, FunnelVersion.version_number,
+            Bot.name.label("bot_name"), Bot.bot_username)
+            .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
+            .join(Funnel, Funnel.id == FunnelVersion.funnel_id).outerjoin(Bot, Bot.id == Funnel.bot_id)
+            .where(FunnelStep.id == step_id, Funnel.project_id == project_id,
+                   FunnelVersion.status != "draft"))).one_or_none()
+        if row is None:
+            raise HTTPException(404, "Опубликованный шаг не найден в проекте")
+        step = row[0]
+        from app.services.funnel_runtime_service import FunnelRuntimeService
+        config = step.config_json if isinstance(step.config_json, dict) else {}
+        if FunnelRuntimeService._is_input_step(step):
+            messages = [{**config, "text": FunnelRuntimeService._step_prompt(step), "wait_for_answer": True}]
+        elif FunnelRuntimeService._is_message_step(step):
+            messages = FunnelRuntimeService._message_sequence(step)
+        else:
+            messages = []
+        # Expose only presentation data, never integration credentials or AI prompts.
+        items = []
+        for message in messages[:50]:
+            if not isinstance(message, dict):
+                continue
+            buttons = FunnelRuntimeService._normalize_buttons(message.get("buttons") or message.get("choices") or message.get("options") or [])
+            display_text = FunnelRuntimeService._message_item_text(message)
+            if str(message.get("parse_mode") or config.get("parse_mode") or "").upper() == "HTML":
+                try:
+                    display_text, _ = telegram_html(display_text)
+                except ValueError:
+                    pass
+            items.append({"text": display_text[:10000],
+                "media_type": FunnelRuntimeService._message_item_type(step, message),
+                "buttons": [button["label"][:255] for button in buttons[:30]],
+                "wait_for_answer": message.get("wait_for_answer") is True,
+                "delay_seconds": FunnelRuntimeService._message_delay_seconds(message)})
+        return {"id": step.id, "key": step.key, "title": step.title, "step_type": step.step_type,
+                "block_type": step.block_type, "funnel_name": row.name, "version_number": row.version_number,
+                "bot_name": row.bot_name, "bot_username": row.bot_username, "messages": items}
 
     @staticmethod
     def query(*, project_id, step_key, funnel_id, date_from, date_to, bot_id=None, link_id=None, buyer_id=None):

@@ -6,7 +6,7 @@ import JourneyStageEditor, { type Catalogue, type Stage } from './JourneyStageEd
 
 type Scope = { projectId: string; botId?: string; buyerId?: string; linkId?: string;
   dateFrom: string; dateTo: string; refreshToken?: object }
-type Step = { funnel_id: string; funnel_name: string }
+type Step = { funnel_id: string; funnel_name: string; bot_name?: string | null; bot_username?: string | null }
 type Bucket = 'reached' | 'remaining' | 'stalled'
 type Row = Stage & Record<Bucket, number> & { number: number; next: number | null;
   conversion: number | null; not_yet_next: number | null }
@@ -93,10 +93,12 @@ export default function TrackingJourney(props: Scope) {
       .catch(() => { if (!controller.signal.aborted) setPeopleError(true) })
     return () => controller.abort()
   }, [detail, offset, scopeKey, retry, props.refreshToken])
-  const funnels = [...new Map(options.map(option => [option.funnel_id, option.funnel_name])).entries()]
+  const funnels = [...new Map(options.map(option => [option.funnel_id,
+    `${option.bot_name || 'Без бота'}${option.bot_username ? ` · @${option.bot_username.replace(/^@/, '')}` : ''} → ${option.funnel_name}`])).entries()]
   const chart = report?.daily.map(day => ({ date: day.date,
     ...Object.fromEntries(day.items.map(stage => [stage.id, stage[chartBucket]])) })) || []
   const outcome = report?.items[report.items.length - 1]?.name
+  const selectedFunnel = options.find(option => option.funnel_id === funnelId)
   return <section className="tracking-journey" aria-label="Движение по этапам">
     <div className="tracking-journey-filters">
       <label>Воронка<select aria-label="Воронка для анализа" value={funnelId} onChange={e => setFunnelId(e.target.value)}>
@@ -107,6 +109,10 @@ export default function TrackingJourney(props: Scope) {
       {catalogue?.can_edit && <button type="button" onClick={() => setEditing(value => !value)}><Settings2 size={16} />Настроить этапы</button>}
       <button type="button" title="Обновить статистику" aria-label="Обновить статистику" onClick={() => setRetry(n => n + 1)}><RotateCcw size={16} /></button>
     </div>
+    {selectedFunnel && <div className="journey-selected-context">
+      <span>{selectedFunnel.bot_name || 'Без бота'}{selectedFunnel.bot_username && ` · @${selectedFunnel.bot_username.replace(/^@/, '')}`}</span>
+      <strong>{selectedFunnel.funnel_name}</strong>
+    </div>}
     {editing && catalogue && <JourneyStageEditor key={`${props.projectId}:${funnelId}`} projectId={props.projectId} funnelId={funnelId}
       catalogue={catalogue} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); setRetry(n => n + 1) }} />}
     {error && <p role="alert" className="tracking-warning">{error}</p>}

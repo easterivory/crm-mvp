@@ -123,6 +123,25 @@ def test_stage_journey_real_database_and_migration():
                 buyer = await db.get(User, buyer.id); buyer.role = await db.get(Role, buyer_role.id)
                 service = TrackingStageJourneyService(db)
                 config = make_config(["age", "offer"], vip.id)
+                preview_step = await db.get(FunnelStep, steps[1].id)
+                preview_step.config_json = {"api_key": "must-not-be-exposed", "messages": [
+                    {"type": "photo", "text": "Описание предложения", "buttons": [{"label": "Продолжить", "url": "https://example.org/private"}]},
+                    {"type": "text", "text": "Второе сообщение", "wait_for_answer": True, "delay_seconds": 5}]}
+                await db.flush()
+                options = await service.steps.options(actor, project.id)
+                own_option = next(item for item in options if item["id"] == steps[1].id)
+                assert own_option["bot_name"] == "Acquisition"
+                assert own_option["number"] == 2 and own_option["version_number"] == 1
+                preview = await service.steps.preview(actor, project.id, steps[1].id)
+                assert preview["messages"][0]["media_type"] == "photo"
+                assert preview["messages"][0]["buttons"] == ["Продолжить"]
+                assert preview["messages"][1]["text"] == "Второе сообщение"
+                assert preview["messages"][1]["wait_for_answer"]
+                assert preview["messages"][1]["delay_seconds"] == 5
+                assert "must-not-be-exposed" not in str(preview) and "example.org" not in str(preview)
+                with pytest.raises(HTTPException) as cross_project:
+                    await service.steps.preview(actor, other.id, steps[1].id)
+                assert cross_project.value.status_code == 404
                 await service.save(actor, project.id, funnel.id, config)
                 filters = dict(date_from=arrival.date(), date_to=now.date())
                 report = await service.report(actor, project.id, funnel.id, **filters)

@@ -294,6 +294,12 @@ async def tracking_step_options(project_id: UUID, bot_id: Optional[UUID] = None,
     return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id)
 
 
+@v1_router.get("/metrics/step-preview")
+async def tracking_step_preview(project_id: UUID, step_id: UUID,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingStepMetricsService(db).preview(current_user, project_id, step_id)
+
+
 @v1_router.get("/metrics/journey")
 async def tracking_journey(project_id: UUID, funnel_id: UUID,
     bot_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,

@@ -5,9 +5,10 @@ import api from '../../api/client'
 import type { TrackingDailyMetric, TrackingMetricSummary } from './types'
 import './tracking-overview.css'
 import TrackingJourney from './TrackingJourney'
+import TrackingStepPreview, { type JourneyStepOption, stepLabel } from './TrackingStepPreview'
 
 type Option = { id: string; name: string }
-type Metric = { id: string; name: string; kind: 'count' | 'money' | 'tag' | 'step'; color: string }
+type Metric = { id: string; name: string; kind: 'count' | 'money' | 'tag' | 'step'; color: string; step?: JourneyStepOption }
 type CustomResult = { total: number; daily: { date: string; count: number }[] }
 type View = { selected: string[]; hidden: string[]; from: string; to: string; indexed: boolean; cohortFrom: string; cohortTo: string }
 type Props = { projectId: string; userId: string; botId?: string; buyerId?: string; linkId?: string;
@@ -86,10 +87,10 @@ export default function TrackingOverview(props: Props) {
         tags.push(...data.items)
         if (!data.items.length || tags.length >= data.total) break
       }
-      const { data: steps } = await api.get<Option[]>('/tracking/metrics/step-options', { params: { project_id: props.projectId, bot_id: props.botId }, signal: controller.signal })
+      const { data: steps } = await api.get<JourneyStepOption[]>('/tracking/metrics/step-options', { params: { project_id: props.projectId, bot_id: props.botId }, signal: controller.signal })
       if (!controller.signal.aborted) setOptions([
         ...tags.map(t => ({ id: `tag:${t.id}`, name: `Тег: ${t.name}`, kind: 'tag' as const, color: customColor(t.id) })),
-        ...steps.map(s => ({ id: `step:${s.id}`, name: `Шаг: ${s.name}`, kind: 'step' as const, color: customColor(s.id) })),
+        ...steps.map(s => ({ id: `step:${s.id}`, name: `Шаг: ${stepLabel(s)}`, kind: 'step' as const, color: customColor(s.id), step: s })),
       ])
     })().catch(() => { if (!controller.signal.aborted) setOptionError('Не удалось загрузить теги и шаги') })
     return () => controller.abort()
@@ -162,9 +163,9 @@ export default function TrackingOverview(props: Props) {
         <button type="button" title="Восстановить стандартный вид" aria-label="Восстановить стандартный вид" onClick={() => setView(initial)}><RotateCcw size={16} /></button>
         <button type="button" title="Закрыть настройки" aria-label="Закрыть настройки" onClick={() => setSettingsOpen(false)}><X size={16} /></button></div></div>
       <input aria-label="Поиск показателя, тега или шага" placeholder="Найти показатель, тег или шаг" value={query} onChange={e => setQuery(e.target.value)} />
-      <div className="tracking-options">{catalogue.filter(m => m.name.toLowerCase().includes(query.toLowerCase())).map(m => <label key={m.id}>
+      <div className="tracking-options">{catalogue.filter(m => m.name.toLowerCase().includes(query.toLowerCase())).map(m => <div className="journey-stage-choice" key={m.id}><label>
         <input type="checkbox" checked={view.selected.includes(m.id)} disabled={!view.selected.includes(m.id) && view.selected.length >= 20} onChange={() => toggle(m.id)} /><span>{m.name}</span>
-      </label>)}</div>
+      </label>{m.step && <TrackingStepPreview projectId={props.projectId} step={m.step} />}</div>)}</div>
       {selected.filter(m => !catalogue.some(x => x.id === m.id)).map(m => <button type="button" key={m.id} onClick={() => toggle(m.id)}>Убрать недоступный показатель</button>)}
       {optionError && <p role="alert">{optionError}. <button type="button" onClick={() => setRetry(n => n + 1)}>Повторить</button></p>}
     </section>}
