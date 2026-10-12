@@ -552,6 +552,13 @@ export default function SettingsPage() {
     ],
   )
 
+  const canEditUserTelegramId = useCallback(
+    (user: User) =>
+      canDeleteUser(user) ||
+      (canManageStaff && currentRoleName === 'super_admin' && user.id === currentUser?.id),
+    [canDeleteUser, canManageStaff, currentRoleName, currentUser?.id],
+  )
+
   const editableRolesForUser = useCallback(
     (user: User) => {
       if (!canDeleteUser(user)) {
@@ -1203,12 +1210,16 @@ export default function SettingsPage() {
   }
 
   const handleUserTelegramIdChange = async (user: User, rawValue: string) => {
-    if (!canDeleteUser(user)) {
+    if (!canEditUserTelegramId(user)) {
       setError('Недостаточно прав для изменения Telegram ID.')
       return
     }
     const normalized = rawValue.replace(/\D/g, '')
     const telegramId = normalized ? Number(normalized) : null
+    if (telegramId !== null && (!Number.isSafeInteger(telegramId) || telegramId <= 0)) {
+      setError('Telegram ID должен быть положительным целым числом.')
+      return
+    }
     if (telegramId === (user.telegram_id ?? null)) {
       return
     }
@@ -2349,7 +2360,7 @@ export default function SettingsPage() {
                               defaultValue={user.telegram_id ?? ''}
                               inputMode="numeric"
                               placeholder="123456789"
-                              disabled={!canRemove || updatingUserId === user.id}
+                              disabled={!canEditUserTelegramId(user) || updatingUserId === user.id}
                               onChange={(event) => {
                                 event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '')
                               }}
