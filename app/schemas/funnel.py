@@ -79,6 +79,7 @@ class FunnelStepOptionOut(BaseModel):
     funnel_name: str
     version_id: uuid.UUID
     version_number: int
+    number: int = 0
     is_active_for_bot: bool = False
 
 

@@ -101,6 +101,7 @@ const EMPTY_WORKSPACE_COUNTS: ChatWorkspaceCounts = {
 }
 
 type FunnelStepOptionRecord = {
+  number: number
   id: string
   key: string
   title: string
@@ -1334,7 +1335,7 @@ export default function ChatsPage() {
       setUsers(usersResponse.data.items)
       setStepOptions(stepsResponse.data.map((step) => ({
         id: step.id,
-        label: `${step.funnel_name} v${step.version_number} · ${step.title}`,
+        label: `${step.funnel_name} v${step.version_number} · #${step.number} · ${step.title}`,
       })))
     } catch {
       setTrackingOptions([])

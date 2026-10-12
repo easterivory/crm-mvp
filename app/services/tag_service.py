@@ -6,12 +6,13 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.tag_repository import TagRepository
-from app.schemas.tag import TagCreate, TagOut, TagUpdate
+from app.schemas.tag import LeadTagsUpdate, TagCreate, TagOut, TagUpdate
 from app.models.lead import Lead
 from app.models.tag import Tag, random_tag_color
 from app.services.advertising_event_service import AdvertisingEventService
@@ -155,6 +156,7 @@ class TagService:
         lead_id: UUID,
         tag_id: UUID,
         project_id: UUID,
+        recalculate_score: bool = True,
     ) -> None:
         lead, tag = await self._ensure_lead_and_tag_in_project(
             lead_id=lead_id,
@@ -219,13 +221,15 @@ class TagService:
                             tag_id,
                             event_type,
                         )
-            await self.scoring.update_lead_score(lead_id)
+            if recalculate_score:
+                await self.scoring.update_lead_score(lead_id)
 
     async def remove_tag_from_lead(
         self,
         lead_id: UUID,
         tag_id: UUID,
         project_id: UUID,
+        recalculate_score: bool = True,
     ) -> None:
         await self._ensure_lead_and_tag_in_project(
             lead_id=lead_id,
@@ -233,7 +237,34 @@ class TagService:
             project_id=project_id,
         )
         await self.tag_repo.remove_tag_from_lead(lead_id=lead_id, tag_id=tag_id)
-        await self.scoring.update_lead_score(lead_id)
+        if recalculate_score:
+            await self.scoring.update_lead_score(lead_id)
+
+    async def update_lead_tags(self, lead_id: UUID, project_id: UUID, data: LeadTagsUpdate) -> list[TagOut]:
+        add_ids = list(dict.fromkeys(data.add_tag_ids))
+        remove_ids = list(dict.fromkeys(data.remove_tag_ids))
+        all_ids = set(add_ids + remove_ids)
+        async with self.db.begin_nested():
+            # Serialize bulk edits for this lead; apply deltas rather than replacing
+            # the set, so another manager's unrelated tags are not overwritten.
+            lead = await self.db.scalar(select(Lead.id).where(
+                Lead.id == lead_id, Lead.project_id == project_id, Lead.is_deleted.is_(False)
+            ).with_for_update())
+            if lead is None:
+                raise HTTPException(status_code=404, detail="Lead not found")
+            valid_ids = set((await self.db.scalars(select(Tag.id).where(
+                Tag.project_id == project_id, Tag.id.in_(all_ids)
+            ))).all()) if all_ids else set()
+            if valid_ids != all_ids:
+                raise HTTPException(status_code=404, detail="Tag not found in project")
+            for tag_id in remove_ids:
+                await self.remove_tag_from_lead(lead_id, tag_id, project_id, recalculate_score=False)
+            for tag_id in add_ids:
+                await self.add_tag_to_lead(lead_id, tag_id, project_id, recalculate_score=False)
+            if all_ids:
+                await self.scoring.update_lead_score(lead_id)
+            tags = await self.tag_repo.list_for_lead(lead_id)
+            return [TagOut.model_validate(tag) for tag in tags]
 
     async def _ensure_lead_and_tag_in_project(
         self,

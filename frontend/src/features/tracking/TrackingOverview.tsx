@@ -4,6 +4,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import api from '../../api/client'
 import type { TrackingDailyMetric, TrackingMetricSummary } from './types'
 import './tracking-overview.css'
+import TrackingJourney from './TrackingJourney'
 
 type Option = { id: string; name: string }
 type Metric = { id: string; name: string; kind: 'count' | 'money' | 'tag' | 'step'; color: string }
@@ -39,6 +40,7 @@ export function metricRatio(numerator: number | null, denominator: number | null
 }
 
 export default function TrackingOverview(props: Props) {
+  const [mode, setMode] = useState<'overview' | 'journey'>('overview')
   const storageKey = `tracking-view:v1:${props.userId}:${props.projectId}`
   const initial = defaults(props.gambling, props.channel)
   const [view, setView] = useState<View>(() => {
@@ -143,6 +145,11 @@ export default function TrackingOverview(props: Props) {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `tracking-${props.dateFrom}-${props.dateTo}.csv`; anchor.click(); URL.revokeObjectURL(url)
   }
   return <div className="tracking-overview">
+    <div className="tracking-actions tracking-view-tabs" role="tablist" aria-label="Вид статистики">
+      <button type="button" role="tab" aria-selected={mode === 'overview'} onClick={() => setMode('overview')}>Обзор</button>
+      <button type="button" role="tab" aria-selected={mode === 'journey'} onClick={() => setMode('journey')}>Прохождение воронки</button>
+    </div>
+    {mode === 'journey' ? <TrackingJourney {...props} /> : <>
     <div className="tracking-tools">
       <div><h2>Обзор трафика</h2><span className="tracking-muted">{props.dateFrom} — {props.dateTo} · UTC{!props.linkId && ' · Все ссылки, включая архивные'}</span></div>
       <div className="tracking-actions">
@@ -192,5 +199,6 @@ export default function TrackingOverview(props: Props) {
         <div className="tracking-ratio-value"><strong>{cohort?.percent == null ? '—' : `${number(cohort.percent, 1)}%`}</strong><span>{cohort ? `${number(cohort.converted)} / ${number(cohort.base)}` : cohortError ? 'Ошибка расчёта' : 'Загрузка…'}</span></div>
       </div>{cohortError && <button type="button" onClick={() => setRetry(n => n + 1)}>Повторить расчёт</button>}
     </div>
+    </>}
   </div>
 }

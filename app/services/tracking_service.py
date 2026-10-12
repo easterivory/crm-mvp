@@ -356,7 +356,7 @@ class TrackingService:
                 FunnelVersion.id == bot.active_funnel_version_id,
                 FunnelVersion.funnel_id == bot.active_funnel_id,
             )
-            .order_by(FunnelStep.position_y, FunnelStep.position_x, FunnelStep.created_at)
+            .order_by(FunnelStep.position_y, FunnelStep.position_x, FunnelStep.id)
         )
         ordered_steps = list(result.scalars().all())
         return [

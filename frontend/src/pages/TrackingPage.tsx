@@ -317,9 +317,7 @@ function funnelList(items: FunnelStepMetric[]) {
         >
           <span className="min-w-0">
             <span className="block truncate font-medium text-gray-100">{item.label}</span>
-            <span className="text-xs text-gray-500">
-              Dropoff {formatNumber(item.dropoff_count)} · {formatPercent(item.dropoff_percent)}
-            </span>
+            <span className="text-xs text-gray-500">Сейчас на шаге</span>
           </span>
           <span className="shrink-0 text-lg font-semibold text-white">
             {formatNumber(item.count)}

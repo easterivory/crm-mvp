@@ -7,7 +7,7 @@ from app.api.v1.dependencies import get_current_project_id, get_current_user
 from app.core.constants import RoleName
 from app.core.database import get_db
 from app.schemas.common import PaginatedResponse
-from app.schemas.tag import TagCreate, TagOut, TagUpdate
+from app.schemas.tag import LeadTagsUpdate, TagCreate, TagOut, TagUpdate
 from app.services.access_control import require_project_access
 from app.services.tag_service import TagService
 
@@ -92,6 +92,18 @@ async def add_tag_to_lead(
         tag_id=tag_id,
         project_id=project_id,
     )
+
+
+@router.patch("/leads/{lead_id}/tags", response_model=list[TagOut])
+async def update_lead_tags(
+    lead_id: UUID,
+    data: LeadTagsUpdate,
+    project_id: UUID = Depends(get_current_project_id),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TagOut]:
+    _ensure_lead_tag_access(current_user)
+    return await TagService(db).update_lead_tags(lead_id, project_id, data)
 
 
 @router.delete("/leads/{lead_id}/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)

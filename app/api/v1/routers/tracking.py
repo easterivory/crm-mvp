@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,6 +29,7 @@ from app.services.tracking_metrics_service import TrackingMetricsService
 from app.services.tracking_step_metrics_service import TrackingStepMetricsService
 from app.services.tracking_cohort_service import TrackingCohortService
 from app.services.tracking_service import TrackingService
+from app.services.tracking_journey_service import TrackingJourneyService
 
 router = APIRouter(prefix="/tracking-links", tags=["tracking"])
 v1_router = APIRouter(prefix="/tracking", tags=["tracking"])
@@ -289,6 +290,30 @@ async def get_tag_tracking_metrics(
 async def tracking_step_options(project_id: UUID, bot_id: Optional[UUID] = None,
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id)
+
+
+@v1_router.get("/metrics/journey")
+async def tracking_journey(project_id: UUID, funnel_id: UUID,
+    bot_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    idle_hours: int = Query(default=24, ge=1, le=8760),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingJourneyService(db).report(current_user, project_id, funnel_id,
+        bot_id=bot_id, buyer_id=buyer_id, link_id=link_id, date_from=date_from, date_to=date_to,
+        idle_hours=idle_hours)
+
+
+@v1_router.get("/metrics/journey/chats")
+async def tracking_journey_chats(project_id: UUID, funnel_id: UUID, step_id: UUID,
+    bucket: Literal["reached", "continued", "current", "waiting", "delayed", "manual", "stalled"] = "reached",
+    bot_id: Optional[UUID] = None, buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    idle_hours: int = Query(default=24, ge=1, le=8760),
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingJourneyService(db).chats(current_user, project_id, funnel_id, step_id,
+        bucket=bucket, idle_hours=idle_hours, limit=limit, offset=offset, bot_id=bot_id,
+        buyer_id=buyer_id, link_id=link_id, date_from=date_from, date_to=date_to)
 
 
 @v1_router.get("/metrics/cohort-conversion")

@@ -26,20 +26,26 @@ class TrackingStepMetricsService:
         # Include archived versions for historical analysis, retaining the latest
         # identity of each stable step key within its own funnel.
         stmt = (select(FunnelStep.id, FunnelStep.key, FunnelStep.title, Funnel.name, Funnel.id.label("funnel_id"),
-                       Funnel.bot_id, FunnelVersion.version_number)
+                       Funnel.bot_id, FunnelVersion.version_number, FunnelVersion.id.label("version_id"),
+                       FunnelStep.position_x, FunnelStep.position_y)
                 .join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
                 .join(Funnel, Funnel.id == FunnelVersion.funnel_id)
                 .where(Funnel.project_id == project_id, FunnelVersion.status != "draft")
-                .order_by(Funnel.name, FunnelVersion.version_number.desc(), FunnelStep.key))
+                .order_by(Funnel.name, Funnel.id, FunnelVersion.version_number.desc(),
+                          FunnelStep.position_y, FunnelStep.position_x, FunnelStep.id))
         if bot_id:
             stmt = stmt.where(Funnel.bot_id == bot_id)
         rows = (await self.db.execute(stmt)).all()
-        seen, result = set(), []
+        seen, result, numbers = set(), [], {}
         for row in rows:
+            numbers[row.version_id] = numbers.get(row.version_id, 0) + 1
             key = (row.funnel_id, row.key)
             if key not in seen:
                 seen.add(key)
-                result.append({"id": row.id, "name": f"{row.name} · {row.title}", "bot_id": row.bot_id})
+                number = numbers[row.version_id]
+                result.append({"id": row.id, "name": f"{row.name} · v{row.version_number} · #{number} · {row.title}",
+                    "bot_id": row.bot_id, "funnel_id": row.funnel_id, "funnel_name": row.name,
+                    "version_number": row.version_number, "number": number, "key": row.key, "title": row.title})
         return result
 
     @staticmethod

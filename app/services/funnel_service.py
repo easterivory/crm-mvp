@@ -132,17 +132,23 @@ class FunnelService:
                     Funnel.project_id == project_id,
                     Funnel.status == "active",
                     Funnel.current_version_id == FunnelVersion.id,
-                    FunnelStep.step_type != "trigger",
                 )
                 .order_by(
                     Funnel.name.asc(),
                     FunnelStep.position_y.asc(),
                     FunnelStep.position_x.asc(),
-                    FunnelStep.created_at.asc(),
+                    FunnelStep.id.asc(),
                 )
             )
         ).mappings().all()
-        return [FunnelStepOptionOut(**row) for row in rows]
+        numbers = {}
+        options = []
+        for row in rows:
+            version_id = row["version_id"]
+            numbers[version_id] = numbers.get(version_id, 0) + 1
+            if row["step_type"] != "trigger":
+                options.append(FunnelStepOptionOut(**row, number=numbers[version_id]))
+        return options
 
     async def create_funnel(
         self,
