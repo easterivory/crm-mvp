@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.tracking import TrackingEvent, TrackingLink
 from app.models.user import User, UserProjectAccess
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
+from app.repositories.tracking_lead_criteria import tracking_lead_criterion
 from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 from app.schemas.buyer import BuyerFunnelDropOffStepOut, BuyerPerformanceOut
 
@@ -146,7 +147,7 @@ class BuyerAnalyticsService:
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                LeadStatus.code.in_(tracking_lead_status_codes),
+                tracking_lead_criterion(tracking_lead_status_codes),
             )
         )
         if start_at is not None:

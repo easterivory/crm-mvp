@@ -63,6 +63,8 @@ class ProjectService:
     async def create_project(self, data: ProjectCreate, actor: User) -> ProjectOut:
         self._ensure_can_create_project(actor)
         name = self._validate_name(data.name)
+        if data.tracking_lead_count_mode == "tags" or data.tracking_lead_tag_ids:
+            raise HTTPException(422, "Сначала создайте проект и его теги, затем включите подсчёт лидов по тегам.")
         status_value = self._validate_status(data.status)
         sla_threshold_minutes = self._validate_sla(data.sla_threshold_minutes)
         tracking_lead_status_codes = await self._validate_tracking_lead_status_codes(
@@ -164,6 +166,22 @@ class ProjectService:
                     values["tracking_lead_status_codes"]
                 )
             )
+        if "tracking_lead_count_mode" in values or "tracking_lead_tag_ids" in values:
+            mode = values.get("tracking_lead_count_mode", project.tracking_lead_count_mode)
+            tag_ids = values.get("tracking_lead_tag_ids", project.tracking_lead_tag_ids)
+            if mode is None or tag_ids is None:
+                raise HTTPException(422, "Режим подсчёта и список тегов не могут быть null.")
+            normalized = list(dict.fromkeys(str(UUID(str(item))) for item in tag_ids))
+            if mode == "tags" and not normalized:
+                raise HTTPException(422, "Выберите хотя бы один тег для подсчёта лидов.")
+            if normalized:
+                found = set((await self.db.scalars(select(Tag.id).where(
+                    Tag.project_id == project_id, Tag.id.in_([UUID(item) for item in normalized]),
+                ))).all())
+                if found != {UUID(item) for item in normalized}:
+                    raise HTTPException(422, "Выбранные теги не найдены в этом проекте.")
+            values["tracking_lead_count_mode"] = mode
+            values["tracking_lead_tag_ids"] = normalized
         if "facebook_tag_event_rules" in values:
             values["facebook_tag_event_rules"] = (
                 await self._validate_facebook_tag_event_rules(

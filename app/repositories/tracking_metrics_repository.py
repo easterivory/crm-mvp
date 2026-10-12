@@ -14,6 +14,7 @@ from app.models.bot import BotStep, ChatBotState
 from app.models.chat import Chat
 from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
+from app.repositories.tracking_lead_criteria import tracking_lead_criterion
 from app.models.message import Message
 from app.models.partner import LeadSubmission
 from app.models.tracking import TrackingEvent, TrackingLink, TrackingSpend
@@ -1458,9 +1459,7 @@ class TrackingMetricsRepository:
             raise ValueError("Submission metrics must use lead_submissions")
         status_codes = cls._normalize_lead_status_codes(lead_status_codes)
         stmt = stmt.join(LeadStatus, LeadStatus.id == Lead.status_id)
-        if not status_codes:
-            return stmt.where(false())
-        return stmt.where(LeadStatus.code.in_(status_codes))
+        return stmt.where(tracking_lead_criterion(status_codes))
 
     @staticmethod
     def _normalize_lead_status_codes(

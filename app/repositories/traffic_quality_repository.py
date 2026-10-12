@@ -11,6 +11,7 @@ from app.models.lead_status import LeadStatus
 from app.models.tracking import TrackingEvent, TrackingSpend
 from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
+from app.repositories.tracking_lead_criteria import tracking_lead_criterion
 
 
 class TrafficQualityRepository:
@@ -29,6 +30,7 @@ class TrafficQualityRepository:
             Lead.id.label("lead_id"), identity.label("person"),
             func.coalesce(Chat.current_cycle_started_at, Chat.created_at).label("entered_at"),
             LeadStatus.code.label("status"),
+            tracking_lead_criterion(project.tracking_lead_status_codes).label("qualified"),
         ).select_from(Lead).join(Chat, Chat.id == Lead.chat_id).outerjoin(
             LeadStatus, LeadStatus.id == Lead.status_id,
         ).where(
@@ -40,7 +42,7 @@ class TrafficQualityRepository:
         people = select(members).join(cohort, cohort.c.person == members.c.person).cte("quality_people")
         totals = (await self.db.execute(select(
             func.count(distinct(people.c.person)).label("leads"),
-            func.count(distinct(people.c.person)).filter(people.c.status.in_(project.tracking_lead_status_codes)).label("qualified_leads"),
+            func.count(distinct(people.c.person)).filter(people.c.qualified).label("qualified_leads"),
         ))).mappings().one()
         values = dict(totals)
 

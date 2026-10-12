@@ -20,6 +20,7 @@ from app.models.base import (
 class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin):
     __tablename__ = "projects"
     __table_args__ = (
+        CheckConstraint("tracking_lead_count_mode IN ('statuses', 'tags')", name="ck_projects_tracking_lead_count_mode"),
         CheckConstraint(
             "status IN ('active', 'archived')",
             name="ck_projects_status",
@@ -80,6 +81,8 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         default=lambda: list(LeadStatusCode.TRACKING_LEAD_DEFAULT),
         server_default=text("'[\"submitted\",\"qualified\"]'::jsonb"),
     )
+    tracking_lead_count_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="statuses", server_default="statuses")
+    tracking_lead_tag_ids: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSONB), nullable=False, default=list, server_default=text("'[]'::jsonb"))
     use_confidence_score: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

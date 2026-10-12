@@ -98,8 +98,11 @@ class InfoBotService:
                 if len(projects) == 1:
                     state["project_id"] = next(iter(projects))
                 await self.state_store.set(chat_id, state)
-                replies = await self.report(state)
-                replies += await self.report({**state, "kind": "all"})
+                weekly = await self.report(state)
+                all_time = await self.report({**state, "kind": "all"})
+                replies = [{"text": week["text"] + "\n\n━━━━━━━━━━━━\n\n" + total["text"]}
+                           for week, total in zip(weekly, all_time, strict=True)]
+                replies[-1]["reply_markup"] = weekly[-1]["reply_markup"]
                 if missing:
                     replies.append({"text": "Не распознаны:\n" + "\n".join(missing)})
                 return chat_id, replies
@@ -219,6 +222,10 @@ class InfoBotService:
         kind = state.get("kind", "week")
         start, end = (date.fromisoformat(state["start"]), date.fromisoformat(state["end"])) if kind == "custom" else period_bounds(kind, state.get("offset", 0))
         heading = "Всё время" if kind == "all" else f"{start:%d.%m.%Y} – {end:%d.%m.%Y}"
+        if kind == "week":
+            heading = "Неделя (пн–вс): " + heading
+        elif kind == "month":
+            heading = "Месяц: " + heading
         targets = []
         for link_id in state.get("link_ids", []):
             link = await self.db.get(TrackingLink, UUID(link_id))
@@ -242,14 +249,18 @@ class InfoBotService:
                     raise ValueError("Бот не найден.")
                 title += " / " + bot.name
             targets.append((project, None, bot_id, title))
-        reports, total = [], {}
+        reports, total, destinations = [], {}, set()
         for project, link, bot_id, title in targets:
             values = await InfoBotReports(self.db).summary(project, start, end, link, bot_id)
+            destinations.add(values["destination_type"])
             for key, value in values.items():
+                if key == "destination_type":
+                    continue
                 total[key] = total.get(key, 0) + value
             reports.append({"text": f"{title}\n{heading} · МСК\n\n" + format_summary(values, gambling=project.project_format == "gambling")})
         if len(targets) > 1:
-            reports.append({"text": f"Итого по {len(targets)} ссылкам\n{heading} · МСК\n\n" + format_summary(total) + "\nСумма показателей ссылок, не уникальные люди между ссылками."})
+            total["destination_type"] = next(iter(destinations)) if len(destinations) == 1 else "mixed"
+            reports.append({"text": f"Итого по {len(targets)} ссылкам\n{heading} · МСК\n\n" + format_summary(total, gambling=all(project.project_format == "gambling" for project, _, _, _ in targets)) + "\nСумма показателей ссылок, не уникальные люди между ссылками."})
         rows = period_keyboard()["inline_keyboard"]
         if kind in {"week", "month"}:
             offset = state.get("offset", 0)

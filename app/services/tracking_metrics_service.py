@@ -360,6 +360,8 @@ class TrackingMetricsService:
         unattributed_summary = self._summary_from_values(unattributed_values)
 
         return TrackingProjectMetricsResponse(
+            tracking_lead_count_mode=getattr(project, "tracking_lead_count_mode", "statuses"),
+            tracking_lead_tag_ids=getattr(project, "tracking_lead_tag_ids", []),
             project_id=project_id,
             bot_id=bot_id,
             date_from=date_from,
@@ -500,6 +502,8 @@ class TrackingMetricsService:
         )
 
         return TrackingLinkMetricsResponse(
+            tracking_lead_count_mode=getattr(project, "tracking_lead_count_mode", "statuses"),
+            tracking_lead_tag_ids=getattr(project, "tracking_lead_tag_ids", []),
             link_id=link.id,
             project_id=link.project_id,
             bot_id=link.bot_id,

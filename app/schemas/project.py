@@ -1,4 +1,5 @@
 import uuid
+from uuid import UUID
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal, Optional
@@ -40,6 +41,8 @@ def default_tracking_lead_status_codes() -> list[str]:
 
 
 class ProjectBase(BaseModel):
+    tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
+    tracking_lead_tag_ids: list[UUID] = Field(default_factory=list, max_length=100)
     name: str = Field(..., max_length=255)
     slug: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
@@ -90,6 +93,8 @@ class ProjectCreate(ProjectBase):
 
 
 class ProjectUpdate(BaseModel):
+    tracking_lead_count_mode: Optional[Literal["statuses", "tags"]] = None
+    tracking_lead_tag_ids: Optional[list[UUID]] = Field(default=None, max_length=100)
     name: Optional[str] = Field(None, max_length=255)
     slug: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = None
@@ -169,6 +174,8 @@ class ProjectRead(OrmBase):
     default_client_lang: str
     is_translation_enabled: bool
     tracking_lead_status_codes: list[str]
+    tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
+    tracking_lead_tag_ids: list[UUID] = Field(default_factory=list)
     use_confidence_score: bool
     hide_assigned_chats_from_all: bool
     chat_lease_minutes: int

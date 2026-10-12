@@ -61,6 +61,8 @@ type Project = {
   default_client_lang: string
   is_translation_enabled: boolean
   tracking_lead_status_codes: string[]
+  tracking_lead_count_mode: 'statuses' | 'tags'
+  tracking_lead_tag_ids: string[]
   use_confidence_score: boolean
   hide_assigned_chats_from_all: boolean
   chat_lease_minutes: number
@@ -398,6 +400,8 @@ export default function SettingsPage() {
     defaultTrackingLeadStatusCodes,
   )
   const [useConfidenceScore, setUseConfidenceScore] = useState(true)
+  const [trackingLeadCountMode, setTrackingLeadCountMode] = useState<'statuses' | 'tags'>('statuses')
+  const [trackingLeadTagIds, setTrackingLeadTagIds] = useState<string[]>([])
   const [hideAssignedChatsFromAll, setHideAssignedChatsFromAll] = useState(false)
   const [chatLeaseMinutes, setChatLeaseMinutes] = useState('30')
   const [projectFormat, setProjectFormat] = useState<'submission' | 'gambling'>('submission')
@@ -685,6 +689,8 @@ export default function SettingsPage() {
 
     const { data } = await api.get<Project>(`/projects/${activeProjectId}`)
     setProject(data)
+    setTrackingLeadCountMode(data.tracking_lead_count_mode ?? 'statuses')
+    setTrackingLeadTagIds(data.tracking_lead_tag_ids ?? [])
     setProjectName(data.name)
     setSlaMinutes(String(data.sla_threshold_minutes))
     setTrackingLeadStatusCodes(
@@ -842,6 +848,8 @@ export default function SettingsPage() {
         name: projectName.trim(),
         sla_threshold_minutes: Number(slaMinutes),
         tracking_lead_status_codes: trackingLeadStatusCodes,
+        tracking_lead_count_mode: trackingLeadCountMode,
+        tracking_lead_tag_ids: trackingLeadTagIds,
         use_confidence_score: useConfidenceScore,
         hide_assigned_chats_from_all: hideAssignedChatsFromAll,
         chat_lease_minutes: Number(chatLeaseMinutes),
@@ -862,6 +870,8 @@ export default function SettingsPage() {
         facebook_tag_event_rules: facebookTagEventRules,
       })
       setProject(data)
+      setTrackingLeadCountMode(data.tracking_lead_count_mode ?? 'statuses')
+      setTrackingLeadTagIds(data.tracking_lead_tag_ids ?? [])
       setProjectName(data.name)
       setSlaMinutes(String(data.sla_threshold_minutes))
       setTrackingLeadStatusCodes(
@@ -2046,15 +2056,42 @@ export default function SettingsPage() {
                     Лид в трекинге
                   </h3>
                   <p className="mt-1 text-sm leading-6 text-zinc-500">
-                    Старты считаются отдельно. Метрика “Лиды”, CPL и CR до лида
-                    считаются только по выбранным статусам.
+                    {trackingLeadCountMode === 'tags' ? 'Подходящие теги: любой из выбранных. Статус не учитывается.' : 'Подходящие статусы: любой из выбранных.'}
                   </p>
                 </div>
                 <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-100">
-                  {trackingLeadStatusCodes.length}
+                  {trackingLeadCountMode === 'tags' ? trackingLeadTagIds.length : trackingLeadStatusCodes.length}
                 </span>
               </div>
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <div className="mt-4 inline-flex gap-1 rounded-lg border border-zinc-700 p-1" role="group" aria-label="Подсчёт лидов">
+                {(['statuses', 'tags'] as const).map((mode) => (
+                  <button key={mode} type="button" aria-pressed={trackingLeadCountMode === mode}
+                    onClick={() => setTrackingLeadCountMode(mode)}
+                    className={`rounded-md px-3 py-2 text-sm ${trackingLeadCountMode === mode ? 'bg-emerald-500/20 text-emerald-200' : 'text-zinc-400'}`}>
+                    {mode === 'statuses' ? 'По статусам' : 'По тегам'}
+                  </button>
+                ))}
+              </div>
+              {trackingLeadCountMode === 'tags' ? (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {tags.map((tag) => (
+                    <label key={tag.id} className="flex items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2.5 text-sm text-zinc-200">
+                      <input type="checkbox" checked={trackingLeadTagIds.includes(tag.id)}
+                        onChange={() => setTrackingLeadTagIds((ids) => ids.includes(tag.id) ? ids.filter((id) => id !== tag.id) : [...ids, tag.id])}
+                        className="h-5 w-5 rounded border-zinc-700 text-emerald-500" />
+                      <span className="min-w-0 break-words">{tag.name}</span>
+                    </label>
+                  ))}
+                  {tags.length === 0 ? <p className="text-sm text-amber-200">В проекте пока нет тегов.</p> : null}
+                  {trackingLeadTagIds.filter((id) => !tags.some((tag) => tag.id === id)).map((id) => (
+                    <label key={id} className="flex items-center gap-3 rounded-lg border border-amber-500/35 px-3 py-2.5 text-sm text-amber-200">
+                      <input type="checkbox" checked onChange={() => setTrackingLeadTagIds((ids) => ids.filter((value) => value !== id))} />
+                      <span className="min-w-0 break-words">Тег не найден: {id}</span>
+                    </label>
+                  ))}
+                  {trackingLeadTagIds.length === 0 ? <p className="text-sm text-amber-200">Выберите хотя бы один тег.</p> : null}
+                </div>
+              ) : <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 {statuses.map((statusItem) => {
                   const isSelected = trackingLeadStatusCodes.includes(statusItem.code)
                   const isLastSelected = isSelected && trackingLeadStatusCodes.length <= 1
@@ -2102,8 +2139,8 @@ export default function SettingsPage() {
                     </label>
                   )
                 })}
-              </div>
-              {unknownTrackingLeadStatusCodes.length > 0 ? (
+              </div>}
+              {trackingLeadCountMode === 'statuses' && unknownTrackingLeadStatusCodes.length > 0 ? (
                 <p className="mt-3 text-sm leading-5 text-amber-100/80">
                   В проекте сохранены коды статусов, которых нет в справочнике. Снимите их или создайте соответствующие статусы.
                 </p>
@@ -2116,7 +2153,7 @@ export default function SettingsPage() {
             </div>
             <button
               type="submit"
-              disabled={!project || isSavingProject}
+              disabled={!project || isSavingProject || (trackingLeadCountMode === 'tags' && trackingLeadTagIds.length === 0)}
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSavingProject ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}

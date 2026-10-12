@@ -16,7 +16,8 @@ from app.models.lander import ProjectLander
 from app.models.lead_status import LeadStatus
 from app.models.role import Role
 from app.models.tracking import TrackingLink
-from app.services.info_bot_reports import InfoBotReports, period_bounds, parse_custom_period
+from app.services.info_bot_reports import InfoBotReports, period_bounds, parse_custom_period, format_summary
+from app.services.admin_bot_service import AdminTelegramError, admin_alert_unavailable_key
 from app.services.info_bot_service import InfoBotService, InfoBotStateStore
 from app.services.tracking_metrics_service import TrackingMetricsService
 
@@ -29,6 +30,32 @@ def test_calendar_periods_and_moscow_bounds():
     assert parse_custom_period("01.01.2025 02.01.2025") == (date(2025, 1, 1), date(2025, 1, 2))
     with pytest.raises(ValueError):
         parse_custom_period("02.01.2025 01.01.2025")
+
+
+def test_report_uses_configured_destination_not_nonzero_subscribers():
+    values = dict(destination_type="bot", channel_joins=10, channel_join_requests=5,
+                  channel_leaves=1, starts=20, leads=2, clicks=40, submitted_leads=1,
+                  registrations=1, first_deposits=1, redeposits=0, spend=10)
+    result = format_summary(values)
+    assert "Залив: на бота" in result
+    assert "Подписчики" not in result and "Заявки в канал" not in result
+    assert "Конверсия старт → лид: 10.00%" in result
+    values.update(destination_type="channel", channel_joins=0)
+    result = format_summary(values, gambling=True)
+    assert "Залив: на канал" in result and "Подписчики канала: 0" in result
+    assert "Конверсия подписчик → лид: —" in result
+    assert "Конверсия старт" not in result and "Поданные" not in result
+    values["destination_type"] = "mixed"
+    assert "разные типы залива" in format_summary(values)
+
+
+def test_admin_alert_unavailable_classification_is_not_network_failure():
+    assert AdminTelegramError("sendMessage", 400, "Bad Request: chat not found").recipient_unavailable
+    assert AdminTelegramError("sendMessage", 403, "Forbidden: bot was blocked by the user").recipient_unavailable
+    assert not AdminTelegramError("sendMessage", 429, "Too Many Requests").recipient_unavailable
+    assert not AdminTelegramError("sendMessage", 500, "Server Error").recipient_unavailable
+    assert not AdminTelegramError("getUpdates", 403, "Forbidden").recipient_unavailable
+    assert admin_alert_unavailable_key("1", 42) != admin_alert_unavailable_key("2", 42)
 
 
 @pytest.mark.skipif(not os.getenv("CRM_TEST_POSTGRES_URL") or not os.getenv("CRM_TEST_REDIS_URL"), reason="Disposable PostgreSQL and Redis required")
@@ -56,7 +83,7 @@ def test_info_bot_permissions_links_periods_and_unchanged_crm_metrics():
                 db.add_all([super_admin, admin, bot]); await db.flush()
                 channel = TelegramChannel(project_id=project.id, tracker_bot_id=bot.id, title="Channel", telegram_chat_id=-100123)
                 db.add(channel); await db.flush()
-                link = TrackingLink(project_id=project.id, bot_id=bot.id, name="Link", title="Link", code="infotest", ref_code="infotest", invite_link="https://t.me/+invite_test")
+                link = TrackingLink(project_id=project.id, bot_id=bot.id, name="Link", title="Link", code="infotest", ref_code="infotest", invite_link="https://t.me/+invite_test", destination_type="channel", channel_id=channel.id)
                 db.add(link); await db.flush()
                 chat = Chat(project_id=project.id, bot_id=bot.id, tracking_link_id=link.id, external_chat_id="12345", external_user_id="12345")
                 db.add(chat); await db.flush()
@@ -101,12 +128,26 @@ def test_info_bot_permissions_links_periods_and_unchanged_crm_metrics():
                 replies = await service.callback(telegram_id, "period:all:0", stored)
                 assert "Лиды: 1" in replies[0]["text"] and "Подписчики канала: 1" in replies[0]["text"]
                 _, replies = await service.handle_update(update(telegram_id, message="https://telegram.me/info_test_bot?start=infotest https://t.me/info_test_bot?start=infotest"))
-                assert len(replies) == 2 and "Всё время" in replies[1]["text"]
+                assert len(replies) == 1 and "Всё время" in replies[0]["text"]
+                assert "Неделя (пн–вс)" in replies[0]["text"]
                 stored = await state.get(telegram_id)
                 assert len(stored["link_ids"]) == 1
                 await service.callback(telegram_id, "custom", stored)
                 _, replies = await service.handle_update(update(telegram_id, message="06.01.2025 06.01.2025"))
                 assert "Подписчики канала: 1" in replies[0]["text"] and "Лиды: 1" in replies[0]["text"]
+                bot_link = TrackingLink(project_id=project.id, bot_id=bot.id, name="Bot link", title="Bot link", code="bot-info", ref_code="bot-info", destination_type="bot")
+                db.add(bot_link); await db.flush()
+                info = await InfoBotReports(db).summary(project, monday, monday, bot_link)
+                assert info["destination_type"] == "bot"
+                assert "Подписчики" not in format_summary(info)
+                replies = await service.report({"link_ids": [str(bot_link.id)], "kind": "all"})
+                assert "Залив: на бота" in replies[0]["text"] and "Подписчики" not in replies[0]["text"]
+                replies = await service.report({"link_ids": [str(bot_link.id), str(link.id)], "kind": "all"})
+                assert "Залив: бот + канал" in replies[-1]["text"]
+                project.project_format = "gambling"
+                await db.flush()
+                replies = await service.report({"link_ids": [str(bot_link.id), str(link.id)], "kind": "all"})
+                assert all("Поданные" not in reply["text"] for reply in replies)
                 super_admin.role = roles[1]
                 await db.flush()
                 _, replies = await service.handle_update(update(telegram_id))

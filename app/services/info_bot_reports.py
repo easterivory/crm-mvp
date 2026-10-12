@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from uuid import UUID
 
 from decimal import Decimal
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
@@ -109,22 +110,37 @@ class InfoBotReports:
             values["spend"] = sum((Decimal(row.get("price_per_unit") or 0) * channels.get(row["link_id"], {}).get("channel_joins", 0)
                 if row.get("destination_type") == "channel" and row.get("cost_model") == "fix_pdp"
                 else Decimal(row["spend"] or 0) for row in rows), Decimal(0))
+        if link:
+            values["destination_type"] = link.destination_type or "bot"
+        else:
+            query = select(TrackingLink.destination_type).where(TrackingLink.project_id == project.id)
+            if bot_id:
+                query = query.where(TrackingLink.bot_id == bot_id)
+            destinations = {value or "bot" for value in (await self.db.scalars(query.distinct())).all()}
+            values["destination_type"] = next(iter(destinations)) if len(destinations) == 1 else "mixed" if destinations else "bot"
         return values
 
 
 def format_summary(values: dict, *, gambling: bool = False) -> str:
-    lines = [
-        f"Подписчики канала: {values['channel_joins']}",
+    destination = values.get("destination_type", "mixed")
+    lines = [{"bot": "Залив: на бота", "channel": "Залив: на канал", "mixed": "Залив: бот + канал"}[destination]]
+    if destination != "bot":
+        lines.append(f"Подписчики канала: {values['channel_joins']}")
+    lines.extend([
         f"Лиды: {values['leads']}",
         f"Старты: {values['starts']} | Клики: {values['clicks']}",
-        f"Заявки в канал: {values['channel_join_requests']} | Отписки: {values['channel_leaves']}",
-    ]
+    ])
+    if destination != "bot":
+        lines.append(f"Заявки в канал: {values['channel_join_requests']} | Отписки: {values['channel_leaves']}")
     if not gambling:
         lines.append(f"Поданные: {values['submitted_leads']}")
     lines.append(f"Рег: {values['registrations']} | ФД: {values['first_deposits']} | РД: {values['redeposits']}")
-    denominator = values['channel_joins'] or values['starts']
-    label = "подписчик" if values['channel_joins'] else "старт"
-    lines.append(f"Конверсия {label} → лид: {values['leads'] / denominator * 100:.2f}%" if denominator else f"Конверсия {label} → лид: —")
+    if destination == "mixed":
+        lines.append("Конверсия → лид: — (разные типы залива; выберите ссылку)")
+    else:
+        denominator = values['channel_joins'] if destination == "channel" else values['starts']
+        label = "подписчик" if destination == "channel" else "старт"
+        lines.append(f"Конверсия {label} → лид: {values['leads'] / denominator * 100:.2f}%" if denominator else f"Конверсия {label} → лид: —")
     lines.append(f"Расход: {values['spend']:.2f}")
     lines.append(f"CPL: {values['spend'] / values['leads']:.2f}" if values['leads'] else "CPL: —")
     return "\n".join(lines)

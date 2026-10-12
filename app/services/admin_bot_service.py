@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.constants import RoleName, TrackingConversionStatus
+from app.core.redis import get_redis
 from app.models.lead import Lead
 from app.models.partner import LeadSubmission
 from app.models.project import Project
@@ -38,9 +39,25 @@ ADMIN_STATS_MARKUP: dict[str, Any] = {
     ]
 }
 
+class AdminTelegramError(RuntimeError):
+    def __init__(self, method: str, code: int | None, description: str) -> None:
+        super().__init__(f"Telegram {method} failed: {description}")
+        self.method, self.code, self.description = method, code, description
+
+    @property
+    def recipient_unavailable(self) -> bool:
+        return self.method == "sendMessage" and (
+            self.code == 403 or (self.code == 400 and self.description.lower() == "bad request: chat not found")
+        )
+
+
+def admin_alert_unavailable_key(bot_id: str, chat_id: int) -> str:
+    return f"admin_bot:alert_unavailable:{bot_id}:{chat_id}"
+
 
 class AdminTelegramClient:
     def __init__(self, token: str) -> None:
+        self.bot_id = token.split(":", 1)[0]
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.session = httpx.AsyncClient(timeout=35.0)
 
@@ -120,9 +137,8 @@ class AdminTelegramClient:
         except ValueError as exc:
             raise RuntimeError(f"Telegram {method} returned non-JSON response") from exc
         if response.status_code >= 400 or data.get("ok") is not True:
-            raise RuntimeError(
-                f"Telegram {method} failed: {data.get('description') or response.text[:500]}"
-            )
+            raise AdminTelegramError(method, data.get("error_code") or response.status_code,
+                                     str(data.get("description") or "Unknown Telegram error"))
         return data
 
 
@@ -144,6 +160,12 @@ class AdminBotService:
         if not isinstance(chat, dict) or not isinstance(chat.get("id"), int):
             return
         chat_id = int(chat["id"])
+        if chat.get("type") == "private" and (message.get("from") or {}).get("id") == chat_id:
+            try:
+                redis = await get_redis()
+                await redis.delete(admin_alert_unavailable_key(self.telegram.bot_id, chat_id))
+            except Exception:
+                logger.warning("Could not clear admin alert delivery cooldown chat_id=%s", chat_id)
         text = str(message.get("text") or "").strip()
         command, _, argument = text.partition(" ")
         command = command.split("@", 1)[0].lower()
@@ -393,17 +415,43 @@ class LowConversionAdminAlertService:
         cpl = _money(spend / Decimal(leads)) if leads > 0 else Decimal("0.00")
         cr = _percent(Decimal(leads) / Decimal(sample) * Decimal("100")) if sample else Decimal("0.0")
         buyer_name = str(row.get("buyer_name") or "не указан")
+        project = await self.db.get(Project, project_id)
+        project_name = project.name if project is not None else str(project_id)
+        sample_label = "клики" if clicks > 0 else "старты"
         text = (
-            f"⚠️ Внимание! Ссылка {row['title']} баера {buyer_name} имеет низкий конверт "
-            f"(CPL: ${cpl}, CR: {cr}%). Рекомендуется остановить трафик."
+            f"⚠️ Низкий конверт · {project_name}\n"
+            f"Ссылка: {row['title']} · код {row.get('code') or row['link_id']}\n"
+            f"Баер: {buyer_name}\n"
+            f"Период: последние 30 дней (UTC)\n"
+            f"Клики: {clicks} | Старты: {starts} | Лиды: {leads}\n"
+            f"CR ({sample_label} → лид): {cr}% | Базовый CR: {row['base_conversion_rate']}%\n"
+            f"Алерт при CR ≤ {_percent(Decimal(str(row['base_conversion_rate'])) * Decimal('0.7'))}%\n"
+            f"Минимальная выборка: {row['min_sample_size']} | CPL: ${cpl}\n"
+            "Проверьте качество трафика и настройки ссылки."
         )
         client = AdminTelegramClient(token)
         delivered = 0
         try:
+            redis = await get_redis()
             for chat_id in recipients:
                 try:
+                    try:
+                        if await redis.get(admin_alert_unavailable_key(client.bot_id, chat_id)):
+                            continue
+                    except Exception:
+                        logger.warning("Admin alert cooldown unavailable; attempting delivery chat_id=%s", chat_id)
                     await client.send_message(chat_id, text)
                     delivered += 1
+                except AdminTelegramError as exc:
+                    if exc.recipient_unavailable:
+                        try:
+                            await redis.set(admin_alert_unavailable_key(client.bot_id, chat_id), "1", ex=3600)
+                        except Exception:
+                            logger.warning("Could not persist admin alert cooldown chat_id=%s", chat_id)
+                        logger.warning("Admin alert recipient unavailable; retry suspended for 1 hour project_id=%s link_id=%s chat_id=%s telegram_code=%s reason=%s. Recipient must open the login bot and press Start.",
+                                       project_id, row["link_id"], chat_id, exc.code, exc.description)
+                    else:
+                        logger.exception("Could not deliver low_cr alert to admin chat_id=%s", chat_id)
                 except Exception:
                     logger.exception("Could not deliver low_cr alert to admin chat_id=%s", chat_id)
         finally:

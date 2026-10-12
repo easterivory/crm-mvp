@@ -13,6 +13,7 @@ from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.project import Project
+from app.repositories.tracking_lead_criteria import tracking_lead_criterion
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
 
@@ -47,7 +48,7 @@ class ProjectMetricsRepository:
                 Lead.is_deleted.is_(False),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
-                LeadStatus.code.in_(tracking_status_codes),
+                tracking_lead_criterion(tracking_status_codes),
                 self._lead_lifecycle_at() >= start_at,
                 self._lead_lifecycle_at() < end_at,
             )

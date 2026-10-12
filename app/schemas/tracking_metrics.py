@@ -105,6 +105,8 @@ class TrackingFunnelStepItem(BaseModel):
 
 
 class TrackingProjectMetricsResponse(BaseModel):
+    tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
+    tracking_lead_tag_ids: list[uuid.UUID] = Field(default_factory=list)
     project_id: uuid.UUID
     bot_id: Optional[uuid.UUID] = None
     date_from: date
@@ -120,6 +122,8 @@ class TrackingProjectMetricsResponse(BaseModel):
 
 
 class TrackingLinkMetricsResponse(BaseModel):
+    tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
+    tracking_lead_tag_ids: list[uuid.UUID] = Field(default_factory=list)
     link_id: uuid.UUID
     project_id: uuid.UUID
     bot_id: uuid.UUID
