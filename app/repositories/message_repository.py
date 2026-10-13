@@ -336,6 +336,18 @@ class MessageRepository(BaseRepository[Message]):
         )
         return list(result.scalars().all())
 
+    async def previous_user_message_at(
+        self, chat_id: UUID, *, created_at: datetime, message_id: UUID,
+    ) -> datetime | None:
+        # Deleted messages still count as client activity, just not funnel input.
+        return await self.db.scalar(
+            select(Message.created_at).where(
+                Message.chat_id == chat_id,
+                Message.sender_type == SenderType.USER,
+                tuple_(Message.created_at, Message.id) < tuple_(created_at, message_id),
+            ).order_by(Message.created_at.desc(), Message.id.desc()).limit(1)
+        )
+
     async def claim_funnel_processing(self, message_ids: list[UUID]) -> bool:
         """Atomically reserve unprocessed messages for one funnel execution."""
         unique_ids = list(dict.fromkeys(message_ids))

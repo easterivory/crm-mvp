@@ -1,8 +1,9 @@
-"""Gambling-project push rules worker."""
+"""Configured funnel push rules worker."""
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -132,7 +133,7 @@ async def run_once(limit: int = 100) -> int:
             )
             await send_operational_alert(
                 component="funnel_push_worker",
-                title="Gambling funnel push failed",
+                title="Funnel push failed",
                 details={
                     "chat_id": chat_id,
                     "push_rule_id": push_rule_id,
@@ -145,16 +146,20 @@ async def run_once(limit: int = 100) -> int:
 
 async def run_loop(interval_seconds: float = 5.0) -> None:
     logger.info("Starting funnel push worker")
+    next_heartbeat = 0.0
     while True:
         try:
             processed = await run_once()
             if processed:
                 logger.info("Processed funnel pushes count=%s", processed)
+            if time.monotonic() >= next_heartbeat:
+                logger.info("Funnel push worker scan completed sent=%s interval_seconds=%s", processed, interval_seconds)
+                next_heartbeat = time.monotonic() + 60
         except Exception as exc:
             logger.exception("Funnel push worker loop failed")
             await send_operational_alert(
                 component="funnel_push_worker",
-                title="Gambling funnel push worker is unhealthy",
+                title="Funnel push worker is unhealthy",
                 details={"error": f"{exc.__class__.__name__}: {str(exc)[:1000]}"},
                 dedupe_key=f"funnel-push-loop:{exc.__class__.__name__}",
             )

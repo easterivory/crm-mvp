@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Integer, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -106,6 +107,10 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         nullable=False,
         default="submission",
         server_default="submission",
+    )
+    # Existing submission chats must not receive the pre-rollout push backlog.
+    funnel_push_enabled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
     vip_tags: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(JSONB),

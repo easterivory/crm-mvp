@@ -33,7 +33,7 @@ from hashlib import sha256
 import logging
 import re
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -341,6 +341,8 @@ class TelegramService:
             message,
             tracking_link_id=start_tracking_link_id,
             source_transport=source_transport,
+            **({"reset_unanswered_push_count": False}
+               if is_bot_api and self._is_start_command(message.text) and not should_start_runtime else {}),
         )
         message_id = msg.id
         event_reference = msg.external_message_id or str(message_id)
@@ -1410,10 +1412,13 @@ class TelegramService:
         state = await self.funnel_runtime.repo.get_chat_funnel_state(chat.id)
         if state is None or state.is_paused or state.completed_at is not None:
             return None
-        if not marked and (state.runtime_json or {}).get("last_engagement", {}).get("type") != "repeated_start":
+        engagement_type = (state.runtime_json or {}).get("last_engagement", {}).get("type")
+        if not marked and engagement_type not in {"repeated_start", "inactivity_restart"}:
             return None
         step = await self.funnel_runtime.repo.get_step(state.current_step_id)
         if step is None:
+            return None
+        if engagement_type == "inactivity_restart" and self.funnel_runtime._is_no_reply_delay_step(step):
             return None
         pending_prompt = self.funnel_runtime._is_input_prompt_pending(state.runtime_json, step)
         if state.waiting_for_answer and not pending_prompt:
@@ -1643,6 +1648,40 @@ class TelegramService:
             fresh_lifecycle,
             start_requested,
         )
+        if (
+            start_requested
+            and not fresh_lifecycle
+            and await self._submission_restart_after_inactivity(chat, user_message, state)
+        ):
+            old_version_id = state.funnel_version_id if state is not None else None
+            await self.bot_repo.reset_chat_state(chat.id)
+            await self.funnel_runtime.repo.delete_chat_funnel_state(chat.id)
+            await self.chat_repo.update_by_id(chat.id, unanswered_push_count=0)
+            await self.chat_audit.log_event(
+                chat_id=chat.id, project_id=chat.project_id, user_id=None,
+                event_type=ChatEventType.NOTE_ADDED,
+                old_value=str(old_version_id) if old_version_id else None,
+                new_value="Повторный /start после 30 дней без сообщений: запуск актуальной воронки с начала.",
+            )
+            await self.funnel_runtime.start_funnel_for_chat(
+                chat_id=chat.id, funnel_id=active_funnel_id,
+                funnel_version_id=active_funnel_version_id,
+            )
+            restarted = await self.funnel_runtime.repo.get_chat_funnel_state(chat.id)
+            if restarted is not None and restarted.funnel_version_id == active_funnel_version_id:
+                runtime = dict(restarted.runtime_json or {})
+                runtime["last_engagement"] = {
+                    "type": "inactivity_restart", "message_id": str(user_message.id),
+                    "at": user_message.created_at.isoformat(),
+                    "previous_version_id": str(old_version_id) if old_version_id else None,
+                }
+                await self.funnel_runtime.repo.update_chat_funnel_runtime(chat_id=chat.id, runtime_json=runtime)
+            logger.info(
+                "Submission funnel restarted by explicit /start after inactivity "
+                "chat_id=%s message_id=%s idle_days=30 old_version_id=%s new_version_id=%s",
+                chat.id, user_message.id, old_version_id, active_funnel_version_id,
+            )
+            return
         target_step_key = await self._tracking_target_step_key(
             chat=chat,
             active_funnel_id=active_funnel_id,
@@ -1723,6 +1762,40 @@ class TelegramService:
                 chat.id,
                 active_funnel_version_id,
             )
+
+    async def _submission_restart_after_inactivity(
+        self, chat: Chat, message: MessageOut, state: Any,
+    ) -> bool:
+        if (
+            not self._is_start_command(message.body)
+            or message.sender_type != SenderType.USER
+            or message.transport_source != "bot_api"
+            or getattr(chat, "is_imported", False)
+            or getattr(chat, "lead_import_id", None) is not None
+        ):
+            return False
+        project = await self.project_repo.get_active(chat.project_id)
+        if project is None or project.project_format != "submission":
+            return False
+        received_at = message.created_at
+        if received_at.tzinfo is None:
+            received_at = received_at.replace(tzinfo=timezone.utc)
+        entered_at = getattr(state, "entered_step_at", None)
+        if entered_at is not None:
+            if entered_at.tzinfo is None:
+                entered_at = entered_at.replace(tzinfo=timezone.utc)
+            if entered_at >= received_at:
+                return False
+        # Chat.last_user_message_at already includes this /start. Use its
+        # chronological predecessor; later input must not hide the idle gap.
+        previous_at = await self.message_repo.previous_user_message_at(
+            chat.id, created_at=received_at, message_id=message.id,
+        )
+        if previous_at is None:
+            return False
+        if previous_at.tzinfo is None:
+            previous_at = previous_at.replace(tzinfo=timezone.utc)
+        return received_at - previous_at >= timedelta(days=30)
 
     @staticmethod
     def _is_completed_state_from_previous_cycle(
@@ -2166,6 +2239,7 @@ class TelegramService:
         *,
         tracking_link_id: UUID | None = None,
         source_transport: str = "bot_api",
+        reset_unanswered_push_count: bool = True,
     ) -> MessageOut:
         """
         Persist the Telegram message via MessageService (includes idempotency,
@@ -2193,6 +2267,7 @@ class TelegramService:
             chat_id=chat_id,
             project_id=project_id,
             data=data,
+            **({"reset_unanswered_push_count": False} if not reset_unanswered_push_count else {}),
         )
 
     @staticmethod

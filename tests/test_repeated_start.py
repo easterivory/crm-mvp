@@ -10,11 +10,86 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models import Base, Bot, Chat, Lead, Message, Project
-from app.models.funnel import ChatFunnelState, Funnel, FunnelVersion, FunnelStep, FunnelEdge, FunnelScheduledJob, FunnelStepLog
+from app.models.funnel import ChatFunnelState, Funnel, FunnelVersion, FunnelStep, FunnelEdge, FunnelScheduledJob, FunnelStepLog, FunnelPushRule
+from app.repositories.funnel_repository import FunnelRepository
 from app.models.lead_status import LeadStatus
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.telegram_service import TelegramService
 from app.schemas.telegram import TelegramUpdate, TelegramMessage, TelegramChat, TelegramUser
+
+
+@pytest.mark.skipif(not os.getenv("CRM_TEST_POSTGRES_URL"), reason="Disposable PostgreSQL required")
+def test_repeated_start_preserves_push_clock_count_and_sent_markers():
+    async def run():
+        schema = "restart_push_" + uuid4().hex
+        url = os.environ["CRM_TEST_POSTGRES_URL"]
+        root = create_async_engine(url)
+        engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}})
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with root.begin() as db:
+                await db.execute(text(f'CREATE SCHEMA "{schema}"'))
+            async with engine.begin() as db:
+                await db.run_sync(Base.metadata.create_all)
+            async with sessions() as db:
+                project = Project(name="Push restart", slug="push-restart", project_format="gambling")
+                status = LeadStatus(name="New", code="new")
+                db.add_all([project, status]); await db.flush()
+                bot = Bot(project_id=project.id, name="Bot")
+                db.add(bot); await db.flush()
+                funnel = Funnel(project_id=project.id, bot_id=bot.id, name="Push restart")
+                db.add(funnel); await db.flush()
+                version = FunnelVersion(funnel_id=funnel.id, version_number=1, status="published")
+                db.add(version); await db.flush()
+                bot.active_funnel_id, bot.active_funnel_version_id = funnel.id, version.id
+                funnel.current_version_id = version.id
+                age = FunnelStep(funnel_version_id=version.id, key="age", title="Age", step_type="input",
+                    block_type="generic_input", config_json={"prompt": " ", "field_key": "age", "answer_type": "number"})
+                db.add(age); await db.flush()
+                now = datetime.now(timezone.utc)
+                entered = now - timedelta(minutes=10)
+                chat = Chat(project_id=project.id, bot_id=bot.id, external_chat_id="12345", external_user_id="12345",
+                    unanswered_push_count=2)
+                db.add(chat); await db.flush()
+                rules = [FunnelPushRule(funnel_version_id=version.id, step_id=age.id,
+                    delay_minutes=delay, message_text="Reminder") for delay in (3, 5, 20)]
+                db.add_all(rules); await db.flush()
+                sent = {str(rules[0].id): entered.isoformat()}
+                state = ChatFunnelState(chat_id=chat.id, funnel_id=funnel.id, funnel_version_id=version.id,
+                    current_step_id=age.id, entered_step_at=entered, waiting_for_answer=True,
+                    runtime_json={"push_rules_sent": sent})
+                db.add_all([state, Lead(project_id=project.id, chat_id=chat.id, status_id=status.id)])
+                await db.commit()
+                chat_id, project_id, bot_id = chat.id, project.id, bot.id
+                for index, command in enumerate(("/start", "/start referral"), start=1):
+                    await TelegramService(db).handle_update(update=TelegramUpdate(update_id=index,
+                        message=TelegramMessage(message_id=index, chat=TelegramChat(id=12345),
+                            from_user=TelegramUser(id=12345, first_name="Anna"), text=command)),
+                        project_id=project_id, bot_id=bot_id)
+                    await db.commit()
+                    assert await FunnelRuntimeService(db).process_repeated_start(chat_id=chat_id) == "data_answer_required"
+                    await db.refresh(chat); await db.refresh(state)
+                    assert chat.unanswered_push_count == 2
+                    assert chat.last_user_message_at is not None
+                    assert chat.has_restarted_bot
+                    assert state.entered_step_at == entered
+                    assert state.runtime_json["push_rules_sent"] == sent
+                    candidates = await FunnelRepository(db).find_stuck_chats_for_push_rules(now=now)
+                    assert [rule.id for _, rule in candidates] == [rules[1].id]
+                # An actual reply still clears the unanswered-push counter.
+                await TelegramService(db).handle_update(update=TelegramUpdate(update_id=3,
+                    message=TelegramMessage(message_id=3, chat=TelegramChat(id=12345),
+                        from_user=TelegramUser(id=12345, first_name="Anna"), text="25")),
+                    project_id=project_id, bot_id=bot_id)
+                await db.commit()
+                await db.refresh(chat)
+                assert chat.unanswered_push_count == 0
+        finally:
+            await engine.dispose()
+            async with root.begin() as db:
+                await db.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            await root.dispose()
+    asyncio.run(run())
 
 
 @pytest.mark.skipif(not os.getenv("CRM_TEST_POSTGRES_URL"), reason="Disposable PostgreSQL required")

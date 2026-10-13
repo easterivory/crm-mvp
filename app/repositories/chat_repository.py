@@ -1103,11 +1103,14 @@ class ChatRepository(BaseRepository[Chat]):
         chat_id: UUID,
         sender_type: str,
         ts: datetime,
+        *,
+        reset_unanswered_push_count: bool = True,
     ) -> None:
         """
         Update last_message_at (always) and the sender-specific timestamp.
         Called by MessageService inside the same DB transaction as the message INSERT.
         Never commits — the caller owns the transaction.
+        Repeated bot starts keep unanswered pushes, but still update chat activity.
 
         Raises LookupError if the chat row was not found (0 rows updated).
         This should not happen in normal flow since MessageService validates
@@ -1135,7 +1138,8 @@ class ChatRepository(BaseRepository[Chat]):
             values["is_blocked_by_user"] = False
             values["is_read"] = False
             values["unanswered_minutes"] = 0
-            values["unanswered_push_count"] = 0
+            if reset_unanswered_push_count:
+                values["unanswered_push_count"] = 0
         elif sender_type == SenderType.MANAGER:
             values["last_manager_reply_at"] = ts
             values["last_operator_message_at"] = ts

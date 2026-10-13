@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 from typing import Any
 
-from sqlalchemy import Float, cast, delete, func, or_, select, update
+from sqlalchemy import Float, String, case, cast, delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -1281,6 +1281,17 @@ class FunnelRepository(BaseRepository[Funnel]):
         limit: int = 100,
     ) -> list[tuple[ChatFunnelState, FunnelPushRule]]:
         now = now or datetime.now(timezone.utc)
+        if limit <= 0:
+            return []
+        entered = ChatFunnelState.entered_step_at
+        utc_entered = func.timezone("UTC", entered)
+        # Match datetime.isoformat(), including its optional microsecond part.
+        visit_marker = case(
+            (func.date_trunc("second", entered) == entered,
+             func.to_char(utc_entered, 'YYYY-MM-DD"T"HH24:MI:SS') + "+00:00"),
+            else_=func.to_char(utc_entered, 'YYYY-MM-DD"T"HH24:MI:SS.US') + "+00:00",
+        )
+        sent_marker = ChatFunnelState.runtime_json["push_rules_sent"][cast(FunnelPushRule.id, String)].astext
         result = await self.db.execute(
             select(ChatFunnelState, FunnelPushRule)
             .join(
@@ -1294,17 +1305,22 @@ class FunnelRepository(BaseRepository[Funnel]):
                 ChatFunnelState.is_paused.is_(False),
                 ChatFunnelState.waiting_for_answer.is_(True),
                 FunnelPushRule.is_active.is_(True),
-                Project.project_format == "gambling",
+                or_(
+                    Project.project_format == "gambling",
+                    ChatFunnelState.entered_step_at >= Project.funnel_push_enabled_at,
+                ),
                 Chat.is_deleted.is_(False),
                 Chat.reset_at.is_(None),
                 Chat.is_blocked.is_(False),
                 Chat.is_blocked_by_user.is_(False),
                 self._push_delivery_allowed(),
+                sent_marker.is_distinct_from(visit_marker),
                 ChatFunnelState.entered_step_at
                 <= now - func.make_interval(0, 0, 0, 0, 0, FunnelPushRule.delay_minutes),
             )
-            .order_by(ChatFunnelState.entered_step_at.asc(), FunnelPushRule.delay_minutes.asc())
-            .limit(max(limit * 4, limit))
+            .order_by(ChatFunnelState.entered_step_at.asc(), FunnelPushRule.delay_minutes.asc(),
+                      ChatFunnelState.chat_id.asc(), FunnelPushRule.id.asc())
+            .limit(limit)
         )
         candidates: list[tuple[ChatFunnelState, FunnelPushRule]] = []
         for state, rule in result.all():

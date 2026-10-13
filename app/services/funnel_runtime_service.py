@@ -1503,6 +1503,7 @@ class FunnelRuntimeService:
             state is None
             or state.completed_at is not None
             or state.is_paused
+            or (getattr(job, "funnel_state_id", None) is not None and state.id != job.funnel_state_id)
             or state.funnel_version_id != job.funnel_version_id
             or state.current_step_id != job.step_id
         ):

@@ -381,13 +381,17 @@ class ChatService:
         return self._chat_out(chat, project.sla_threshold_minutes, None)
 
     async def update_timestamps(
-        self, chat_id: UUID, sender_type: str, ts: datetime
+        self, chat_id: UUID, sender_type: str, ts: datetime,
+        *, reset_unanswered_push_count: bool = True,
     ) -> None:
         """
         Called by MessageService inside the same DB transaction.
         Delegates straight to the repository — no business logic here.
         """
-        await self.chat_repo.update_timestamps(chat_id, sender_type, ts)
+        await self.chat_repo.update_timestamps(
+            chat_id, sender_type, ts,
+            **({"reset_unanswered_push_count": False} if not reset_unanswered_push_count else {}),
+        )
         if sender_type == SenderType.USER:
             chat = await self.chat_repo.get_by_id(chat_id)
             if chat is not None:

@@ -367,6 +367,7 @@ class MessageService:
         auto_translate: bool = True,
         translate_incoming: bool = True,
         pause_funnel_after_delivery: bool = False,
+        reset_unanswered_push_count: bool = True,
     ) -> MessageOut:
         """
         Atomically (within one DB transaction):
@@ -522,7 +523,8 @@ class MessageService:
         # Use the DB-assigned created_at so chat timestamps are always consistent
         # with what is stored, regardless of application-server clock skew.
         await self.chat_service.update_timestamps(
-            chat_id, data.sender_type, message.created_at
+            chat_id, data.sender_type, message.created_at,
+            **({"reset_unanswered_push_count": False} if not reset_unanswered_push_count else {}),
         )
 
         if upload_id_for_sent_mark is not None and self._is_outgoing_media_type(data.message_type):
