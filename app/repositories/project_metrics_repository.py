@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import distinct, func, or_, select
+from sqlalchemy import distinct, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import LeadStatusCode, MessageType, SenderType
@@ -13,6 +13,9 @@ from app.models.lead import Lead
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
 from app.models.project import Project
+from app.models.lead import LeadTag
+from app.models.tag import Tag
+from app.models.tracking_journey import LeadTagHistory
 from app.repositories.tracking_lead_criteria import tracking_lead_criterion
 from app.repositories.tracking_metrics_repository import TrackingMetricsRepository
 from app.repositories.lifecycle_metrics_repository import LifecycleMetricsRepository
@@ -29,7 +32,8 @@ class ProjectMetricsRepository:
         end_at = start_at + timedelta(days=1)
 
         project_result = await self.db.execute(
-            select(Project.tracking_lead_status_codes, Project.project_format).where(
+            select(Project.tracking_lead_status_codes, Project.project_format,
+                   Project.tracking_lead_count_mode, Project.tracking_lead_tag_ids).where(
                 Project.id == project_id
             )
         )
@@ -53,21 +57,22 @@ class ProjectMetricsRepository:
                 self._lead_lifecycle_at() < end_at,
             )
         )
-        starts_result = await self.db.execute(
-            select(func.count(distinct(Chat.id)))
-            .join(Message, Message.chat_id == Chat.id)
-            .where(
-                Chat.project_id == project_id,
-                Chat.is_deleted.is_(False),
-                Chat.reset_at.is_(None),
-                Message.sender_type == SenderType.USER,
-                Message.message_type == MessageType.TEXT,
-                self._is_start_message(),
-                Message.created_at >= start_at,
-                Message.created_at < end_at,
-            )
-        )
         tracking_metrics = TrackingMetricsRepository(self.db)
+        starts = await tracking_metrics.aggregate_starts_by_project(project_id, None, day, day)
+        mode = project_row.tracking_lead_count_mode if project_row is not None else "statuses"
+        qualified_today = 0
+        if mode == "tags":
+            tag_ids = [UUID(value) for value in project_row.tracking_lead_tag_ids or []]
+            events = union_all(
+                select(LeadTagHistory.lead_id, LeadTagHistory.occurred_at.label("at")).where(LeadTagHistory.tag_id.in_(tag_ids)),
+                select(LeadTag.lead_id, LeadTag.created_at.label("at")).join(Tag, Tag.id == LeadTag.tag_id)
+                    .where(Tag.project_id == project_id, LeadTag.tag_id.in_(tag_ids)),
+            ).subquery()
+            first = select(events.c.lead_id, func.min(events.c.at).label("at")).group_by(events.c.lead_id).subquery()
+            qualified_today = int(await self.db.scalar(select(func.count()).select_from(first)
+                .join(Lead, Lead.id == first.c.lead_id).join(Chat, Chat.id == Lead.chat_id)
+                .where(Lead.project_id == project_id, Lead.is_deleted.is_(False), Chat.is_deleted.is_(False),
+                       Chat.reset_at.is_(None), first.c.at >= start_at, first.c.at < end_at)) or 0)
         submitted = await tracking_metrics.aggregate_submitted_by_project(
             project_id=project_id,
             bot_id=None,
@@ -86,7 +91,7 @@ class ProjectMetricsRepository:
             date_to=day,
         )
         leads = int(leads_result.scalar_one() or 0)
-        starts = int(starts_result.scalar_one() or 0)
+        starts = int(starts or 0)
         submitted = int(submitted or 0)
         spend = Decimal(spend or 0)
         cpl = spend / Decimal(leads) if leads > 0 else Decimal("0")
@@ -107,6 +112,9 @@ class ProjectMetricsRepository:
             "subscribers_today": starts,
             "conversion_today": conversion,
             "leads_today": leads,
+            "tracking_lead_count_mode": mode,
+            "qualified_today": qualified_today,
+            "timezone": "UTC",
             "chats_today": starts,
             "submitted_today": submitted,
             "submitted_percent_today": submitted_percent,

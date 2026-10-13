@@ -3,7 +3,7 @@ ProjectService - project CRUD and validation.
 """
 import re
 import unicodedata
-from datetime import date
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -351,7 +351,7 @@ class ProjectService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found",
             )
-        metrics = await self.metrics_repo.header_metrics(project_id, date.today())
+        metrics = await self.metrics_repo.header_metrics(project_id, datetime.now(timezone.utc).date())
         return ProjectDashboardHeaderOut(**metrics)
 
     async def _generate_unique_slug(self, name: str) -> str:

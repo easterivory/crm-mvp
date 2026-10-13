@@ -3576,14 +3576,20 @@ class FunnelRuntimeService:
         if step.block_type == "generic_ab_test":
             return self._evaluate_ab_test_variant(chat_id=chat_id, step=step)
 
-        if str(config.get("mode") or "").strip() == "simple_yes_no":
+        if self._uses_simple_yes_no(config):
             value = str(answer or await self._condition_source_value(chat_id, "last_answer", None) or "")
             normalized = value.strip().lower()
+            outcome = "fallback"
             if normalized in {"yes", "y", "true", "1", "да", "ага", "ок"}:
-                return "true"
-            if normalized in {"no", "n", "false", "0", "нет"}:
-                return "false"
-            return "fallback"
+                outcome = "true"
+            elif normalized in {"no", "n", "false", "0", "нет"}:
+                outcome = "false"
+            logger.info(
+                "Condition evaluated chat_id=%s step_id=%s outcome=%s configured_mode=simple_yes_no "
+                "evaluation=answer_yes_no answer_chars=%s",
+                chat_id, step.id, outcome, len(value),
+            )
+            return outcome
 
         if step.block_type == "generic_hold_router":
             hold_enabled = bool(await self._condition_source_value(chat_id, "hold_mode", None))
@@ -3617,13 +3623,33 @@ class FunnelRuntimeService:
         passed = any(values) if config.get("mode") == "any" else all(values)
         outcome = "true" if passed else "false"
         logger.info(
-            "Condition evaluated chat_id=%s step_id=%s outcome=%s values=%s",
+            "Condition evaluated chat_id=%s step_id=%s outcome=%s values=%s configured_mode=%s",
             chat_id,
             step.id,
             outcome,
             values,
+            config.get("mode"),
         )
         return outcome
+
+    @staticmethod
+    def _uses_simple_yes_no(config: dict[str, Any]) -> bool:
+        if str(config.get("mode") or "").strip() != "simple_yes_no":
+            return False
+        conditions = config.get("conditions")
+        if not isinstance(conditions, list) or not conditions:
+            return True
+        # The editor used to retain this mode after users changed the default rule.
+        # Only the original yes/no rule may bypass explicit comparisons.
+        if len(conditions) != 1 or not isinstance(conditions[0], dict):
+            return False
+        rule = conditions[0]
+        return (
+            str(rule.get("source") or "last_answer") == "last_answer"
+            and not rule.get("field")
+            and str(rule.get("operator") or rule.get("type") or "equals") == "equals"
+            and str(rule.get("value") or "").strip().lower() == "yes"
+        )
 
     async def _evaluate_block_specific_condition(
         self,
@@ -3734,7 +3760,13 @@ class FunnelRuntimeService:
         operator = str(condition.get("operator") or condition.get("type") or "equals")
         expected = condition.get("value")
         actual = await self._condition_source_value(chat_id, source, field)
-        return self._compare_condition(actual, operator, expected)
+        passed = self._compare_condition(actual, operator, expected)
+        logger.info(
+            "Condition rule evaluated chat_id=%s source=%s field=%s operator=%s "
+            "actual_type=%s actual_present=%s passed=%s",
+            chat_id, source, field, operator, type(actual).__name__, actual is not None, passed,
+        )
+        return passed
 
     async def _condition_source_value(self, chat_id: UUID, source: str, field: Any) -> Any:
         state = await self.repo.get_chat_funnel_state(chat_id)

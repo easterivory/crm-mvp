@@ -6,7 +6,7 @@ import JourneyStageEditor, { type Catalogue, type Stage } from './JourneyStageEd
 
 type Scope = { projectId: string; botId?: string; buyerId?: string; linkId?: string;
   dateFrom: string; dateTo: string; refreshToken?: object }
-type Step = { funnel_id: string; funnel_name: string; bot_name?: string | null; bot_username?: string | null }
+type Step = { funnel_id: string; funnel_name: string; bot_name?: string | null; bot_username?: string | null; is_preferred?: boolean }
 type Bucket = 'reached' | 'remaining' | 'stalled'
 type Row = Stage & Record<Bucket, number> & { number: number; next: number | null;
   conversion: number | null; not_yet_next: number | null }
@@ -48,17 +48,17 @@ export default function TrackingJourney(props: Scope) {
   useEffect(() => setSourceOffset(0), [scopeKey])
   useEffect(() => {
     setOptions([]); setFunnelId(''); setCatalogue(null); setReport(null); setSourceId(''); setEditing(false)
-  }, [props.projectId, props.botId])
+  }, [props.projectId, props.botId, props.linkId])
   useEffect(() => {
     const controller = new AbortController()
     setError(''); setLoading(true)
     void api.get<Step[]>('/tracking/metrics/step-options', { signal: controller.signal,
-      params: { project_id: props.projectId, bot_id: props.botId } })
+      params: { project_id: props.projectId, bot_id: props.botId, link_id: props.linkId } })
       .then(({ data }) => { if (!controller.signal.aborted) { setOptions(data);
-        setFunnelId(current => data.some(o => o.funnel_id === current) ? current : data[0]?.funnel_id || ''); setLoading(false) } })
+        setFunnelId(current => data.some(o => o.funnel_id === current) ? current : (data.find(o => o.is_preferred) || data[0])?.funnel_id || ''); setLoading(false) } })
       .catch(() => { if (!controller.signal.aborted) { setError('Не удалось загрузить воронки'); setLoading(false) } })
     return () => controller.abort()
-  }, [props.projectId, props.botId, retry])
+  }, [props.projectId, props.botId, props.linkId, retry])
   useEffect(() => {
     setSourceId('')
   }, [props.projectId, funnelId])

@@ -71,6 +71,10 @@ def test_tag_only_qualification_and_safe_status_default():
                 await db.flush()
                 assert await repo.aggregate_leads_by_project(project.id, None, day, day, ["qualified"]) == 1
                 assert (await ProjectMetricsRepository(db).header_metrics(project.id, day))["leads_today"] == 1
+                today_header = await ProjectMetricsRepository(db).header_metrics(project.id, datetime.now(timezone.utc).date())
+                assert today_header["leads_today"] == 0
+                assert today_header["qualified_today"] == 1  # Two matching tags are one qualification.
+                assert today_header["tracking_lead_count_mode"] == "tags"
                 assert (await InfoBotReports(db).summary(project, day, day, link))["leads"] == 1
                 for tag in tags[:2]:
                     await db.execute(text("DELETE FROM lead_tags WHERE lead_id=:lead AND tag_id=:tag"), {"lead": leads[0].id, "tag": tag.id})

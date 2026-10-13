@@ -2001,7 +2001,7 @@ export default function TrackingPage() {
           {detailMetrics ? (
             <div className="space-y-5">
               {selectedProjectId && <TrackingOverview key={`${user?.id}:${selectedProjectId}:${detailLink?.id}`} projectId={selectedProjectId} userId={user?.id ?? 'user'}
-                linkId={detailLink?.id} dateFrom={dateFrom} dateTo={dateTo} gambling={detailIsGambling}
+                botId={detailLink.bot_id} linkId={detailLink.id} dateFrom={dateFrom} dateTo={dateTo} gambling={detailIsGambling}
                 channel={detailIsChannel} summary={detailMetrics.summary} daily={detailMetrics.daily} refreshToken={detailMetrics} loading={isDetailLoading} />}
 
               {detailIsGambling && detailMetrics.lifecycle_sources.length > 0 ? (

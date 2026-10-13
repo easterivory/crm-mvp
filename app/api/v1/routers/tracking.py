@@ -290,8 +290,9 @@ async def get_tag_tracking_metrics(
 
 @v1_router.get("/metrics/step-options")
 async def tracking_step_options(project_id: UUID, bot_id: Optional[UUID] = None,
+    link_id: Optional[UUID] = None,
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id)
+    return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id, link_id=link_id)
 
 
 @v1_router.get("/metrics/step-preview")

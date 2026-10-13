@@ -4,8 +4,8 @@ from uuid import UUID, uuid5, NAMESPACE_URL
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, exists, func, literal, or_, select, tuple_, union_all
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Integer, String, and_, case, cast, column, exists, func, literal, select, tuple_, union_all
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID, insert
 from sqlalchemy.orm import aliased
 
 from app.core.constants import MessageType, RoleName, SenderType
@@ -128,6 +128,8 @@ class TrackingStageJourneyService:
             link = await self.metrics.link_repo.get_link_by_id(link_id)
             if not link or link.project_id != project_id or (buyer_id and link.buyer_id != buyer_id):
                 raise HTTPException(404, "Ссылка не найдена")
+            if link.bot_id != funnel_bot:
+                raise HTTPException(422, "Ссылка и воронка должны относиться к одному боту")
         date_from, date_to = self.metrics._resolve_date_range(date_from, date_to)
         if (date_to - date_from).days > 3660:
             raise HTTPException(422, "Диапазон не должен превышать 10 лет")
@@ -161,7 +163,7 @@ class TrackingStageJourneyService:
                            (channel.c.chat_id.is_not(None), channel.c.tracking_link_id), else_=Chat.tracking_link_id)
         # Rank before all date/bot/link filters, including retained deleted chats.
         # A later duplicate must not become a new acquisition when filters change.
-        ranked = (select(Chat.id.label("chat_id"), Chat.bot_id, origin_link.label("tracking_link_id"),
+        ranked = (select(Chat.id.label("chat_id"), Chat.bot_id, Chat.external_user_id, origin_link.label("tracking_link_id"),
                          Chat.is_deleted, person_key(Chat).label("person"), acquired.label("acquired_at"),
                          func.row_number().over(partition_by=person_key(Chat),
                              order_by=(acquired, func.coalesce(starts.c.message_id, Chat.id), Chat.id)).label("rank"))
@@ -177,41 +179,63 @@ class TrackingStageJourneyService:
         if link_id:
             cohort_query = cohort_query.where(ranked.c.tracking_link_id == link_id)
         if config.scope == "funnel":
-            related_chat, related_lead, related_log = aliased(Chat), aliased(Lead), aliased(FunnelStepLog)
-            first_funnel = (select(related_log.funnel_id).select_from(related_chat)
-                .join(related_lead, related_lead.chat_id == related_chat.id)
-                .join(related_log, related_log.lead_id == related_lead.id)
-                .where(related_chat.project_id == project_id, related_lead.project_id == project_id,
-                       person_key(related_chat) == ranked.c.person, related_log.event_type == "entered",
-                       related_log.created_at <= as_of).order_by(related_log.created_at, related_log.id).limit(1).scalar_subquery())
+            # One ordered history scan replaces a correlated scan per person.
+            identity = person_key(Chat)
+            first_funnels = (select(identity.label("person"), FunnelStepLog.funnel_id)
+                .select_from(Chat).join(Lead, Lead.chat_id == Chat.id)
+                .join(FunnelStepLog, FunnelStepLog.lead_id == Lead.id)
+                .where(Chat.project_id == project_id, Lead.project_id == project_id,
+                       FunnelStepLog.event_type == "entered", FunnelStepLog.created_at <= as_of)
+                .distinct(identity).order_by(identity, FunnelStepLog.created_at, FunnelStepLog.id)
+                .cte("stage_first_funnels"))
             # Keep start-only people, but do not mix leads from unrelated funnels
             # of the same bot into a specific funnel's conversion denominator.
-            cohort_query = cohort_query.where(first_funnel.is_(None) | (first_funnel == funnel_id))
+            cohort_query = cohort_query.outerjoin(first_funnels, first_funnels.c.person == ranked.c.person).where(
+                first_funnels.c.funnel_id.is_(None) | (first_funnels.c.funnel_id == funnel_id))
         cohort = cohort_query.cte("stage_cohort")
-        members = (select(cohort.c.chat_id.label("origin_chat_id"), cohort.c.acquired_at,
-                          Lead.id.label("lead_id"), Chat.id.label("chat_id"))
-            .join(Chat, and_(Chat.project_id == project_id, person_key(Chat) == cohort.c.person))
-            .join(Lead, and_(Lead.chat_id == Chat.id, Lead.project_id == project_id)).cte("stage_members"))
+        identified = and_(cohort.c.external_user_id.is_not(None), cohort.c.external_user_id != "")
+        def member_rows(match, identity_filter):
+            return (select(cohort.c.chat_id.label("origin_chat_id"), cohort.c.acquired_at,
+                           Lead.id.label("lead_id"), Chat.id.label("chat_id"))
+                .join(Chat, and_(Chat.project_id == project_id, match))
+                .join(Lead, and_(Lead.chat_id == Chat.id, Lead.project_id == project_id))
+                .where(identity_filter))
+        # Keep anonymous contacts separate and let known IDs use the identity index.
+        members = union_all(
+            member_rows(Chat.external_user_id == cohort.c.external_user_id, identified),
+            member_rows(Chat.id == cohort.c.chat_id, ~identified),
+        ).cte("stage_members")
         facts = []
+        tag_map, step_map = [], []
         for index, stage in enumerate(config.stages):
             if stage.source == "start":
-                fact = select(cohort.c.chat_id, literal(index).label("stage"), cohort.c.acquired_at.label("at"))
+                facts.append(select(cohort.c.chat_id, literal(index).label("stage"), cohort.c.acquired_at.label("at")))
             elif stage.source == "tag":
-                fact = (select(members.c.origin_chat_id, literal(index).label("stage"), LeadTagHistory.occurred_at.label("at"))
-                    .join(LeadTagHistory, LeadTagHistory.lead_id == members.c.lead_id)
-                    .where(LeadTagHistory.tag_id.in_(stage.tag_ids), LeadTagHistory.occurred_at >= members.c.acquired_at,
-                           LeadTagHistory.occurred_at <= as_of))
+                tag_map.extend({"stage": index, "tag_id": str(tag_id)} for tag_id in set(stage.tag_ids))
             else:
-                matches = [and_(FunnelStepLog.funnel_id == r.funnel_id, FunnelStep.key == r.key) for r in stage.step_refs]
-                if stage.step_keys:
-                    matches.append(and_(FunnelStepLog.funnel_id == funnel_id, FunnelStep.key.in_(stage.step_keys)))
-                fact = (select(members.c.origin_chat_id, literal(index).label("stage"), FunnelStepLog.created_at.label("at"))
-                    .join(FunnelStepLog, FunnelStepLog.lead_id == members.c.lead_id)
-                    .join(FunnelStep, FunnelStep.id == FunnelStepLog.step_id)
-                    .where(or_(*matches),
-                           FunnelStepLog.event_type == stage.source, FunnelStepLog.created_at >= members.c.acquired_at,
-                           FunnelStepLog.created_at <= as_of))
-            facts.append(fact)
+                references = {(r.funnel_id, r.key) for r in stage.step_refs}
+                references.update((funnel_id, key) for key in stage.step_keys)
+                step_map.extend({"stage": index, "event_type": stage.source, "funnel_id": str(owner), "step_key": key}
+                                for owner, key in sorted(references))
+        # Read each history once, joining the selected stage mappings. JSONB keeps
+        # even a large catalogue below PostgreSQL's prepared-parameter limit.
+        if tag_map:
+            tag_mapping = func.jsonb_to_recordset(cast(literal(tag_map, type_=JSONB), JSONB)).table_valued(
+                column("stage", Integer), column("tag_id", PGUUID)).render_derived(name="stage_tag_map", with_types=True)
+            facts.append(select(members.c.origin_chat_id, tag_mapping.c.stage, LeadTagHistory.occurred_at.label("at"))
+                .join(LeadTagHistory, LeadTagHistory.lead_id == members.c.lead_id)
+                .join(tag_mapping, tag_mapping.c.tag_id == LeadTagHistory.tag_id)
+                .where(LeadTagHistory.occurred_at >= members.c.acquired_at, LeadTagHistory.occurred_at <= as_of))
+        if step_map:
+            step_mapping = func.jsonb_to_recordset(cast(literal(step_map, type_=JSONB), JSONB)).table_valued(
+                column("stage", Integer), column("event_type", String), column("funnel_id", PGUUID),
+                column("step_key", String)).render_derived(name="stage_step_map", with_types=True)
+            facts.append(select(members.c.origin_chat_id, step_mapping.c.stage, FunnelStepLog.created_at.label("at"))
+                .join(FunnelStepLog, FunnelStepLog.lead_id == members.c.lead_id)
+                .join(FunnelStep, FunnelStep.id == FunnelStepLog.step_id)
+                .join(step_mapping, and_(step_mapping.c.funnel_id == FunnelStepLog.funnel_id,
+                    step_mapping.c.step_key == FunnelStep.key, step_mapping.c.event_type == FunnelStepLog.event_type))
+                .where(FunnelStepLog.created_at >= members.c.acquired_at, FunnelStepLog.created_at <= as_of))
         events = union_all(*facts).cte("stage_events")
         first = (select(events.c.chat_id, events.c.stage, func.min(events.c.at).label("at"))
             .group_by(events.c.chat_id, events.c.stage).cte("stage_first"))
@@ -228,14 +252,17 @@ class TrackingStageJourneyService:
         state_scope = (ChatFunnelState.funnel_id == funnel_id if config.scope == "funnel" else
             exists(select(Funnel.id).where(Funnel.id == ChatFunnelState.funnel_id, Funnel.bot_id == funnel_bot,
                                            Funnel.project_id == project_id)))
-        stalled = exists(select(members.c.chat_id).join(member_chat, member_chat.id == members.c.chat_id)
+        stalled_people = (select(members.c.origin_chat_id).join(member_chat, member_chat.id == members.c.chat_id)
             .join(ChatFunnelState, ChatFunnelState.chat_id == member_chat.id)
-            .where(members.c.origin_chat_id == timeline.c.chat_id, state_scope,
+            .where(state_scope,
                    ChatFunnelState.completed_at.is_(None), ChatFunnelState.is_paused.is_(False),
                    ChatFunnelState.waiting_for_answer.is_(True), ~scheduled,
                    func.greatest(ChatFunnelState.entered_step_at, member_chat.last_user_message_at,
-                                 member_chat.last_client_message_at) <= datetime.now(timezone.utc) - timedelta(hours=config.idle_hours)))
-        wide = select(timeline, last_stage.label("last_stage"), stalled.label("stalled")).cte("stage_wide")
+                                 member_chat.last_client_message_at) <= as_of - timedelta(hours=config.idle_hours))
+            .distinct().cte("stage_stalled_people"))
+        wide = (select(timeline, last_stage.label("last_stage"),
+                       stalled_people.c.origin_chat_id.is_not(None).label("stalled"))
+            .outerjoin(stalled_people, stalled_people.c.origin_chat_id == timeline.c.chat_id).cte("stage_wide"))
         return config, wide, members, date_from, date_to
 
     @staticmethod
@@ -290,7 +317,9 @@ class TrackingStageJourneyService:
         groups = (await self.db.execute(select(bucket.label("date"),
                 wide.c.tracking_link_id.label("link_id"), TrackingLink.title, TrackingLink.code,
                 func.grouping(bucket).label("date_group"),
-                func.grouping(wide.c.tracking_link_id).label("link_group"), *columns).select_from(wide)
+                func.grouping(wide.c.tracking_link_id).label("link_group"), *columns,
+                select(func.count(func.distinct(members.c.chat_id))).scalar_subquery().label("physical_chats"))
+            .select_from(wide)
             .outerjoin(TrackingLink, and_(TrackingLink.id == wide.c.tracking_link_id, TrackingLink.project_id == project_id))
             .group_by(func.grouping_sets(tuple_(), tuple_(bucket),
                 tuple_(wide.c.tracking_link_id, TrackingLink.title, TrackingLink.code))))).mappings().all()
@@ -305,8 +334,7 @@ class TrackingStageJourneyService:
             series.append({"date": cursor, **self.present(config, indexed.get(cursor, zero))})
             cursor = (cursor.replace(year=cursor.year + (cursor.month == 12), month=cursor.month % 12 + 1)
                       if granularity == "month" else cursor + timedelta(days=7 if granularity == "week" else 1))
-        physical_chats = await self.db.scalar(select(func.count(func.distinct(members.c.chat_id))).select_from(members))
-        return {**self.present(config, totals), "physical_chats": physical_chats,
+        return {**self.present(config, totals), "physical_chats": totals["physical_chats"],
                 "date_from": date_from, "date_to": date_to, "timezone": "Europe/Moscow", "granularity": granularity,
                 "daily": series, "sources_total": len(sources),
                 "sources": [{"link_id": r["link_id"], "title": r["title"], "code": r["code"], **self.present(config, r)}
@@ -325,13 +353,17 @@ class TrackingStageJourneyService:
             if bucket == "stalled":
                 condition = and_(condition, wide.c.stalled)
         selected = select(wide.c.chat_id, wide.c.tracking_link_id, wide.c[f"s{index}"].label("stage_at")).where(condition).cte("stage_selection")
-        total = await self.db.scalar(select(func.count()).select_from(selected))
-        rows = (await self.db.execute(select(Chat.id.label("chat_id"), Lead.id.label("lead_id"), Lead.name,
+        total_query = select(func.count().label("total")).select_from(selected).cte("stage_selection_total")
+        page = (select(Chat.id.label("chat_id"), Lead.id.label("lead_id"), Lead.name,
                 Lead.username, Chat.contact_name, Chat.last_message_at, TrackingLink.title.label("link_title"),
                 TrackingLink.code.label("link_code"), selected.c.stage_at)
             .select_from(selected).join(Chat, Chat.id == selected.c.chat_id).outerjoin(Lead, Lead.chat_id == Chat.id)
             .outerjoin(TrackingLink, and_(TrackingLink.id == selected.c.tracking_link_id, TrackingLink.project_id == project_id))
-            .order_by(Chat.last_message_at.desc().nullslast(), Chat.id).limit(limit).offset(offset))).mappings().all()
+            .order_by(Chat.last_message_at.desc().nullslast(), Chat.id).limit(limit).offset(offset).cte("stage_selection_page"))
+        results = (await self.db.execute(select(total_query.c.total, *page.c).select_from(total_query)
+            .outerjoin(page, literal(True)).order_by(page.c.last_message_at.desc().nullslast(), page.c.chat_id))).mappings().all()
+        total = results[0]["total"]
+        rows = [{key: value for key, value in row.items() if key != "total"} for row in results if row["chat_id"] is not None]
         tags = {}
         if rows:
             for lead_id, name in (await self.db.execute(select(LeadTag.lead_id, Tag.name).join(Tag, Tag.id == LeadTag.tag_id)

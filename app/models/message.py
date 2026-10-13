@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -34,6 +34,9 @@ class Message(Base, UUIDPrimaryKey, TimestampMixin):
         return value if isinstance(value, str) else None
 
     __table_args__ = (
+        Index("ix_messages_project_start_lookup", "chat_id", "created_at", "id",
+              postgresql_include=["tracking_link_id"],
+              postgresql_where=text("sender_type = 'user' AND message_type = 'text' AND (split_part(lower(trim(body)), ' ', 1) = '/start' OR split_part(lower(trim(body)), ' ', 1) LIKE '/start@%')")),
         Index(
             "ix_messages_tracking_link_created_at",
             "tracking_link_id",

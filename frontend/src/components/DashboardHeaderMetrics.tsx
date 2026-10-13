@@ -6,6 +6,8 @@ import { useAuthStore } from '../store/authStore'
 
 type HeaderMetrics = {
   project_format?: 'submission' | 'gambling'
+  tracking_lead_count_mode?: 'statuses' | 'tags'
+  qualified_today?: number
   subscribers_today: number
   conversion_today: string | number
   leads_today: number
@@ -78,8 +80,12 @@ export default function DashboardHeaderMetrics() {
   return (
     <div className="flex shrink-0 overflow-x-auto border-b border-white/5 bg-[#11182a]/95 px-3 py-2 text-sm text-gray-400 shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] lg:px-6">
       <div className="flex min-w-max items-center">
-        <Metric label="Подписчиков сегодня" value={formatInteger(metrics.subscribers_today)} />
-        <Metric label="Лидов сегодня" value={formatInteger(metrics.leads_today)} />
+        <Metric label="Первые старты сегодня" value={formatInteger(metrics.subscribers_today)}
+          hint="Первый /start человека в проекте. Повторные старты и диалоги в других ботах не добавляются. День — UTC." />
+        <Metric label="Лиды из новых сегодня" value={formatInteger(metrics.leads_today)}
+          hint="Лиды, пришедшие сегодня и соответствующие выбранным в проекте тегам или статусам. День — UTC." />
+        {metrics.tracking_lead_count_mode === 'tags' && <Metric label="Целевой тег сегодня" value={formatInteger(metrics.qualified_today || 0)}
+          hint="Первое присвоение любого целевого тега за день, независимо от даты прихода лида. Повторные присвоения не увеличивают счётчик. День — UTC." />}
         <Metric label="Конверсия" value={formatPercent(metrics.conversion_today)} valueClassName="text-orange-400" />
         {metrics.project_format === 'gambling' ? (
           <>
@@ -106,13 +112,15 @@ function Metric({
   label,
   value,
   valueClassName = 'text-white',
+  hint,
 }: {
   label: string
   value: string | number
   valueClassName?: string
+  hint?: string
 }) {
   return (
-    <div className="flex shrink-0 items-baseline gap-1.5 border-r border-white/10 px-4 first:pl-0 last:border-r-0 last:pr-0">
+    <div title={hint} className="flex shrink-0 items-baseline gap-1.5 border-r border-white/10 px-4 first:pl-0 last:border-r-0 last:pr-0">
       <span>{label}:</span>
       <span className={`font-semibold ${valueClassName}`}>{value}</span>
     </div>

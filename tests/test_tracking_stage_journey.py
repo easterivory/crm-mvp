@@ -163,6 +163,19 @@ def test_stage_journey_real_database_and_migration():
                 own_option = next(item for item in options if item["id"] == steps[1].id)
                 assert own_option["bot_name"] == "Acquisition"
                 assert own_option["number"] == 2 and own_option["version_number"] == 1
+                active_bot = await db.get(Bot, bot.id)
+                active_bot.active_funnel_id = funnel.id
+                await db.flush()
+                link_options = await service.steps.options(actor, project.id, link_id=link.id)
+                assert {item["bot_id"] for item in link_options} == {bot.id}
+                assert all(item["is_preferred"] for item in link_options)
+                assert await service.steps.options(buyer, project.id, link_id=link.id)
+                with pytest.raises(HTTPException) as wrong_bot:
+                    await service.steps.options(actor, project.id, secondary.id, link_id=link.id)
+                assert wrong_bot.value.status_code == 422
+                with pytest.raises(HTTPException) as wrong_project:
+                    await service.steps.options(actor, other.id, link_id=link.id)
+                assert wrong_project.value.status_code == 404
                 preview = await service.steps.preview(actor, project.id, steps[1].id)
                 assert preview["messages"][0]["media_type"] == "photo"
                 assert preview["messages"][0]["buttons"] == ["Продолжить"]
@@ -183,6 +196,12 @@ def test_stage_journey_real_database_and_migration():
                 original.tracking_link_id = None
                 await db.flush()
                 assert (await service.report(actor, project.id, funnel.id, link_id=link.id, **filters))["people"] == 5
+                empty_page = await service.chats(actor, project.id, funnel.id, config.stages[0].id,
+                    offset=1000, **filters)
+                assert empty_page["total"] == 5 and empty_page["items"] == []
+                empty_period = await service.chats(actor, project.id, funnel.id, config.stages[0].id,
+                    date_from=now.date(), date_to=now.date())
+                assert empty_period == {"items": [], "total": 0}
                 origin_detail = await service.chats(actor, project.id, funnel.id, config.stages[-1].id, **filters)
                 assert origin_detail["items"][0]["link_code"] == "stages-fb"
                 assert [s["remaining"] for s in report["items"]] == [2, 1, 1, 0]
@@ -232,6 +251,9 @@ def test_stage_journey_real_database_and_migration():
                 short_config = JourneyConfig(stages=[config.stages[0], config.stages[-1]])
                 await service.save(actor, project.id, secondary_funnel.id, short_config)
                 assert (await service.report(actor, project.id, secondary_funnel.id, **filters))["people"] == 0
+                with pytest.raises(HTTPException) as wrong_funnel:
+                    await service.report(actor, project.id, secondary_funnel.id, link_id=link.id, **filters)
+                assert wrong_funnel.value.status_code == 422
                 # The same Telegram ID in a different project is a new person there.
                 other_bot = Bot(project_id=other.id, name="Other bot")
                 db.add(other_bot); await db.flush()
@@ -282,6 +304,22 @@ def test_stage_journey_real_database_and_migration():
                     db.add(FunnelStepLog(lead_id=alt_lead.id, funnel_id=alternative.id, funnel_version_id=alt_version.id,
                         step_id=alt_step.id, step_name="Alternative age", event_type=event, created_at=arrival + timedelta(hours=1)))
                 await db.flush()
+                scoped_options = await service.steps.options(actor, project.id, link_id=link.id)
+                assert {item["bot_id"] for item in scoped_options} == {bot.id}
+                assert {item["funnel_id"] for item in scoped_options if item["is_preferred"]} == {funnel.id}
+                source_link = await db.get(TrackingLink, link.id)
+                source_link.target_funnel_id = alternative.id
+                await db.flush()
+                targeted_options = await service.steps.options(actor, project.id, link_id=link.id)
+                assert {item["funnel_id"] for item in targeted_options if item["is_preferred"]} == {alternative.id}
+                source_link.target_funnel_id = None
+                unowned_link = TrackingLink(project_id=project.id, bot_id=secondary.id, name="Unowned", title="Unowned",
+                    code="unowned-stages", ref_code="unowned-stages")
+                db.add(unowned_link)
+                await db.flush()
+                with pytest.raises(HTTPException) as foreign_buyer:
+                    await service.steps.options(buyer, project.id, link_id=unowned_link.id)
+                assert foreign_buyer.value.status_code == 404
                 report = await service.report(actor, project.id, funnel.id, **filters)
                 assert report["people"] == 6 and report["items"][1]["reached"] == 3
                 combined = config.model_copy(deep=True)
@@ -326,6 +364,26 @@ def test_stage_journey_real_database_and_migration():
                 assert await db.scalar(text("SELECT to_regclass('tracking_journey_configs')")) is None
                 assert await db.scalar(text("SELECT count(*) FROM chats")) == 8
                 await db.run_sync(lambda c: migrate(c, "upgrade"))
+            async with sessions() as db:
+                actor = await db.get(User, actor.id)
+                actor.role = await db.get(Role, admin_role.id)
+                service = TrackingStageJourneyService(db)
+                await service.save(actor, other.id, other_funnel.id, other_config)
+                # Empty Telegram IDs must never merge anonymous contacts.
+                for index, external_user_id in enumerate(("", "", "")):
+                    anonymous = Chat(project_id=other.id, bot_id=other_bot.id,
+                        external_chat_id=f"anonymous-{index}", external_user_id=external_user_id)
+                    db.add(anonymous)
+                    await db.flush()
+                    db.add(Lead(project_id=other.id, chat_id=anonymous.id, status_id=status.id))
+                    db.add(Message(chat_id=anonymous.id, body="/start", sender_type="user", created_at=now))
+                await db.flush()
+                anonymous_report = await service.report(actor, other.id, other_funnel.id,
+                    date_from=now.date(), date_to=now.date())
+                assert anonymous_report["people"] == 3 and anonymous_report["physical_chats"] == 3
+                anonymous_page = await service.chats(actor, other.id, other_funnel.id, other_config.stages[0].id,
+                    date_from=now.date(), date_to=now.date())
+                assert anonymous_page["total"] == 3 and len(anonymous_page["items"]) == 3
         finally:
             await engine.dispose()
             async with root.begin() as db:

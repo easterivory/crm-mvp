@@ -52,6 +52,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         Index("ix_chats_tracking_link_id", "tracking_link_id"),
         Index("ix_chats_external_chat_id", "external_chat_id"),
         Index("ix_chats_external_user_id", "external_user_id"),
+        Index("ix_chats_project_external_user", "project_id", "external_user_id", "id"),
         Index("ix_chats_last_user_message_at", "last_user_message_at"),
         Index("ix_chats_last_manager_reply_at", "last_manager_reply_at"),
         Index("ix_chats_last_message_at", "last_message_at"),

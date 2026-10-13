@@ -67,6 +67,7 @@ export default function TrackingOverview(props: Props) {
   const scopeKey = JSON.stringify([props.projectId, props.botId, props.buyerId, props.linkId, props.dateFrom, props.dateTo, view.selected, view.from, view.to])
   useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(view)) } catch { /* Preferences are optional. */ } }, [storageKey, view])
   useEffect(() => {
+    if (mode !== 'overview') return
     const controller = new AbortController()
     setCohort(null); setCohortError(false)
     void api.get('/tracking/metrics/cohort-conversion', { signal: controller.signal, params: {
@@ -75,9 +76,10 @@ export default function TrackingOverview(props: Props) {
     } }).then(({ data }) => { if (!controller.signal.aborted) setCohort(data) })
       .catch(() => { if (!controller.signal.aborted) setCohortError(true) })
     return () => controller.abort()
-  }, [cohortKey, retry, props.refreshToken])
+  }, [mode, cohortKey, retry, props.refreshToken])
 
   useEffect(() => {
+    if (mode !== 'overview') return
     const controller = new AbortController()
     setOptions([]); setOptionError('')
     void (async () => {
@@ -87,16 +89,17 @@ export default function TrackingOverview(props: Props) {
         tags.push(...data.items)
         if (!data.items.length || tags.length >= data.total) break
       }
-      const { data: steps } = await api.get<JourneyStepOption[]>('/tracking/metrics/step-options', { params: { project_id: props.projectId, bot_id: props.botId }, signal: controller.signal })
+      const { data: steps } = await api.get<JourneyStepOption[]>('/tracking/metrics/step-options', { params: { project_id: props.projectId, bot_id: props.botId, link_id: props.linkId }, signal: controller.signal })
       if (!controller.signal.aborted) setOptions([
         ...tags.map(t => ({ id: `tag:${t.id}`, name: `Тег: ${t.name}`, kind: 'tag' as const, color: customColor(t.id) })),
         ...steps.map(s => ({ id: `step:${s.id}`, name: `Шаг: ${stepLabel(s)}`, kind: 'step' as const, color: customColor(s.id), step: s })),
       ])
     })().catch(() => { if (!controller.signal.aborted) setOptionError('Не удалось загрузить теги и шаги') })
     return () => controller.abort()
-  }, [props.projectId, props.botId, retry])
+  }, [mode, props.projectId, props.botId, props.linkId, retry])
 
   useEffect(() => {
+    if (mode !== 'overview') return
     const controller = new AbortController()
     setCustom({}); setCustomErrors({}); setResultsKey('')
     const ids = [...new Set([...view.selected, view.from, view.to])].filter(id => /^(tag|step):/.test(id))
@@ -115,7 +118,7 @@ export default function TrackingOverview(props: Props) {
       setCustomErrors(Object.fromEntries(items.filter(x => !x.data).map(x => [x.id, true])))
     })
     return () => controller.abort()
-  }, [scopeKey, retry, props.refreshToken]) // scopeKey contains all request parameters.
+  }, [mode, scopeKey, retry, props.refreshToken]) // scopeKey contains all request parameters.
 
   const catalogue = [...definitions, ...options]
   const cohortOptions = [{ id: 'arrivals', name: 'Все вошедшие лиды' }, ...catalogue.filter(m => m.kind === 'tag' || m.kind === 'step' || ['submitted_leads', 'registrations', 'first_deposits', 'redeposits'].includes(m.id))]
@@ -150,7 +153,7 @@ export default function TrackingOverview(props: Props) {
       <button type="button" role="tab" aria-selected={mode === 'overview'} onClick={() => setMode('overview')}>Обзор</button>
       <button type="button" role="tab" aria-selected={mode === 'journey'} onClick={() => setMode('journey')}>Движение по этапам</button>
     </div>
-    {mode === 'journey' ? <TrackingJourney {...props} /> : <>
+    {mode === 'journey' ? <TrackingJourney key={JSON.stringify([props.projectId, props.botId, props.linkId])} {...props} /> : <>
     <div className="tracking-tools">
       <div><h2>Обзор трафика</h2><span className="tracking-muted">{props.dateFrom} — {props.dateTo} · UTC{!props.linkId && ' · Все ссылки, включая архивные'}</span></div>
       <div className="tracking-actions">
@@ -170,7 +173,10 @@ export default function TrackingOverview(props: Props) {
       {optionError && <p role="alert">{optionError}. <button type="button" onClick={() => setRetry(n => n + 1)}>Повторить</button></p>}
     </section>}
     <div className="tracking-kpis">{selected.map(m => <div key={m.id} className="tracking-kpi">
-      <span className="tracking-metric-name"><i style={{ background: m.color }} />{m.name}</span>
+      <span className="tracking-metric-name" title={m.id === 'starts'
+        ? 'Первый /start человека в проекте. Повторные диалоги в других ботах, именные аккаунты без /start и автостарт по подписке не добавляются к этому показателю.'
+        : m.id === 'leads' ? 'Лиды из пришедших за выбранный период, соответствующие целевым тегам или статусам проекта. Дата присвоения тега не заменяет дату прихода.' : undefined}>
+        <i style={{ background: m.color }} />{m.name}</span>
       <strong>{number(getTotal(m.id), m.kind === 'money' ? 2 : 0)}</strong>
       <span className="tracking-muted">{customErrors[m.id] ? 'Не удалось загрузить' : m.kind === 'tag' || m.kind === 'step' || m.id === 'leads' ? 'По дате входа лида' : 'События за период'}</span>
     </div>)}</div>

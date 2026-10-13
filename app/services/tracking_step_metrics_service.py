@@ -20,11 +20,23 @@ class TrackingStepMetricsService:
         self.db = db
         self.metrics = TrackingMetricsService(db)
 
-    async def options(self, actor, project_id, bot_id=None):
+    async def options(self, actor, project_id, bot_id=None, *, link_id=None):
         await self.metrics._ensure_project_access(actor, project_id)
         await self.metrics._get_active_project_or_404(project_id)
+        preferred_funnel_id = None
+        if link_id:
+            link = await self.metrics.link_repo.get_link_by_id(link_id)
+            buyer_id = self.metrics.resolve_buyer_filter(actor, None)
+            if not link or link.project_id != project_id or (buyer_id and link.buyer_id != buyer_id):
+                raise HTTPException(404, "Ссылка не найдена")
+            if bot_id and bot_id != link.bot_id:
+                raise HTTPException(422, "Ссылка не относится к выбранному боту")
+            bot_id = link.bot_id
+            preferred_funnel_id = link.target_funnel_id
         if bot_id:
             await self.metrics._ensure_bot_in_project(bot_id, project_id)
+            if preferred_funnel_id is None:
+                preferred_funnel_id = await self.db.scalar(select(Bot.active_funnel_id).where(Bot.id == bot_id))
         # Include archived versions for historical analysis, retaining the latest
         # identity of each stable step key within its own funnel.
         stmt = (select(FunnelStep.id, FunnelStep.key, FunnelStep.title, Funnel.name, Funnel.id.label("funnel_id"),
@@ -48,6 +60,7 @@ class TrackingStepMetricsService:
                 number = numbers[row.version_id]
                 result.append({"id": row.id, "name": f"{row.name} · v{row.version_number} · #{number} · {row.title}",
                     "bot_id": row.bot_id, "funnel_id": row.funnel_id, "funnel_name": row.name,
+                    "is_preferred": row.funnel_id == preferred_funnel_id,
                     "bot_name": row.bot_name, "bot_username": row.bot_username,
                     "version_number": row.version_number, "number": number, "key": row.key, "title": row.title})
         return result

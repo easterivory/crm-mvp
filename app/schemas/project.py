@@ -196,6 +196,9 @@ class ProjectOut(ProjectRead):
 
 class ProjectDashboardHeaderOut(BaseModel):
     date: date
+    timezone: str = "UTC"
+    tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
+    qualified_today: int = 0
     project_format: ProjectFormat = "submission"
     subscribers_today: int
     conversion_today: Decimal

@@ -83,7 +83,7 @@ export const universalBlocks: UniversalBlock[] = [
     defaultTitle: 'Условие',
     description: 'Проверяет одно или несколько условий и ведёт по исходам.',
     defaultConfig: {
-      mode: 'simple_yes_no',
+      mode: 'all',
       conditions: [{ id: 'cond_1', source: 'last_answer', field: '', operator: 'equals', value: 'yes' }],
       outcomes: [
         { id: 'true', label: 'Да', target_step_id: '' },

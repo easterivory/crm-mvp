@@ -61,7 +61,11 @@ from app.models.tracking_journey import LeadTagHistory, TrackingJourneyConfig  #
 from app.models.lead_import import BotLeadImport  # noqa: F401
 from app.models.ai import AIBudgetReservation, AIProjectSettings, AIProviderConnection, AIUsageLog  # noqa: F401
 
+from .info_bot_delivery import InfoBotDelivery, InfoBotCursor
+
 __all__ = [
+    "InfoBotDelivery",
+    "InfoBotCursor",
     "Base",
     "Project",
     "SystemSetting",

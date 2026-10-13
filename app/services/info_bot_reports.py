@@ -128,7 +128,7 @@ def format_summary(values: dict, *, gambling: bool = False) -> str:
         lines.append(f"Подписчики канала: {values['channel_joins']}")
     lines.extend([
         f"Лиды: {values['leads']}",
-        f"Старты: {values['starts']} | Клики: {values['clicks']}",
+        f"Первые старты: {values['starts']} | Клики: {values['clicks']}",
     ])
     if destination != "bot":
         lines.append(f"Заявки в канал: {values['channel_join_requests']} | Отписки: {values['channel_leaves']}")

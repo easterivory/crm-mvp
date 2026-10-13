@@ -24,8 +24,16 @@ export default function ConditionBlockSettings({
   trackingLinks = [],
   onConfigChange,
 }: ConditionBlockSettingsProps) {
-  const mode = textValue(step.config_json, 'mode') || 'all'
+  const configuredMode = textValue(step.config_json, 'mode') || 'all'
   const conditions = normalizeConditions(step.config_json.conditions)
+  const defaultYesNoRule = conditions.length === 1
+    && (conditions[0].source || 'last_answer') === 'last_answer'
+    && !conditions[0].field
+    && (conditions[0].operator || 'equals') === 'equals'
+    && String(conditions[0].value || '').trim().toLowerCase() === 'yes'
+  const mode = configuredMode === 'simple_yes_no' && conditions.length > 0 && !defaultYesNoRule
+    ? 'all'
+    : configuredMode
   const outcomes = normalizeOutcomes(step.config_json.outcomes)
 
   const patchConfig = (patch: Record<string, unknown>) => {
@@ -40,25 +48,34 @@ export default function ConditionBlockSettings({
         </span>
         <select
           value={mode}
-          onChange={(event) => patchConfig({ mode: event.target.value })}
+          onChange={(event) => {
+            const nextMode = event.target.value
+            if (nextMode === 'simple_yes_no' && conditions.length > 0 && !defaultYesNoRule
+              && !window.confirm('Переключить на ответ «Да / Нет»? Настроенные правила будут заменены проверкой ответа «Да / Нет».')) {
+              return
+            }
+            patchConfig(nextMode === 'simple_yes_no'
+              ? { mode: nextMode, conditions: [{ id: 'cond_1', source: 'last_answer', field: '', operator: 'equals', value: 'yes' }] }
+              : { mode: nextMode })
+          }}
           className="w-full rounded-lg border border-white/10 bg-background/70 px-2 py-1.5 text-sm text-gray-100 outline-none ring-accent-400/50 transition focus:ring-2"
         >
           <option value="all">Все условия / AND</option>
           <option value="any">Любое условие / OR</option>
-          <option value="simple_yes_no">Да / Нет</option>
+          <option value="simple_yes_no">Ответ «Да / Нет»</option>
           {step.block_type === 'generic_hold_router' ? (
             <option value="hold_mode">Hold toggle</option>
           ) : null}
         </select>
       </label>
 
-      <VisualRuleBuilder
+      {mode !== 'simple_yes_no' ? <VisualRuleBuilder
         rules={conditions}
         tags={tags}
         statuses={statuses}
         trackingLinks={trackingLinks}
-        onChange={(nextConditions) => patchConfig({ conditions: nextConditions })}
-      />
+        onChange={(nextConditions) => patchConfig({ mode, conditions: nextConditions })}
+      /> : null}
 
       <OutcomeEditor
         outcomes={outcomes}
