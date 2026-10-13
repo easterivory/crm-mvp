@@ -89,6 +89,25 @@ export type ConfiguredOutput = {
   targetStepId?: string
 }
 
+export const defaultAnalysisConfig = {
+  enabled: true,
+  step_goal: 'Проанализировать ответ клиента и выбрать подходящий выход.',
+  instructions: '', fallback_type: 'answers', context_source: 'answer',
+  max_output_tokens: 600, temperature: 0,
+  outcomes: [
+    { id: 'matched', label: 'Подходит', instruction: '', target_step_id: '' },
+    { id: 'fallback', label: 'Не распознано / ошибка', instruction: '', target_step_id: '' },
+  ],
+  output_fields: [],
+}
+
+export function analysisSettings(step: FunnelStep): Record<string, unknown> | null {
+  if (step.block_type === 'ai_analysis') return step.config_json
+  const value = step.config_json.ai_analysis
+  return step.step_type === 'input' && value && typeof value === 'object' && !Array.isArray(value)
+    && (value as Record<string, unknown>).enabled === true ? value as Record<string, unknown> : null
+}
+
 export const answerTypes = [
   ['text', 'Текст'],
   ['phone', 'Телефон'],
@@ -458,12 +477,23 @@ export function collectConfiguredOutputs(step: FunnelStep): ConfiguredOutput[] {
     return []
   }
 
-  if (step.block_type === 'ai_response') {
-    return normalizeOutcomes(step.config_json.outcomes).map((outcome) => ({
+  const analysis = analysisSettings(step)
+  if (step.block_type === 'ai_response' || analysis) {
+    const outputs = normalizeOutcomes((analysis ?? step.config_json).outcomes).map((outcome) => ({
       key: `ai:${outcome.id}`,
       label: outcome.label,
       targetStepId: outcome.target_step_id,
     }))
+    if (step.step_type === 'input' && numberValue(step.config_json, 'timeout_seconds', 0) > 0) {
+      outputs.push({ key: 'input:timeout', label: 'Таймаут', targetStepId: textValue(step.config_json, 'timeout_target_step_id') })
+    }
+    if (step.step_type === 'input') {
+      outputs.push(...normalizeButtons(step.config_json.choices ?? step.config_json.options ?? step.config_json.buttons).map(choice => ({
+        key: `choice:${choice.id}`, label: choice.label, targetStepId: choice.target_step_id,
+      })))
+      outputs.push({ key: 'input:answer', label: 'Ответ', targetStepId: undefined })
+    }
+    return outputs
   }
 
   if (step.step_type === 'condition') {
@@ -592,6 +622,10 @@ function sanitizeStepTargets(step: FunnelStep, stepIds: Set<string>): FunnelStep
   }
   for (const key of ['buttons', 'choices', 'outcomes', 'variants']) {
     config[key] = sanitizeTargetList(config[key], stepIds)
+  }
+  if (config.ai_analysis && typeof config.ai_analysis === 'object' && !Array.isArray(config.ai_analysis)) {
+    const analysis = config.ai_analysis as Record<string, unknown>
+    config.ai_analysis = { ...analysis, outcomes: sanitizeTargetList(analysis.outcomes, stepIds) }
   }
   if (Array.isArray(config.messages)) {
     config.messages = config.messages.map((message) => {

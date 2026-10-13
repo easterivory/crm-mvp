@@ -184,8 +184,10 @@ async def test_ai_provider(
         raise HTTPException(status_code=422, detail="Specify a model for the connection test")
     snapshot = _provider_snapshot(connection)
     await db.rollback()
+    gateway = AIGatewayService()
+    test_token_limit = 1024 if gateway.model_options(snapshot, model)["token_parameter"] == "max_completion_tokens" else 100
     try:
-        result = await AIGatewayService().execute(
+        result = await gateway.execute(
             connection=snapshot,
             model=model,
             system_prompt=(
@@ -194,7 +196,7 @@ async def test_ai_provider(
             ),
             messages=[{"role": "user", "content": "Проверка подключения"}],
             temperature=0,
-            max_output_tokens=100,
+            max_output_tokens=test_token_limit,
         )
     except (AIGatewayError, AICredentialError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -63,7 +63,8 @@ def test_only_explicit_idle_start_restarts_current_published_funnel(
                 funnel.current_version_id = version.id
                 old_step = FunnelStep(funnel_version_id=old_version.id, key="old", title="Old", step_type="input",
                     block_type="generic_input", config_json={"field_key": "phone", "answer_type": "phone", "prompt": " "})
-                trigger = FunnelStep(funnel_version_id=version.id, key="start", title="Start", step_type="trigger", block_type="generic_start")
+                trigger = FunnelStep(funnel_version_id=version.id, key="start", title="Start", step_type="trigger", block_type="generic_start",
+                    config_json={"repeat_start_defaults": {"mode": "remind", "text": ""}})
                 phone = FunnelStep(funnel_version_id=version.id, key="phone", title="Phone", step_type="input",
                     block_type="generic_input", config_json={"field_key": "phone", "answer_type": "phone", "prompt": " ", "prompt_delay_seconds": 30})
                 age = FunnelStep(funnel_version_id=version.id, key="age", title="Age", step_type="input",

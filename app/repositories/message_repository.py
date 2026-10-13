@@ -348,6 +348,13 @@ class MessageRepository(BaseRepository[Message]):
             ).order_by(Message.created_at.desc(), Message.id.desc()).limit(1)
         )
 
+    async def latest_funnel_upload_delivery(self, chat_id: UUID, upload_id: UUID) -> Message | None:
+        return await self.db.scalar(select(Message).where(
+            Message.chat_id == chat_id, Message.sender_type == SenderType.BOT,
+            Message.raw_payload_json["broadcast_upload_id"].astext == str(upload_id),
+            Message.telegram_file_id.is_not(None),
+        ).order_by(Message.created_at.desc(), Message.id.desc()).limit(1))
+
     async def claim_funnel_processing(self, message_ids: list[UUID]) -> bool:
         """Atomically reserve unprocessed messages for one funnel execution."""
         unique_ids = list(dict.fromkeys(message_ids))

@@ -59,6 +59,7 @@ import InspectorPanel from './InspectorPanel'
 import PublishReviewModal from './PublishReviewModal'
 import VersionHistoryPanel from './VersionHistoryPanel'
 import MessageBlockSettings from './MessageBlockSettings'
+import RepeatedStartSettings from './RepeatedStartSettings'
 
 type FunnelBuilderProps = {
   funnelId: string
@@ -158,7 +159,14 @@ function graphForSave(graph: FunnelGraph): FunnelGraph {
 }
 
 function setManagedTarget(step: FunnelStep, sourceKey: string, targetStepId: string): FunnelStep {
-  if (step.block_type === 'ai_response') {
+  const analysis = step.step_type === 'input' && step.config_json.ai_analysis && typeof step.config_json.ai_analysis === 'object'
+    ? step.config_json.ai_analysis as Record<string, unknown> : null
+  if (analysis && sourceKey.startsWith('ai:')) {
+    return { ...step, config_json: { ...step.config_json, ai_analysis: { ...analysis,
+      outcomes: normalizeOutcomes(analysis.outcomes).map((outcome) => `ai:${outcome.id}` === sourceKey
+        ? { ...outcome, target_step_id: targetStepId } : outcome) } } }
+  }
+  if (step.block_type === 'ai_response' || step.block_type === 'ai_analysis') {
     return {
       ...step,
       config_json: {
@@ -291,7 +299,7 @@ export default function FunnelBuilder({
   const [isSaving, setIsSaving] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isPublishOpen, setIsPublishOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'editor' | 'analytics' | 'versions'>('editor')
+  const [activeTab, setActiveTab] = useState<'editor' | 'settings' | 'analytics' | 'versions'>('editor')
   const [compactPanel, setCompactPanel] = useState<CompactBuilderPanel>('canvas')
   const [libraryCollapsed, setLibraryCollapsed] = useState(() => localStorage.getItem('funnel-library-collapsed') === 'true')
   const [inspectorWidth, setInspectorWidth] = useState(() => Math.max(320, Math.min(720, Number(localStorage.getItem('funnel-inspector-width')) || 380)))
@@ -942,7 +950,7 @@ export default function FunnelBuilder({
   return (
     <div className="flex min-h-[calc(100dvh-5rem)] flex-col overflow-visible rounded-xl border border-white/8 bg-[#090d18]/80 md:min-h-[calc(100dvh-8rem)] lg:h-full lg:min-h-0 lg:overflow-hidden">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/8 bg-[#0d1324]/95 px-3 py-3 shadow-card md:px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="flex min-w-0 flex-1 basis-full items-center gap-3">
           <button
             type="button"
             onClick={onBack}
@@ -1009,6 +1017,7 @@ export default function FunnelBuilder({
         <div className="-mx-1 flex w-full shrink-0 gap-2 overflow-x-auto px-1 pb-1 md:mx-0 md:w-auto md:flex-wrap md:overflow-visible md:px-0 md:pb-0">
           {[
             { key: 'editor' as const, label: 'Редактор', icon: GitBranch },
+            { key: 'settings' as const, label: 'Настройки воронки', icon: Settings2 },
             { key: 'analytics' as const, label: 'Аналитика', icon: BarChart3 },
             { key: 'versions' as const, label: 'История версий', icon: History },
           ].map((tab) => {
@@ -1065,6 +1074,10 @@ export default function FunnelBuilder({
           )}
         </div>
       </header>
+
+      {activeTab === 'settings' && <div className="min-h-0 flex-1 overflow-y-auto">
+        <RepeatedStartSettings steps={graph.steps} readOnly={!isEditableDraft} onUpdate={updateStep} />
+      </div>}
 
       {activeTab === 'editor' && botTransportType === 'user_mtproto' ? (
         <div className="flex shrink-0 items-start gap-3 border-b border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm leading-5 text-amber-50">
@@ -1237,14 +1250,14 @@ export default function FunnelBuilder({
             <DropOffChart analytics={analyticsData} />
           )}
         </div>
-      ) : (
+      ) : activeTab === 'versions' ? (
         <VersionHistoryPanel
           versions={versions}
           users={versionUsers}
           activeVersionId={activeVersionId}
           onOpenVersion={(nextVersionId) => void switchVersion(nextVersionId)}
         />
-      )}
+      ) : null}
 
       {isPublishOpen ? (
         <PublishReviewModal

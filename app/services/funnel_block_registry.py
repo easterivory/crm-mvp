@@ -143,6 +143,7 @@ MVP_BLOCKS: dict[str, list[tuple[str, str]]] = {
     "integration": [
         ("generic_integration", "Интеграция"),
         ("ai_response", "ИИ-ответ"),
+        ("ai_analysis", "ИИ-анализ"),
         ("outgoing_webhook", "Webhook"),
         ("http_request", "HTTP request"),
         ("external_crm", "Внешняя CRM"),
@@ -365,6 +366,9 @@ class FunnelBlockRegistry:
             return [f"Неизвестная категория блока: {step_type}."]
         if not self.is_known(step_type, block_type):
             return [f"Блок {block_type} не разрешён для категории {step_type}."]
+        analysis = config.get("ai_analysis")
+        if step_type == "input" and isinstance(analysis, dict) and analysis.get("enabled") is True:
+            errors.extend(self.validate_block("integration", "ai_analysis", analysis))
 
         if block_type == "generic_trigger":
             trigger_type = str(config.get("trigger_type") or "new_chat").strip()
@@ -512,12 +516,27 @@ class FunnelBlockRegistry:
             integration_type = str(config.get("integration_type") or "webhook").strip()
             if integration_type in {"webhook", "http_request"} and not self._text(config, "url"):
                 errors.append("Для интеграции нужен URL.")
-        if block_type == "ai_response":
+        if block_type in {"ai_response", "ai_analysis"}:
+            ai_label = "ИИ-анализа" if block_type == "ai_analysis" else "ИИ-ответа"
+            if block_type == "ai_analysis":
+                from pydantic import ValidationError
+                from app.schemas.ai import AIAnalysisConfig
+                try:
+                    AIAnalysisConfig.model_validate({**config, "enabled": True})
+                except ValidationError as exc:
+                    errors.extend(str(error["msg"]) for error in exc.errors())
+                for route in config.get("outcomes", []) if isinstance(config.get("outcomes"), list) else []:
+                    if not isinstance(route, dict):
+                        continue
+                    if not route.get("target_step_id"):
+                        errors.append(f"ИИ-анализ: подключите выход «{route.get('label') or route.get('id')}».")
+                    if route.get("id") != "fallback" and not any(route.get(key) for key in ("instruction", "aliases", "country_codes")) and route.get("country_match") != "other":
+                        errors.append(f"ИИ-анализ: задайте правило выхода «{route.get('label') or route.get('id')}».")
             if not self._text(config, "step_goal", "goal"):
-                errors.append("Для ИИ-ответа укажите цель шага.")
+                errors.append(f"Для {ai_label} укажите цель шага.")
             outcomes = config.get("outcomes")
             if not isinstance(outcomes, list) or not outcomes:
-                errors.append("Для ИИ-ответа добавьте хотя бы один маршрут.")
+                errors.append(f"Для {ai_label} добавьте хотя бы один маршрут.")
             else:
                 route_ids: set[str] = set()
                 for index, outcome in enumerate(outcomes, start=1):
@@ -547,7 +566,7 @@ class FunnelBlockRegistry:
                             f"Маршрут ИИ #{index}: правило выбора длиннее 1000 символов."
                         )
                 if "fallback" not in route_ids:
-                    errors.append("Для ИИ-ответа нужен маршрут fallback.")
+                    errors.append(f"Для {ai_label} нужен маршрут fallback.")
 
             output_fields = config.get("output_fields")
             if output_fields is not None and not isinstance(output_fields, list):
@@ -590,7 +609,7 @@ class FunnelBlockRegistry:
                 ("min_delay_ms", 0, 30000, "минимальную задержку"),
                 ("max_delay_ms", 0, 30000, "максимальную задержку"),
             ):
-                if key not in config or config.get(key) in {None, ""}:
+                if key not in config or config.get(key) is None or config.get(key) == "":
                     continue
                 try:
                     number = float(config[key])

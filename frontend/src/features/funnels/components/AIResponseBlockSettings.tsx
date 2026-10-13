@@ -15,6 +15,10 @@ type AIOutcome = {
   label: string
   instruction: string
   target_step_id: string
+  aliases?: string[]
+  country_codes?: string[]
+  country_match?: string
+  save_answer?: boolean
 }
 
 type AIOutputField = {
@@ -30,6 +34,7 @@ type AIResponseBlockSettingsProps = {
   projectId: string
   steps: FunnelStep[]
   onConfigChange: (patch: Record<string, unknown>) => void
+  analysis?: boolean
 }
 
 const inputClass =
@@ -47,6 +52,7 @@ function normalizeAIOutcomes(value: unknown): AIOutcome[] {
       ? item as Record<string, unknown>
       : {}
     return {
+      ...current,
       id: String(current.id ?? `route_${index + 1}`),
       label: String(current.label ?? `Маршрут ${index + 1}`),
       instruction: String(current.instruction ?? current.when ?? ''),
@@ -85,6 +91,7 @@ export default function AIResponseBlockSettings({
   projectId,
   steps,
   onConfigChange,
+  analysis = false,
 }: AIResponseBlockSettingsProps) {
   const [providers, setProviders] = useState<AIProviderOption[]>([])
   const [models, setModels] = useState<string[]>([])
@@ -157,7 +164,7 @@ export default function AIResponseBlockSettings({
     <div className="space-y-5">
       <div className="flex items-center gap-2 border-b border-white/8 pb-3">
         <BrainCircuit size={17} className="shrink-0 text-cyan-200" />
-        <h4 className="text-sm font-semibold text-white">ИИ-ответ</h4>
+        <h4 className="text-sm font-semibold text-white">{analysis ? 'ИИ-анализ' : 'ИИ-ответ'}</h4>
       </div>
 
       <label className="block">
@@ -239,6 +246,23 @@ export default function AIResponseBlockSettings({
         </label>
       </div>
 
+      {analysis && <div className="grid gap-3">
+        <label className="block text-xs text-gray-400">Контекст анализа
+          <select aria-label="Контекст анализа" className={`${inputClass} mt-1`} value={String(config.context_source ?? 'answer')}
+            onChange={(event) => onConfigChange({ context_source: event.target.value })}>
+            <option value="answer">Текущий ответ</option><option value="history">Ответ и история диалога</option>
+          </select>
+        </label>
+        <label className="block text-xs text-gray-400">Резерв при недоступности ИИ
+          <select aria-label="Резерв при недоступности ИИ" className={`${inputClass} mt-1`} value={String(config.fallback_type ?? 'answers')}
+            onChange={(event) => onConfigChange({ fallback_type: event.target.value })}>
+            <option value="answers">Заданные варианты ответов</option>
+            <option value="citizenship">Справочник гражданства</option>
+            <option value="none">Выход «Не распознано»</option>
+          </select>
+        </label>
+      </div>}
+
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -303,6 +327,35 @@ export default function AIResponseBlockSettings({
               steps={steps}
               onChange={(value) => updateOutcome(index, { target_step_id: value })}
             />
+            {analysis && step.step_type === 'input' && outcome.id !== 'fallback' && <label className="flex items-center justify-between gap-3 text-xs text-gray-300">
+              Проверять и сохранять ответ вопроса
+              <input type="checkbox" checked={outcome.save_answer !== false}
+                onChange={(event) => updateOutcome(index, { save_answer: event.target.checked })} />
+            </label>}
+            {analysis && outcome.id !== 'fallback' && config.fallback_type !== 'none' && (
+              config.fallback_type === 'citizenship' ? <>
+                <label className="block text-xs text-gray-400">Гражданство для резервного выхода
+                  <select aria-label="Гражданство для резервного выхода" className={`${inputClass} mt-1`} value={outcome.country_match ?? 'listed'}
+                    onChange={(event) => updateOutcome(index, { country_match: event.target.value })}>
+                    <option value="listed">Указанные страны</option><option value="other">Другие определённые страны</option>
+                  </select>
+                </label>
+                {outcome.country_match !== 'other' && <label className="block text-xs text-gray-400">ISO-коды через запятую
+                  <input aria-label="ISO-коды через запятую" key={`${outcome.id}:codes:${config.fallback_type}`} className={`${inputClass} mt-1`}
+                    defaultValue={(outcome.country_codes ?? []).join(', ')} placeholder="RU, UZ"
+                    onBlur={(event) => updateOutcome(index, { country_codes: event.target.value.split(',').map(value => value.trim().toUpperCase()).filter(Boolean) })} />
+                </label>}
+                <label className="block text-xs text-gray-400">Дополнительные резервные ответы, каждый с новой строки
+                  <textarea aria-label="Дополнительные резервные ответы, каждый с новой строки" className={`${inputClass} mt-1`} rows={2}
+                    defaultValue={(outcome.aliases ?? []).join('\n')}
+                    onBlur={(event) => updateOutcome(index, { aliases: event.target.value.split('\n').map(value => value.trim()).filter(Boolean) })} />
+                </label>
+              </> : <label className="block text-xs text-gray-400">Резервные ответы, каждый с новой строки
+                <textarea aria-label="Резервные ответы, каждый с новой строки" key={`${outcome.id}:aliases:${config.fallback_type}`} className={`${inputClass} mt-1`} rows={3}
+                  defaultValue={(outcome.aliases ?? []).join('\n')}
+                  onBlur={(event) => updateOutcome(index, { aliases: event.target.value.split('\n').map(value => value.trim()).filter(Boolean) })} />
+              </label>
+            )}
           </div>
         ))}
       </div>
@@ -396,14 +449,14 @@ export default function AIResponseBlockSettings({
         ))}
       </div>
 
-      <label className="flex items-center justify-between gap-3 border-y border-white/8 py-3 text-sm text-gray-200">
+      {!analysis && <label className="flex items-center justify-between gap-3 border-y border-white/8 py-3 text-sm text-gray-200">
         <span>Разделять ответ на сообщения</span>
         <input
           type="checkbox"
           checked={config.split_messages !== false}
           onChange={(event) => onConfigChange({ split_messages: event.target.checked })}
         />
-      </label>
+      </label>}
 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
@@ -426,7 +479,7 @@ export default function AIResponseBlockSettings({
           <input
             type="number"
             min="1"
-            max="32000"
+            max={analysis ? 2048 : 32000}
             value={optionalNumber(config.max_output_tokens)}
             onChange={(event) => onConfigChange({
               max_output_tokens: event.target.value === '' ? null : Number(event.target.value),
@@ -435,7 +488,7 @@ export default function AIResponseBlockSettings({
             className={inputClass}
           />
         </label>
-        <label className="block">
+        {!analysis && <label className="block">
           <span className="mb-1 block text-xs text-gray-500">мс на символ</span>
           <input
             type="number"
@@ -448,13 +501,13 @@ export default function AIResponseBlockSettings({
             placeholder="Проект"
             className={inputClass}
           />
-        </label>
+        </label>}
         <label className="block">
           <span className="mb-1 block text-xs text-gray-500">История, сообщений</span>
           <input
             type="number"
             min="1"
-            max="100"
+            max={analysis ? 20 : 100}
             value={optionalNumber(config.history_message_limit)}
             onChange={(event) => onConfigChange({
               history_message_limit: event.target.value === '' ? null : Number(event.target.value),
@@ -463,7 +516,7 @@ export default function AIResponseBlockSettings({
             className={inputClass}
           />
         </label>
-        <label className="block">
+        {!analysis && <label className="block">
           <span className="mb-1 block text-xs text-gray-500">Мин. задержка, мс</span>
           <input
             type="number"
@@ -476,8 +529,8 @@ export default function AIResponseBlockSettings({
             placeholder="Проект"
             className={inputClass}
           />
-        </label>
-        <label className="block">
+        </label>}
+        {!analysis && <label className="block">
           <span className="mb-1 block text-xs text-gray-500">Макс. задержка, мс</span>
           <input
             type="number"
@@ -490,10 +543,10 @@ export default function AIResponseBlockSettings({
             placeholder="Проект"
             className={inputClass}
           />
-        </label>
+        </label>}
       </div>
 
-      <label className="block">
+      {!analysis && <label className="block">
         <span className="mb-1 block text-xs text-gray-500">Сообщение при недоступности ИИ</span>
         <textarea
           value={typeof config.fallback_message === 'string' ? config.fallback_message : ''}
@@ -502,7 +555,7 @@ export default function AIResponseBlockSettings({
           className={`${inputClass} resize-y`}
           placeholder="Необязательно; затем сработает маршрут fallback"
         />
-      </label>
+      </label>}
     </div>
   )
 }

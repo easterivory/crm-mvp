@@ -242,6 +242,9 @@ class FunnelGraphValidator:
             add(config.get(key))
         for key in ("buttons", "choices", "outcomes", "variants"):
             add_from_list(config.get(key), "target_step_id")
+        analysis = config.get("ai_analysis")
+        if isinstance(analysis, dict) and analysis.get("enabled") is True:
+            add_from_list(analysis.get("outcomes"), "target_step_id")
         messages = config.get("messages")
         if isinstance(messages, list):
             for message in messages:

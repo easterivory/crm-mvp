@@ -274,6 +274,78 @@ class AIUsageSummaryOut(BaseModel):
     by_connection: list[AIUsageConnectionSummary]
 
 
+class AIAnalysisPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    next_route_key: str = Field(min_length=1, max_length=100, pattern=r"^[a-z][a-z0-9_]*$")
+    normalized_answer: str | None = Field(default=None, max_length=4000)
+    evidence: str | None = Field(default=None, max_length=4000)
+    extracted_data: dict[str, Any] = Field(default_factory=dict)
+
+
+class AIAnalysisRoute(BaseModel):
+    id: str = Field(min_length=1, max_length=100, pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=255)
+    instruction: str = Field(default="", max_length=1000)
+    target_step_id: UUID | None = None
+    aliases: list[str] = Field(default_factory=list, max_length=100)
+    country_codes: list[str] = Field(default_factory=list, max_length=250)
+    country_match: Literal["listed", "other"] = "listed"
+    save_answer: bool = Field(default=True, strict=True)
+
+    @field_validator("target_step_id", mode="before")
+    @classmethod
+    def empty_target(cls, value):
+        return None if value == "" else value
+
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, value):
+        if any(not item.strip() or len(item) > 255 for item in value):
+            raise ValueError("Резервные варианты должны содержать от 1 до 255 символов.")
+        return value
+
+    @field_validator("country_codes")
+    @classmethod
+    def validate_country_codes(cls, value):
+        from app.services.ai_analysis_fallback_service import country_aliases
+        known = country_aliases()[0]
+        normalized = list(dict.fromkeys(item.strip().upper() for item in value))
+        if any(code not in known for code in normalized):
+            raise ValueError("Укажите существующие ISO-коды стран.")
+        return normalized
+
+
+class AIAnalysisConfig(BaseModel):
+    enabled: bool = Field(default=False, strict=True)
+    step_goal: str = Field(default="", max_length=4000)
+    instructions: str = Field(default="", max_length=4000)
+    fallback_type: Literal["answers", "citizenship", "none"] = "answers"
+    context_source: Literal["answer", "history"] = "answer"
+    connection_id: UUID | None = None
+    model: str | None = Field(default=None, max_length=255)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=2048)
+    history_message_limit: int | None = Field(default=None, ge=1, le=20)
+    outcomes: list[AIAnalysisRoute] = Field(default_factory=list, max_length=30)
+    output_fields: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
+
+    @field_validator("connection_id", mode="before")
+    @classmethod
+    def empty_connection(cls, value):
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def validate_routes(self):
+        if not self.enabled:
+            return self
+        if not self.step_goal.strip():
+            raise ValueError("Для ИИ-анализа укажите цель.")
+        keys = [item.id for item in self.outcomes]
+        if not keys or len(keys) != len(set(keys)) or "fallback" not in keys:
+            raise ValueError("Нужны уникальные выходы ИИ-анализа и выход fallback.")
+        return self
+
+
 class AIResponsePayload(BaseModel):
     messages: list[str] = Field(min_length=1, max_length=5)
     extracted_data: dict[str, Any] = Field(default_factory=dict)

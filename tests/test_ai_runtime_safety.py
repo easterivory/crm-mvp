@@ -224,7 +224,7 @@ def test_model_capabilities_have_legacy_defaults_and_explicit_overrides():
         AIGatewayService.model_options(snapshot(), "gpt-4o")["token_parameter"]
         == "max_tokens"
     )
-    for model in ("o3", "o4-mini", "gpt-5", "gpt-5.2"):
+    for model in ("o3", "o4-mini", "gpt-5", "gpt-5.2", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra"):
         options = AIGatewayService.model_options(snapshot(), model)
         assert options["token_parameter"] == "max_completion_tokens"
         assert options["supports_temperature"] is False
@@ -250,6 +250,55 @@ def test_model_capabilities_have_legacy_defaults_and_explicit_overrides():
         model_options={" new-model ": {"supports_temperature": False}},
     )
     assert list(created.model_options) == ["new-model"]
+
+
+def test_gpt6_capabilities_preserve_other_providers_and_explicit_model_overrides():
+    legacy = AIGatewayService.model_options(snapshot(provider="custom"), "gpt-6-luna")
+    assert legacy["token_parameter"] == "max_tokens" and legacy["supports_temperature"] is True
+    explicit = snapshot(model_options_json={"gpt-6-luna": {
+        "token_parameter": "max_tokens", "supports_temperature": True,
+    }})
+    assert AIGatewayService.model_options(explicit, "gpt-6-luna")["token_parameter"] == "max_tokens"
+    assert AIGatewayService.model_options(explicit, "gpt-6-luna")["supports_temperature"] is True
+
+
+@pytest.mark.parametrize("provider_code,parameter,expected", [
+    ("unsupported_parameter", "max_tokens", "select max_completion_tokens"),
+    ("unsupported_value", "temperature", "disable Temperature"),
+    ("model_not_found", "model", "unavailable or inaccessible"),
+    ("context_length_exceeded", None, "context limit exceeded"),
+    (None, "response_format", "request rejected for parameter (response_format)"),
+])
+def test_provider_error_reports_safe_protocol_diagnostics(provider_code, parameter, expected):
+    response = httpx.Response(400, json={"error": {
+        "code": provider_code, "param": parameter,
+        "message": "private lead text and sk-private-key must never be persisted",
+    }}, headers={"x-request-id": "req_safe123"})
+    with pytest.raises(AIGatewayError) as caught:
+        AIGatewayService._raise_for_provider_status(response)
+    error = caught.value
+    assert expected in str(error) and "private" not in str(error)
+    assert error.code == "provider_request_rejected" and error.status_code == 400
+    assert not error.retriable and error.provider_request_id == "req_safe123"
+
+
+@pytest.mark.parametrize("body", [
+    {"error": {"code": "sk-private-key", "param": "private lead text", "message": "private"}},
+    {"error": {"code": ["private"], "param": {"private": True}}},
+    {"error": "private"}, ["private"],
+])
+def test_provider_error_does_not_echo_unknown_or_malformed_fields(body):
+    with pytest.raises(AIGatewayError) as caught:
+        AIGatewayService._raise_for_provider_status(httpx.Response(400, json=body, headers={"x-request-id": "sk-private-key"}))
+    assert str(caught.value) == "Provider returned HTTP 400"
+    assert caught.value.provider_request_id is None
+
+
+@pytest.mark.parametrize("body", [b"<html>private</html>", b"\xff", b"x" * 65537])
+def test_provider_error_accepts_non_json_or_oversized_error_responses(body):
+    with pytest.raises(AIGatewayError) as caught:
+        AIGatewayService._raise_for_provider_status(httpx.Response(400, content=body))
+    assert str(caught.value) == "Provider returned HTTP 400"
 
 
 def test_budget_requires_complete_finite_prices_and_usage():

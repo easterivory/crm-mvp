@@ -12,7 +12,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import ValidationError
 
-from app.schemas.ai import AIResponsePayload
+from app.schemas.ai import AIAnalysisPayload, AIResponsePayload
 from app.core.ai_provider_security import provider_request
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class AIProviderSnapshot:
 
 @dataclass(frozen=True)
 class AIGatewayResult:
-    response: AIResponsePayload
+    response: AIResponsePayload | AIAnalysisPayload
     prompt_tokens: int | None
     completion_tokens: int | None
     total_tokens: int | None
@@ -82,7 +82,7 @@ class AIGatewayService:
     @staticmethod
     def model_options(connection: AIProviderSnapshot, model: str) -> dict[str, Any]:
         reasoning = connection.provider == "openai" and bool(
-            re.match(r"^(?:o[134](?:-|$)|gpt-5(?:[.-]|$))", model)
+            re.match(r"^(?:o[134](?:-|$)|gpt-[56](?:[.-]|$))", model)
         )
         options = {
             "token_parameter": "max_completion_tokens" if reasoning else "max_tokens",
@@ -103,6 +103,7 @@ class AIGatewayService:
         messages: Sequence[dict[str, str]],
         temperature: float,
         max_output_tokens: int,
+        analysis: bool = False,
     ) -> AIGatewayResult:
         normalized_model = model.strip()
         if not normalized_model:
@@ -169,7 +170,7 @@ class AIGatewayService:
         try:
             content, _ = (self._gemini_content_and_usage(payload) if connection.api_style == "gemini"
                           else self._openai_content_and_usage(payload))
-            response = self._parse_response(content)
+            response = self._parse_response(content, analysis=analysis)
         except AIGatewayError as exc:
             exc.latency_ms = latency_ms
             exc.prompt_tokens = prompt_tokens
@@ -402,12 +403,12 @@ class AIGatewayService:
         return text, usage
 
     @staticmethod
-    def _parse_response(content: str) -> AIResponsePayload:
+    def _parse_response(content: str, *, analysis: bool = False) -> AIResponsePayload | AIAnalysisPayload:
         match = JSON_FENCE_RE.match(content)
         normalized = match.group(1) if match else content.strip()
         try:
             payload = json.loads(normalized)
-            return AIResponsePayload.model_validate(payload)
+            return (AIAnalysisPayload if analysis else AIResponsePayload).model_validate(payload)
         except (json.JSONDecodeError, ValidationError, TypeError) as exc:
             raise AIGatewayError(
                 "Model did not return the required JSON structure",
@@ -478,10 +479,44 @@ class AIGatewayService:
             code = "provider_request_rejected"
         message = f"Provider returned HTTP {status_code}"
         # Provider error bodies can echo credentials and customer prompts.
-        # Persist only protocol diagnostics; request IDs are recorded separately.
+        # Use only allowlisted protocol fields, never the provider's free-form message.
+        diagnostics = {
+            "unsupported_parameter": "unsupported parameter",
+            "unsupported_value": "unsupported parameter value",
+            "invalid_parameter": "invalid parameter",
+            "invalid_value": "invalid parameter value",
+            "model_not_found": "requested model is unavailable or inaccessible",
+            "context_length_exceeded": "model context limit exceeded",
+            "insufficient_quota": "provider quota or balance exhausted",
+            "invalid_api_key": "provider rejected the API key",
+        }
+        allowed_parameters = {"model", "max_tokens", "max_completion_tokens", "temperature",
+                              "top_p", "response_format", "reasoning_effort"}
+        if len(response.content) <= 65536:
+            try:
+                payload = response.json()
+            except (ValueError, UnicodeError):
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(error, dict):
+                diagnostic = diagnostics.get(error.get("code")) if isinstance(error.get("code"), str) else None
+                parameter = error.get("param")
+                if not diagnostic and status_code == 400 and isinstance(parameter, str) and parameter in allowed_parameters:
+                    diagnostic = "request rejected for parameter"
+                if diagnostic:
+                    message += f": {diagnostic}"
+                    if isinstance(parameter, str) and parameter in allowed_parameters:
+                        message += f" ({parameter})"
+                        if parameter == "max_tokens" and error.get("code") == "unsupported_parameter":
+                            message += "; select max_completion_tokens in model compatibility settings"
+                        elif parameter == "temperature" and error.get("code") in {"unsupported_parameter", "unsupported_value"}:
+                            message += "; disable Temperature in model compatibility settings"
+        request_id = response.headers.get("x-request-id", "")
+        safe_request_id = request_id if re.fullmatch(r"req_[A-Za-z0-9_-]{1,200}", request_id) else None
         raise AIGatewayError(
             message,
             code=code,
             status_code=status_code,
             retriable=status_code == 429 or status_code >= 500,
+            provider_request_id=safe_request_id,
         )

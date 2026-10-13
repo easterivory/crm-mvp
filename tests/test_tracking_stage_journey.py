@@ -25,7 +25,7 @@ from app.models.tracking import TrackingLink
 from app.models.tracking_journey import LeadTagHistory, TrackingJourneyConfig
 from app.repositories.tag_repository import TagRepository
 from app.schemas.tracking_journey import JourneyConfig
-from app.services.tracking_stage_journey_service import TrackingStageJourneyService
+from app.services.tracking_stage_journey_service import MSK, TrackingStageJourneyService
 
 
 def make_config(step_keys, tag_id):
@@ -110,6 +110,7 @@ def test_stage_journey_real_database_and_migration():
                 db.add_all([*steps, link]); await db.flush()
                 now = datetime.now(timezone.utc)
                 arrival = now - timedelta(days=5)
+                report_today, report_arrival = now.astimezone(MSK).date(), arrival.astimezone(MSK).date()
                 chats, leads = [], []
                 for i in range(5):
                     chat = Chat(project_id=project.id, bot_id=bot.id, external_chat_id=str(i), external_user_id=str(i), tracking_link_id=link.id)
@@ -139,7 +140,7 @@ def test_stage_journey_real_database_and_migration():
                 automatic = await service.configuration(actor, project.id, funnel.id)
                 assert automatic["config"]["mode"] == "steps" and automatic["is_default"]
                 assert len(automatic["config"]["stages"]) == 3
-                default_filters = dict(date_from=arrival.date(), date_to=now.date())
+                default_filters = dict(date_from=report_arrival, date_to=report_today)
                 default_report = await service.report(actor, project.id, funnel.id, **default_filters)
                 assert [stage["reached"] for stage in default_report["items"]] == [5, 3, 2]
                 assert default_report["outcomes"] is None and default_report["conversion"] is None
@@ -187,7 +188,7 @@ def test_stage_journey_real_database_and_migration():
                     await service.steps.preview(actor, other.id, steps[1].id)
                 assert cross_project.value.status_code == 404
                 await service.save(actor, project.id, funnel.id, config)
-                filters = dict(date_from=arrival.date(), date_to=now.date())
+                filters = dict(date_from=report_arrival, date_to=report_today)
                 report = await service.report(actor, project.id, funnel.id, **filters)
                 assert report["people"] == 5
                 assert [s["reached"] for s in report["items"]] == [5, 3, 2, 1]
@@ -200,13 +201,13 @@ def test_stage_journey_real_database_and_migration():
                     offset=1000, **filters)
                 assert empty_page["total"] == 5 and empty_page["items"] == []
                 empty_period = await service.chats(actor, project.id, funnel.id, config.stages[0].id,
-                    date_from=now.date(), date_to=now.date())
+                    date_from=report_today, date_to=report_today)
                 assert empty_period == {"items": [], "total": 0}
                 origin_detail = await service.chats(actor, project.id, funnel.id, config.stages[-1].id, **filters)
                 assert origin_detail["items"][0]["link_code"] == "stages-fb"
                 assert [s["remaining"] for s in report["items"]] == [2, 1, 1, 0]
                 assert [s["next"] for s in report["items"]] == [3, 2, 1, None]
-                assert len(report["daily"]) == (now.date() - arrival.date()).days + 1
+                assert len(report["daily"]) == (report_today - report_arrival).days + 1
                 assert report["daily"][-1]["people"] == 0
                 repo = TagRepository(db)
                 await repo.remove_tag_from_lead(leads[0].id, vip.id)
@@ -240,7 +241,7 @@ def test_stage_journey_real_database_and_migration():
                 await db.flush()
                 report = await service.report(actor, project.id, funnel.id, **filters)
                 assert report["outcomes"] == 3 and report["offer_conversion"] == pytest.approx(200 / 3)
-                assert (await service.report(actor, project.id, funnel.id, date_from=now.date(), date_to=now.date()))["people"] == 0
+                assert (await service.report(actor, project.id, funnel.id, date_from=report_today, date_to=report_today))["people"] == 0
                 assert (await service.report(buyer, project.id, funnel.id, **filters))["people"] == 5
                 secondary_funnel = Funnel(name="Second", project_id=project.id, bot_id=secondary.id)
                 db.add(secondary_funnel); await db.flush()
@@ -379,10 +380,10 @@ def test_stage_journey_real_database_and_migration():
                     db.add(Message(chat_id=anonymous.id, body="/start", sender_type="user", created_at=now))
                 await db.flush()
                 anonymous_report = await service.report(actor, other.id, other_funnel.id,
-                    date_from=now.date(), date_to=now.date())
+                    date_from=report_today, date_to=report_today)
                 assert anonymous_report["people"] == 3 and anonymous_report["physical_chats"] == 3
                 anonymous_page = await service.chats(actor, other.id, other_funnel.id, other_config.stages[0].id,
-                    date_from=now.date(), date_to=now.date())
+                    date_from=report_today, date_to=report_today)
                 assert anonymous_page["total"] == 3 and len(anonymous_page["items"]) == 3
         finally:
             await engine.dispose()

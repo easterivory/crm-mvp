@@ -127,6 +127,11 @@ class FunnelDropOffAnalyticsOut(BaseModel):
     steps: list[FunnelDropOffStepOut] = Field(default_factory=list)
 
 
+class RepeatedStartDefaults(BaseModel):
+    mode: Literal["continue", "remind"] = "continue"
+    text: str = Field(default="", max_length=4000)
+
+
 class FunnelStepIn(BaseModel):
     id: Optional[uuid.UUID] = None
     key: str = Field(..., min_length=1, max_length=100)
@@ -138,6 +143,29 @@ class FunnelStepIn(BaseModel):
     config_json: dict[str, Any] = Field(default_factory=dict)
     validation_json: Optional[dict[str, Any]] = None
     ui_schema_json: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_repeated_start_settings(self) -> "FunnelStepIn":
+        from app.schemas.ai import AIAnalysisConfig
+        if self.block_type == "ai_analysis":
+            if self.step_type != "integration":
+                raise ValueError("ИИ-анализ должен быть блоком интеграции.")
+            AIAnalysisConfig.model_validate({**self.config_json, "enabled": True})
+        if "ai_analysis" in self.config_json:
+            if self.step_type != "input":
+                raise ValueError("Опция ИИ-анализа доступна только в вопросах.")
+            AIAnalysisConfig.model_validate(self.config_json["ai_analysis"])
+        if "repeat_start_defaults" in self.config_json:
+            if self.step_type != "trigger" or self.config_json.get("trigger_type") == "custom_command":
+                raise ValueError("Общие настройки повторного /start задаются в обычном стартовом блоке.")
+            RepeatedStartDefaults.model_validate(self.config_json["repeat_start_defaults"])
+        if "repeat_start_mode" in self.config_json:
+            mode = self.config_json["repeat_start_mode"]
+            if not isinstance(mode, str) or mode not in {"inherit", "continue", "remind"}:
+                raise ValueError("Некорректная реакция на повторный /start.")
+            if self.config_json["repeat_start_mode"] == "remind" and self.step_type not in {"message", "input"}:
+                raise ValueError("Напоминание доступно для сообщений и вопросов.")
+        return self
 
 
 class FunnelStepOut(OrmBase):

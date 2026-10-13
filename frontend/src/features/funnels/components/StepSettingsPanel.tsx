@@ -16,11 +16,13 @@ import {
 import type { FunnelStep } from '../types'
 import AbTestBlockSettings from './AbTestBlockSettings'
 import AIResponseBlockSettings from './AIResponseBlockSettings'
+import AIQuestionAnalysisSettings from './AIQuestionAnalysisSettings'
 import ConditionBlockSettings from './ConditionBlockSettings'
 import InputBlockSettings from './InputBlockSettings'
 import MessageBlockSettings from './MessageBlockSettings'
 import { TargetSelect } from './ButtonListEditor'
 import UnsupportedBlockCard from './UnsupportedBlockCard'
+import { RepeatedStartModeSelect } from './RepeatedStartSettings'
 
 type StepSettingsPanelProps = {
   step: FunnelStep | null
@@ -202,6 +204,12 @@ export default function StepSettingsPanel({
               onChange={(event) => onUpdate(step.id, { ui_schema_json: { ...step.ui_schema_json, description: event.target.value } })}
               className="mt-1 w-full rounded border border-white/10 bg-background/70 p-2 text-sm text-gray-100" />
           </label>
+          {(step.step_type === 'message' || step.step_type === 'input') && <RepeatedStartModeSelect
+            inherit
+            value={step.config_json.repeat_start_mode === 'continue' || step.config_json.repeat_start_mode === 'remind'
+              ? step.config_json.repeat_start_mode : 'inherit'}
+            onChange={(mode) => patchConfig({ repeat_start_mode: mode })}
+          />}
         </div>
       </div>
 
@@ -770,8 +778,12 @@ export default function StepSettingsPanel({
             </div>
           ) : null}
 
-          {step.block_type === 'ai_response' ? (
+          {step.step_type === 'input' && <AIQuestionAnalysisSettings step={step} steps={steps}
+            projectId={projectId} onChange={(ai_analysis) => patchConfig({ ai_analysis })} />}
+
+          {step.block_type === 'ai_response' || step.block_type === 'ai_analysis' ? (
             <AIResponseBlockSettings
+              analysis={step.block_type === 'ai_analysis'}
               step={step}
               projectId={projectId}
               steps={steps}
@@ -779,7 +791,7 @@ export default function StepSettingsPanel({
             />
           ) : null}
 
-          {step.step_type === 'integration' && step.block_type !== 'ai_response' ? (
+          {step.step_type === 'integration' && !['ai_response', 'ai_analysis'].includes(step.block_type) ? (
             <label className="block">
               <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                 URL

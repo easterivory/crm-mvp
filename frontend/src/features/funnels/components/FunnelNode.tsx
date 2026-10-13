@@ -76,7 +76,7 @@ const headerByType = {
 }
 
 function previewLines(step: FunnelStep) {
-  if (step.block_type === 'ai_response') {
+  if (step.block_type === 'ai_response' || step.block_type === 'ai_analysis') {
     const goal = textValue(step.config_json, 'step_goal') || 'Цель не настроена'
     const model = textValue(step.config_json, 'model')
     return model ? [goal, `Модель: ${model}`] : [goal, 'Модель проекта']
@@ -163,7 +163,7 @@ function previewLines(step: FunnelStep) {
 
 export default function FunnelNode({ data, selected, isConnectable }: NodeProps<FunnelFlowNode>) {
   const { step, stepNumber, onDelete } = data
-  const Icon = step.block_type === 'ai_response'
+  const Icon = step.block_type === 'ai_response' || step.block_type === 'ai_analysis'
     ? BrainCircuit
     : iconByType[step.step_type] ?? Bell
   const isSupported = mvpBlockTypes.has(step.block_type)

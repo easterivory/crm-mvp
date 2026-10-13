@@ -1,4 +1,5 @@
 import type { FunnelStepType } from './types'
+import { defaultAnalysisConfig } from './funnelConfig'
 
 export type BlockMenuItem = {
   stepType: FunnelStepType
@@ -174,6 +175,14 @@ export const universalBlocks: UniversalBlock[] = [
   },
   {
     stepType: 'integration',
+    blockType: 'ai_analysis',
+    label: 'ИИ-анализ',
+    defaultTitle: 'ИИ-анализ',
+    description: 'Анализирует ответ и выбирает выход без отправки сообщения.',
+    defaultConfig: defaultAnalysisConfig,
+  },
+  {
+    stepType: 'integration',
     blockType: 'ai_response',
     label: 'ИИ-ответ',
     defaultTitle: 'ИИ-ответ',
@@ -230,7 +239,7 @@ export const blockGroups: BlockMenuGroup[] = [
     title: 'Интеграции',
     accent: 'violet',
     items: universalBlocks.filter((item) =>
-      ['ai_response', 'generic_integration'].includes(item.blockType),
+      ['ai_response', 'ai_analysis', 'generic_integration'].includes(item.blockType),
     ),
   },
   {
@@ -330,6 +339,7 @@ export const legacyBlockGroups: BlockMenuGroup[] = [
       { stepType: 'delay', blockType: 'generic_delay', label: 'Таймер', defaultTitle: 'Ожидание' },
       { stepType: 'operator', blockType: 'generic_operator', label: 'Оператор', defaultTitle: 'Оператор' },
       { stepType: 'operator', blockType: 'manager_review', label: 'Проверка менеджером', defaultTitle: 'Проверка менеджером' },
+      { stepType: 'integration', blockType: 'ai_analysis', label: 'ИИ-анализ', defaultTitle: 'ИИ-анализ', defaultConfig: defaultAnalysisConfig },
       {
         stepType: 'integration',
         blockType: 'ai_response',
