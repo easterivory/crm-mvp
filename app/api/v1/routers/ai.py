@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+import logging
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -37,6 +39,17 @@ from app.services.ai_gateway_service import (
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+logger = logging.getLogger(__name__)
+
+PROVIDER_TEST_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "messages": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 1},
+        "extracted_data": {"type": "object", "properties": {}, "additionalProperties": False},
+        "next_route_key": {"type": "string", "enum": ["continue"]},
+    },
+    "required": ["messages", "extracted_data", "next_route_key"],
+}
 
 
 @router.get("/providers", response_model=list[AIProviderConnectionOut])
@@ -186,19 +199,27 @@ async def test_ai_provider(
     await db.rollback()
     gateway = AIGatewayService()
     test_token_limit = 1024 if gateway.model_options(snapshot, model)["token_parameter"] == "max_completion_tokens" else 100
+    strict_probe = snapshot.provider == "openai" and bool(re.match(r"^gpt-6(?:[.-]|$)", model))
     try:
         result = await gateway.execute(
             connection=snapshot,
             model=model,
             system_prompt=(
-                "Return only valid JSON with keys messages, extracted_data and "
-                "next_route_key. messages must contain one short confirmation."
+                'Return exactly this JSON object without Markdown or additional text: '
+                '{"messages":["Connection OK"],"extracted_data":{},"next_route_key":"continue"}. '
+                'messages must be an array of strings, extracted_data an empty object, next_route_key a string.'
             ),
             messages=[{"role": "user", "content": "Проверка подключения"}],
             temperature=0,
             max_output_tokens=test_token_limit,
+            **({"response_schema": PROVIDER_TEST_SCHEMA} if strict_probe else {}),
         )
     except (AIGatewayError, AICredentialError) as exc:
+        logger.warning(
+            "AI connection test failed connection_id=%s code=%s latency_ms=%s total_tokens=%s",
+            connection_id, getattr(exc, "code", "credential_error"),
+            getattr(exc, "latency_ms", None), getattr(exc, "total_tokens", None),
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return AIProviderTestOut(
         ok=True,

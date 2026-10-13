@@ -301,6 +301,42 @@ def test_provider_error_accepts_non_json_or_oversized_error_responses(body):
     assert str(caught.value) == "Provider returned HTTP 400"
 
 
+def test_connection_probe_schema_is_explicit_without_changing_default_json_mode():
+    from app.api.v1.routers.ai import PROVIDER_TEST_SCHEMA
+    format = AIGatewayService.response_format(PROVIDER_TEST_SCHEMA)
+    assert format["type"] == "json_schema" and format["json_schema"]["strict"] is True
+    schema = format["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["messages", "extracted_data", "next_route_key"]
+    assert schema["properties"]["messages"]["type"] == "array"
+    assert schema["properties"]["extracted_data"]["additionalProperties"] is False
+    assert AIGatewayService.response_format() == {"type": "json_object"}
+    response = AIGatewayService._parse_response('{"messages":["Connection OK"],"extracted_data":{},"next_route_key":"continue"}')
+    assert response.messages == ["Connection OK"]
+
+
+def test_json_diagnostics_distinguish_invalid_syntax_and_schema_without_echoing_values():
+    with pytest.raises(AIGatewayError) as syntax:
+        AIGatewayService._parse_response('{"messages": ["private text",')
+    assert "invalid or incomplete JSON" in str(syntax.value) and "private" not in str(syntax.value)
+    with pytest.raises(AIGatewayError) as schema:
+        AIGatewayService._parse_response('{"messages":"sk-private-key","extracted_data":{},"next_route_key":"continue"}')
+    assert "invalid or missing fields: messages" in str(schema.value) and "private" not in str(schema.value)
+    assert syntax.value.code == schema.value.code == "invalid_structured_output"
+    with pytest.raises(AIGatewayError) as analysis:
+        AIGatewayService._parse_response('{"next_route_key":"fallback","private-field":"sk-private-key"}', analysis=True)
+    assert "private" not in str(analysis.value)
+
+
+def test_provider_refusal_is_not_mistaken_for_a_broken_json_reply():
+    with pytest.raises(AIGatewayError) as caught:
+        AIGatewayService._openai_content_and_usage({"choices": [{"message": {
+            "content": None, "refusal": "private text must not be echoed",
+        }}]})
+    assert caught.value.code == "model_refusal" and not caught.value.retriable
+    assert "private" not in str(caught.value)
+
+
 def test_budget_requires_complete_finite_prices_and_usage():
     connection = snapshot(
         pricing_json={

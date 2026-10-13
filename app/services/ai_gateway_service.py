@@ -94,6 +94,14 @@ class AIGatewayService:
             options.update({key: value for key, value in overrides.items() if value is not None})
         return options
 
+    @staticmethod
+    def response_format(response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
+        if response_schema is None:
+            return {"type": "json_object"}
+        return {"type": "json_schema", "json_schema": {
+            "name": "crm_connection_test", "strict": True, "schema": response_schema,
+        }}
+
     async def execute(
         self,
         *,
@@ -104,6 +112,7 @@ class AIGatewayService:
         temperature: float,
         max_output_tokens: int,
         analysis: bool = False,
+        response_schema: dict[str, Any] | None = None,
     ) -> AIGatewayResult:
         normalized_model = model.strip()
         if not normalized_model:
@@ -140,6 +149,7 @@ class AIGatewayService:
                     messages=messages,
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
+                    **({"response_schema": response_schema} if response_schema is not None else {}),
                 )
                 usage = payload.get("usage") or {}
                 if not isinstance(usage, dict):
@@ -172,13 +182,21 @@ class AIGatewayService:
                           else self._openai_content_and_usage(payload))
             response = self._parse_response(content, analysis=analysis)
         except AIGatewayError as exc:
+            choices = payload.get("choices") if connection.api_style != "gemini" else payload.get("candidates")
+            candidate = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+            finish = candidate.get("finish_reason") or candidate.get("finishReason")
+            if isinstance(finish, str) and finish in {"length", "MAX_TOKENS"} and exc.code in {"empty_provider_response", "invalid_structured_output"}:
+                exc = AIGatewayError(
+                    "Model exhausted the output token limit before completing JSON; increase the output token limit (reasoning tokens also count)",
+                    code="output_token_limit", retriable=False,
+                )
             exc.latency_ms = latency_ms
             exc.prompt_tokens = prompt_tokens
             exc.completion_tokens = completion_tokens
             exc.total_tokens = total_tokens
             exc.estimated_cost_usd = estimated_cost_usd
             exc.provider_request_id = request_id
-            raise
+            raise exc
         return AIGatewayResult(
             response=response,
             prompt_tokens=prompt_tokens,
@@ -243,6 +261,7 @@ class AIGatewayService:
         messages: Sequence[dict[str, str]],
         temperature: float,
         max_output_tokens: int,
+        response_schema: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         payload: dict[str, Any] = {
             "model": model,
@@ -262,7 +281,7 @@ class AIGatewayService:
         if options["supports_temperature"]:
             payload["temperature"] = temperature
         if options["supports_json_mode"]:
-            payload["response_format"] = {"type": "json_object"}
+            payload["response_format"] = self.response_format(response_schema)
 
         try:
             response = await provider_request(
@@ -353,6 +372,8 @@ class AIGatewayService:
                 retriable=True,
             )
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(message, dict) and message.get("refusal"):
+            raise AIGatewayError("Model refused to produce the requested response", code="model_refusal", retriable=False)
         content = message.get("content") if isinstance(message, dict) else None
         if isinstance(content, list):
             content = "".join(
@@ -409,9 +430,17 @@ class AIGatewayService:
         try:
             payload = json.loads(normalized)
             return (AIAnalysisPayload if analysis else AIResponsePayload).model_validate(payload)
-        except (json.JSONDecodeError, ValidationError, TypeError) as exc:
+        except json.JSONDecodeError as exc:
             raise AIGatewayError(
-                "Model did not return the required JSON structure",
+                f"Model returned invalid or incomplete JSON (line {exc.lineno}, column {exc.colno})",
+                code="invalid_structured_output", retriable=True,
+            ) from exc
+        except ValidationError as exc:
+            known_fields = {"messages", "extracted_data", "next_route_key", "normalized_answer", "evidence"}
+            fields = sorted({str(error["loc"][0]) for error in exc.errors(include_input=False, include_context=False)
+                             if error.get("loc") and error["loc"][0] in known_fields})
+            raise AIGatewayError(
+                "Model returned JSON with invalid or missing fields" + (": " + ", ".join(fields) if fields else ""),
                 code="invalid_structured_output",
                 retriable=True,
             ) from exc
