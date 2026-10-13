@@ -38,7 +38,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1420,7 +1420,8 @@ class TelegramService:
             return None
         run_at = await self.db.scalar(select(FunnelScheduledJob.run_at).where(
             FunnelScheduledJob.chat_id == chat.id,
-            FunnelScheduledJob.funnel_state_id == state.id,
+            FunnelScheduledJob.funnel_version_id == state.funnel_version_id,
+            or_(FunnelScheduledJob.funnel_state_id == state.id, FunnelScheduledJob.funnel_state_id.is_(None)),
             FunnelScheduledJob.step_id == step.id,
             FunnelScheduledJob.status.in_(["pending", "running"]),
         ).order_by(FunnelScheduledJob.run_at).limit(1))
@@ -1685,10 +1686,12 @@ class TelegramService:
                 )
                 return
 
-            outcome = await self.funnel_runtime.process_repeated_start(chat_id=chat.id)
+            engagement_version_id = state.funnel_version_id if state is not None else active_funnel_version_id
+            engagement_step_id = state.current_step_id if state is not None else None
+            outcome = await self.funnel_runtime.process_repeated_start(chat_id=chat.id, message_id=user_message.id)
             logger.info(
-                "Repeated start engagement handled chat_id=%s version_id=%s state=%s outcome=%s",
-                chat.id, active_funnel_version_id, status_name, outcome,
+                "Repeated start engagement handled chat_id=%s version_id=%s step_id=%s message_id=%s state=%s outcome=%s",
+                chat.id, engagement_version_id, engagement_step_id, user_message.id, status_name, outcome,
             )
             return
 

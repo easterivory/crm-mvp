@@ -13,6 +13,7 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 import httpx
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import DBAPIError
 
@@ -27,7 +28,7 @@ from app.core.telegram_commands import (
 )
 from app.models.lead import Lead
 from app.models.user import User
-from app.models.funnel import FunnelScheduledJob, FunnelStep, FunnelVersion
+from app.models.funnel import ChatFunnelState, FunnelEdge, FunnelScheduledJob, FunnelStep, FunnelVersion
 from app.repositories.bot_repository import BotRepository
 from app.repositories.broadcast_repository import BroadcastRepository
 from app.repositories.chat_repository import ChatRepository
@@ -705,40 +706,107 @@ class FunnelRuntimeService:
             return None
         return await self.move_to_next_step(chat_id=chat_id, edge_id=edge.id)
 
-    async def process_repeated_start(self, *, chat_id: UUID) -> str:
+    async def process_repeated_start(self, *, chat_id: UUID, message_id: UUID | None = None) -> str:
         """Treat /start as engagement, never as a field value or a button choice."""
         state = await self.repo.get_chat_funnel_state(chat_id)
         if state is None or state.completed_at is not None:
             return "inactive"
         if state.is_paused:
             return "paused"
-        if not state.waiting_for_answer:
-            return "not_waiting"
         step = await self.repo.get_step(state.current_step_id)
-        if step is None or not self._is_message_step(step):
+        if step is None:
             return "data_answer_required"
         mappings = await self.repo.list_field_mappings(state.funnel_version_id)
         if any(mapping.step_id == step.id for mapping in mappings):
             return "data_answer_required"
+        if self._is_message_step(step) and self._input_target_field(step) is not None:
+            return "data_answer_required"
+        free_question = (
+            self._is_input_step(step)
+            and self._input_answer_type(step) == "text"
+            and self._input_target_field(step) is None
+            and all(button.get("type") == "url" for button in self._buttons_from_step(step))
+        )
+        if not self._is_message_step(step) and not free_question:
+            return "data_answer_required"
+        runtime = dict(state.runtime_json or {})
+        previous = runtime.get("last_engagement")
+        if message_id is not None and isinstance(previous, dict) and previous.get("message_id") == str(message_id):
+            return "already_processed"
+        if not state.waiting_for_answer or self._is_input_prompt_pending(runtime, step):
+            pending_job = await self.db.scalar(select(FunnelScheduledJob.id).where(
+                FunnelScheduledJob.chat_id == chat_id, FunnelScheduledJob.funnel_version_id == state.funnel_version_id,
+                or_(FunnelScheduledJob.funnel_state_id == state.id, FunnelScheduledJob.funnel_state_id.is_(None)),
+                FunnelScheduledJob.step_id == step.id, FunnelScheduledJob.status.in_(["pending", "running"]),
+                FunnelScheduledJob.job_type.in_(["message_sequence", "input_prompt"])).limit(1))
+            if pending_job is None:
+                return "not_waiting"
+            pending = runtime.get("pending_start_engagement")
+            if not self._start_engagement_matches_visit(pending, state):
+                runtime["pending_start_engagement"] = self._start_engagement_marker(state, message_id)
+                await self.repo.update_chat_funnel_runtime(chat_id=chat_id, runtime_json=runtime)
+            logger.info("Repeated start preserved until prompt is ready chat_id=%s step_id=%s message_id=%s job_id=%s",
+                        chat_id, step.id, message_id, pending_job)
+            return "engagement_pending"
+        edges = [edge for edge in await self.repo.list_edges(state.funnel_version_id)
+                 if edge.from_step_id == step.id]
+        if free_question:
+            default = self._engagement_default_edge(edges, input_step=True)
+            if edges and default is None:
+                return "button_choice_required"
+            runtime.pop("pending_start_engagement", None)
+            runtime["last_engagement"] = self._start_engagement_marker(state, message_id)
+            await self.repo.update_chat_funnel_runtime(chat_id=chat_id, runtime_json=runtime)
+            # A free-text engagement question has no field to overwrite. Store
+            # the actual /start answer in runtime, not a fabricated keyword.
+            runtime = self._runtime_with_answer(runtime, step_id=step.id, answer="/start")
+            await self.repo.upsert_chat_funnel_state(
+                chat_id=chat_id, funnel_id=state.funnel_id, funnel_version_id=state.funnel_version_id,
+                current_step_id=step.id, entered_step_at=state.entered_step_at,
+                waiting_for_answer=False, runtime_json=runtime,
+            )
+            await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id, step_id=step.id)
+            await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
+            if default is None:
+                await self._mark_completed(chat_id, step=step)
+            else:
+                next_step = await self.move_to_next_step(chat_id=chat_id, edge_id=default.id)
+                if next_step is not None:
+                    await self._execute_from_step(chat_id=chat_id, step=next_step, answer="/start")
+            return "continued"
         index = self._waiting_message_index(step, state.runtime_json)
         messages = self._message_sequence(step)
+        if index is None and len(messages) == 1:
+            index = 0
         if index is None or index >= len(messages):
             return "not_waiting_for_message"
         remaining = index + 1 < len(messages)
-        edges = [edge for edge in await self.repo.list_edges(state.funnel_version_id)
-                 if edge.from_step_id == step.id]
-        default = next((edge for edge in edges if
-                        (edge.condition_json or {}).get("source_key") in {"message:next", "message:default"}
-                        or not edge.condition_json), None)
-        if edges and default is None:
+        default = self._engagement_default_edge(edges)
+        timer_target = (step.config_json or {}).get("timeout_target_step_id") if self._message_auto_advance_seconds(step) else None
+        if default is None and not remaining and timer_target:
+            try:
+                target_id = UUID(str(timer_target))
+            except (TypeError, ValueError):
+                return "invalid_engagement_target"
+            target = await self.repo.get_step(target_id)
+            if target is None or target.funnel_version_id != state.funnel_version_id:
+                return "invalid_engagement_target"
+        choice_buttons = [button for button in self._buttons_from_message_item(messages[index]) if button.get("type") != "url"]
+        future_wait = remaining and (
+            bool(timer_target) or any(
+                self._message_item_waits_for_answer(item) or (
+                    bool(self._buttons_from_message_item(item)) and not (
+                        self._message_item_continues_after_buttons(item)
+                        and self._buttons_support_automatic_continue(self._buttons_from_message_item(item))))
+                for item in messages[index + 1:]))
+        if edges and default is None and not (not remaining and timer_target) and not (future_wait and not choice_buttons):
             return "button_choice_required"
-        if remaining and default is not None and any(edge.id != default.id for edge in edges):
+        if remaining and choice_buttons and default is not None and any(edge.id != default.id for edge in edges):
             return "button_choice_required"
-        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id)
-        runtime = dict(state.runtime_json or {})
+        await self.repo.cancel_scheduled_jobs_for_chat(chat_id=chat_id, step_id=step.id)
         runtime.pop("message_auto_advance", None)
-        runtime["last_engagement"] = {"type": "repeated_start", "step_id": str(step.id),
-                                      "at": datetime.now(timezone.utc).isoformat()}
+        runtime.pop("pending_start_engagement", None)
+        runtime["last_engagement"] = self._start_engagement_marker(state, message_id)
         await self.repo.upsert_chat_funnel_state(
             chat_id=chat_id, funnel_id=state.funnel_id, funnel_version_id=state.funnel_version_id,
             current_step_id=step.id, entered_step_at=state.entered_step_at,
@@ -746,15 +814,65 @@ class FunnelRuntimeService:
         )
         await self._log_step_event(chat_id=chat_id, step=step, event_type="answered")
         if remaining:
-            next_step = await self._execute_message_sequence(chat_id=chat_id, step=step, start_index=index + 1)
+            next_step = await self._execute_message_sequence(chat_id=chat_id, step=step, start_index=index + 1,
+                completion_edge_id=default.id if default is not None else None)
         elif default is not None:
             next_step = await self.move_to_next_step(chat_id=chat_id, edge_id=default.id)
+        elif timer_target:
+            next_step = await self._move_to_step_id(chat_id=chat_id, from_step=step, target_step_id=timer_target)
         else:
             await self._mark_completed(chat_id, step=step)
             next_step = None
         if next_step is not None and next_step.id != step.id:
             await self._execute_from_step(chat_id=chat_id, step=next_step)
         return "continued"
+
+    @staticmethod
+    def _start_engagement_marker(state: ChatFunnelState, message_id: UUID | None) -> dict[str, Any]:
+        return {"type": "repeated_start", "state_id": str(state.id), "step_id": str(state.current_step_id),
+                "version_id": str(state.funnel_version_id), "visit": AIDeliveryStateService.visit(state),
+                "message_id": str(message_id) if message_id else None, "at": datetime.now(timezone.utc).isoformat()}
+
+    @staticmethod
+    def _start_engagement_matches_visit(marker: Any, state: ChatFunnelState) -> bool:
+        return isinstance(marker, dict) and (
+            marker.get("state_id") == str(state.id) and marker.get("step_id") == str(state.current_step_id)
+            and marker.get("version_id") == str(state.funnel_version_id)
+            and marker.get("visit") == AIDeliveryStateService.visit(state)
+        )
+
+    @staticmethod
+    def _engagement_default_edge(edges: list[FunnelEdge], *, input_step: bool = False) -> FunnelEdge | None:
+        source_keys = {"input:answer", "input:next", "input:default"} if input_step else {"message:next", "message:default"}
+        for edge in edges:
+            condition = edge.condition_json or {}
+            if not condition or condition.get("source_key") in source_keys:
+                return edge
+            if not condition.get("source_key") and not any(condition.get(key) for key in ("value", "button_value", "choice")):
+                label = str(condition.get("outcome") or condition.get("label") or "").strip().lower()
+                if label in ({"далее", "next", "default", "ответ", "answer"} if input_step else {"далее", "next", "default"}):
+                    return edge
+        return None
+
+    async def _consume_pending_start_engagement(self, *, chat_id: UUID, step: FunnelStep) -> str | None:
+        state = await self.repo.get_chat_funnel_state(chat_id)
+        pending = (state.runtime_json or {}).get("pending_start_engagement") if state is not None else None
+        if not isinstance(pending, dict):
+            return None
+        if state.current_step_id != step.id or state.is_paused or state.completed_at is not None:
+            return None
+        matches = self._start_engagement_matches_visit(pending, state)
+        runtime = dict(state.runtime_json or {})
+        runtime.pop("pending_start_engagement", None)
+        await self.repo.update_chat_funnel_runtime(chat_id=chat_id, runtime_json=runtime)
+        if not matches:
+            logger.info("Discarding repeated start from obsolete visit chat_id=%s step_id=%s", chat_id, step.id)
+            return None
+        outcome = await self.process_repeated_start(chat_id=chat_id,
+            message_id=UUID(pending["message_id"]) if pending.get("message_id") else None)
+        logger.info("Deferred repeated start applied chat_id=%s step_id=%s message_id=%s outcome=%s",
+                    chat_id, step.id, pending.get("message_id"), outcome)
+        return outcome
 
     async def process_incoming_message(
         self,
@@ -1449,6 +1567,7 @@ class FunnelRuntimeService:
                 start_index=index,
                 skip_delay_at_start=True,
                 skip_chat_action_at_start=payload.get("chat_action_completed") is True,
+                **({"completion_edge_id": payload["completion_edge_id"]} if payload.get("completion_edge_id") else {}),
             )
             if next_step is not None and next_step.id != step.id:
                 await self._execute_from_step(chat_id=job.chat_id, step=next_step)
@@ -1534,6 +1653,8 @@ class FunnelRuntimeService:
                 runtime_json=runtime_json,
             )
             await self._send_input_prompt(chat_id=job.chat_id, step=step)
+            if await self._consume_pending_start_engagement(chat_id=job.chat_id, step=step) == "continued":
+                return
             await self._schedule_input_timeout(chat_id=job.chat_id, step=step)
             return
 
@@ -1680,6 +1801,8 @@ class FunnelRuntimeService:
                         waiting_for_answer=True,
                     )
                 await self._send_input_prompt(chat_id=chat_id, step=current)
+                if await self._consume_pending_start_engagement(chat_id=chat_id, step=current) == "continued":
+                    return None
                 await self._schedule_input_timeout(chat_id=chat_id, step=current)
                 return current
 
@@ -1780,6 +1903,7 @@ class FunnelRuntimeService:
         answer: Any | None = None,
         skip_delay_at_start: bool = False,
         skip_chat_action_at_start: bool = False,
+        completion_edge_id: UUID | str | None = None,
     ) -> Optional[FunnelStep]:
         messages = self._message_sequence(step)
         if not messages:
@@ -1797,7 +1921,8 @@ class FunnelRuntimeService:
                     step=step,
                     job_type="message_sequence",
                     delay_seconds=delay_seconds,
-                    payload_json={"message_index": index},
+                    payload_json={"message_index": index, **(
+                        {"completion_edge_id": str(completion_edge_id)} if completion_edge_id else {})},
                 )
                 logger.info(
                     "Scheduled message sequence chat_id=%s step_id=%s index=%s delay_seconds=%s",
@@ -1825,6 +1950,7 @@ class FunnelRuntimeService:
                         "message_index": index,
                         "chat_action_completed": True,
                         "chat_action": chat_action,
+                        **({"completion_edge_id": str(completion_edge_id)} if completion_edge_id else {}),
                     },
                 )
                 if scheduled_job_id is not None:
@@ -1899,6 +2025,8 @@ class FunnelRuntimeService:
                         waiting_for_answer=True,
                         runtime_json=runtime_json,
                     )
+                    if await self._consume_pending_start_engagement(chat_id=chat_id, step=step) == "continued":
+                        return None
                     if auto_advance_seconds > 0:
                         await self._schedule_job(
                             chat_id=chat_id, step=step, job_type="message_auto_advance",
@@ -1907,6 +2035,17 @@ class FunnelRuntimeService:
                 return step
             index += 1
 
+        if completion_edge_id:
+            state = await self.repo.get_chat_funnel_state(chat_id)
+            if state is None or state.is_paused or state.completed_at is not None or state.current_step_id != step.id:
+                return None
+            edges = [edge for edge in await self.repo.list_edges(state.funnel_version_id) if edge.from_step_id == step.id]
+            completion = next((edge for edge in edges if str(edge.id) == str(completion_edge_id)), None)
+            if completion is None:
+                logger.warning("Repeated-start continuation edge unavailable chat_id=%s step_id=%s edge_id=%s",
+                               chat_id, step.id, completion_edge_id)
+                return step
+            return await self.move_to_next_step(chat_id=chat_id, edge_id=completion.id)
         return await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
 
     @staticmethod
@@ -4841,6 +4980,7 @@ class FunnelRuntimeService:
     ) -> dict:
         runtime = dict(runtime_json or {})
         runtime.pop("message_auto_advance", None)
+        runtime.pop("pending_start_engagement", None)
         runtime["last_answer"] = answer
         runtime["last_answer_step_id"] = str(step_id)
         retries = dict(runtime.get("input_retries") or {})
@@ -4871,6 +5011,7 @@ class FunnelRuntimeService:
     ) -> dict:
         runtime = dict(runtime_json or {}) if preserve_answers else {}
         runtime.pop("manual_review", None)
+        runtime.pop("pending_start_engagement", None)
         runtime.pop("input_prompt_pending_step_id", None)
         runtime.pop("message_sequence", None)
         runtime.pop("no_reply", None)
