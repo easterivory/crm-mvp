@@ -133,7 +133,7 @@ def test_client_message_after_latest_outgoing_is_unanswered() -> None:
 
 
 def test_telegram_user_block_pauses_active_funnel() -> None:
-    chat = SimpleNamespace(id=uuid4())
+    chat = SimpleNamespace(id=uuid4(), is_blocked_by_user=True)
     state = SimpleNamespace(completed_at=None, is_paused=False)
     service = ChatUserBlockService.__new__(ChatUserBlockService)
     service.chat_repo = SimpleNamespace(

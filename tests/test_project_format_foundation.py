@@ -44,7 +44,7 @@ class ConfidenceBackwardCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         )
         service.identity = SimpleNamespace(
             normalize_phone=lambda value: None,
-            find_duplicates=AsyncMock(return_value=[]),
+            count_duplicates=AsyncMock(return_value=0),
         )
         return service
 

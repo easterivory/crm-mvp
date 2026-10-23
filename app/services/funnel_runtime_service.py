@@ -2350,6 +2350,7 @@ class FunnelRuntimeService:
                 raise RuntimeError("Funnel media upload file is missing from private storage")
 
             telegram_result = await self.message_service._send_media_to_telegram_by_type(
+                allow_restricted_media_fallback=True,
                 parse_mode=parse_mode,
                 media_type=normalized_type,
                 media=path,
@@ -3068,6 +3069,9 @@ class FunnelRuntimeService:
                         step.id,
                         action_type,
                     )
+            except DBAPIError:
+                # A failed SQL transaction cannot be used to write the error log.
+                raise
             except Exception as exc:
                 await self._log_runtime_step(
                     chat_id=chat_id,

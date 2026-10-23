@@ -51,7 +51,7 @@ class LeadConfidenceTests(unittest.IsolatedAsyncioTestCase):
         ))
         service.identity = SimpleNamespace(
             normalize_phone=lambda value: None,
-            find_duplicates=AsyncMock(return_value=[SimpleNamespace(id=uuid4())]),
+            count_duplicates=AsyncMock(return_value=1),
         )
 
         result = await service.calculate_confidence(lead)

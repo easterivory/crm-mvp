@@ -46,7 +46,7 @@ from app.schemas.message import MessageCreate, MessageOut, MessageReplyOut, Mess
 from app.services.access_control import has_project_access
 from app.services.chat_service import ChatService
 from app.services.chat_photo_album import AlbumPhoto, prepare_album
-from app.services.telegram_sender import TelegramSenderService
+from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderService
 from app.services.translation_service import TranslationService, TranslationUnavailableError
 from app.utils.video_processor import VideoProcessingError
 
@@ -798,6 +798,7 @@ class MessageService:
 
         caption = data.caption or data.body
         result = await self._send_upload_by_type(
+            allow_restricted_media_fallback=data.sender_type == SenderType.BOT,
             parse_mode=data.parse_mode,
             upload=upload,
             path=path,
@@ -855,6 +856,7 @@ class MessageService:
         caption = data.caption or data.body
         result = await self._send_media_to_telegram_by_type(
             parse_mode=data.parse_mode,
+            allow_restricted_media_fallback=data.sender_type == SenderType.BOT,
             media_type=message_type,
             media=data.telegram_file_id,
             project_id=project_id,
@@ -905,8 +907,10 @@ class MessageService:
         caption: str | None,
         reply_parameters: dict | None = None,
         parse_mode: str | None = None,
+        allow_restricted_media_fallback: bool = False,
     ) -> dict | None:
         return await self._send_media_to_telegram_by_type(
+            allow_restricted_media_fallback=allow_restricted_media_fallback,
             parse_mode=parse_mode,
             media_type=upload.media_type,
             media=path,
@@ -934,7 +938,45 @@ class MessageService:
         mime_type: str | None,
         reply_parameters: dict | None = None,
         parse_mode: str | None = None,
+        allow_restricted_media_fallback: bool = False,
     ) -> dict | None:
+        if allow_restricted_media_fallback and media_type in {MessageType.VOICE, MessageType.VIDEO_NOTE}:
+            try:
+                result = await self._send_media_to_telegram_by_type(
+                    media_type=media_type, media=media, project_id=project_id, bot_id=bot_id,
+                    external_chat_id=external_chat_id, caption=caption, reply_markup=reply_markup,
+                    file_name=file_name, mime_type=mime_type, reply_parameters=reply_parameters,
+                    parse_mode=parse_mode,
+                )
+                if result is not None:
+                    return result
+                error = getattr(self.telegram_sender, "last_delivery_error", None)
+            except TelegramDeliveryError as exc:
+                error = exc
+            if not isinstance(error, TelegramDeliveryError) or "VOICE_MESSAGES_FORBIDDEN" not in error.description.upper() or error.transient:
+                if error is not None and getattr(self.telegram_sender, "raise_on_delivery_error", False):
+                    raise error
+                return None
+            content = media
+            if isinstance(media, str):
+                token = await self.telegram_sender._get_token(project_id, bot_id)
+                if not token:
+                    raise error
+                info = await self.telegram_sender.get_file(token, media)
+                limit = min(settings.CHAT_VIDEO_MAX_MB if media_type == MessageType.VIDEO_NOTE else settings.CHAT_DOCUMENT_MAX_MB, 20) * 1024 * 1024
+                if not info.get("file_path") or int(info.get("file_size") or 0) > limit:
+                    raise error
+                content = await self.telegram_sender.download_file(token, info["file_path"], max_bytes=limit)
+            fallback_type = MessageType.VIDEO if media_type == MessageType.VIDEO_NOTE else MessageType.DOCUMENT
+            logger.warning("Funnel restricted media fallback project_id=%s bot_id=%s external_chat_id=%s from_type=%s to_type=%s reason=VOICE_MESSAGES_FORBIDDEN",
+                           project_id, bot_id, external_chat_id, media_type, fallback_type)
+            return await self._send_media_to_telegram_by_type(
+                media_type=fallback_type, media=content, project_id=project_id, bot_id=bot_id,
+                external_chat_id=external_chat_id, caption=caption, reply_markup=reply_markup,
+                file_name=file_name or ("video.mp4" if fallback_type == MessageType.VIDEO else "voice.ogg"),
+                mime_type="video/mp4" if fallback_type == MessageType.VIDEO else (mime_type or "audio/ogg"),
+                reply_parameters=reply_parameters, parse_mode=parse_mode,
+            )
         if media_type == MessageType.PHOTO:
             return await self.telegram_sender.send_photo(
                 parse_mode=parse_mode,

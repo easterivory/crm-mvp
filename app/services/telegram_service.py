@@ -887,6 +887,7 @@ class TelegramService:
             bot_id=bot_id,
             external_chat_id=str(event.chat.id),
             is_blocked_by_user=is_blocked,
+            observed_at=event.date,
         )
         if chat is None:
             logger.info(
@@ -1523,7 +1524,7 @@ class TelegramService:
             chat=chat,
             project_id=chat.project_id,
             bot_id=chat.bot_id,
-            user_message=MessageOut.model_validate(message),
+            user_message=message,
             start_requested=True,
             fresh_lifecycle=fresh_lifecycle,
         )
@@ -1627,7 +1628,7 @@ class TelegramService:
         chat: Chat,
         active_funnel_id: UUID,
         active_funnel_version_id: UUID,
-        user_message: MessageOut,
+        user_message: Message | MessageOut,
         start_requested: bool,
         fresh_lifecycle: bool,
     ) -> None:
@@ -1713,7 +1714,11 @@ class TelegramService:
 
         if start_requested:
             if status_name == "not_started":
-                if (user_message.raw_payload_json or {}).get("crm_repeated_start") is True:
+                payload = getattr(user_message, "raw_payload_json", None)
+                if payload is None:
+                    persisted = await self.message_repo.get_by_id(user_message.id)
+                    payload = persisted.raw_payload_json if persisted is not None else None
+                if (payload or {}).get("crm_repeated_start") is True:
                     logger.info("Repeated start has no active lifecycle chat_id=%s", chat.id)
                     return
                 await self.bot_repo.reset_chat_state(chat.id)

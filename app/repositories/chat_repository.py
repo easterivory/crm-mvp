@@ -1135,7 +1135,9 @@ class ChatRepository(BaseRepository[Chat]):
         if sender_type == SenderType.USER:
             values["last_user_message_at"] = ts
             values["last_client_message_at"] = ts
-            values["is_blocked_by_user"] = False
+            fresh_observation = or_(Chat.telegram_block_state_at.is_(None), Chat.telegram_block_state_at <= ts)
+            values["is_blocked_by_user"] = case((fresh_observation, False), else_=Chat.is_blocked_by_user)
+            values["telegram_block_state_at"] = case((fresh_observation, ts), else_=Chat.telegram_block_state_at)
             values["is_read"] = False
             values["unanswered_minutes"] = 0
             if reset_unanswered_push_count:
@@ -1457,10 +1459,21 @@ class ChatRepository(BaseRepository[Chat]):
         external_chat_id: str,
         bot_id: Optional[UUID],
         is_blocked_by_user: bool,
+        observed_at: datetime | None = None,
     ) -> Optional[Chat]:
         now = datetime.now(timezone.utc)
+        observed_at = observed_at or now
+        identity = [Chat.project_id == project_id, Chat.external_chat_id == str(external_chat_id),
+                    Chat.is_deleted.is_(False), Chat.reset_at.is_(None)]
+        if bot_id is not None:
+            identity.append(Chat.bot_id == bot_id)
+        # Match the runtime's lock order: root chat first, funnel state second.
+        locked = (await self.db.scalars(select(Chat.id).where(*identity).order_by(Chat.id).with_for_update())).all()
+        if not locked:
+            return None
         values: dict = {
             "is_blocked_by_user": is_blocked_by_user,
+            "telegram_block_state_at": observed_at,
             "updated_at": now,
         }
         if is_blocked_by_user:
@@ -1474,6 +1487,8 @@ class ChatRepository(BaseRepository[Chat]):
         stmt = (
             update(Chat)
             .where(
+                Chat.id.in_(locked),
+                or_(Chat.telegram_block_state_at.is_(None), Chat.telegram_block_state_at <= observed_at),
                 Chat.project_id == project_id,
                 Chat.external_chat_id == str(external_chat_id),
                 Chat.is_deleted.is_(False),
@@ -1494,7 +1509,7 @@ class ChatRepository(BaseRepository[Chat]):
         )
         if bot_id is not None:
             lookup = lookup.where(Chat.bot_id == bot_id)
-        refreshed = await self.db.execute(lookup.order_by(Chat.updated_at.desc()).limit(1))
+        refreshed = await self.db.execute(lookup.order_by(Chat.updated_at.desc()).limit(1).execution_options(populate_existing=True))
         return refreshed.scalar_one_or_none()
 
     async def reactivate_reset_chat(

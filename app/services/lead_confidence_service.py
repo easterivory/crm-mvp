@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -22,8 +23,10 @@ from app.models.project import Project
 from app.models.tag import Tag
 from app.repositories.partner_repository import PartnerIntegrationRepository
 from app.services.lead_auto_submit_queue import enqueue_lead_auto_submit
-from app.services.lead_identity_service import LeadIdentityService
+from app.services.lead_identity_service import IdentityLookupUnavailable, LeadIdentityService
 from app.core.name_extraction import KNOWN_NAMES, name_key
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,7 +232,16 @@ class LeadConfidenceService:
         if not context.project.use_confidence_score:
             return lead.score_percent
 
-        result = await self.calculate_confidence(lead)
+        previous_score = lead.score_percent
+        try:
+            result = await self.calculate_confidence(lead)
+        except IdentityLookupUnavailable as exc:
+            lead.confidence_meta = {**(lead.confidence_meta or {}), "calculation_deferred": {
+                "at": datetime.now(timezone.utc).isoformat(), "reason": "database_resource_unavailable",
+            }}
+            logger.warning("Confidence calculation deferred lead_id=%s sqlstate=%s previous_score=%s auto_submit=False",
+                           lead_id, exc.sqlstate, previous_score)
+            return previous_score
         lead.score_percent = result.score_percent
         lead.confidence_level = result.confidence_level
         lead.confidence_reasons = result.reasons
@@ -288,6 +300,8 @@ class LeadConfidenceService:
         required_fields: list[str],
     ) -> tuple[bool, list[str]]:
         reasons: list[str] = []
+        if (lead.confidence_meta or {}).get("calculation_deferred"):
+            reasons.append("пересчёт уверенности отложен из-за недоступности проверки")
         try:
             min_score = max(0, min(int(rules.get("min_score", 100)), 100))
         except (TypeError, ValueError):
@@ -554,12 +568,12 @@ class LeadConfidenceService:
         context: ConfidenceContext,
         weights: dict[str, int],
     ) -> ConfidenceCheckResult:
-        duplicates = await self.identity.find_duplicates(context.lead.id, context.lead.project_id)
+        duplicate_count = await self.identity.count_duplicates(context.lead.id, context.lead.project_id)
         return ConfidenceCheckResult(
             code="probable_duplicate",
-            penalty=weights["probable_duplicate"] if duplicates else 0,
+            penalty=weights["probable_duplicate"] if duplicate_count else 0,
             message="Найден вероятный дубль лида.",
-            meta={"count": len(duplicates)},
+            meta={"count": duplicate_count},
         )
 
     async def _load_context(self, lead_id: UUID) -> ConfidenceContext | None:

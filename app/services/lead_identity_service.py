@@ -5,8 +5,9 @@ from collections import defaultdict
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, and_, func, literal_column, or_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import DBAPIError
 
 from app.models.bot import Bot
 from app.models.chat import Chat
@@ -20,6 +21,12 @@ from app.schemas.lead_identity import (
     DuplicateSubmissionConflict,
     DuplicateSubmissionHistory,
 )
+
+
+class IdentityLookupUnavailable(RuntimeError):
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        super().__init__("Duplicate identity lookup temporarily unavailable")
 
 
 class LeadIdentityService:
@@ -43,11 +50,11 @@ class LeadIdentityService:
 
         conditions = []
         if phone_digits:
-            conditions.append(self._phone_digits_expr() == phone_digits)
+            conditions.append(and_(Lead.phone.is_not(None), self._phone_digits_expr() == phone_digits))
         if telegram_id:
             conditions.append(Chat.external_user_id == telegram_id)
         if username:
-            conditions.append(self._username_expr() == username)
+            conditions.append(and_(Lead.username.is_not(None), self._username_expr() == username))
 
         if not conditions:
             return []
@@ -147,8 +154,50 @@ class LeadIdentityService:
         return row[0], row[1]
 
     async def _fetch_duplicate_rows(self, lead_id: UUID, conditions: list, visible_project_ids: list[UUID] | None = None) -> list:
-        result = await self.db.execute(self._duplicate_rows_query(lead_id, conditions, visible_project_ids))
+        candidates = self._candidate_ids_query(lead_id, conditions, visible_project_ids).cte("identity_candidates")
+        candidates = candidates.prefix_with("MATERIALIZED", dialect="postgresql")
+        result = await self.db.execute(self._duplicate_rows_query(
+            lead_id, [Lead.id.in_(select(candidates.c.id))], visible_project_ids,
+        ))
         return list(result.all())
+
+    @staticmethod
+    def _candidate_ids_query(lead_id: UUID, conditions: list, visible_project_ids: list[UUID] | None = None):
+        # Separate identity lookups let PostgreSQL use the existing partial indexes.
+        branches = []
+        for condition in conditions:
+            query = select(Lead.id).join(Chat, Chat.id == Lead.chat_id).where(Lead.id != lead_id, condition)
+            if visible_project_ids is not None:
+                query = query.where(Lead.project_id.in_(visible_project_ids))
+            branches.append(query)
+        return union(*branches) if len(branches) > 1 else branches[0]
+
+    async def count_duplicates(self, lead_id: UUID, project_id: UUID) -> int:
+        try:
+            async with self.db.begin_nested():
+                return await self._count_duplicates(lead_id, project_id)
+        except DBAPIError as exc:
+            sqlstate = getattr(exc.orig, "sqlstate", None)
+            if sqlstate not in {"53100", "53200", "53300", "57014", "55P03"}:
+                raise
+            raise IdentityLookupUnavailable(sqlstate) from exc
+
+    async def _count_duplicates(self, lead_id: UUID, project_id: UUID) -> int:
+        lead, chat = await self._get_source_identity(lead_id, project_id)
+        conditions = []
+        phone = self.normalize_phone(lead.phone)
+        username = self.normalize_username(lead.username)
+        telegram_id = self._normalize_nonempty(chat.external_user_id)
+        if phone:
+            conditions.append(and_(Lead.phone.is_not(None), self._phone_digits_expr() == phone))
+        if username:
+            conditions.append(and_(Lead.username.is_not(None), self._username_expr() == username))
+        if telegram_id:
+            conditions.append(Chat.external_user_id == telegram_id)
+        if not conditions:
+            return 0
+        candidates = self._candidate_ids_query(lead_id, conditions).subquery()
+        return int(await self.db.scalar(select(func.count()).select_from(candidates)) or 0)
 
     @staticmethod
     def _duplicate_rows_query(lead_id: UUID, conditions: list, visible_project_ids: list[UUID] | None = None) -> Select:
@@ -247,8 +296,10 @@ class LeadIdentityService:
 
     @staticmethod
     def _phone_digits_expr():
-        return func.regexp_replace(func.coalesce(Lead.phone, ""), r"\D", "", "g")
+        return func.regexp_replace(func.coalesce(Lead.phone, literal_column("''")),
+                                   literal_column(r"'\D'"), literal_column("''"), literal_column("'g'"))
 
     @staticmethod
     def _username_expr():
-        return func.lower(func.replace(func.coalesce(Lead.username, ""), "@", ""))
+        return func.lower(func.replace(func.coalesce(Lead.username, literal_column("''")),
+                                       literal_column("'@'"), literal_column("''")))

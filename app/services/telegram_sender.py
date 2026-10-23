@@ -77,6 +77,7 @@ class TelegramSenderService:
         self.account_gateway = TelegramAccountGateway()
         self.release_transaction_before_network = release_transaction_before_network
         self.raise_on_delivery_error = raise_on_delivery_error
+        self.last_delivery_error: TelegramDeliveryError | None = None
 
     async def _get_transport_type(
         self,
@@ -778,6 +779,7 @@ class TelegramSenderService:
         reply_parameters: dict | None = None,
         parse_mode: str | None = None,
     ) -> dict[str, Any] | None:
+        self.last_delivery_error = None
         caption_entities = []
         if supports_caption and caption and parse_mode == "HTML":
             caption, caption_entities = telegram_html(caption.strip())
@@ -1140,6 +1142,7 @@ class TelegramSenderService:
         bot_id: UUID | None,
         external_chat_id: str,
     ) -> None:
+        self.last_delivery_error = error
         if error.blocked:
             await self._record_bot_blocked(
                 project_id=project_id,

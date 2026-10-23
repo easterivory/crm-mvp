@@ -39,6 +39,7 @@ from app.workers.funnel_scheduled_worker import (
 
 try:
     from arq import Retry, cron
+    from arq.worker import func as arq_function
     from arq.connections import RedisSettings
 except ImportError:  # pragma: no cover - production installs arq from requirements.txt
     Retry = None
@@ -804,10 +805,25 @@ def _redis_settings_from_url() -> Any:
 from app.workers.tiktok_worker import deliver_tiktok_outbox_task
 
 
+async def persist_telegram_block_task(ctx, project_id: str, bot_id: str | None, external_chat_id: str, observed_at: str):
+    from app.services.chat_user_block_service import ChatUserBlockService
+    applied = await ChatUserBlockService.persist_blocked_from_telegram_error(
+        project_id=UUID(project_id), bot_id=UUID(bot_id) if bot_id else None,
+        external_chat_id=external_chat_id, observed_at=datetime.fromisoformat(observed_at),
+        defer_if_locked=False,
+    )
+    if not applied:
+        if Retry is not None:
+            raise Retry(defer=5)
+        raise RuntimeError("Telegram block persistence is waiting for the chat transaction")
+    return {"status": "applied_or_obsolete"}
+
+
 class WorkerSettings:
     """ARQ compatibility settings."""
     functions = [
         deliver_tiktok_outbox_task,
+        arq_function(persist_telegram_block_task, max_tries=120, timeout=15) if Retry is not None else persist_telegram_block_task,
         send_lead_postback,
         auto_submit_lead_task,
         export_lead_to_sheets_task,

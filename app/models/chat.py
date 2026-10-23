@@ -128,6 +128,7 @@ class Chat(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMixin
         default=False,
         server_default="false",
     )
+    telegram_block_state_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     unanswered_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     assignment_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),

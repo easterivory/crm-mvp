@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.database import get_db_session
 from app.models.chat import Chat
@@ -26,14 +27,16 @@ class ChatUserBlockService:
         bot_id: UUID | None,
         external_chat_id: str,
         is_blocked_by_user: bool,
+        observed_at: datetime | None = None,
     ) -> Chat | None:
         chat = await self.chat_repo.set_blocked_by_user(
             project_id=project_id,
             bot_id=bot_id,
             external_chat_id=external_chat_id,
             is_blocked_by_user=is_blocked_by_user,
+            **({"observed_at": observed_at} if observed_at is not None else {}),
         )
-        if chat is None or not is_blocked_by_user:
+        if chat is None or not is_blocked_by_user or not chat.is_blocked_by_user:
             return chat
 
         state = await self.funnel_repo.get_chat_funnel_state(chat.id)
@@ -56,21 +59,39 @@ class ChatUserBlockService:
         project_id: UUID,
         bot_id: UUID | None,
         external_chat_id: str,
+        observed_at: datetime | None = None,
+        defer_if_locked: bool = True,
     ) -> bool:
         # The outgoing CRM request returns an error and its transaction rolls
         # back. Keep Telegram's authoritative block state independently. The
         # runtime pause is performed by the native webhook or by the next
         # runtime guard, avoiding a cross-transaction lock on funnel state.
+        observed_at = observed_at or datetime.now(timezone.utc)
         async with get_db_session() as db:
             try:
+                identity = [Chat.project_id == project_id, Chat.external_chat_id == str(external_chat_id),
+                            Chat.is_deleted.is_(False), Chat.reset_at.is_(None)]
+                if bot_id is not None:
+                    identity.append(Chat.bot_id == bot_id)
+                existing_ids = (await db.scalars(select(Chat.id).where(*identity).order_by(Chat.id))).all()
+                if not existing_ids:
+                    return True
+                locked = (await db.scalars(select(Chat.id).where(Chat.id.in_(existing_ids)).order_by(Chat.id).with_for_update(skip_locked=True))).all()
+                if len(locked) != len(existing_ids):
+                    await db.rollback()
+                    if defer_if_locked:
+                        from app.services.telegram_block_queue import enqueue_telegram_block_update
+                        await enqueue_telegram_block_update(project_id, bot_id, external_chat_id, observed_at)
+                    return False
                 chat = await ChatRepository(db).set_blocked_by_user(
                     project_id=project_id,
                     bot_id=bot_id,
                     external_chat_id=external_chat_id,
                     is_blocked_by_user=True,
+                    observed_at=observed_at,
                 )
                 await db.commit()
-                return chat is not None
+                return True
             except Exception:
                 await db.rollback()
                 raise
