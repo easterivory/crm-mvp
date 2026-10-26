@@ -89,7 +89,8 @@ type ChatListProps = {
   stepOptions: FilterOption[]
   tagOptions: FilterOption[]
   total: number
-  workspaceCounts: Record<'unread' | 'mine' | 'all' | 'favorites', number> & {
+  workspaceCounts: Record<'unread' | 'mine' | 'all' | 'favorites' | 'priority', number> & {
+    priority_enabled?: boolean
     unanswered?: number
   }
   trackingOptions: FilterOption[]

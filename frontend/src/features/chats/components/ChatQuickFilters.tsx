@@ -3,7 +3,7 @@ import type { ChatFiltersState } from '../types'
 type ChatQuickFiltersProps = {
   filters: ChatFiltersState
   currentUserId: string | null
-  counts: Record<'unread' | 'mine' | 'all' | 'favorites', number>
+  counts: Record<'unread' | 'mine' | 'all' | 'favorites' | 'priority', number> & { priority_enabled?: boolean }
   onChange: (filters: ChatFiltersState) => void
 }
 
@@ -34,6 +34,7 @@ export default function ChatQuickFilters({
   }
 
   const items = [
+    { key: 'priority', label: 'Приоритетные', hidden: !counts.priority_enabled },
     { key: 'unread', label: 'Не прочитано лидом' },
     { key: 'mine', label: 'Мои', disabled: !currentUserId },
     { key: 'all', label: 'Все' },
@@ -42,7 +43,7 @@ export default function ChatQuickFilters({
 
   return (
     <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
-      {items.map((item) => {
+      {items.filter(item => !('hidden' in item && item.hidden)).map((item) => {
         const isActive = filters.workspaceView === item.key
         return (
           <button

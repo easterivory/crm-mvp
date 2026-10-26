@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { fetchBots } from '../features/bots/api'
 import TrackingOverview from '../features/tracking/TrackingOverview'
+import TrackingDuplicates from '../features/tracking/TrackingDuplicates'
 import TrafficQualitySettings from '../features/tracking/TrafficQualitySettings'
 import TikTokSettings from '../features/tracking/TikTokSettings'
 import type { Bot } from '../features/bots/types'
@@ -1058,6 +1059,8 @@ export default function TrackingPage() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        {selectedProjectId && <TrackingDuplicates key={`${selectedProjectId}:duplicates`} projectId={selectedProjectId}
+          botId={selectedBotIdForQuery} buyerId={buyerFilter || undefined} dateFrom={dateFrom} dateTo={dateTo} />}
         {metrics && selectedProjectId && <TrackingOverview key={`${user?.id}:${selectedProjectId}:overview`} projectId={selectedProjectId} userId={user?.id ?? 'user'}
           botId={selectedBotIdForQuery} buyerId={buyerFilter || undefined} dateFrom={dateFrom} dateTo={dateTo}
           gambling={isGambling} channel={hasChannelTraffic} summary={metrics.summary} daily={metrics.daily} refreshToken={metrics} loading={isLoading} />}
@@ -2000,6 +2003,8 @@ export default function TrackingPage() {
 
           {detailMetrics ? (
             <div className="space-y-5">
+              {selectedProjectId && <TrackingDuplicates key={detailLink.id} projectId={selectedProjectId}
+                botId={detailLink.bot_id} linkId={detailLink.id} dateFrom={dateFrom} dateTo={dateTo} />}
               {selectedProjectId && <TrackingOverview key={`${user?.id}:${selectedProjectId}:${detailLink?.id}`} projectId={selectedProjectId} userId={user?.id ?? 'user'}
                 botId={detailLink.bot_id} linkId={detailLink.id} dateFrom={dateFrom} dateTo={dateTo} gambling={detailIsGambling}
                 channel={detailIsChannel} summary={detailMetrics.summary} daily={detailMetrics.daily} refreshToken={detailMetrics} loading={isDetailLoading} />}

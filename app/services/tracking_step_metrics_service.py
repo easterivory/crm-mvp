@@ -20,7 +20,7 @@ class TrackingStepMetricsService:
         self.db = db
         self.metrics = TrackingMetricsService(db)
 
-    async def options(self, actor, project_id, bot_id=None, *, link_id=None):
+    async def options(self, actor, project_id, bot_id=None, *, link_id=None, include_equivalent_ids=False):
         await self.metrics._ensure_project_access(actor, project_id)
         await self.metrics._get_active_project_or_404(project_id)
         preferred_funnel_id = None
@@ -51,6 +51,10 @@ class TrackingStepMetricsService:
         if bot_id:
             stmt = stmt.where(Funnel.bot_id == bot_id)
         rows = (await self.db.execute(stmt)).all()
+        equivalent_ids = {}
+        if include_equivalent_ids:
+            for row in rows:
+                equivalent_ids.setdefault((row.funnel_id, row.key), []).append(row.id)
         seen, result, numbers = set(), [], {}
         for row in rows:
             numbers[row.version_id] = numbers.get(row.version_id, 0) + 1
@@ -58,7 +62,7 @@ class TrackingStepMetricsService:
             if key not in seen:
                 seen.add(key)
                 number = numbers[row.version_id]
-                result.append({"id": row.id, "name": f"{row.name} · v{row.version_number} · #{number} · {row.title}",
+                result.append({"id": row.id, **({"equivalent_step_ids": equivalent_ids[key]} if include_equivalent_ids else {}), "name": f"{row.name} · v{row.version_number} · #{number} · {row.title}",
                     "bot_id": row.bot_id, "funnel_id": row.funnel_id, "funnel_name": row.name,
                     "is_preferred": row.funnel_id == preferred_funnel_id,
                     "bot_name": row.bot_name, "bot_username": row.bot_username,

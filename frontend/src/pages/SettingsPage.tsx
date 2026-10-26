@@ -1,3 +1,4 @@
+import PriorityChatSettings from '../features/chats/components/PriorityChatSettings'
 import {
   Check,
   ChevronDown,
@@ -1727,6 +1728,7 @@ export default function SettingsPage() {
 
         {!isLoading && activeTab === 'project' ? (
           <form className="max-w-xl space-y-4" onSubmit={handleProjectSave}>
+            {activeProjectId && <PriorityChatSettings key={activeProjectId} projectId={activeProjectId} />}
             <div>
               <h2 className="text-xl font-semibold text-zinc-100">Проект</h2>
               <p className="mt-1 text-sm text-zinc-500">

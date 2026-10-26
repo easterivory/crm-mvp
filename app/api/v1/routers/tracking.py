@@ -26,6 +26,7 @@ from app.schemas.tracking_metrics import (
     TrackingTagMetrics,
 )
 from app.services.tracking_metrics_service import TrackingMetricsService
+from app.services.tracking_duplicate_service import TrackingDuplicateService
 from app.services.tracking_step_metrics_service import TrackingStepMetricsService
 from app.services.tracking_cohort_service import TrackingCohortService
 from app.services.tracking_service import TrackingService
@@ -291,8 +292,18 @@ async def get_tag_tracking_metrics(
 @v1_router.get("/metrics/step-options")
 async def tracking_step_options(project_id: UUID, bot_id: Optional[UUID] = None,
     link_id: Optional[UUID] = None,
+    include_equivalent_ids: bool = False,
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id, link_id=link_id)
+    return await TrackingStepMetricsService(db).options(current_user, project_id, bot_id, link_id=link_id, include_equivalent_ids=include_equivalent_ids)
+
+
+@v1_router.get("/metrics/duplicates")
+async def tracking_duplicate_metrics(project_id: UUID, bot_id: Optional[UUID] = None,
+    buyer_id: Optional[UUID] = None, link_id: Optional[UUID] = None,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await TrackingDuplicateService(db).report(current_user, project_id, bot_id=bot_id,
+        buyer_id=buyer_id, link_id=link_id, date_from=date_from, date_to=date_to)
 
 
 @v1_router.get("/metrics/step-preview")

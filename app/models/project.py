@@ -124,6 +124,7 @@ class Project(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin, SoftDeleteMi
         default=1,
         server_default="1",
     )
+    priority_chat_rules: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSONB), nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     confidence_weights: Mapped[Optional[dict[str, int]]] = mapped_column(
         MutableDict.as_mutable(JSONB),
         nullable=True,

@@ -89,6 +89,7 @@ type ChatWorkspaceCounts = Record<ChatWorkspaceView, number> & {
 }
 
 const EMPTY_WORKSPACE_COUNTS: ChatWorkspaceCounts = {
+  priority: 0,
   unread: 0,
   mine: 0,
   all: 0,
@@ -561,7 +562,7 @@ function isQuickFilter(value: string | null): value is ChatFiltersState['quickFi
 }
 
 function isWorkspaceView(value: string | null | undefined): value is ChatWorkspaceView {
-  return value === 'unread' || value === 'mine' || value === 'all' || value === 'favorites'
+  return value === 'unread' || value === 'mine' || value === 'all' || value === 'favorites' || value === 'priority'
 }
 
 function isChatSort(value: string | null): value is ChatSort {

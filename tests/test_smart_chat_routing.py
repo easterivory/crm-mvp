@@ -199,7 +199,7 @@ class ChatWorkspaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_counts_use_one_aggregate_query(self) -> None:
         row = SimpleNamespace(
-            _mapping={"unread": 2, "unanswered": 4, "mine": 3, "all": 5, "favorites": 1}
+            _mapping={"priority": 2, "unread": 2, "unanswered": 4, "mine": 3, "all": 5, "favorites": 1}
         )
         result = SimpleNamespace(one=lambda: row)
         db = SimpleNamespace(execute=AsyncMock(return_value=result))
@@ -213,7 +213,7 @@ class ChatWorkspaceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             counts,
-            {"unread": 2, "unanswered": 4, "mine": 3, "all": 5, "favorites": 1},
+            {"priority": 2, "unread": 2, "unanswered": 4, "mine": 3, "all": 5, "favorites": 1},
         )
         sql = str(
             db.execute.await_args.args[0].compile(dialect=postgresql.dialect())

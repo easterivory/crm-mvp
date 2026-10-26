@@ -127,6 +127,7 @@ class ChatService:
             current_step_id=filters.current_step_id,
             sort_by=filters.sort_by,
             workspace_view=filters.workspace_view,
+            priority_rules=getattr(project, "priority_chat_rules", None),
             viewer_id=actor.id if actor is not None else None,
             hide_assigned_from_all=(
                 bool(project.hide_assigned_chats_from_all)
@@ -247,6 +248,7 @@ class ChatService:
             )
         await self.chat_lease.release_expired(project_id=project_id)
         counts = await self.chat_repo.workspace_counts(
+            priority_rules=getattr(project, "priority_chat_rules", None),
             project_id=project_id,
             viewer_id=actor.id,
             hide_assigned_from_all=project.hide_assigned_chats_from_all,
@@ -258,6 +260,7 @@ class ChatService:
         )
         return ChatWorkspaceCountsOut(
             **counts,
+            priority_enabled=bool((getattr(project, "priority_chat_rules", None) or {}).get("enabled")),
             hide_assigned_chats_from_all=project.hide_assigned_chats_from_all,
             chat_lease_minutes=project.chat_lease_minutes,
             project_format=project.project_format,

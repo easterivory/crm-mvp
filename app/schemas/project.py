@@ -40,7 +40,14 @@ def default_tracking_lead_status_codes() -> list[str]:
     return list(LeadStatusCode.TRACKING_LEAD_DEFAULT)
 
 
+class PriorityChatRules(BaseModel):
+    enabled: bool = False
+    tag_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    step_ids: list[UUID] = Field(default_factory=list, max_length=200)
+
+
 class ProjectBase(BaseModel):
+    priority_chat_rules: PriorityChatRules = Field(default_factory=PriorityChatRules)
     tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
     tracking_lead_tag_ids: list[UUID] = Field(default_factory=list, max_length=100)
     name: str = Field(..., max_length=255)
@@ -93,6 +100,7 @@ class ProjectCreate(ProjectBase):
 
 
 class ProjectUpdate(BaseModel):
+    priority_chat_rules: Optional[PriorityChatRules] = None
     tracking_lead_count_mode: Optional[Literal["statuses", "tags"]] = None
     tracking_lead_tag_ids: Optional[list[UUID]] = Field(default=None, max_length=100)
     name: Optional[str] = Field(None, max_length=255)
@@ -164,6 +172,7 @@ class ProjectTranslationUpdate(BaseModel):
 
 
 class ProjectRead(OrmBase):
+    priority_chat_rules: PriorityChatRules = Field(default_factory=PriorityChatRules)
     id: uuid.UUID
     name: str
     slug: str

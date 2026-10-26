@@ -26,10 +26,12 @@ class ChatFavoriteUpdate(BaseModel):
     is_favorite: bool
 
 
-ChatWorkspaceView = Literal["unread", "mine", "all", "favorites"]
+ChatWorkspaceView = Literal["unread", "mine", "all", "favorites", "priority"]
 
 
 class ChatWorkspaceCountsOut(BaseModel):
+    priority: int = 0
+    priority_enabled: bool = False
     unread: int = 0
     unanswered: int = 0
     mine: int = 0

@@ -17,11 +17,12 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, String, and_, case, false, func, or_, select, update
+from sqlalchemy import ColumnElement, String, and_, case, false, func, or_, select, tuple_, update
+from sqlalchemy.orm import aliased
 
 from app.core.constants import SenderType
 from app.models.chat import Chat
-from app.models.funnel import ChatFunnelState
+from app.models.funnel import ChatFunnelState, FunnelStep, FunnelVersion, FunnelStepLog
 from app.models.lead import Lead, LeadTag
 from app.models.lead_status import LeadStatus
 from app.models.message import Message
@@ -36,6 +37,31 @@ from app.repositories.message_repository import MessageRepository
 class ChatRepository(BaseRepository[Chat]):
     model = Chat
     CYCLE_START_TOLERANCE_SECONDS = 1
+
+    @classmethod
+    def priority_expr(cls, rules: dict | None) -> ColumnElement:
+        rules = rules or {}
+        if not rules.get("enabled"):
+            return false()
+        conditions = []
+        if rules.get("tag_ids"):
+            conditions.append(select(LeadTag.lead_id).join(Lead, Lead.id == LeadTag.lead_id)
+                .join(Tag, Tag.id == LeadTag.tag_id).where(Lead.chat_id == Chat.id,
+                Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False),
+                Tag.project_id == Chat.project_id, LeadTag.tag_id.in_([UUID(str(value)) for value in rules["tag_ids"]]))
+                .correlate(Chat).exists())
+        if rules.get("step_ids"):
+            chosen = aliased(FunnelStep)
+            visited = aliased(FunnelStep)
+            chosen_keys = select(FunnelVersion.funnel_id, chosen.key).join(chosen,
+                chosen.funnel_version_id == FunnelVersion.id).where(chosen.id.in_([UUID(str(value)) for value in rules["step_ids"]]))
+            conditions.append(select(FunnelStepLog.id).join(visited, visited.id == FunnelStepLog.step_id)
+                .join(Lead, Lead.id == FunnelStepLog.lead_id)
+                .where(Lead.chat_id == Chat.id, Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False), FunnelStepLog.event_type == "entered",
+                tuple_(FunnelStepLog.funnel_id, visited.key).in_(chosen_keys),
+                or_(Chat.current_cycle_started_at.is_(None), FunnelStepLog.created_at >= Chat.current_cycle_started_at))
+                .correlate(Chat).exists())
+        return cls.unanswered_expr() & or_(*conditions) if conditions else false()
 
     # ── SQL expressions ────────────────────────────────────────────────────────
 
@@ -268,13 +294,16 @@ class ChatRepository(BaseRepository[Chat]):
         activity_from: Optional[datetime] = None,
         activity_to: Optional[datetime] = None,
         workspace_view: Optional[str] = None,
+        priority_rules: dict | None = None,
         viewer_id: Optional[UUID] = None,
         hide_assigned_from_all: bool = False,
         project_format: str = "submission",
         push_unread_threshold: int = 1,
         use_confidence_score: bool = True,
     ):
-        if workspace_view == "unread":
+        if workspace_view == "priority":
+            stmt = stmt.where(self.priority_expr(priority_rules))
+        elif workspace_view == "unread":
             stmt = stmt.where(
                 self._workspace_unread_expr(
                     project_format=project_format,
@@ -776,6 +805,7 @@ class ChatRepository(BaseRepository[Chat]):
         current_step_id: Optional[UUID] = None,
         sort_by: str = "latest",
         workspace_view: Optional[str] = None,
+        priority_rules: dict | None = None,
         viewer_id: Optional[UUID] = None,
         hide_assigned_from_all: bool = False,
         project_format: str = "submission",
@@ -809,6 +839,7 @@ class ChatRepository(BaseRepository[Chat]):
             funnel_state=funnel_state,
             current_step_id=current_step_id,
             workspace_view=workspace_view,
+            priority_rules=priority_rules,
             viewer_id=viewer_id,
             hide_assigned_from_all=hide_assigned_from_all,
             project_format=project_format,
@@ -857,6 +888,7 @@ class ChatRepository(BaseRepository[Chat]):
         current_step_id: Optional[UUID] = None,
         sort_by: str = "latest",
         workspace_view: Optional[str] = None,
+        priority_rules: dict | None = None,
         viewer_id: Optional[UUID] = None,
         hide_assigned_from_all: bool = False,
         project_format: str = "submission",
@@ -903,6 +935,7 @@ class ChatRepository(BaseRepository[Chat]):
             funnel_state=funnel_state,
             current_step_id=current_step_id,
             workspace_view=workspace_view,
+            priority_rules=priority_rules,
             viewer_id=viewer_id,
             hide_assigned_from_all=hide_assigned_from_all,
             project_format=project_format,
@@ -918,6 +951,7 @@ class ChatRepository(BaseRepository[Chat]):
         project_id: UUID,
         viewer_id: UUID,
         hide_assigned_from_all: bool,
+        priority_rules: dict | None = None,
         project_format: str = "submission",
         push_unread_threshold: int = 1,
         use_confidence_score: bool = True,
@@ -934,6 +968,7 @@ class ChatRepository(BaseRepository[Chat]):
 
         stmt = (
             select(
+                func.count(Chat.id).filter(self.priority_expr(priority_rules)).label("priority"),
                 func.count(Chat.id)
                 .filter(
                     self._workspace_unread_expr(
@@ -975,6 +1010,7 @@ class ChatRepository(BaseRepository[Chat]):
 
         row = (await self.db.execute(stmt)).one()._mapping
         return {
+            "priority": int(row["priority"] or 0),
             "unread": int(row["unread"] or 0),
             "unanswered": int(row["unanswered"] or 0),
             "mine": int(row["mine"] or 0),

@@ -295,11 +295,11 @@ class LeadIdentityService:
         return normalized or None
 
     @staticmethod
-    def _phone_digits_expr():
-        return func.regexp_replace(func.coalesce(Lead.phone, literal_column("''")),
+    def _phone_digits_expr(model=Lead):
+        return func.regexp_replace(func.coalesce(model.phone, literal_column("''")),
                                    literal_column(r"'\D'"), literal_column("''"), literal_column("'g'"))
 
     @staticmethod
-    def _username_expr():
-        return func.lower(func.replace(func.coalesce(Lead.username, literal_column("''")),
+    def _username_expr(model=Lead):
+        return func.lower(func.replace(func.coalesce(model.username, literal_column("''")),
                                        literal_column("'@'"), literal_column("''")))

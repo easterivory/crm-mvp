@@ -65,6 +65,8 @@ class ProjectService:
         name = self._validate_name(data.name)
         if data.tracking_lead_count_mode == "tags" or data.tracking_lead_tag_ids:
             raise HTTPException(422, "Сначала создайте проект и его теги, затем включите подсчёт лидов по тегам.")
+        if data.priority_chat_rules.enabled or data.priority_chat_rules.tag_ids or data.priority_chat_rules.step_ids:
+            raise HTTPException(422, "Сначала создайте проект, затем настройте приоритетные чаты.")
         status_value = self._validate_status(data.status)
         sla_threshold_minutes = self._validate_sla(data.sla_threshold_minutes)
         tracking_lead_status_codes = await self._validate_tracking_lead_status_codes(
@@ -126,6 +128,22 @@ class ProjectService:
             )
 
         values = data.model_dump(exclude_unset=True)
+        if "priority_chat_rules" in values:
+            if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+                raise HTTPException(403, "Только администратор может менять правила приоритетных чатов.")
+            from app.models.funnel import Funnel, FunnelVersion, FunnelStep
+            rules = data.priority_chat_rules
+            if rules is None:
+                raise HTTPException(422, "Правила приоритетных чатов не могут быть null.")
+            if rules.enabled and not (rules.tag_ids or rules.step_ids):
+                raise HTTPException(422, "Выберите теги или шаги для приоритетных чатов.")
+            tags = set((await self.db.scalars(select(Tag.id).where(Tag.project_id == project_id, Tag.id.in_(rules.tag_ids)))).all())
+            steps = set((await self.db.scalars(select(FunnelStep.id).join(FunnelVersion, FunnelVersion.id == FunnelStep.funnel_version_id)
+                .join(Funnel, Funnel.id == FunnelVersion.funnel_id).where(Funnel.project_id == project_id,
+                FunnelVersion.status != "draft", FunnelStep.id.in_(rules.step_ids)))).all())
+            if tags != set(rules.tag_ids) or steps != set(rules.step_ids):
+                raise HTTPException(422, "Выбранные теги или опубликованные шаги не найдены в проекте.")
+            values["priority_chat_rules"] = rules.model_dump(mode="json")
         for non_nullable_field in (
             "name",
             "slug",

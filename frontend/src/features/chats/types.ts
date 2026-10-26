@@ -8,7 +8,7 @@ export type ChatFunnelStateFilter =
 export type ChatDatePreset = '' | 'today' | 'yesterday' | '7d' | '30d' | 'custom'
 export type ChatTagMode = 'any' | 'all'
 export type ChatQuickFilter = '' | 'all' | 'mine' | 'unanswered' | 'hot'
-export type ChatWorkspaceView = 'unread' | 'mine' | 'all' | 'favorites'
+export type ChatWorkspaceView = 'unread' | 'mine' | 'all' | 'favorites' | 'priority'
 export type ChatSort = 'latest' | 'priority'
 
 export type ChatFiltersState = {

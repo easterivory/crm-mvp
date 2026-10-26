@@ -4,7 +4,7 @@ import { Eye, Image, MessageSquare, Mic, Video, X } from 'lucide-react'
 import api from '../../api/client'
 
 export type JourneyStepOption = { id: string; funnel_id: string; funnel_name: string; key: string;
-  name: string; title: string; number: number; version_number: number; bot_name?: string | null; bot_username?: string | null }
+  name: string; title: string; number: number; version_number: number; bot_name?: string | null; bot_username?: string | null; equivalent_step_ids?: string[] }
 export const botLabel = (step: Pick<JourneyStepOption, 'bot_name' | 'bot_username'>) =>
   [step.bot_name || 'Без бота', step.bot_username ? `@${step.bot_username.replace(/^@/, '')}` : ''].filter(Boolean).join(' · ')
 export const stepLabel = (step: JourneyStepOption) => `${botLabel(step)} · ${step.name}`
