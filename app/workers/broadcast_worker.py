@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -12,10 +13,13 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text, select, update
 
 from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
-from app.core.database import get_db_session
+from app.core.database import get_db_session, engine
+from app.models.bot import Bot
+from app.services.broadcast_transport import BroadcastHTTPClient
 from app.models.broadcast import Broadcast, BroadcastRecipient
 from app.repositories.broadcast_repository import BroadcastRepository
 from app.services.broadcast_service import BroadcastService
@@ -32,8 +36,6 @@ logger = logging.getLogger(__name__)
 ACTIVE_STATUS = "processing"
 STOP_STATUSES = {"paused", "cancelled"}
 FINAL_STATUS = "completed"
-TELEGRAM_RATE_LIMIT_PER_SECOND = 30
-MAX_MICRO_BATCH_SIZE = 10
 
 
 @dataclass(slots=True)
@@ -78,6 +80,38 @@ class BroadcastDeliveryWorker:
         broadcast = await self._load_broadcast(broadcast_id, project_id)
         if broadcast is None:
             return BroadcastRunResult(broadcast_id=broadcast_id, status="not_found")
+        bot_id = broadcast.bot_id
+        project_id = broadcast.project_id
+        await self.db.commit()
+        # One owner per bot across polling and ARQ, including different campaigns.
+        key = int.from_bytes(hashlib.blake2b(f"broadcast:{bot_id or broadcast_id}".encode(), digest_size=8).digest(), "big", signed=True)
+        async with engine.connect() as lock_conn:
+            acquired = await lock_conn.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
+            await lock_conn.commit()
+            if not acquired:
+                return BroadcastRunResult(broadcast_id=broadcast_id, status="busy")
+            try:
+                async with BroadcastHTTPClient(rate=settings.BROADCAST_MESSAGES_PER_SECOND) as client:
+                    self.http_client = client
+                    self.media_cache = {}
+                    return await self._process_owned(broadcast_id=broadcast_id, project_id=project_id)
+            finally:
+                try:
+                    await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                    await lock_conn.commit()
+                except BaseException:
+                    await lock_conn.invalidate()
+                    raise
+
+    async def _process_owned(
+        self,
+        *,
+        broadcast_id: UUID,
+        project_id: UUID | None = None,
+    ) -> BroadcastRunResult:
+        broadcast = await self._load_broadcast(broadcast_id, project_id)
+        if broadcast is None:
+            return BroadcastRunResult(broadcast_id=broadcast_id, status="not_found")
 
         project_id = broadcast.project_id
         if broadcast.status == "scheduled":
@@ -96,12 +130,21 @@ class BroadcastDeliveryWorker:
             await self.db.commit()
             return BroadcastRunResult(broadcast_id=broadcast.id, status=broadcast.status)
 
+        # A terminated process may have sent to Telegram before recording success.
+        # Do not automatically replay these ambiguous deliveries.
+        await self.db.execute(update(BroadcastRecipient).where(
+            BroadcastRecipient.broadcast_id == broadcast.id,
+            BroadcastRecipient.status == "sending",
+        ).values(status="failed", last_error="Delivery interrupted; Telegram outcome unknown. Not retried."))
+        transport = await self.db.scalar(select(Bot.transport_type).where(Bot.id == broadcast.bot_id))
+        if transport != "bot_api":
+            self.media_cache = None
+        await self.db.commit()
+
         sent = 0
         failed = 0
-        micro_batch_size = max(
-            1,
-            min(settings.BROADCAST_BATCH_SIZE, MAX_MICRO_BATCH_SIZE),
-        )
+        concurrency = max(1, min(settings.BROADCAST_CONCURRENCY, 16)) if transport == "bot_api" else 1
+        micro_batch_size = max(1, min(settings.BROADCAST_BATCH_SIZE, 100))
 
         while True:
             fresh = await self._active_or_stopped(broadcast.id, project_id)
@@ -127,40 +170,46 @@ class BroadcastDeliveryWorker:
             )
             if not recipients:
                 await self._complete_broadcast(fresh)
+                fresh = await self.repo.get_in_project(broadcast.id, project_id)
                 return BroadcastRunResult(
                     broadcast_id=broadcast.id,
-                    status=FINAL_STATUS,
+                    status=fresh.status if fresh else "not_found",
                     sent=sent,
                     failed=failed,
                 )
 
-            batch_started_at = time.monotonic()
-            estimated_requests = 0
-            for recipient in recipients:
-                fresh = await self._active_or_stopped(broadcast.id, project_id)
-                if fresh is None:
-                    return BroadcastRunResult(
-                        broadcast_id=broadcast.id,
-                        status="not_found",
-                        sent=sent,
-                        failed=failed,
-                    )
-                if fresh.status != ACTIVE_STATUS:
-                    return BroadcastRunResult(
-                        broadcast_id=broadcast.id,
-                        status=fresh.status,
-                        sent=sent,
-                        failed=failed,
-                    )
-
-                estimated_requests += self._estimated_request_count(fresh)
-                delivered = await self._deliver_recipient(fresh, recipient)
-                if delivered:
-                    sent += 1
-                else:
-                    failed += 1
-
-            await self._respect_telegram_rate_limit(batch_started_at, estimated_requests)
+            recipient_ids = [recipient.id for recipient in recipients]
+            await self.db.commit()
+            gate = asyncio.Semaphore(concurrency)
+            async def deliver(recipient_id):
+                async with gate:
+                    async with get_db_session() as db:
+                        worker = BroadcastDeliveryWorker(db)
+                        worker.service.telegram_sender.http_client = self.http_client
+                        worker.service.media_cache = self.media_cache
+                        current = await worker._active_or_stopped(broadcast_id, project_id)
+                        if current is None or current.status != ACTIVE_STATUS:
+                            return None
+                        claimed = await db.scalar(update(BroadcastRecipient).where(
+                            BroadcastRecipient.id == recipient_id,
+                            BroadcastRecipient.status == "pending",
+                        ).values(status="sending").returning(BroadcastRecipient.id))
+                        await db.commit()
+                        if claimed is None:
+                            return None
+                        recipient = await db.get(BroadcastRecipient, recipient_id)
+                        return await worker._deliver_recipient(current, recipient)
+            batch_start = time.monotonic()
+            results = await asyncio.gather(*(deliver(rid) for rid in recipient_ids), return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+                sent += result is True
+                failed += result is False
+            await self.repo.sync_progress_counts(broadcast_id, project_id)
+            await self.db.commit()
+            logger.info("Broadcast batch broadcast_id=%s recipients=%s sent=%s failed=%s elapsed_seconds=%.3f concurrency=%s",
+                        broadcast_id, len(results), sum(r is True for r in results), sum(r is False for r in results), time.monotonic() - batch_start, concurrency)
 
     async def _load_broadcast(
         self,
@@ -227,11 +276,6 @@ class BroadcastDeliveryWorker:
             chat, lead = context
             await self.service._send_to_recipient(broadcast, recipient_chat_id, chat, lead)
             await self.repo.mark_recipient_sent(recipient_id)
-            await self.repo.increment_progress_counts(
-                broadcast_id,
-                project_id,
-                sent_delta=1,
-            )
             await self.db.commit()
             logger.info(
                 "Broadcast recipient delivered broadcast_id=%s recipient_id=%s chat_id=%s",
@@ -244,11 +288,6 @@ class BroadcastDeliveryWorker:
             await self.db.rollback()
             error = self._error_message(exc)
             await self.repo.mark_recipient_failed(recipient_id, error)
-            await self.repo.increment_progress_counts(
-                broadcast_id,
-                project_id,
-                failed_delta=1,
-            )
             await self.db.commit()
             logger.warning(
                 "Broadcast recipient failed broadcast_id=%s recipient_id=%s error=%s",
@@ -260,14 +299,16 @@ class BroadcastDeliveryWorker:
 
     async def _complete_broadcast(self, broadcast: Broadcast) -> None:
         counts = await self.repo.status_counts(broadcast.id)
-        await self.repo.update_in_project(
-            broadcast.id,
-            broadcast.project_id,
+        await self.db.execute(update(Broadcast).where(
+            Broadcast.id == broadcast.id,
+            Broadcast.status == ACTIVE_STATUS,
+            Broadcast.is_deleted.is_(False),
+        ).values(
             status=FINAL_STATUS,
             sent_count=counts.get("sent", 0),
             failed_count=counts.get("failed", 0),
             sent_at=datetime.now(timezone.utc),
-        )
+        ))
         await self.db.commit()
         logger.info(
             "Broadcast delivery completed broadcast_id=%s sent=%s failed=%s skipped=%s",
@@ -276,22 +317,6 @@ class BroadcastDeliveryWorker:
             counts.get("failed", 0),
             counts.get("skipped", 0),
         )
-
-    @staticmethod
-    def _estimated_request_count(broadcast: Broadcast) -> int:
-        return max(1, len(BroadcastService._content_messages(broadcast.content_json or {})))
-
-    @staticmethod
-    async def _respect_telegram_rate_limit(
-        batch_started_at: float,
-        estimated_requests: int,
-    ) -> None:
-        if estimated_requests <= 0:
-            return
-        minimum_duration = estimated_requests / TELEGRAM_RATE_LIMIT_PER_SECOND
-        elapsed = time.monotonic() - batch_started_at
-        if elapsed < minimum_duration:
-            await asyncio.sleep(minimum_duration - elapsed)
 
     @staticmethod
     def _error_message(exc: Exception) -> str:

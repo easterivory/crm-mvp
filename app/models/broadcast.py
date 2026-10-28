@@ -121,6 +121,7 @@ class Broadcast(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
 class BroadcastRecipient(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "broadcast_recipients"
     __table_args__ = (
+        CheckConstraint("status IN ('pending','sending','sent','failed','skipped')", name="ck_broadcast_recipients_status"),
         UniqueConstraint("broadcast_id", "chat_id", name="uq_broadcast_recipients_broadcast_chat"),
         Index("ix_broadcast_recipients_broadcast_id", "broadcast_id"),
         Index("ix_broadcast_recipients_chat_id", "chat_id"),

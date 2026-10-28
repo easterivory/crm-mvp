@@ -93,9 +93,11 @@ class Settings(BaseSettings):
     ADMIN_BOT_TOKEN: Optional[str] = None
 
     # Broadcast worker
-    BROADCAST_BATCH_SIZE: int = 25
+    BROADCAST_BATCH_SIZE: int = 100
     BROADCAST_SEND_INTERVAL_MS: int = 75
     BROADCAST_MAX_ATTEMPTS: int = 3
+    BROADCAST_CONCURRENCY: int = 12
+    BROADCAST_MESSAGES_PER_SECOND: float = 20.0
     BROADCAST_UPLOAD_STORAGE_PATH: str = "storage/broadcast_uploads"
     BROADCAST_UPLOAD_TTL_HOURS: int = 168
     BROADCAST_PHOTO_MAX_BYTES: int = 10 * 1024 * 1024

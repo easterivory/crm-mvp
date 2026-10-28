@@ -97,7 +97,7 @@ class BroadcastService:
         self.project_repo = ProjectRepository(db)
         self.audience = AudienceFilterService(db)
         self.audit = AuditService(db)
-        self.telegram_sender = TelegramSenderService(db)
+        self.telegram_sender = TelegramSenderService(db, raise_on_delivery_error=True)
         self.funnel_runtime = FunnelRuntimeService(db)
 
     async def list_broadcasts(
@@ -124,7 +124,7 @@ class BroadcastService:
             total_recipients=broadcast.total_recipients or sum(counts.values()),
             sent_count=sent_count,
             failed_count=failed_count,
-            pending=counts.get("pending", 0),
+            pending=counts.get("pending", 0) + counts.get("sending", 0),
             sent=sent_count,
             failed=failed_count,
             skipped=counts.get("skipped", 0),
@@ -160,7 +160,7 @@ class BroadcastService:
             )
             if is_delivered:
                 delivered += 1
-            elif recipient.status == "pending":
+            elif recipient.status in {"pending", "sending"}:
                 pending += 1
             elif recipient.status == "failed":
                 failed += 1
@@ -674,79 +674,15 @@ class BroadcastService:
         return BroadcastOut.model_validate(updated)
 
     async def process_due_broadcasts(self) -> int:
-        processed = 0
-        broadcasts = await self.repo.list_due_broadcasts(limit=20)
-        for broadcast in broadcasts:
-            if broadcast.status == "scheduled":
-                broadcast = await self.repo.update_in_project(
-                    broadcast.id,
-                    broadcast.project_id,
-                    status="processing",
-                    started_at=datetime.now(timezone.utc),
-                )
-            if broadcast is None or broadcast.status != "processing":
-                continue
-            processed += await self._process_broadcast_batch(broadcast)
-        return processed
+        from app.workers.broadcast_worker import BroadcastDeliveryWorker
+        return await BroadcastDeliveryWorker(self.db).process_due_broadcasts()
 
     async def _process_broadcast_batch(self, broadcast: Broadcast) -> int:
-        recipients = await self.repo.list_pending_recipients(
-            broadcast.id,
-            limit=settings.BROADCAST_BATCH_SIZE,
-            max_attempts=settings.BROADCAST_MAX_ATTEMPTS,
+        from app.workers.broadcast_worker import BroadcastDeliveryWorker
+        result = await BroadcastDeliveryWorker(self.db).process_broadcast(
+            broadcast_id=broadcast.id, project_id=broadcast.project_id,
         )
-        if not recipients:
-            counts = await self.repo.status_counts(broadcast.id)
-            await self.repo.update_in_project(
-                broadcast.id,
-                broadcast.project_id,
-                status="completed",
-                sent_count=counts.get("sent", 0),
-                failed_count=counts.get("failed", 0),
-                sent_at=datetime.now(timezone.utc),
-            )
-            return 0
-
-        sent = 0
-        for recipient in recipients:
-            fresh = await self.repo.get_in_project(broadcast.id, broadcast.project_id)
-            if fresh is None or fresh.status in {"cancelled", "paused"}:
-                break
-            try:
-                context = await self.repo.get_recipient_context(recipient)
-                if context is None:
-                    await self.repo.mark_recipient_failed(recipient.id, "Chat not found")
-                    continue
-                chat, lead = context
-                await self._send_to_recipient(broadcast, recipient.chat_id, chat, lead)
-                await self.repo.mark_recipient_sent(recipient.id)
-                await self.repo.increment_progress_counts(
-                    broadcast.id,
-                    broadcast.project_id,
-                    sent_delta=1,
-                )
-                sent += 1
-            except Exception as exc:
-                await self.repo.mark_recipient_error(
-                    recipient,
-                    str(exc),
-                    max_attempts=settings.BROADCAST_MAX_ATTEMPTS,
-                )
-                await self.repo.sync_progress_counts(broadcast.id, broadcast.project_id)
-            if settings.BROADCAST_SEND_INTERVAL_MS > 0:
-                await asyncio.sleep(settings.BROADCAST_SEND_INTERVAL_MS / 1000)
-
-        if await self.repo.count_pending_recipients(broadcast.id) == 0:
-            counts = await self.repo.status_counts(broadcast.id)
-            await self.repo.update_in_project(
-                broadcast.id,
-                broadcast.project_id,
-                status="completed",
-                sent_count=counts.get("sent", 0),
-                failed_count=counts.get("failed", 0),
-                sent_at=datetime.now(timezone.utc),
-            )
-        return sent
+        return result.sent
 
     async def _send_to_recipient(
         self,
@@ -933,6 +869,11 @@ class BroadcastService:
             mime_type = upload.mime_type
             file_size = upload.file_size
 
+        cache = getattr(self, "media_cache", None)
+        cache_key = (broadcast.bot_id, upload_id, message_type)
+        if upload_id is not None and cache is not None and cache_key in cache:
+            media_file = cache[cache_key]
+
         raw_caption = message.get("caption")
         if raw_caption is None:
             raw_caption = message.get("text")
@@ -1004,6 +945,9 @@ class BroadcastService:
 
         if upload_id is not None:
             await self.repo.mark_upload_used(upload_id, broadcast.project_id)
+            file_id = self._extract_telegram_file_id(message_type, telegram_result)
+            if cache is not None and file_id:
+                cache[cache_key] = file_id
 
         return {
             "telegram_result": telegram_result,
@@ -1085,6 +1029,8 @@ class BroadcastService:
         lead: Lead | None,
         *, html: bool = False,
     ) -> str:
+        if "{{" not in template:
+            return template
         custom_fields = lead.custom_fields if lead is not None and isinstance(lead.custom_fields, dict) else {}
         project = await self.project_repo.get_active(broadcast.project_id)
         bot = (

@@ -15,7 +15,7 @@ BroadcastStatus = Literal[
     "completed",
     "cancelled",
 ]
-RecipientStatus = Literal["pending", "sent", "failed", "skipped"]
+RecipientStatus = Literal["pending", "sending", "sent", "failed", "skipped"]
 ScheduleType = Literal["now", "scheduled"]
 TimezoneMode = Literal["project", "lead_local", "fixed"]
 AudienceMode = Literal["all", "any"]

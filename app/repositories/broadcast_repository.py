@@ -49,6 +49,7 @@ class BroadcastRepository(BaseRepository[Broadcast]):
     ) -> Optional[Broadcast]:
         result = await self.db.execute(
             select(Broadcast)
+            .execution_options(populate_existing=True)
             .options(selectinload(Broadcast.created_by))
             .where(
                 Broadcast.id == broadcast_id,
@@ -262,7 +263,8 @@ class BroadcastRepository(BaseRepository[Broadcast]):
     async def mark_upload_used(self, upload_id: UUID, project_id: UUID) -> None:
         await self.db.execute(
             update(BroadcastUpload)
-            .where(BroadcastUpload.id == upload_id, BroadcastUpload.project_id == project_id)
+            .where(BroadcastUpload.id == upload_id, BroadcastUpload.project_id == project_id,
+                   BroadcastUpload.status != "used")
             .values(status="used")
         )
 
@@ -493,17 +495,16 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         broadcast_id: UUID,
         since: datetime,
     ) -> bool:
-        result = await self.db.execute(
-            select(func.count(Chat.id))
+        query = (
+            select(Chat.id)
             .join(BroadcastRecipient, BroadcastRecipient.chat_id == Chat.id)
             .where(
                 BroadcastRecipient.broadcast_id == broadcast_id,
                 Chat.last_client_message_at.is_not(None),
                 Chat.last_client_message_at > since,
             )
-            .limit(1)
         )
-        return result.scalar_one() > 0
+        return bool(await self.db.scalar(select(query.exists())))
 
     async def get_recipient_context(self, recipient: BroadcastRecipient):
         result = await self.db.execute(

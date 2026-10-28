@@ -176,7 +176,7 @@ def test_telegram_forbidden_response_persists_user_block() -> None:
         async def __aexit__(self, exc_type, exc, traceback):
             return False
 
-        async def post(self, url, json):
+        async def post(self, url, json, **kwargs):
             request = httpx.Request("POST", url, json=json)
             return httpx.Response(
                 403,

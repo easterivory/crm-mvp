@@ -1,6 +1,7 @@
 """Outgoing Telegram Bot API client with opt-in delivery diagnostics."""
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -71,6 +72,7 @@ class TelegramSenderService:
         *,
         release_transaction_before_network: bool = False,
         raise_on_delivery_error: bool = False,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
@@ -78,6 +80,15 @@ class TelegramSenderService:
         self.release_transaction_before_network = release_transaction_before_network
         self.raise_on_delivery_error = raise_on_delivery_error
         self.last_delivery_error: TelegramDeliveryError | None = None
+        self.http_client = http_client
+
+    @asynccontextmanager
+    async def _delivery_client(self, timeout: float):
+        if getattr(self, "http_client", None) is not None:
+            yield self.http_client
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                yield client
 
     async def _get_transport_type(
         self,
@@ -206,8 +217,8 @@ class TelegramSenderService:
             payload["reply_parameters"] = reply_parameters
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload)
+            async with self._delivery_client(10.0) as client:
+                response = await client.post(url, json=payload, timeout=10.0)
         except httpx.HTTPError as exc:
             await self._handle_delivery_error(
                 self._network_delivery_error("sendMessage", exc),
@@ -819,7 +830,7 @@ class TelegramSenderService:
         url = f"https://api.telegram.org/bot{token}/{method}"
         caption_text = caption.strip() if supports_caption and isinstance(caption, str) else ""
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with self._delivery_client(timeout) as client:
                 if isinstance(media, Path):
                     data: dict[str, str] = {"chat_id": external_chat_id}
                     if caption_entities:
@@ -838,7 +849,7 @@ class TelegramSenderService:
                                 mime_type or "application/octet-stream",
                             )
                         }
-                        response = await client.post(url, data=data, files=files)
+                        response = await client.post(url, data=data, files=files, timeout=timeout)
                 elif isinstance(media, bytes):
                     data = {"chat_id": external_chat_id}
                     if caption_entities:
@@ -856,7 +867,7 @@ class TelegramSenderService:
                             mime_type or "application/octet-stream",
                         )
                     }
-                    response = await client.post(url, data=data, files=files)
+                    response = await client.post(url, data=data, files=files, timeout=timeout)
                 else:
                     payload: dict[str, Any] = {"chat_id": external_chat_id, media_field: media}
                     if caption_entities:
@@ -867,7 +878,7 @@ class TelegramSenderService:
                         payload["reply_markup"] = reply_markup
                     if reply_parameters:
                         payload["reply_parameters"] = reply_parameters
-                    response = await client.post(url, json=payload)
+                    response = await client.post(url, json=payload, timeout=timeout)
         except httpx.HTTPError as exc:
             await self._handle_delivery_error(
                 self._network_delivery_error(method, exc),
