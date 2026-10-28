@@ -4,6 +4,7 @@ services:
     image: postgres:16-alpine
     shm_size: ${POSTGRES_SHM_SIZE:-256m}
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -19,8 +20,11 @@ services:
   redis:  
     image: redis:7-alpine
     restart: unless-stopped
+    command: ["sh", "/usr/local/bin/crm-redis-start.sh"]
+    stop_grace_period: 60s
     volumes:
       - redis_data:/data
+      - ./docker/redis-start.sh:/usr/local/bin/crm-redis-start.sh:ro
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -30,6 +34,7 @@ services:
   api:
     build: .
     restart: unless-stopped
+    stop_grace_period: 60s
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "${API_PORT}:8000"
@@ -58,6 +63,7 @@ services:
   worker:
     build: .
     restart: unless-stopped
+    stop_grace_period: 60s
     command: python -m app.workers
     env_file:
       - .env
@@ -81,6 +87,7 @@ services:
   jobs:
     build: .
     restart: unless-stopped
+    stop_grace_period: 60s
     command: arq app.workers.postback_worker.WorkerSettings
     env_file:
       - .env
@@ -104,6 +111,7 @@ services:
   exports:
     build: .
     restart: unless-stopped
+    stop_grace_period: 60s
     command: arq app.workers.dialog_export_worker.WorkerSettings
     env_file:
       - .env
@@ -125,6 +133,7 @@ services:
   backup:
     build: .
     restart: unless-stopped
+    stop_grace_period: 60s
     command: arq app.workers.backup_worker.WorkerSettings
     env_file:
       - .env
@@ -141,6 +150,7 @@ services:
   mtproto:
     build: .
     restart: unless-stopped
+    stop_grace_period: 60s
     command: python -m app.workers mtproto
     env_file:
       - .env

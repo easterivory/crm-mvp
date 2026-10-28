@@ -61,6 +61,18 @@ class ScheduledMessageRepository(BaseRepository[ScheduledMessage]):
         )
         return bool(result.rowcount)
 
+    async def recover_interrupted(self) -> int:
+        """Caller must own the scheduled-message worker advisory lock."""
+        result = await self.db.execute(
+            update(ScheduledMessage)
+            .where(ScheduledMessage.status == "running")
+            .values(status="failed", last_error=(
+                "Отправка прервана перезапуском обработчика. Результат доставки неизвестен. "
+                "Проверьте переписку в Telegram перед повторной отправкой."
+            ))
+        )
+        return result.rowcount
+
     async def mark_sent(self, message_id: UUID, sent_message_id: UUID) -> None:
         await self.db.execute(
             update(ScheduledMessage)
