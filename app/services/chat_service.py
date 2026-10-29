@@ -97,13 +97,22 @@ class ChatService:
         sla = project.sla_threshold_minutes
         await self.chat_lease.release_expired(project_id=project_id)
 
+        search_query = (filters.q or "").strip() or None
+        exact_telegram_id = bool(
+            search_query
+            and search_query.isascii()
+            and search_query.removeprefix("-").isdigit()
+            and await self.chat_repo.has_telegram_identity(project_id, search_query)
+        )
+
         # 3.1 Use `is True` instead of `bool()` so that None and False are both
         # treated as "no filter". bool(None) == False is incidentally the same
         # result, but `is True` makes the intent explicit and avoids accidental
         # truthy coercion of unexpected values (e.g. 0, empty string).
         filter_kwargs: dict = dict(
             project_id=project_id,
-            search_query=(filters.q or "").strip() or None,
+            search_query=search_query,
+            exact_telegram_id=exact_telegram_id,
             only_unread=filters.unread is True,
             only_unanswered=filters.unanswered is True
             or filters.has_unanswered_incoming is True,
@@ -149,9 +158,9 @@ class ChatService:
             chat_ids=chat_ids,
         )
         latest_messages = await self.chat_repo.latest_messages_for_chats(chat_ids)
-        search_hits = await self.chat_repo.search_hit_messages_for_chats(
-            chat_ids,
-            filters.q,
+        search_hits = (
+            {} if exact_telegram_id
+            else await self.chat_repo.search_hit_messages_for_chats(chat_ids, filters.q)
         )
         tags_by_chat = await self.chat_repo.lead_tags_for_chats(chat_ids)
         statuses_by_chat = await self.chat_repo.lead_statuses_for_chats(chat_ids)

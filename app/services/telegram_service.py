@@ -887,7 +887,10 @@ class TelegramService:
             bot_id=bot_id,
             external_chat_id=str(event.chat.id),
             is_blocked_by_user=is_blocked,
-            observed_at=event.date,
+            observed_at=(
+                datetime.fromtimestamp(event.date, timezone.utc)
+                if event.date is not None else None
+            ),
         )
         if chat is None:
             logger.info(

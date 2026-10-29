@@ -1053,10 +1053,6 @@ export default function ChatsPage() {
       return
     }
 
-    if (chatsAbortRef.current) {
-      return
-    }
-
     const searchQuery = debouncedChatFilters.q.trim()
     const params: Record<string, boolean | number | string> = {
       limit: CHAT_LIMIT,
@@ -1125,6 +1121,13 @@ export default function ChatsPage() {
     delete queryParams.offset
     const requestKey = JSON.stringify(queryParams)
     const isNewQuery = requestKey !== chatQueryKeyRef.current
+
+    if (chatsAbortRef.current) {
+      if (!isNewQuery || append) return
+      chatsAbortRef.current.abort()
+      chatsAbortRef.current = null
+      setIsChatsLoadingMore(false)
+    }
 
     if (append && (isNewQuery || loadedChatCountRef.current >= totalChatsRef.current)) {
       return

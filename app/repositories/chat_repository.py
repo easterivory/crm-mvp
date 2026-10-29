@@ -300,6 +300,7 @@ class ChatRepository(BaseRepository[Chat]):
         project_format: str = "submission",
         push_unread_threshold: int = 1,
         use_confidence_score: bool = True,
+        exact_telegram_id: bool = False,
     ):
         if workspace_view == "priority":
             stmt = stmt.where(self.priority_expr(priority_rules))
@@ -375,7 +376,11 @@ class ChatRepository(BaseRepository[Chat]):
         if tracking_link_id is not None:
             stmt = stmt.where(Chat.tracking_link_id == tracking_link_id)
         if search_query:
-            stmt = stmt.where(self._search_expr(search_query))
+            stmt = stmt.where(
+                self._telegram_identity_expr(search_query)
+                if exact_telegram_id
+                else self._search_expr(search_query)
+            )
         if date_from is not None:
             stmt = stmt.where(Chat.created_at >= date_from)
         if date_to is not None:
@@ -429,6 +434,19 @@ class ChatRepository(BaseRepository[Chat]):
                 .exists()
             )
         return stmt
+
+    @staticmethod
+    def _telegram_identity_expr(query: str) -> ColumnElement:
+        return or_(Chat.external_chat_id == query, Chat.external_user_id == query)
+
+    async def has_telegram_identity(self, project_id: UUID, query: str) -> bool:
+        stmt = select(Chat.id).where(
+            Chat.project_id == project_id,
+            Chat.is_deleted.is_(False),
+            Chat.reset_at.is_(None),
+            self._telegram_identity_expr(query),
+        ).limit(1)
+        return (await self.db.execute(stmt)).scalar_one_or_none() is not None
 
     @staticmethod
     def _search_expr(search_query: str) -> ColumnElement:
@@ -811,6 +829,7 @@ class ChatRepository(BaseRepository[Chat]):
         project_format: str = "submission",
         push_unread_threshold: int = 1,
         use_confidence_score: bool = True,
+        exact_telegram_id: bool = False,
     ) -> list[Chat]:
         """
         Returns chats matching the given filters. The default order is the
@@ -828,6 +847,7 @@ class ChatRepository(BaseRepository[Chat]):
             assigned_user_id=assigned_user_id,
             unassigned=unassigned,
             search_query=search_query,
+            exact_telegram_id=exact_telegram_id,
             tracking_link_id=tracking_link_id,
             date_from=date_from,
             date_to=date_to,
@@ -894,6 +914,7 @@ class ChatRepository(BaseRepository[Chat]):
         project_format: str = "submission",
         push_unread_threshold: int = 1,
         use_confidence_score: bool = True,
+        exact_telegram_id: bool = False,
     ) -> int:
         """
         Mirror of list() without LIMIT/OFFSET — used for pagination totals.
@@ -924,6 +945,7 @@ class ChatRepository(BaseRepository[Chat]):
             assigned_user_id=assigned_user_id,
             unassigned=unassigned,
             search_query=search_query,
+            exact_telegram_id=exact_telegram_id,
             tracking_link_id=tracking_link_id,
             date_from=date_from,
             date_to=date_to,
