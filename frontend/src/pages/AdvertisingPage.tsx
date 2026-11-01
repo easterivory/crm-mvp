@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   Plus,
   Save,
@@ -7,6 +7,7 @@ import {
   Square,
   ChevronLeft,
   ChevronRight,
+  SlidersHorizontal,
 } from 'lucide-react'
 import axios from 'axios'
 import api from '../api/client'
@@ -110,15 +111,23 @@ const today = () =>
 
 export default function AdvertisingPage(props: { tracking?: boolean }) {
   const { selectedProjectId } = useProjectBotSelection()
+  const { pathname } = useLocation()
   return (
     <AdvertisingPageContent
-      key={`${selectedProjectId}:${props.tracking}`}
+      key={`${selectedProjectId}:${pathname}`}
+      initialSettings={pathname === '/settings/advertising'}
       {...props}
     />
   )
 }
 
-function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
+function AdvertisingPageContent({
+  tracking = false,
+  initialSettings = false,
+}: {
+  tracking?: boolean
+  initialSettings?: boolean
+}) {
   const { selectedProjectId } = useProjectBotSelection()
   const superAdmin = useAuthStore((s) => s.user?.role_name === 'super_admin')
   const [config, setConfig] = useState<Config>(defaults)
@@ -133,6 +142,8 @@ function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [ready, setReady] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [enabledOnServer, setEnabledOnServer] = useState(false)
   const [notice, setNotice] = useState('')
   const [urls, setUrls] = useState<Record<string, string>>({})
   const urlsRef = useRef<Record<string, string>>({})
@@ -177,39 +188,62 @@ function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
   const load = useCallback(async () => {
     const current = ++generation.current
     setReady(false)
+    setLoading(true)
+    setError('')
     setDraft(null)
     setPreview(null)
     setReport(null)
     setDeliveries(null)
     setOffset(0)
-    if (!selectedProjectId) return
+    if (!selectedProjectId) {
+      setLoading(false)
+      return
+    }
+    let resource = 'настройки сценария'
     try {
       const p = { project_id: selectedProjectId }
       const cfg = await api.get('/advertising/settings', { params: p })
+      resource = 'слоты'
       const s = await api.get('/advertising/slots', { params: p })
-      const b = await api.get('/bots', { params: { ...p, limit: 100 } })
-      const t = await api.get('/tags', { params: { ...p, limit: 200 } })
+      const options = async (path: string): Promise<Option[]> => {
+        const result: Option[] = []
+        for (let offset = 0; ; offset += 100) {
+          const response = await api.get(path, {
+            params: { ...p, limit: 100, offset },
+          })
+          if (current !== generation.current) return []
+          const page: Option[] = response.data.items ?? response.data
+          result.push(...page)
+          if (page.length < 100 || result.length >= response.data.total) break
+        }
+        return result
+      }
+      resource = 'список ботов'
+      const b = await options('/bots')
+      resource = 'теги проекта'
+      const t = await options('/tags')
       if (current !== generation.current) return
       setConfig(cfg.data)
+      setEnabledOnServer(cfg.data.enabled)
       setSlots(s.data)
-      setBots(
-        (b.data.items ?? b.data).filter(
-          (x: Option) => x.transport_type !== 'user_mtproto',
-        ),
-      )
-      setTags(t.data.items ?? t.data)
+      setBots(b.filter((x: Option) => x.transport_type !== 'user_mtproto'))
+      setTags(t)
       setError('')
       setReady(true)
-      setTab(cfg.data.enabled ? 'slots' : 'settings')
+      setTab(initialSettings || !cfg.data.enabled ? 'settings' : 'slots')
     } catch (e) {
       if (current === generation.current)
         setError(
           axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
             ? e.response.data.detail
-            : 'Не удалось загрузить сценарий',
+            : axios.isAxiosError(e) && (!e.response || e.response.status >= 500)
+              ? `Не удалось загрузить ${resource}: API недоступен или вернул ошибку. Проверьте запуск серверной части и миграцию 0090.`
+              : `Не удалось загрузить ${resource}${axios.isAxiosError(e) && e.response ? ` (HTTP ${e.response.status})` : ''}`,
         )
+    } finally {
+      if (current === generation.current) setLoading(false)
     }
-  }, [selectedProjectId])
+  }, [selectedProjectId, initialSettings])
   useEffect(() => {
     void load()
     return () => {
@@ -279,6 +313,12 @@ function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
           {tracking ? 'Трекинг рекламы' : 'Рекламный сценарий'}
         </h1>
         <div className="flex gap-2">
+          {!tracking && (
+            <Link className={button} to="/settings/advertising">
+              <SlidersHorizontal size={16} />
+              Настройки сценария
+            </Link>
+          )}
           <Link
             className={button}
             to={tracking ? '/advertising' : '/tracking/advertising'}
@@ -295,6 +335,13 @@ function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
           </button>
         </div>
       </header>
+      {ready && !tracking && (
+        <p
+          className={`mb-4 text-sm ${enabledOnServer ? 'text-emerald-300' : 'text-gray-400'}`}
+        >
+          {enabledOnServer ? 'Сценарий включён' : 'Сценарий выключен'}
+        </p>
+      )}
       {error && (
         <p
           role="alert"
@@ -309,7 +356,18 @@ function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
         </p>
       )}
       {!ready ? (
-        <p>Загрузка…</p>
+        loading ? (
+          <p role="status">Загрузка…</p>
+        ) : (
+          <button
+            className={button}
+            disabled={busy}
+            onClick={() => void act(load)}
+          >
+            <RefreshCw size={16} />
+            Повторить загрузку
+          </button>
+        )
       ) : tracking ? (
         <>
           <div className="mb-5 flex flex-wrap gap-3">
@@ -550,6 +608,7 @@ function AdvertisingPageContent({ tracking = false }: { tracking?: boolean }) {
                 onClick={() =>
                   void act(async () => {
                     await api.put('/advertising/settings', config, { params })
+                    setEnabledOnServer(config.enabled)
                     window.dispatchEvent(new Event('advertising-settings'))
                     setNotice(
                       'Настройки сохранены. Старая база не обрабатывается автоматически.',

@@ -25,13 +25,22 @@ async function main() {
       await page.route('**/api/**', async route => {
         const request = route.request(), url = new URL(request.url()), p = url.pathname.replace(/\/$/, '')
         if (!p.startsWith('/api/')) return route.continue()
+        if (['/api/v1/tags', '/api/v1/bots'].includes(p) && Number(url.searchParams.get('limit')) > 100) {
+          return route.fulfill({ status: 422, json: { detail: [{ loc: ['query', 'limit'], msg: 'Input should be less than or equal to 100' }] } })
+        }
         let data = { items: [], total: 0 }
         if (p === '/api/ui-host-context') data = { crm_ui_allowed: true }
         else if (p.endsWith('/advertising/settings')) data = { enabled: true, bot_ids: ['bot'], protected_tag_ids: ['hot'], audience_tag_id: 'ad', timeout_minutes: 180 }
         else if (p.endsWith('/advertising/slots/slot') && request.method() === 'PUT') { slot = { id: 'slot', ...request.postDataJSON(), revision: 2 }; data = slot }
         else if (p.endsWith('/advertising/slots')) data = [slot]
         else if (p.endsWith('/bots')) data = { items: [{ id: 'bot', name: 'Вакансии бот', transport_type: 'bot_api', project_id: 'project' }], total: 1 }
-        else if (p.endsWith('/tags')) data = { items: [{ id: 'hot', name: 'HOT HOT' }, { id: 'ad', name: 'Материал для рекламы' }], total: 2 }
+        else if (p.endsWith('/tags')) {
+          const tags = [{ id: 'hot', name: 'HOT HOT' }, { id: 'ad', name: 'Материал для рекламы' },
+            ...Array.from({ length: 98 }, (_, i) => ({ id: `tag-${i}`, name: `Тег ${i}` })),
+            { id: 'last', name: 'Защита со второй страницы' }]
+          const offset = Number(url.searchParams.get('offset') || 0)
+          data = { items: tags.slice(offset, offset + 100), total: tags.length }
+        }
         else if (p.endsWith('/projects')) data = { items: [project], total: 1 }
         else if (p.endsWith('/advertising/backfill/preview')) data = { preview_id: 'preview', count: 25, sample_chat_ids: ['local-chat'] }
         else if (p.endsWith('/advertising/backfill/start')) { assert.equal(request.postDataJSON().confirmation, 'ЗАПУСТИТЬ'); data = { run_id: 'run', state: 'queued' } }
@@ -43,6 +52,12 @@ async function main() {
       await page.getByRole('button', { name: '#1 Оффер покупателя' }).click()
       await page.getByRole('button', { name: 'Сохранить слот', exact: true }).click()
       await page.getByRole('status').filter({ hasText: 'Слот сохранён' }).waitFor()
+      await page.getByRole('link', { name: 'Настройки сценария', exact: true }).click()
+      await page.getByLabel('Рекламный сценарий включён').waitFor()
+      await page.getByText('Защита со второй страницы', { exact: true }).first().waitFor()
+      await page.screenshot({ path: path.join(output, `settings-${size.width}.png`), fullPage: true })
+      await page.getByRole('button', { name: 'Слоты', exact: true }).click()
+      await page.getByRole('button', { name: '#1 Оффер покупателя' }).click()
       await page.screenshot({ path: path.join(output, `slots-${size.width}.png`), fullPage: true })
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false)
       await page.getByRole('button', { name: 'Старая база', exact: true }).click()
@@ -55,6 +70,15 @@ async function main() {
       await page.getByRole('button', { name: 'Рассчитать' }).click()
       await page.getByRole('heading', { name: 'Отправки по слотам' }).waitFor()
       await page.screenshot({ path: path.join(output, `tracking-${size.width}.png`), fullPage: true })
+      let failed = true
+      await page.route('**/api/v1/advertising/settings*', route => failed
+        ? route.fulfill({ status: 500, json: { detail: 'Сервер недоступен' } }) : route.fallback())
+      await page.goto('http://127.0.0.1:5177/settings/advertising')
+      await page.getByRole('alert').waitFor()
+      assert.equal(await page.getByText('Загрузка…', { exact: true }).count(), 0)
+      failed = false
+      await page.getByRole('button', { name: 'Повторить загрузку' }).click()
+      await page.getByLabel('Рекламный сценарий включён').waitFor()
       assert.deepEqual(errors, [])
       await context.close()
     }
