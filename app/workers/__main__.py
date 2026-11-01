@@ -12,6 +12,8 @@ Usage:
     python -m app.workers postback  # partner postback worker only
     python -m app.workers buyer  # buyer Telegram bot polling worker only
     python -m app.workers info   # super-admin info bot only
+    python -m app.workers advertising # advertising slot queue
+    python -m app.workers advertising-bot # separate slot management bot
     python -m app.workers backup  # scheduled database backups only
     python -m app.workers mtproto # dedicated Telegram work-account process
     python -m app.workers all     # shared workers (default in Docker)
@@ -75,6 +77,14 @@ def main() -> None:
         from app.workers.info_bot import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "advertising":
+        from app.workers.advertising_worker import run_loop
+        asyncio.run(run_loop())
+
+    elif mode == "advertising-bot":
+        from app.workers.info_bot import run_loop
+        asyncio.run(run_loop(advertising=True))
+
     elif mode == "backup":
         from app.workers.backup_worker import run_loop
         asyncio.run(run_loop())
@@ -94,6 +104,7 @@ def main() -> None:
         from app.workers.postback_worker import run_loop as postback_loop
         from app.workers.scheduled_message_worker import run_loop as scheduled_loop
         from app.workers.stats_worker import run_loop as stats_loop
+        from app.workers.advertising_worker import run_loop as advertising_loop
 
         async def run_all() -> None:
             logger.info("Starting shared workers; MTProto runs in its dedicated service")
@@ -108,13 +119,15 @@ def main() -> None:
                 buyer_loop(),
                 admin_loop(),
                 info_loop(),
+                advertising_loop(),
+                info_loop(advertising=True),
             )
 
         asyncio.run(run_all())
 
     else:
         logger.error(
-            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | info | backup | mtproto | all",
+            "Unknown worker mode: %r. Use: alert | stats | funnel | push | broadcast | scheduled | postback | buyer | admin | info | advertising | advertising-bot | backup | mtproto | all",
             mode,
         )
         sys.exit(1)

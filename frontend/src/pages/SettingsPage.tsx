@@ -1,4 +1,5 @@
 import PriorityChatSettings from '../features/chats/components/PriorityChatSettings'
+import { Link } from 'react-router-dom'
 import {
   Check,
   ChevronDown,
@@ -1506,6 +1507,7 @@ export default function SettingsPage() {
           </div>
         </div>
         <nav className="flex min-h-0 gap-2 overflow-x-auto md:flex-1 md:flex-col md:space-y-2 md:overflow-x-visible md:overflow-y-auto">
+          {['admin', 'super_admin'].includes(currentUser?.role_name || '') && <Link to="/settings/advertising" className="shrink-0 rounded-lg px-3 py-2 text-sm text-emerald-300">Рекламный сценарий</Link>}
           {visibleTabs.map((tab) => (
             <button
               key={tab.key}

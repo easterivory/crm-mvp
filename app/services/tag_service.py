@@ -84,6 +84,13 @@ class TagService:
                 detail="Tag not found",
             )
         await TrafficQualityService(self.db).ensure_tag_unused(project_id, tag_id)
+        from app.services.advertising_service import AdvertisingService
+        advertising = await AdvertisingService(self.db).config(project_id)
+        if tag_id == advertising.audience_tag_id or tag_id in advertising.protected_tag_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Сначала уберите тег из настроек рекламного сценария",
+            )
         deleted = await self.tag_repo.delete_from_project(tag_id, project_id)
         if not deleted:
             raise HTTPException(

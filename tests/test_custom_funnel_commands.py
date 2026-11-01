@@ -180,6 +180,7 @@ def test_runtime_executes_custom_trigger_without_selecting_it_for_start() -> Non
     assert FunnelRuntimeService._default_start_trigger([custom, default]) is default
 
     service = FunnelRuntimeService.__new__(FunnelRuntimeService)
+    service.db = SimpleNamespace(scalar=AsyncMock(return_value=None))
     service.repo = SimpleNamespace(
         lock_chat_for_runtime=AsyncMock(return_value=True),
         list_steps=AsyncMock(return_value=[custom, default]),

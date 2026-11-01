@@ -22,6 +22,7 @@ import BroadcastButtonListEditor from './BroadcastButtonListEditor'
 import VariablePicker from './VariablePicker'
 
 type ContentStepProps = {
+  urlOnly?: boolean
   content: BroadcastContent
   botId: string | null
   funnels: BroadcastOption[]
@@ -81,6 +82,7 @@ function formatBytes(value?: number) {
 }
 
 export default function ContentStep({
+  urlOnly = false,
   content,
   botId,
   funnels,
@@ -339,6 +341,7 @@ export default function ContentStep({
         <h2 className="text-sm font-semibold text-white">Кнопки под сообщением</h2>
         <div className="mt-3">
           <BroadcastButtonListEditor
+            urlOnly={urlOnly}
             buttons={message.buttons ?? []}
             funnels={availableFunnels}
             onChange={(buttons) => replaceMessage({ buttons })}

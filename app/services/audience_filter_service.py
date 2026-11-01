@@ -150,6 +150,15 @@ class AudienceFilterService:
         operator = rule.operator
         raw_value = rule.value
 
+        if field == "advertising":
+            from app.models.advertising import AdvertisingEnrollment
+            exists_expr = select(AdvertisingEnrollment.id).where(
+                AdvertisingEnrollment.chat_id == Chat.id,
+                AdvertisingEnrollment.status.in_(["active", "completed"]),
+                AdvertisingEnrollment.started_at.is_not(None),
+            ).exists()
+            return self._apply_set_operator(exists_expr, operator)
+
         if field == "tag":
             values = self._uuid_values(raw_value, "tag")
             exists_expr = (

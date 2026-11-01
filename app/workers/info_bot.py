@@ -64,8 +64,13 @@ class InfoTelegramClient(AdminTelegramClient):
         ]})
 
 
-async def run_loop():
-    state = InfoBotStateStore()
+async def run_loop(*, advertising=False):
+    if advertising:
+        from app.services.advertising_bot import AdvertisingBotState, AdvertisingBotService, AdvertisingBotConfig
+        state, service_type, config_type = AdvertisingBotState(), AdvertisingBotService, AdvertisingBotConfig
+    else:
+        state, service_type, config_type = InfoBotStateStore(), InfoBotService, InfoBotConfigService
+    namespace = "advertising_bot" if advertising else "info_bot"
     owner = str(uuid4())
     client, current_token, lock_key = None, None, None
     heartbeat = None
@@ -73,7 +78,7 @@ async def run_loop():
         while True:
             try:
                 async with get_db_session() as db:
-                    token = await InfoBotConfigService(db).token()
+                    token = await config_type(db).token()
                 if token != current_token:
                     if heartbeat:
                         heartbeat.cancel()
@@ -85,7 +90,7 @@ async def run_loop():
                         await state.redis.eval(RELEASE_SCRIPT, 1, lock_key, owner)
                     current_token = token
                     client = InfoTelegramClient(token) if token else None
-                    lock_key = f"info_bot:poller:{token.split(':')[0]}" if token else None
+                    lock_key = f"{namespace}:poller:{token.split(':')[0]}" if token else None
                 if not client:
                     await asyncio.sleep(25)
                     continue
@@ -132,7 +137,7 @@ async def run_loop():
                             # Cached delivery must not outlive a revoked CRM role.
                             if chat_id is not None:
                                 async with get_db_session() as db:
-                                    authorized = await InfoBotService(db, state).authorized_user(chat_id)
+                                    authorized = await service_type(db, state).authorized_user(chat_id)
                                     allowed = authorized is not None
                                 if not allowed:
                                     replies = [{"text": "Доступ только для суперадминистраторов CRM с привязанным Telegram ID."}]
@@ -142,8 +147,13 @@ async def run_loop():
                         else:
                             async with asyncio.timeout(60):
                                 async with get_db_session() as db:
-                                    chat_id, replies = await InfoBotService(db, state).handle_update(update)
-                                    await db.rollback()
+                                    chat_id, replies = await service_type(db, state).handle_update(update)
+                                    if advertising:
+                                        plan = {"chat_id": chat_id, "replies": replies, "sent": 0}
+                                        await InfoBotDeliveryRepository(db).save_plan(client.bot_id, update_id, plan)
+                                        await db.commit()
+                                    else:
+                                        await db.rollback()
                     except Exception as exc:
                         failures = await state.redis.incr(failure_key)
                         await state.redis.expire(failure_key, 300)

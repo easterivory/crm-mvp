@@ -9,6 +9,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import SuperAdminRoute from './components/SuperAdminRoute'
 import BotsPage from './pages/BotsPage'
 import BroadcastsPage from './pages/BroadcastsPage'
+import AdvertisingPage from './pages/AdvertisingPage'
 import DashboardPage from './pages/DashboardPage'
 import FunnelsPage from './pages/FunnelsPage'
 import LeadsPage from './pages/LeadsPage'
@@ -89,6 +90,9 @@ function CrmApplication() {
           <Route path="/funnels" element={<FunnelsPage />} />
           <Route path="/funnels/:funnelId/builder" element={<FunnelsPage />} />
           <Route path="/broadcasts" element={<BuyerRestrictedRoute><BroadcastsPage /></BuyerRestrictedRoute>} />
+          <Route path="/advertising" element={<AdminRoute><AdvertisingPage /></AdminRoute>} />
+          <Route path="/settings/advertising" element={<AdminRoute><AdvertisingPage /></AdminRoute>} />
+          <Route path="/tracking/advertising" element={<AdminRoute><AdvertisingPage tracking /></AdminRoute>} />
           <Route path="/bots" element={<BuyerRestrictedRoute><ManagerRestrictedRoute><BotsPage /></ManagerRestrictedRoute></BuyerRestrictedRoute>} />
           <Route path="/leads" element={<BuyerRestrictedRoute><LeadsPage /></BuyerRestrictedRoute>} />
           <Route path="/tracking" element={<ManagerRestrictedRoute><TrackingPage /></ManagerRestrictedRoute>} />

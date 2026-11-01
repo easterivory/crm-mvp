@@ -434,6 +434,9 @@ class ChatService:
                 detail="Chat not found",
             )
 
+        await FunnelRuntimeService(self.db).lock_chat_for_runtime(chat_id)
+        from app.services.advertising_service import AdvertisingService
+        await AdvertisingService(self.db).return_to_main(chat_id, reason="administrator_reset")
         lead = await self.lead_repo.get_existing_by_chat(chat_id, project_id)
         if lead is not None:
             await self.lead_repo.clear_tags(lead.id)

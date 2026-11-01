@@ -34,6 +34,8 @@ import {
 } from '../shared/lib'
 import { useAuthStore } from '../store/authStore'
 import DashboardHeaderMetrics from './DashboardHeaderMetrics'
+import api from '../api/client'
+import { useProjectBotSelection } from '../shared/lib'
 
 const SIDEBAR_COLLAPSED_KEY = 'crm:sidebarCollapsed'
 
@@ -42,6 +44,7 @@ const navItems = [
   { label: 'Заготовки', path: '/snippets', icon: Library },
   { label: t('funnels'), path: '/funnels', icon: Workflow },
   { label: t('broadcasts'), path: '/broadcasts', icon: Megaphone },
+  { label: 'Рекламный сценарий', path: '/advertising', icon: Megaphone },
   { label: t('bots'), path: '/bots', icon: Bot },
   { label: t('leads'), path: '/leads', icon: UsersRound },
   { label: t('analytics'), path: '/analytics', icon: BarChart3 },
@@ -75,6 +78,20 @@ export default function MainLayout() {
   const logout = useAuthStore((state) => state.logout)
   const navigate = useNavigate()
   const location = useLocation()
+  const { selectedProjectId } = useProjectBotSelection()
+  const [advertisingEnabled, setAdvertisingEnabled] = useState(false)
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      setAdvertisingEnabled(false)
+      if (selectedProjectId && isAdminOrSuperAdminRole(user?.role_name)) {
+        void api.get('/advertising/settings', { params: { project_id: selectedProjectId } })
+          .then(r => { if (active) setAdvertisingEnabled(r.data.enabled) }).catch(() => {})
+      }
+    }
+    refresh(); window.addEventListener('advertising-settings', refresh)
+    return () => { active = false; window.removeEventListener('advertising-settings', refresh) }
+  }, [selectedProjectId, user?.role_name])
   const [isCollapsed, setIsCollapsed] = useState(readCollapsed)
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const [isMobileScopeOpen, setIsMobileScopeOpen] = useState(false)
@@ -116,6 +133,7 @@ export default function MainLayout() {
   const visibleNavItems = useMemo(
     () =>
       navItems.filter((item) => {
+        if (item.path === '/advertising') return advertisingEnabled && isAdminOrSuperAdminRole(user?.role_name)
         if (isBuyerRole(user?.role_name)) {
           return ['/chats', '/funnels', '/tracking'].includes(item.path)
         }
@@ -133,7 +151,7 @@ export default function MainLayout() {
           '/settings/ai',
         ].includes(item.path)
       }),
-    [user?.role_name],
+    [user?.role_name, advertisingEnabled],
   )
   const roleLabel = useMemo(() => {
     const role = user?.role_name ?? 'user'

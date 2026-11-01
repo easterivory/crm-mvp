@@ -15,6 +15,7 @@ type AudienceRuleRowProps = {
 }
 
 const fields = [
+  ['advertising', 'Рекламная аудитория'],
   ['tag', 'Тег'],
   ['lead_status', 'Статус лида'],
   ['funnel_state', 'Состояние воронки'],
@@ -239,7 +240,7 @@ export default function AudienceRuleRow({
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
         <select
           value={rule.field}
-          onChange={(event) => onChange({ ...rule, field: event.target.value, value: [] })}
+          onChange={(event) => onChange({ ...rule, field: event.target.value, operator: event.target.value === 'advertising' ? 'exists' : 'equals', value: [] })}
           className="rounded-lg border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none"
         >
           {fields.map(([value, label]) => (
@@ -251,7 +252,7 @@ export default function AudienceRuleRow({
           onChange={(event) => onChange({ ...rule, operator: event.target.value })}
           className="rounded-lg border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none"
         >
-          {operators.map(([value, label]) => (
+          {operators.filter(([value]) => rule.field !== 'advertising' || ['exists', 'empty'].includes(value)).map(([value, label]) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </select>

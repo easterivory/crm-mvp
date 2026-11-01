@@ -274,6 +274,27 @@ class BroadcastDeliveryWorker:
             if context is None:
                 raise RuntimeError("Chat not found")
             chat, lead = context
+            audience = broadcast.audience_filter_json or {}
+            advertising_audience = any(
+                rule.get("field") == "advertising" and rule.get("operator", "exists") == "exists"
+                for rule in (audience.get("include") or {}).get("rules", [])
+            )
+            if advertising_audience:
+                from app.services.advertising_service import AdvertisingService
+                from app.services.audience_filter_service import AudienceFilterService
+                from app.models.chat import Chat
+                ad = AdvertisingService(self.db)
+                cfg = await ad.config(project_id)
+                filters = AudienceFilterService(self.db)
+                stmt = filters._audience_stmt(project_id=project_id, bot_id=broadcast.bot_id,
+                    audience_filter=filters._parse_filter(audience)).where(Chat.id == chat.id)
+                still_matches = (await self.db.execute(stmt)).first() is not None
+                reason = await ad.protected_reason(chat, cfg)
+                if not cfg.enabled or not still_matches or reason:
+                    await self.db.execute(update(BroadcastRecipient).where(BroadcastRecipient.id == recipient_id)
+                        .values(status="skipped", last_error=reason or "Advertising audience changed"))
+                    await self.db.commit()
+                    return False
             await self.service._send_to_recipient(broadcast, recipient_chat_id, chat, lead)
             await self.repo.mark_recipient_sent(recipient_id)
             await self.db.commit()

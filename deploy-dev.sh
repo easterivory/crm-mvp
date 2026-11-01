@@ -72,12 +72,49 @@ echo "=== Reset local dev to origin/dev ==="
 git checkout dev
 git reset --hard origin/dev
 
-echo "=== Cleanup stale runtime containers ==="
-docker rm -f crm_mvp_dev-frontend-1 2>/dev/null || true
-docker compose rm -sf api worker jobs backup
+echo "=== Build images before stopping the running application ==="
+docker compose build api worker jobs backup exports mtproto
 
-echo "=== Build and restart DEV containers ==="
-docker compose up -d --build postgres redis api worker jobs backup
+echo "=== Stop writers before backup and migration ==="
+docker compose stop api worker jobs backup exports mtproto
+docker compose up -d postgres redis
+for attempt in $(seq 1 30); do
+  if docker compose exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null; then
+    break
+  fi
+  if [ "$attempt" = "30" ]; then
+    echo "PostgreSQL is not ready; application remains stopped." >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+echo "=== Save pre-migration database backup ==="
+BACKUP_DIR="$PWD/backups/deploy"
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+BACKUP_FILE="$BACKUP_DIR/pre-migration-$(date -u +%Y%m%dT%H%M%SZ)-$$.dump"
+PREVIOUS_UMASK=$(umask)
+umask 077
+if ! docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_FILE.partial"; then
+  rm -f "$BACKUP_FILE.partial"
+  echo "Backup failed; no migration or application startup was attempted." >&2
+  exit 1
+fi
+if [ ! -s "$BACKUP_FILE.partial" ]; then
+  rm -f "$BACKUP_FILE.partial"
+  echo "Empty backup; deployment stopped." >&2
+  exit 1
+fi
+mv "$BACKUP_FILE.partial" "$BACKUP_FILE"
+umask "$PREVIOUS_UMASK"
+echo "Database backup: $BACKUP_FILE (media volumes are separate)"
+
+echo "=== Migrate before starting the new application ==="
+docker compose run --rm --no-deps api alembic upgrade head
+
+echo "=== Start application against migrated database ==="
+docker compose up -d --no-deps api worker jobs backup exports mtproto
 
 echo "=== Frontend static assets ==="
 if [ "$BUILD_FRONTEND_ON_SERVER" = "1" ]; then
@@ -92,9 +129,6 @@ else
 fi
 print_frontend_assets
 reload_nginx_if_present
-
-echo "=== Run migrations ==="
-docker compose exec -T api alembic upgrade head
 
 echo "=== Seed dev users ==="
 docker compose exec -T api python scripts/seed_test_users.py

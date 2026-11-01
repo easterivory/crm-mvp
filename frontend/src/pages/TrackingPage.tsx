@@ -19,6 +19,7 @@ import {
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
+import AdvertisingTrackingLink from '../components/AdvertisingTrackingLink'
 
 import { fetchBots } from '../features/bots/api'
 import TrackingOverview from '../features/tracking/TrackingOverview'
@@ -975,6 +976,7 @@ export default function TrackingPage() {
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
+            <AdvertisingTrackingLink />
             {!isBuyer && <label className="block"><span className="mb-1 block text-xs text-gray-400">Баер</span>
               <select aria-label="Баер" value={buyerFilter} onChange={e => setBuyerFilter(e.target.value)} className={`${dateInputClassName} max-w-52`}>
                 <option value="">Все баеры</option>{buyers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}

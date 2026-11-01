@@ -1282,6 +1282,9 @@ class TelegramService:
             )
             return
 
+        from app.services.advertising_service import AdvertisingService
+        if await AdvertisingService(self.db).owns_chat(chat.id):
+            return
         logger.info(
             "No active funnel, using legacy bot_engine fallback bot_id=%s project_id=%s "
             "chat_id=%s start_requested=%s",
@@ -1658,6 +1661,8 @@ class TelegramService:
             and await self._submission_restart_after_inactivity(chat, user_message, state)
         ):
             old_version_id = state.funnel_version_id if state is not None else None
+            from app.services.advertising_service import AdvertisingService
+            await AdvertisingService(self.db).return_to_main(chat.id)
             await self.bot_repo.reset_chat_state(chat.id)
             await self.funnel_runtime.repo.delete_chat_funnel_state(chat.id)
             await self.chat_repo.update_by_id(chat.id, unanswered_push_count=0)
@@ -1685,6 +1690,8 @@ class TelegramService:
                 "chat_id=%s message_id=%s idle_days=30 old_version_id=%s new_version_id=%s",
                 chat.id, user_message.id, old_version_id, active_funnel_version_id,
             )
+            return
+        if state is not None and (getattr(state, "runtime_json", None) or {}).get("advertising_enrollment_id"):
             return
         target_step_key = await self._tracking_target_step_key(
             chat=chat,
@@ -1919,6 +1926,9 @@ class TelegramService:
             )
             return
 
+        from app.services.advertising_service import AdvertisingService
+        if await AdvertisingService(self.db).owns_chat(chat.id):
+            return
         logger.info(
             "No active funnel, using legacy bot_engine fallback for callback "
             "bot_id=%s project_id=%s chat_id=%s",

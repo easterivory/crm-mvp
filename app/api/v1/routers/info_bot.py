@@ -57,7 +57,7 @@ async def save_info_bot(data: InfoBotSettings, user: User = Depends(get_current_
             raise HTTPException(422, "Telegram не подтвердил токен. Проверьте токен и доступность Telegram.") from None
         finally:
             await client.close()
-    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": INFO_BOT_KEY})
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": "crm_management_bot_settings"})
     service = InfoBotConfigService(db)
     current = await service.read()
     config = dict(current)
@@ -67,7 +67,10 @@ async def save_info_bot(data: InfoBotSettings, user: User = Depends(get_current_
         buyer = await settings_service.get_effective_buyer_bot_config()
         bot_id = token.split(":", 1)[0]
         existing = await db.scalar(select(Bot.id).where(Bot.telegram_token.like(f"{bot_id}:%")).limit(1))
-        other_tokens = (global_config.admin_bot_token, global_config.tg_backup_bot_token, buyer.token)
+        from app.services.advertising_bot import AdvertisingBotConfig
+        advertising = await AdvertisingBotConfig(db).read()
+        ad_token = AICredentialService().decrypt(advertising["encrypted_token"]) if advertising.get("encrypted_token") else None
+        other_tokens = (global_config.admin_bot_token, global_config.tg_backup_bot_token, buyer.token, ad_token)
         if any(value and value.split(":", 1)[0] == bot_id for value in other_tokens) or existing:
             raise HTTPException(422, "Для инфобота нужен отдельный бот, не подключённый к CRM, алертам или бэкапам.")
         config.update(encrypted_token=AICredentialService().encrypt(token), username=profile.get("username"))

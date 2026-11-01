@@ -11,6 +11,9 @@ __pycache__/
 coverage/
 htmlcov/
 logs/
+backups/
+*.dump
+*.sql.gz
 *.log
 node_modules/
 frontend/node_modules/

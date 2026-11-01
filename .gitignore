@@ -40,6 +40,9 @@ htmlcov/
 *.log
 logs/
 storage/
+backups/
+*.dump
+*.sql.gz
 
 # OS
 .DS_Store

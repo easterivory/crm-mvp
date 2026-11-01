@@ -223,6 +223,8 @@ class FunnelRuntimeService:
             return None
 
         existing = await self.repo.get_chat_funnel_state(chat_id)
+        if existing is not None and (getattr(existing, "runtime_json", None) or {}).get("advertising_enrollment_id"):
+            return None
         if existing is not None and existing.completed_at is None:
             logger.info(
                 "Funnel start is already active; duplicate request ignored "
@@ -233,6 +235,9 @@ class FunnelRuntimeService:
             )
             return await self.repo.get_step(existing.current_step_id)
 
+        from app.services.advertising_service import AdvertisingService
+        if await AdvertisingService(self.db).owns_chat(chat_id):
+            return None
         steps = await self.repo.list_steps(funnel_version_id)
         trigger = self._default_start_trigger(steps)
         if trigger is None:
@@ -268,6 +273,8 @@ class FunnelRuntimeService:
             is_paused=False,
             runtime_json={},
         )
+        from app.services.advertising_service import AdvertisingService
+        await AdvertisingService(self.db).watch_start(chat_id)
         await self._log_runtime_step(chat_id=chat_id, step=initial_step, status="success")
         logger.info(
             "Starting active funnel chat_id=%s funnel_id=%s funnel_version_id=%s start_step_id=%s",
@@ -302,6 +309,9 @@ class FunnelRuntimeService:
         command: str,
     ) -> Optional[FunnelStep]:
         if not await self.repo.lock_chat_for_runtime(chat_id):
+            return None
+        from app.services.advertising_service import AdvertisingService
+        if await AdvertisingService(self.db).owns_chat(chat_id):
             return None
         trigger = await self.get_custom_command_trigger(
             funnel_version_id=funnel_version_id,
@@ -563,6 +573,8 @@ class FunnelRuntimeService:
             raise PermissionError("Only the assigned manager can resume this funnel.")
 
         state = await self.repo.get_chat_funnel_state(chat_id)
+        if state and (getattr(state, "runtime_json", None) or {}).get("advertising_enrollment_id"):
+            raise PermissionError("Возврат из рекламы возможен только через /start после 30 дней без сообщений")
         if state is None or state.completed_at is not None:
             return False
 

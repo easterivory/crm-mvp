@@ -13,6 +13,7 @@ type BroadcastButton = Record<string, unknown> & {
 }
 
 type Props = {
+  urlOnly?: boolean
   buttons: BroadcastButton[]
   funnels: BroadcastOption[]
   onChange: (buttons: BroadcastButton[]) => void
@@ -27,7 +28,7 @@ function newButton(): BroadcastButton {
   }
 }
 
-export default function BroadcastButtonListEditor({ buttons, funnels, onChange }: Props) {
+export default function BroadcastButtonListEditor({ buttons, funnels, onChange, urlOnly = false }: Props) {
   const update = (index: number, patch: Partial<BroadcastButton>) => {
     onChange(buttons.map((button, idx) => (idx === index ? { ...button, ...patch } : button)))
   }
@@ -50,9 +51,9 @@ export default function BroadcastButtonListEditor({ buttons, funnels, onChange }
               }
               className="rounded-lg border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none"
             >
-              <option value="callback">Callback</option>
+              {!urlOnly && <option value="callback">Callback</option>}
               <option value="url">URL</option>
-              <option value="start_funnel">Запустить воронку</option>
+              {!urlOnly && <option value="start_funnel">Запустить воронку</option>}
             </select>
             <button
               type="button"
@@ -100,7 +101,7 @@ export default function BroadcastButtonListEditor({ buttons, funnels, onChange }
       ))}
       <button
         type="button"
-        onClick={() => onChange([...buttons, newButton()])}
+        onClick={() => onChange([...buttons, urlOnly ? { ...newButton(), type: 'url' } : newButton()])}
         className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 px-3 text-sm text-gray-100 transition hover:border-accent-300/35"
       >
         <Plus size={15} />
