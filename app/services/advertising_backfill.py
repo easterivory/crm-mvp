@@ -38,10 +38,10 @@ async def process_backfill(db, limit=25):
         AdvertisingAudit.details["state"].astext == "queued").order_by(AdvertisingAudit.created_at).limit(1).with_for_update(skip_locked=True))
     if run is None:
         return
-    service = AdvertisingService(db)
+    service = AdvertisingService(db, run.scenario_id)
     cfg = await service.config(run.project_id)
     progress = dict(run.details)
-    if not cfg.enabled or progress["settings"] != cfg.model_dump(mode="json"):
+    if not cfg.enabled or progress["settings"] != cfg.model_dump(mode="json", exclude={"name"}):
         run.details = {**progress, "state": "stopped_settings_changed"}
         return
     options = progress["options"]
@@ -54,7 +54,7 @@ async def process_backfill(db, limit=25):
         if await db.scalar(select(AdvertisingEnrollment.id).where(AdvertisingEnrollment.chat_id == chat_id,
             AdvertisingEnrollment.status != "returned").limit(1)):
             continue
-        enrollment = AdvertisingEnrollment(project_id=run.project_id, chat_id=chat_id,
+        enrollment = AdvertisingEnrollment(project_id=run.project_id, scenario_id=run.scenario_id, chat_id=chat_id,
             source="backfill", stop_main=options["stop_main"], status="waiting", due_at=now())
         db.add(enrollment)
         await db.flush()

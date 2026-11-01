@@ -30,10 +30,14 @@ async function main() {
         }
         let data = { items: [], total: 0 }
         if (p === '/api/ui-host-context') data = { crm_ui_allowed: true }
-        else if (p.endsWith('/advertising/settings')) data = { enabled: true, bot_ids: ['bot'], protected_tag_ids: ['hot'], audience_tag_id: 'ad', timeout_minutes: 180 }
+        else if (p.endsWith('/advertising/availability')) data = { enabled: true }
+        else if (p.endsWith('/advertising/scenarios')) data = [
+          { id: 'project', name: 'Основной', enabled: true, bot_ids: ['bot'] },
+          { id: 'second', name: 'Второй сценарий', enabled: true, bot_ids: ['bot2'] }]
+        else if (p.endsWith('/advertising/settings')) data = { name: url.searchParams.get('scenario_id') === 'second' ? 'Второй сценарий' : 'Основной', enabled: true, bot_ids: [url.searchParams.get('scenario_id') === 'second' ? 'bot2' : 'bot'], protected_tag_ids: ['hot'], audience_tag_id: 'ad', timeout_minutes: 180 }
         else if (p.endsWith('/advertising/slots/slot') && request.method() === 'PUT') { slot = { id: 'slot', ...request.postDataJSON(), revision: 2 }; data = slot }
-        else if (p.endsWith('/advertising/slots')) data = [slot]
-        else if (p.endsWith('/bots')) data = { items: [{ id: 'bot', name: 'Вакансии бот', transport_type: 'bot_api', project_id: 'project' }], total: 1 }
+        else if (p.endsWith('/advertising/slots')) data = url.searchParams.get('scenario_id') === 'second' ? [] : [slot]
+        else if (p.endsWith('/bots')) data = { items: [{ id: 'bot', name: 'Вакансии бот', transport_type: 'bot_api', project_id: 'project' }, { id: 'bot2', name: 'Другой бот', transport_type: 'bot_api', project_id: 'project' }], total: 2 }
         else if (p.endsWith('/tags')) {
           const tags = [{ id: 'hot', name: 'HOT HOT' }, { id: 'ad', name: 'Материал для рекламы' },
             ...Array.from({ length: 98 }, (_, i) => ({ id: `tag-${i}`, name: `Тег ${i}` })),
@@ -53,6 +57,14 @@ async function main() {
       await page.getByRole('button', { name: 'Сохранить слот', exact: true }).click()
       await page.getByRole('status').filter({ hasText: 'Слот сохранён' }).waitFor()
       await page.getByRole('link', { name: 'Настройки сценария', exact: true }).click()
+      await page.getByLabel('Рекламный сценарий включён').waitFor()
+      assert.equal(await page.getByLabel('Другой бот', { exact: false }).isDisabled(), true)
+      await page.getByLabel('Сценарий', { exact: true }).selectOption('second')
+      await page.getByLabel('Название сценария', { exact: true }).waitFor()
+      assert.equal(await page.getByLabel('Название сценария', { exact: true }).inputValue(), 'Второй сценарий')
+      await page.getByRole('button', { name: 'Слоты', exact: true }).click()
+      assert.equal(await page.getByRole('button', { name: '#1 Оффер покупателя' }).count(), 0)
+      await page.getByLabel('Сценарий', { exact: true }).selectOption('project')
       await page.getByLabel('Рекламный сценарий включён').waitFor()
       await page.getByText('Защита со второй страницы', { exact: true }).first().waitFor()
       await page.screenshot({ path: path.join(output, `settings-${size.width}.png`), fullPage: true })

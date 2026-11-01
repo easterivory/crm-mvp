@@ -85,7 +85,7 @@ export default function MainLayout() {
     const refresh = () => {
       setAdvertisingEnabled(false)
       if (selectedProjectId && isAdminOrSuperAdminRole(user?.role_name)) {
-        void api.get('/advertising/settings', { params: { project_id: selectedProjectId } })
+        void api.get('/advertising/availability', { params: { project_id: selectedProjectId } })
           .then(r => { if (active) setAdvertisingEnabled(r.data.enabled) }).catch(() => {})
       }
     }

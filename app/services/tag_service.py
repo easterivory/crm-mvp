@@ -85,8 +85,9 @@ class TagService:
             )
         await TrafficQualityService(self.db).ensure_tag_unused(project_id, tag_id)
         from app.services.advertising_service import AdvertisingService
-        advertising = await AdvertisingService(self.db).config(project_id)
-        if tag_id == advertising.audience_tag_id or tag_id in advertising.protected_tag_ids:
+        configurations = await AdvertisingService(self.db).scenarios(project_id)
+        if any(str(tag_id) == c.settings_json.get("audience_tag_id") or
+               str(tag_id) in c.settings_json.get("protected_tag_ids", []) for c in configurations):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Сначала уберите тег из настроек рекламного сценария",

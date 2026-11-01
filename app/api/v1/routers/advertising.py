@@ -89,19 +89,54 @@ def require_admin(user=Depends(get_current_user)):
     return user
 
 
+async def scenario_service(scenario_id: UUID | None = None,
+    project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+    service = AdvertisingService(db, scenario_id)
+    await service.config(project_id)
+    return service
+
+
+@router.get("/scenarios")
+async def scenarios(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+    rows = await AdvertisingService(db).scenarios(project_id)
+    result = [{"id": r.id, "name": r.name, "enabled": r.enabled,
+        "bot_ids": r.settings_json.get("bot_ids", [])} for r in rows]
+    if not any(r.id == project_id for r in rows):
+        result.insert(0, {"id": project_id, "name": "Основной", "enabled": False, "bot_ids": []})
+    return result
+
+
+from pydantic import BaseModel, Field
+
+
+class ScenarioCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+@router.post("/scenarios")
+async def create_scenario(data: ScenarioCreate, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+    return await AdvertisingService(db).create_scenario(project_id, data.name, user.id)
+
+
+@router.get("/availability")
+async def availability(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+    return {"enabled": any(r.enabled for r in await AdvertisingService(db).scenarios(project_id))}
+
+
 @router.get("/settings")
-async def settings(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
-    return await AdvertisingService(db).config(project_id)
+async def settings(project_id=Depends(get_current_project_id), service=Depends(scenario_service)):
+    return await service.config(project_id)
 
 
 @router.put("/settings")
-async def save_settings(data: AdvertisingSettings, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
-    return await AdvertisingService(db).save_config(project_id, data, user.id)
+async def save_settings(data: AdvertisingSettings, project_id=Depends(get_current_project_id), user=Depends(require_admin), service=Depends(scenario_service)):
+    return await service.save_config(project_id, data, user.id)
 
 
 @router.get("/slots")
-async def slots(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+async def slots(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     return list((await db.scalars(select(AdvertisingSlot).where(AdvertisingSlot.project_id == project_id)
+        .where(AdvertisingSlot.scenario_id == service.scope(project_id))
         .order_by(AdvertisingSlot.position, AdvertisingSlot.id))).all())
 
 
@@ -121,21 +156,22 @@ async def media_preview(upload_id: UUID, project_id=Depends(get_current_project_
 
 
 @router.post("/slots")
-async def create_slot(data: SlotWrite, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
-    return await AdvertisingService(db).save_slot(project_id, data, user.id)
+async def create_slot(data: SlotWrite, project_id=Depends(get_current_project_id), user=Depends(require_admin), service=Depends(scenario_service)):
+    return await service.save_slot(project_id, data, user.id)
 
 
 @router.put("/slots/{slot_id}")
-async def save_slot(slot_id: UUID, data: SlotWrite, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
-    return await AdvertisingService(db).save_slot(project_id, data, user.id, slot_id)
+async def save_slot(slot_id: UUID, data: SlotWrite, project_id=Depends(get_current_project_id), user=Depends(require_admin), service=Depends(scenario_service)):
+    return await service.save_slot(project_id, data, user.id, slot_id)
 
 
 @router.get("/tracking")
 async def tracking(start: datetime, end: datetime, bot_id: UUID | None = None,
-    project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+    project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise HTTPException(422, "Укажите диапазон дат с часовым поясом")
     conditions = [AdvertisingEnrollment.project_id == project_id,
+        AdvertisingEnrollment.scenario_id == service.scope(project_id),
         AdvertisingEnrollment.created_at >= start, AdvertisingEnrollment.created_at < end]
     if bot_id:
         conditions.append(Chat.bot_id == bot_id)
@@ -156,48 +192,49 @@ async def tracking(start: datetime, end: datetime, bot_id: UUID | None = None,
 
 @router.get("/participants")
 async def participants(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
-    project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+    project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     rows = (await db.execute(select(AdvertisingEnrollment, Chat.contact_name, Chat.external_user_id)
         .join(Chat, Chat.id == AdvertisingEnrollment.chat_id).where(AdvertisingEnrollment.project_id == project_id)
+        .where(AdvertisingEnrollment.scenario_id == service.scope(project_id))
         .order_by(AdvertisingEnrollment.created_at.desc(), AdvertisingEnrollment.id).limit(limit).offset(offset))).all()
     return [{**jsonable_encoder(row), "contact_name": name, "telegram_id": telegram_id} for row, name, telegram_id in rows]
 
 
 @router.get("/participants/{enrollment_id}/deliveries")
-async def deliveries(enrollment_id: UUID, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+async def deliveries(enrollment_id: UUID, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     enrollment = await db.get(AdvertisingEnrollment, enrollment_id)
-    if not enrollment or enrollment.project_id != project_id:
+    if not enrollment or enrollment.project_id != project_id or enrollment.scenario_id != service.scope(project_id):
         raise HTTPException(404)
     return list((await db.scalars(select(AdvertisingDelivery).where(AdvertisingDelivery.enrollment_id == enrollment_id)
         .order_by(AdvertisingDelivery.position))).all())
 
 
 @router.post("/participants/{enrollment_id}/stop")
-async def stop(enrollment_id: UUID, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+async def stop(enrollment_id: UUID, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     row = await db.get(AdvertisingEnrollment, enrollment_id)
-    if not row or row.project_id != project_id:
+    if not row or row.project_id != project_id or row.scenario_id != service.scope(project_id):
         raise HTTPException(404)
     await db.scalar(select(Chat.id).where(Chat.id == row.chat_id).with_for_update())
     await db.refresh(row)
     if row.status not in {"waiting", "active"}:
         raise HTTPException(409, "Очередь уже остановлена или завершена")
-    await AdvertisingService(db).stop(row, "administrator")
-    AdvertisingService(db).audit(project_id, "stopped", user.id, enrollment_id=str(row.id))
+    await service.stop(row, "administrator")
+    service.audit(project_id, "stopped", user.id, enrollment_id=str(row.id))
     return {"status": row.status}
 
 
 @router.get("/log")
-async def log(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+async def log(project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     return list((await db.scalars(select(AdvertisingAudit).where(AdvertisingAudit.project_id == project_id)
+        .where(AdvertisingAudit.scenario_id == service.scope(project_id))
         .order_by(AdvertisingAudit.created_at.desc()).limit(100))).all())
 
 
 @router.post("/backfill/preview")
-async def backfill_preview(data: BackfillRequest, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+async def backfill_preview(data: BackfillRequest, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     from app.services.advertising_backfill import eligible_chats
     if data.created_before.tzinfo is None or data.created_before > now():
         raise HTTPException(422, "Граница даты должна быть в прошлом, с часовым поясом")
-    service = AdvertisingService(db)
     cfg = await service.config(project_id)
     if not cfg.enabled:
         raise HTTPException(422, "Сначала включите рекламный сценарий")
@@ -207,21 +244,21 @@ async def backfill_preview(data: BackfillRequest, project_id=Depends(get_current
     count = await db.scalar(select(func.count()).select_from(stmt.subquery()))
     sample = list((await db.scalars(stmt.limit(20))).all())
     preview = service.audit(project_id, "backfill_preview", user.id, count=count,
-        settings=cfg.model_dump(mode="json"), options=data.model_dump(mode="json", exclude={"confirmation", "preview_id"}),
+        settings=cfg.model_dump(mode="json", exclude={"name"}), options=data.model_dump(mode="json", exclude={"confirmation", "preview_id"}),
         state="preview")
     await db.flush()
     return {"preview_id": preview.id, "count": count, "sample_chat_ids": sample}
 
 
 @router.post("/backfill/start")
-async def backfill_start(data: BackfillRequest, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db)):
+async def backfill_start(data: BackfillRequest, project_id=Depends(get_current_project_id), user=Depends(require_admin), db=Depends(get_db), service=Depends(scenario_service)):
     preview = await db.get(AdvertisingAudit, data.preview_id, with_for_update=True) if data.preview_id else None
-    if not preview or preview.project_id != project_id or preview.actor_id != user.id or preview.event != "backfill_preview":
+    if not preview or preview.project_id != project_id or preview.scenario_id != service.scope(project_id) or preview.actor_id != user.id or preview.event != "backfill_preview":
         raise HTTPException(404, "Предпросмотр не найден")
     if preview.details.get("state") != "preview":
         return {"run_id": preview.id, "state": preview.details.get("state")}
-    cfg = await AdvertisingService(db).config(project_id)
-    if data.confirmation != "ЗАПУСТИТЬ" or preview.created_at < now() - timedelta(minutes=15) or preview.details["settings"] != cfg.model_dump(mode="json"):
+    cfg = await service.config(project_id)
+    if data.confirmation != "ЗАПУСТИТЬ" or preview.created_at < now() - timedelta(minutes=15) or preview.details["settings"] != cfg.model_dump(mode="json", exclude={"name"}):
         raise HTTPException(409, "Обновите предпросмотр и подтвердите запуск словом ЗАПУСТИТЬ")
     if preview.details["options"] != data.model_dump(mode="json", exclude={"confirmation", "preview_id"}):
         raise HTTPException(409, "Параметры отличаются от предпросмотра")

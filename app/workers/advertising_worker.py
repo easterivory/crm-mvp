@@ -25,7 +25,7 @@ async def process_enrollment(enrollment_id, session_factory=get_db_session, send
             return
         chat = await db.scalar(select(Chat).where(Chat.id == row.chat_id).with_for_update())
         await db.refresh(row)
-        service = AdvertisingService(db)
+        service = AdvertisingService(db, row.scenario_id)
         cfg = await service.config(row.project_id)
         if not cfg.enabled:
             return
@@ -144,7 +144,7 @@ async def run_once(limit=30):
             async with get_db_session() as db:
                 from app.models.advertising import AdvertisingConfig
                 ids = list((await db.scalars(select(AdvertisingEnrollment.id).join(
-                    AdvertisingConfig, AdvertisingConfig.project_id == AdvertisingEnrollment.project_id,
+                    AdvertisingConfig, AdvertisingConfig.id == AdvertisingEnrollment.scenario_id,
                 ).where(AdvertisingConfig.enabled.is_(True), AdvertisingEnrollment.status.in_(["waiting", "active"]),
                     AdvertisingEnrollment.due_at <= now()).order_by(AdvertisingEnrollment.due_at).limit(limit))).all())
             for enrollment_id in ids:

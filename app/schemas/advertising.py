@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 class AdvertisingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
+    name: str = Field(default="Основной", min_length=1, max_length=255)
     bot_ids: list[UUID] = Field(default_factory=list, max_length=100)
     protected_tag_ids: list[UUID] = Field(default_factory=list, max_length=100)
     audience_tag_id: UUID | None = None

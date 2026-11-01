@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(not os.getenv("CRM_TEST_POSTGRES_URL"), reason="
 
 
 @asynccontextmanager
-async def fixture():
+async def fixture(before_scenarios=None, after_scenarios=None):
     schema = "ad_" + uuid4().hex
     root = create_async_engine(os.environ["CRM_TEST_POSTGRES_URL"])
     engine = create_async_engine(os.environ["CRM_TEST_POSTGRES_URL"], connect_args={"server_settings": {"search_path": schema}})
@@ -50,10 +50,25 @@ async def fixture():
                 with Operations.context(MigrationContext.configure(sync)):
                     module.upgrade()
             await conn.run_sync(upgrade)
+        if before_scenarios:
+            async with sessions() as db:
+                await before_scenarios(db, pid)
+                await db.commit()
+        spec = importlib.util.spec_from_file_location("migration_ad_scenarios", "alembic/versions/20261102_0091_advertising_scenarios.py")
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        async with engine.begin() as conn:
+            def upgrade_scenarios(sync):
+                with Operations.context(MigrationContext.configure(sync)):
+                    module.upgrade()
+            await conn.run_sync(upgrade_scenarios)
+        if after_scenarios:
+            async with sessions() as db:
+                await after_scenarios(db, pid)
         async with sessions() as db:
             assert (await db.get(Project, pid)).name == "Advertising QA"
             assert await db.scalar(select(func.count()).select_from(AdvertisingEnrollment)) == 0
-            assert not (await AdvertisingService(db).config(pid)).enabled
+            if before_scenarios is None:
+                assert not (await AdvertisingService(db).config(pid)).enabled
             bot = Bot(project_id=pid, name="Bot", transport_type="bot_api")
             status = LeadStatus(name="New", code="new")
             audience, hot = Tag(project_id=pid, name="Advertising"), Tag(project_id=pid, name="HOT HOT")
@@ -278,16 +293,16 @@ def test_confirmed_backfill_rechecks_tags_and_never_sends_in_mark_only_mode():
             actor = SimpleNamespace(id=None)
             data = BackfillRequest(created_before=now(), stop_main=False, start_slots=False)
             async with sessions() as db:
-                preview = await backfill_preview(data, pid, actor, db)
+                preview = await backfill_preview(data, pid, actor, db, AdvertisingService(db))
                 assert preview["count"] == 4
                 assert await db.scalar(select(func.count()).select_from(AdvertisingEnrollment)) == 0
                 data.preview_id = preview["preview_id"]
                 with pytest.raises(HTTPException) as error:
-                    await backfill_start(data, pid, actor, db)
+                    await backfill_start(data, pid, actor, db, AdvertisingService(db))
                 assert error.value.status_code == 409
                 data.confirmation = "ЗАПУСТИТЬ"
-                await backfill_start(data, pid, actor, db)
-                await backfill_start(data, pid, actor, db)
+                await backfill_start(data, pid, actor, db, AdvertisingService(db))
+                await backfill_start(data, pid, actor, db, AdvertisingService(db))
                 db.add(LeadTag(lead_id=leads[0], tag_id=hot))
                 await db.commit()
             async with sessions() as db:
@@ -296,9 +311,9 @@ def test_confirmed_backfill_rechecks_tags_and_never_sends_in_mark_only_mode():
                 rows = list((await db.scalars(select(AdvertisingEnrollment))).all())
                 assert len(rows) == 3 and all(r.status == "completed" and not r.stop_main for r in rows)
                 assert await db.scalar(select(func.count()).select_from(AdvertisingDelivery)) == 0
-                report = await tracking(now() - timedelta(days=1), now(), None, pid, actor, db)
+                report = await tracking(now() - timedelta(days=1), now(), None, pid, actor, db, AdvertisingService(db))
                 assert report["cohort_counts"] == {"completed": 3}
-                assert len(await participants(50, 0, pid, actor, db)) == 3
+                assert len(await participants(50, 0, pid, actor, db, AdvertisingService(db))) == 3
     asyncio.run(run())
 
 
@@ -427,7 +442,9 @@ def test_backup_restore_preserves_existing_cards_and_advertising_queue():
             eid = await enroll(sessions, chats[0]); await process_enrollment(eid, sessions)
             async with sessions() as db:
                 schema = await db.scalar(text("SELECT current_schema()"))
-            dump = await asyncio.to_thread(command, "pg_dump", "-U", "postgres", "-d", "crm_test", "-n", schema, "-Fc")
+            from sqlalchemy.engine import make_url
+            database = make_url(os.environ["CRM_TEST_POSTGRES_URL"]).database
+            dump = await asyncio.to_thread(command, "pg_dump", "-U", "postgres", "-d", database, "-n", schema, "-Fc")
             await asyncio.to_thread(command, "createdb", "-U", "postgres", restored)
             engine = create_async_engine(os.environ["CRM_TEST_POSTGRES_URL"].rsplit("/", 1)[0] + "/" + restored,
                 connect_args={"server_settings": {"search_path": schema}})

@@ -44,24 +44,29 @@ class AdvertisingBotService(InfoBotService):
             if body in {"/start", "/stats", "/cancel"} or data == "ad:projects":
                 await self.state_store.clear(chat_id)
                 projects = (await self.db.execute(select(Project.id, Project.name).join(AdvertisingConfig,
-                    AdvertisingConfig.project_id == Project.id).where(AdvertisingConfig.enabled.is_(True), Project.is_deleted.is_(False))
+                    AdvertisingConfig.project_id == Project.id).where(AdvertisingConfig.enabled.is_(True), Project.is_deleted.is_(False)).distinct()
                     .order_by(Project.name).limit(50))).all()
                 return chat_id, [{"text": "Рекламные сценарии", "reply_markup": keyboard([[(name, f"ad:project:{pid}")] for pid, name in projects])}]
             if data.startswith("ad:project:"):
                 pid = UUID(data.split(":")[-1])
-                if not (await AdvertisingService(self.db).config(pid)).enabled:
+                scenarios = [r for r in await AdvertisingService(self.db).scenarios(pid) if r.enabled]
+                return chat_id, [{"text": "Выберите сценарий", "reply_markup": keyboard(
+                    [[(s.name, f"ad:scenario:{s.id}")] for s in scenarios] + [[("Проекты", "ad:projects")]])}]
+            if data.startswith("ad:scenario:"):
+                scenario = await self.db.get(AdvertisingConfig, UUID(data.split(":")[-1]))
+                if not scenario or not scenario.enabled:
                     raise ValueError("Сценарий отключён")
-                slots = (await self.db.scalars(select(AdvertisingSlot).where(AdvertisingSlot.project_id == pid)
+                slots = (await self.db.scalars(select(AdvertisingSlot).where(AdvertisingSlot.scenario_id == scenario.id)
                     .order_by(AdvertisingSlot.position, AdvertisingSlot.id).limit(80))).all()
-                return chat_id, [{"text": "Слоты проекта", "reply_markup": keyboard(
+                return chat_id, [{"text": f"Слоты: {scenario.name}", "reply_markup": keyboard(
                     [[(f"{i + 1}. {s.name}", f"ad:slot:{s.id}")] for i, s in enumerate(slots)] + [[("Проекты", "ad:projects")]])}]
             if data.startswith("ad:slot:"):
                 slot = await self.db.get(AdvertisingSlot, UUID(data.split(":")[-1]))
-                if slot is None or not (await AdvertisingService(self.db).config(slot.project_id)).enabled:
+                if slot is None or not (await AdvertisingService(self.db, slot.scenario_id).config(slot.project_id)).enabled:
                     raise ValueError("Слот недоступен")
                 draft = SlotWrite(name=slot.name, position=slot.position, enabled=slot.enabled,
                     delay_minutes=slot.delay_minutes, revision=slot.revision, content_json=slot.content_json).model_dump(mode="json")
-                state = {"slot_id": str(slot.id), "project_id": str(slot.project_id), "draft": draft}
+                state = {"slot_id": str(slot.id), "project_id": str(slot.project_id), "scenario_id": str(slot.scenario_id), "draft": draft}
                 await self.state_store.set(chat_id, state)
                 return chat_id, self.menu(state)
             if not state.get("draft"):
@@ -80,7 +85,7 @@ class AdvertisingBotService(InfoBotService):
             if data == "ad:toggle":
                 state["draft"]["enabled"] = not state["draft"]["enabled"]
             elif data == "ad:save":
-                slot = await AdvertisingService(self.db).save_slot(UUID(state["project_id"]),
+                slot = await AdvertisingService(self.db, UUID(state.get("scenario_id") or state["project_id"])).save_slot(UUID(state["project_id"]),
                     SlotWrite.model_validate(state["draft"]), actor.id, UUID(state["slot_id"]))
                 state["draft"]["revision"] = slot.revision
                 await self.state_store.set(chat_id, state)

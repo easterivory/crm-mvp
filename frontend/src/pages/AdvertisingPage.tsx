@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import {
   Plus,
   Save,
@@ -19,6 +19,7 @@ import { uploadBroadcastMedia } from '../features/broadcasts/api'
 import type { BroadcastContent } from '../features/broadcasts/types'
 
 type Config = {
+  name: string
   enabled: boolean
   bot_ids: string[]
   protected_tag_ids: string[]
@@ -75,6 +76,7 @@ type Report = {
   }[]
 }
 const defaults: Config = {
+  name: 'Основной',
   enabled: false,
   bot_ids: [],
   protected_tag_ids: [],
@@ -111,10 +113,16 @@ const today = () =>
 
 export default function AdvertisingPage(props: { tracking?: boolean }) {
   const { selectedProjectId } = useProjectBotSelection()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
+  const [, setSearch] = useSearchParams()
+  const previousProject = useRef(selectedProjectId)
+  useEffect(() => {
+    if (previousProject.current && previousProject.current !== selectedProjectId) setSearch({}, { replace: true })
+    previousProject.current = selectedProjectId
+  }, [selectedProjectId, setSearch])
   return (
     <AdvertisingPageContent
-      key={`${selectedProjectId}:${pathname}`}
+      key={`${selectedProjectId}:${pathname}:${search}`}
       initialSettings={pathname === '/settings/advertising'}
       {...props}
     />
@@ -129,6 +137,11 @@ function AdvertisingPageContent({
   initialSettings?: boolean
 }) {
   const { selectedProjectId } = useProjectBotSelection()
+  const [search, setSearch] = useSearchParams()
+  const scenarioId = search.get('scenario_id') || selectedProjectId
+  const scenarioQuery = `?scenario_id=${scenarioId}`
+  const [scenarios, setScenarios] = useState<{ id: string; name: string; enabled: boolean; bot_ids: string[] }[]>([])
+  const [newName, setNewName] = useState('')
   const superAdmin = useAuthStore((s) => s.user?.role_name === 'super_admin')
   const [config, setConfig] = useState<Config>(defaults)
   const [slots, setSlots] = useState<Slot[]>([])
@@ -164,7 +177,7 @@ function AdvertisingPageContent({
   const [token, setToken] = useState('')
   const [botEnabled, setBotEnabled] = useState(false)
   const [botName, setBotName] = useState('')
-  const params = { project_id: selectedProjectId }
+  const params = { project_id: selectedProjectId, scenario_id: scenarioId }
   const generation = useRef(0)
   const act = async (work: () => Promise<void>) => {
     if (busy) return
@@ -201,7 +214,8 @@ function AdvertisingPageContent({
     }
     let resource = 'настройки сценария'
     try {
-      const p = { project_id: selectedProjectId }
+      const p = { project_id: selectedProjectId, scenario_id: scenarioId }
+      const list = await api.get('/advertising/scenarios', { params: p })
       const cfg = await api.get('/advertising/settings', { params: p })
       resource = 'слоты'
       const s = await api.get('/advertising/slots', { params: p })
@@ -224,6 +238,7 @@ function AdvertisingPageContent({
       const t = await options('/tags')
       if (current !== generation.current) return
       setConfig(cfg.data)
+      setScenarios(list.data)
       setEnabledOnServer(cfg.data.enabled)
       setSlots(s.data)
       setBots(b.filter((x: Option) => x.transport_type !== 'user_mtproto'))
@@ -237,13 +252,13 @@ function AdvertisingPageContent({
           axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
             ? e.response.data.detail
             : axios.isAxiosError(e) && (!e.response || e.response.status >= 500)
-              ? `Не удалось загрузить ${resource}: API недоступен или вернул ошибку. Проверьте запуск серверной части и миграцию 0090.`
+              ? `Не удалось загрузить ${resource}: API недоступен или вернул ошибку. Проверьте запуск серверной части и миграцию 0091.`
               : `Не удалось загрузить ${resource}${axios.isAxiosError(e) && e.response ? ` (HTTP ${e.response.status})` : ''}`,
         )
     } finally {
       if (current === generation.current) setLoading(false)
     }
-  }, [selectedProjectId, initialSettings])
+  }, [selectedProjectId, initialSettings, scenarioId])
   useEffect(() => {
     void load()
     return () => {
@@ -314,14 +329,14 @@ function AdvertisingPageContent({
         </h1>
         <div className="flex gap-2">
           {!tracking && (
-            <Link className={button} to="/settings/advertising">
+            <Link className={button} to={`/settings/advertising${scenarioQuery}`}>
               <SlidersHorizontal size={16} />
               Настройки сценария
             </Link>
           )}
           <Link
             className={button}
-            to={tracking ? '/advertising' : '/tracking/advertising'}
+            to={`${tracking ? '/advertising' : '/tracking/advertising'}${scenarioQuery}`}
           >
             {tracking ? 'Сценарий' : 'Статистика'}
           </Link>
@@ -335,6 +350,22 @@ function AdvertisingPageContent({
           </button>
         </div>
       </header>
+      {ready && <div className="mb-5 flex flex-wrap items-end gap-3">
+        <label className="min-w-0 w-full sm:w-80">Сценарий
+          <select aria-label="Сценарий" className={input} value={scenarioId || ''} disabled={busy}
+            onChange={(e) => setSearch({ scenario_id: e.target.value })}>
+            {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}{s.enabled ? '' : ' · выключен'}</option>)}
+          </select>
+        </label>
+        {!tracking && <>
+          <input aria-label="Название нового сценария" placeholder="Новый сценарий" className={`${input} sm:!w-64`}
+            maxLength={255} value={newName} onChange={e => setNewName(e.target.value)} />
+          <button className={button} disabled={busy || !newName.trim()} onClick={() => void act(async () => {
+            const r = await api.post('/advertising/scenarios', { name: newName.trim() }, { params })
+            setSearch({ scenario_id: r.data.id })
+          })}><Plus size={16} />Создать сценарий</button>
+        </>}
+      </div>}
       {ready && !tracking && (
         <p
           className={`mb-4 text-sm ${enabledOnServer ? 'text-emerald-300' : 'text-gray-400'}`}
@@ -406,7 +437,7 @@ function AdvertisingPageContent({
             </label>
             <button
               className={button}
-              disabled={busy || !config.enabled}
+              disabled={busy}
               onClick={() => void act(showReport)}
             >
               Рассчитать
@@ -510,6 +541,10 @@ function AdvertisingPageContent({
           </nav>
           {(tab === 'settings' || (!config.enabled && tab !== 'bot')) && (
             <div className="max-w-3xl space-y-5">
+              <label className="block">Название сценария
+                <input className={input} maxLength={255} value={config.name || ''}
+                  onChange={e => setConfig({ ...config, name: e.target.value })} />
+              </label>
               <label className="flex gap-3">
                 <input
                   type="checkbox"
@@ -544,6 +579,7 @@ function AdvertisingPageContent({
                       <input
                         type="checkbox"
                         checked={config.bot_ids.includes(b.id)}
+                        disabled={scenarios.some(s => s.id !== scenarioId && s.bot_ids.includes(b.id))}
                         onChange={(e) =>
                           setConfig({
                             ...config,
@@ -554,6 +590,8 @@ function AdvertisingPageContent({
                         }
                       />
                       {b.name}
+                      {scenarios.filter(s => s.id !== scenarioId && s.bot_ids.includes(b.id)).map(s =>
+                        <span className="text-gray-400" key={s.id}> · {s.name}</span>)}
                     </label>
                   ))}
                 </div>
@@ -607,7 +645,12 @@ function AdvertisingPageContent({
                 disabled={busy}
                 onClick={() =>
                   void act(async () => {
+                    const previous = scenarios.find(s => s.id === scenarioId)
+                    if (previous?.bot_ids.some(id => !config.bot_ids.includes(id)) && !window.confirm(
+                      'Убраны боты из сценария. Их незавершённые очереди остановятся при обработке и не перенесутся в другой сценарий. Сохранить?',
+                    )) return
                     await api.put('/advertising/settings', config, { params })
+                    setScenarios((await api.get('/advertising/scenarios', { params })).data)
                     setEnabledOnServer(config.enabled)
                     window.dispatchEvent(new Event('advertising-settings'))
                     setNotice(

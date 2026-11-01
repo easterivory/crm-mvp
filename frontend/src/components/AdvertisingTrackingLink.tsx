@@ -14,7 +14,7 @@ export default function AdvertisingTrackingLink() {
     setEnabled(false)
     if (selectedProjectId && ['admin', 'super_admin'].includes(role || '')) {
       void api
-        .get('/advertising/settings', {
+        .get('/advertising/availability', {
           params: { project_id: selectedProjectId },
         })
         .then((r) => {

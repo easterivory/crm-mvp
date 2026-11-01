@@ -284,12 +284,14 @@ class BroadcastDeliveryWorker:
                 from app.services.audience_filter_service import AudienceFilterService
                 from app.models.chat import Chat
                 ad = AdvertisingService(self.db)
-                cfg = await ad.config(project_id)
+                ad = await ad.for_chat(chat)
+                from app.schemas.advertising import AdvertisingSettings
+                cfg = await ad.config(project_id) if ad else AdvertisingSettings()
                 filters = AudienceFilterService(self.db)
                 stmt = filters._audience_stmt(project_id=project_id, bot_id=broadcast.bot_id,
                     audience_filter=filters._parse_filter(audience)).where(Chat.id == chat.id)
                 still_matches = (await self.db.execute(stmt)).first() is not None
-                reason = await ad.protected_reason(chat, cfg)
+                reason = await ad.protected_reason(chat, cfg) if ad else "advertising_scenario_missing"
                 if not cfg.enabled or not still_matches or reason:
                     await self.db.execute(update(BroadcastRecipient).where(BroadcastRecipient.id == recipient_id)
                         .values(status="skipped", last_error=reason or "Advertising audience changed"))

@@ -25,20 +25,70 @@ def now():
 
 
 class AdvertisingService:
-    def __init__(self, db):
+    def __init__(self, db, scenario_id=None):
         self.db = db
+        self.scenario_id = scenario_id
+
+    def scope(self, project_id):
+        return self.scenario_id or project_id
+
+    async def scenarios(self, project_id):
+        return list((await self.db.scalars(select(AdvertisingConfig).where(
+            AdvertisingConfig.project_id == project_id).order_by(
+                (AdvertisingConfig.id == project_id).desc(), AdvertisingConfig.name, AdvertisingConfig.id)
+            .execution_options(populate_existing=True))).all())
+
+    async def create_scenario(self, project_id, name, actor_id):
+        project = await self.db.scalar(select(Project).where(Project.id == project_id).with_for_update()
+            .execution_options(populate_existing=True))
+        if not project or project.is_deleted or project.project_format != "submission":
+            raise HTTPException(422, "Рекламный сценарий доступен для проектов с подачей")
+        # Reserve the legacy identity even when the first action is creating a second scenario.
+        await self.ensure_default(project_id)
+        row = AdvertisingConfig(id=uuid4(), project_id=project_id, name=name.strip() or "Новый сценарий",
+            enabled=False, settings_json={})
+        self.db.add(row)
+        await self.db.flush()
+        AdvertisingService(self.db, row.id).audit(project_id, "scenario_created", actor_id)
+        return row
+
+    async def ensure_default(self, project_id):
+        if self.scope(project_id) == project_id:
+            await self.db.execute(insert(AdvertisingConfig).values(id=project_id, project_id=project_id,
+                name="Основной", enabled=False, settings_json={}).on_conflict_do_nothing())
+        else:
+            await self.config(project_id)
+
+    async def for_bot(self, project_id, bot_id):
+        rows = (await self.db.scalars(select(AdvertisingConfig).where(
+            AdvertisingConfig.project_id == project_id,
+            AdvertisingConfig.settings_json["bot_ids"].contains([str(bot_id)])))).all()
+        if len(rows) > 1:
+            raise RuntimeError("Ambiguous advertising scenario assignment")
+        return AdvertisingService(self.db, rows[0].id) if rows else None
+
+    async def for_chat(self, chat):
+        scenario_id = await self.db.scalar(select(AdvertisingEnrollment.scenario_id).where(
+            AdvertisingEnrollment.chat_id == chat.id, AdvertisingEnrollment.status != "returned")
+            .order_by(AdvertisingEnrollment.created_at.desc()).limit(1))
+        return AdvertisingService(self.db, scenario_id) if scenario_id else await self.for_bot(chat.project_id, chat.bot_id)
 
     def audit(self, project_id, event, actor_id=None, **details):
-        row = AdvertisingAudit(project_id=project_id, event=event, actor_id=actor_id, details=details)
+        row = AdvertisingAudit(project_id=project_id, scenario_id=self.scope(project_id), event=event, actor_id=actor_id, details=details)
         self.db.add(row)
         return row
 
     async def config(self, project_id):
-        row = await self.db.get(AdvertisingConfig, project_id, populate_existing=True)
-        return AdvertisingSettings.model_validate({**(row.settings_json if row else {}), "enabled": bool(row and row.enabled)})
+        row = await self.db.get(AdvertisingConfig, self.scope(project_id), populate_existing=True)
+        if (row and row.project_id != project_id) or (not row and self.scope(project_id) != project_id):
+            raise HTTPException(404, "Сценарий не найден в этом проекте")
+        return AdvertisingSettings.model_validate({**(row.settings_json if row else {}),
+            "name": row.name if row else "Основной", "enabled": bool(row and row.enabled)})
 
     async def save_config(self, project_id, data: AdvertisingSettings, actor_id):
-        project = await self.db.get(Project, project_id)
+        # All scenario edits in a project serialize here, including concurrent bot assignments.
+        project = await self.db.scalar(select(Project).where(Project.id == project_id).with_for_update()
+            .execution_options(populate_existing=True))
         if project is None or project.is_deleted or project.project_format != "submission":
             raise HTTPException(422, "Рекламный сценарий доступен для проектов с подачей")
         if data.enabled and (not data.bot_ids or not data.audience_tag_id):
@@ -53,18 +103,28 @@ class AdvertisingService:
             raise HTTPException(422, "Проверьте защитные теги и отдельный тег рекламы")
         if data.audience_tag_id and str(data.audience_tag_id) in (project.tracking_lead_tag_ids or []):
             raise HTTPException(422, "Тег рекламной аудитории не может быть тегом целевого лида")
-        await self.db.execute(insert(AdvertisingConfig).values(project_id=project_id, enabled=False,
-            settings_json={}).on_conflict_do_nothing())
-        row = await self.db.get(AdvertisingConfig, project_id, with_for_update=True, populate_existing=True)
+        await self.ensure_default(project_id)
+        for other in await self.scenarios(project_id):
+            if other.id != self.scope(project_id) and set(map(str, data.bot_ids)).intersection(other.settings_json.get("bot_ids", [])):
+                raise HTTPException(409, f"Бот уже назначен в сценарий «{other.name}». Сначала уберите его оттуда")
+        row = await self.db.get(AdvertisingConfig, self.scope(project_id), with_for_update=True, populate_existing=True)
         if data.enabled and not row.enabled:
             row.enabled_at = now()
         row.enabled = data.enabled
-        row.settings_json = data.model_dump(mode="json", exclude={"enabled"})
+        row.name = data.name.strip() or "Основной"
+        row.settings_json = data.model_dump(mode="json", exclude={"enabled", "name"})
         self.audit(project_id, "settings_saved", actor_id, settings=data.model_dump(mode="json"))
         await self.db.flush()
         return data
 
     async def save_slot(self, project_id, data: SlotWrite, actor_id, slot_id=None):
+        slot = await self.db.get(AdvertisingSlot, slot_id, with_for_update=True) if slot_id else None
+        if slot_id and (slot is None or slot.project_id != project_id or slot.scenario_id != self.scope(project_id)):
+            raise HTTPException(404, "Слот не найден")
+        project = await self.db.get(Project, project_id)
+        if project is None or project.is_deleted:
+            raise HTTPException(404, "Проект не найден")
+        await self.ensure_default(project_id)
         from app.services.broadcast_service import BroadcastService
         content = copy.deepcopy(data.content_json)
         messages = content.get("messages", [])
@@ -101,13 +161,10 @@ class AdvertisingService:
             if not path.is_relative_to(Path(settings.BROADCAST_UPLOAD_STORAGE_PATH).resolve()) or not path.is_file():
                 raise HTTPException(422, "Медиафайл недоступен. Загрузите его заново")
             upload.expires_at = None
-        slot = await self.db.get(AdvertisingSlot, slot_id, with_for_update=True) if slot_id else None
-        if slot_id and (slot is None or slot.project_id != project_id):
-            raise HTTPException(404, "Слот не найден")
         if slot is not None and slot.revision != data.revision:
             raise HTTPException(409, "Слот уже изменён. Обновите страницу")
         if slot is None:
-            slot = AdvertisingSlot(project_id=project_id, revision=0)
+            slot = AdvertisingSlot(project_id=project_id, scenario_id=self.scope(project_id), revision=0)
             self.db.add(slot)
         for key in ("name", "position", "enabled", "delay_minutes"):
             setattr(slot, key, getattr(data, key))
@@ -121,11 +178,14 @@ class AdvertisingService:
         chat = await self.db.get(Chat, chat_id)
         if chat is None:
             return
-        cfg = await self.config(chat.project_id)
+        service = await self.for_bot(chat.project_id, chat.bot_id)
+        if service is None:
+            return
+        cfg = await service.config(chat.project_id)
         if not cfg.enabled or chat.bot_id not in cfg.bot_ids:
             return
         await self.db.execute(insert(AdvertisingEnrollment).values(
-            id=uuid4(), project_id=chat.project_id, chat_id=chat.id, status="waiting",
+            id=uuid4(), project_id=chat.project_id, scenario_id=service.scope(chat.project_id), chat_id=chat.id, status="waiting",
             due_at=now() + timedelta(minutes=cfg.timeout_minutes), source="automatic", stop_main=True,
         ).on_conflict_do_nothing())
 
@@ -149,7 +209,7 @@ class AdvertisingService:
             await self.db.execute(update(AdvertisingDelivery).where(
                 AdvertisingDelivery.enrollment_id == row.id, AdvertisingDelivery.status.in_(["pending", "sending"]),
             ).values(status="cancelled"))
-            self.audit(row.project_id, reason, enrollment_id=str(row.id))
+            AdvertisingService(self.db, row.scenario_id).audit(row.project_id, reason, enrollment_id=str(row.id))
         # Production sessions do not autoflush. Release the live-chat unique key
         # before the same transaction registers the new main-funnel lifecycle.
         await self.db.flush()
@@ -189,6 +249,7 @@ class AdvertisingService:
             return False
         slots = (await self.db.scalars(select(AdvertisingSlot).where(
             AdvertisingSlot.project_id == chat.project_id, AdvertisingSlot.enabled.is_(True),
+            AdvertisingSlot.scenario_id == enrollment.scenario_id,
         ).order_by(AdvertisingSlot.position, AdvertisingSlot.id))).all() if start_slots else []
         if start_slots and not slots:
             enrollment.reason = "no_active_slots"

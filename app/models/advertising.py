@@ -9,9 +9,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
 
 
+def default_scenario(context):
+    return context.get_current_parameters()["project_id"]
+
+
 class AdvertisingConfig(Base, UpdatedAtMixin):
     __tablename__ = "advertising_configs"
-    project_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), primary_key=True)
+    id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=default_scenario)
+    project_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255), default="Основной", nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     settings_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
@@ -20,6 +26,7 @@ class AdvertisingConfig(Base, UpdatedAtMixin):
 class AdvertisingSlot(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     __tablename__ = "advertising_slots"
     project_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
+    scenario_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("advertising_configs.id"), default=default_scenario, index=True)
     name: Mapped[str] = mapped_column(String(255))
     position: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -37,6 +44,7 @@ class AdvertisingEnrollment(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin
               postgresql_where=text("status IN ('waiting','active','completed','protected','stopped')")),
     )
     project_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"))
+    scenario_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("advertising_configs.id"), default=default_scenario, index=True)
     chat_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chats.id"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="waiting")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -64,6 +72,7 @@ class AdvertisingDelivery(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
 class AdvertisingAudit(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "advertising_audit"
     project_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
+    scenario_id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), default=default_scenario, index=True)
     actor_id: Mapped[PyUUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     event: Mapped[str] = mapped_column(String(80))
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
