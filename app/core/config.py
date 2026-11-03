@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     APP_NAME: str = "CRM MVP"
     DEBUG: bool = False
     BASE_URL: str = "http://localhost:8000"
+    POSTBACK_PUBLIC_BASE_URL: str = ""
+    POSTBACK_RELAY_ENABLED: bool = False
+    POSTBACK_RELAY_SECRET: str = ""
+    # Explicit UUID list, or '*' for all projects. Empty means no projects.
+    POSTBACK_RELAY_PROJECT_IDS: str = ""
+    POSTBACK_DIRECT_ENABLED: bool = True
     CRM_PUBLIC_HOSTS: str = ""
     APP_SERVICE_NAME: str = "api"
     LOG_STORAGE_PATH: str = "storage/logs"

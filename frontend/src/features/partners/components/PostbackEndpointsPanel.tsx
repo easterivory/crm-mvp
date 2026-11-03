@@ -41,6 +41,7 @@ type PostbackEndpoint = {
   parameter_mapping: ParameterMapping
   is_active: boolean
   url: string
+  delivery_mode?: 'direct' | 'relay'
   created_at: string
   updated_at: string
 }
@@ -328,6 +329,7 @@ export default function PostbackEndpointsPanel({
                   <span className={`shrink-0 text-xs ${endpoint.is_active ? 'text-emerald-300' : 'text-zinc-600'}`}>{endpoint.is_active ? 'Активен' : 'Выключен'}</span>
                 </div>
                 <p className="mt-1 truncate font-mono text-xs text-zinc-500">{endpoint.event_type}</p>
+                <p className="mt-1 text-xs text-zinc-400">{endpoint.delivery_mode === 'relay' ? 'Внешний приёмник' : 'Прямой приём CRM'}</p>
               </button>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 <button type="button" title="Редактировать" onClick={() => startEdit(endpoint)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><Pencil size={14} /></button>

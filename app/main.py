@@ -80,7 +80,7 @@ async def log_unhandled_request_errors(request: Request, call_next):
         logger.exception(
             "Unhandled API request error method=%s path=%s",
             request.method,
-            request.url.path,
+            "/pb/[redacted]" if request.url.path.startswith("/pb/") else request.url.path,
         )
         raise
 
@@ -133,6 +133,8 @@ app.include_router(ai.router, prefix=_v1_prefix)
 app.include_router(telegram.router, prefix=_v1_prefix)
 app.include_router(telegram_contact.router)
 app.include_router(postbacks.public_router)
+from app.api.v1.routers import postback_relay
+app.include_router(postback_relay.router)
 
 # BrowserRouter pages need an explicit index.html fallback on direct requests.
 # Keep these routes before the broad public /{slug} lander route.

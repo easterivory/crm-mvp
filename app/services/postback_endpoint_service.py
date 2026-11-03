@@ -376,6 +376,9 @@ class PostbackEndpointService:
             )
 
     def _endpoint_out(self, endpoint: PostbackEndpoint) -> PostbackEndpointOut:
+        from app.services.postback_relay_service import public_base_url, project_scope
+        scope = project_scope() if settings.POSTBACK_RELAY_ENABLED else set()
+        use_relay = settings.POSTBACK_RELAY_ENABLED and (scope is None or endpoint.project_id in scope)
         return PostbackEndpointOut(
             id=endpoint.id,
             project_id=endpoint.project_id,
@@ -386,8 +389,9 @@ class PostbackEndpointService:
                 endpoint.parameter_mapping or {},
             ),
             is_active=endpoint.is_active,
+            delivery_mode="relay" if use_relay and settings.POSTBACK_PUBLIC_BASE_URL else "direct",
             url=(
-                f"{settings.BASE_URL.rstrip('/')}/pb/{endpoint.secret_token}"
+                f"{public_base_url() if use_relay else settings.BASE_URL.rstrip('/')}/pb/{endpoint.secret_token}"
             ),
             created_at=endpoint.created_at,
             updated_at=endpoint.updated_at,

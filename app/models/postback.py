@@ -11,6 +11,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UpdatedAtMixin, UUIDPrimaryKey
 
 
+class PostbackRelayDelivery(Base, UUIDPrimaryKey, TimestampMixin):
+    """Durable transport deduplication; retained even if an endpoint is deleted."""
+    __tablename__ = "postback_relay_deliveries"
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
 class PostbackEndpoint(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     """Project-scoped authenticated endpoint exposed to a partner."""
 

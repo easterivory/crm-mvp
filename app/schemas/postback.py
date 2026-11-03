@@ -66,6 +66,7 @@ class PostbackEndpointOut(OrmBase):
     parameter_mapping: PostbackParameterMapping
     is_active: bool
     url: str
+    delivery_mode: Literal["direct", "relay"] = "direct"
     created_at: datetime
     updated_at: datetime
 

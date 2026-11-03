@@ -154,6 +154,10 @@ async def receive_public_postback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> PublicPostbackResult:
+    from app.core.config import settings
+    from fastapi import HTTPException
+    if not settings.POSTBACK_DIRECT_ENABLED:
+        raise HTTPException(404)
     body_payload = await _request_payload(request)
     return await PostbackEndpointService(db).receive(
         secret_token=secret_token,
