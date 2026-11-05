@@ -20,6 +20,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
 from app.core.lead_names import normalize_name_part, split_lead_name
+from app.core.hold_schedule import HoldSchedule, scheduled_hold_plan
 from app.core.name_extraction import extract_answer_name
 from app.core.telegram_commands import (
     command_from_trigger_step,
@@ -56,10 +57,7 @@ from app.services.facebook_capi_service import FacebookCAPIError, FacebookCAPISe
 from app.services.advertising_event_service import AdvertisingEventService
 from app.services.funnel_block_registry import is_supported_lead_field_key
 from app.services.funnel_disappearing_message_service import FunnelDisappearingMessageService
-from app.services.funnel_job_queue import (
-    enqueue_funnel_chat_action,
-    enqueue_funnel_scheduled_job,
-)
+from app.services.runtime_dispatch_service import save_runtime_dispatch
 from app.services.lead_scoring_service import LeadScoringService
 from app.services.lead_event_service import LeadEventService
 from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderService
@@ -2093,12 +2091,11 @@ class FunnelRuntimeService:
                     },
                 )
                 if scheduled_job_id is not None:
-                    await enqueue_funnel_chat_action(
-                        scheduled_job_id=scheduled_job_id,
-                        chat_id=chat_id,
-                        action=chat_action,
-                        duration_seconds=chat_action_duration,
-                    )
+                    await save_runtime_dispatch(self.db, key=f"action:{scheduled_job_id}", kind="action", payload={
+                        "scheduled_job_id": str(scheduled_job_id), "chat_id": str(chat_id),
+                        "action": chat_action, "duration_seconds": chat_action_duration,
+                        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=chat_action_duration)).isoformat(),
+                    })
                     logger.info(
                         "Scheduled message chat action chat_id=%s step_id=%s index=%s "
                         "action=%s duration_seconds=%s",
@@ -2276,7 +2273,9 @@ class FunnelRuntimeService:
             run_at=datetime.now(timezone.utc) + timedelta(seconds=delay_seconds),
             payload_json=payload_json,
         )
-        await enqueue_funnel_scheduled_job(job.id, delay_seconds)
+        await save_runtime_dispatch(self.db, key=f"scheduled:{job.id}", kind="scheduled", payload={
+            "job_id": str(job.id), "run_at": job.run_at.isoformat(),
+        })
         return job.id
 
     async def _execute_delay_step(self, *, chat_id: UUID, step: FunnelStep) -> Optional[FunnelStep]:
@@ -2444,6 +2443,9 @@ class FunnelRuntimeService:
             return source
 
         context = await self.repo.get_message_template_context(chat_id)
+        if context.get("lead_id") and any(match.group(1) == "lead_id" for match in TEMPLATE_VARIABLE_RE.finditer(source)):
+            from app.services.postback_contract_service import remember_personal_link
+            await remember_personal_link(self.db, UUID(str(context["lead_id"])))
         state = await self.repo.get_chat_funnel_state(chat_id)
         custom_fields = dict(context.get("custom_fields") or {})
         name = context.get("name") or context.get("contact_name")
@@ -2468,6 +2470,7 @@ class FunnelRuntimeService:
             "bot": context.get("bot"),
             "telegram_id": context.get("external_user_id"),
             "chat_id": str(chat_id),
+            "lead_id": str(context["lead_id"]) if context.get("lead_id") else None,
             "last_answer": (state.runtime_json or {}).get("last_answer") if state else None,
         }
 
@@ -2512,6 +2515,13 @@ class FunnelRuntimeService:
         if not self._message_item_is_deliverable(step, item):
             return None
         text = self._message_item_text(item)
+        if reply_markup and "{{" in json.dumps(reply_markup):
+            from copy import deepcopy
+            reply_markup = deepcopy(reply_markup)
+            for row in reply_markup.get("inline_keyboard", []):
+                for button in row:
+                    if button.get("url"):
+                        button["url"] = await self._render_text_template(chat_id, button["url"])
         message_type, media_ref = self._message_item_media_payload(step, item)
         upload_id = self._message_item_upload_id(item)
         if reuse_upload_delivery and upload_id is not None:
@@ -4203,6 +4213,9 @@ class FunnelRuntimeService:
         if source == "hold_mode":
             if state is None:
                 return False
+            plan = await self._get_scheduled_hold_plan(chat_id=chat_id, state=state)
+            if plan is not None:
+                return plan["is_hold"]
             version = await self.repo.get_version(state.funnel_version_id)
             return bool(version.is_hold_active) if version is not None else False
         if lead is None:
@@ -4237,7 +4250,46 @@ class FunnelRuntimeService:
     ) -> bool:
         if not self._is_call_time_input_step(step):
             return False
+        # Scheduled routing assigns a concrete date even when it is today.
+        if await self._get_scheduled_hold_plan(chat_id=chat_id) is not None:
+            return True
         return bool(await self._condition_source_value(chat_id, "hold_mode", None))
+
+    async def _get_scheduled_hold_plan(self, *, chat_id: UUID, state=None) -> dict | None:
+        state = state or await self.repo.get_chat_funnel_state(chat_id)
+        if state is None:
+            return None
+        runtime = dict(state.runtime_json or {})
+        saved = runtime.get("hold_schedule_plan")
+        # A booking belongs to this funnel run. Calendar edits or midnight must
+        # not move someone who has already been assigned a date.
+        if isinstance(saved, dict) and saved.get("version_id") == str(state.funnel_version_id):
+            return saved
+        version = await self.repo.get_version(state.funnel_version_id)
+        if version is None or getattr(version, "hold_mode", "manual") != "project_schedule":
+            return None
+        lead = await self.repo.get_lead_by_chat(chat_id)
+        if lead is None:
+            return None
+        from app.models.project import Project
+        project = await self.db.get(Project, lead.project_id)
+        if project is None:
+            return None
+        schedule = HoldSchedule.model_validate(project.hold_schedule or {})
+        if not schedule.enabled:
+            return None
+        plan = scheduled_hold_plan(schedule, datetime.now(timezone.utc))
+        plan["version_id"] = str(state.funnel_version_id)
+        runtime["hold_schedule_plan"] = plan
+        state.runtime_json = runtime
+        await self.repo.update_lead_mapped_fields(lead.id, {}, {
+            "hold_date": plan["date"], "hold_date_label": plan["date_label"],
+            "hold_timezone": plan["timezone"],
+        })
+        await self.db.flush()
+        logger.info("HOLD scheduled chat_id=%s version_id=%s date=%s timezone=%s deferred=%s",
+            chat_id, state.funnel_version_id, plan["date"], plan["timezone"], plan["is_hold"])
+        return plan
 
     async def _apply_hold_call_time_override(
         self,
@@ -4247,7 +4299,8 @@ class FunnelRuntimeService:
         state: Any,
     ) -> Optional[FunnelStep]:
         current_state = await self.repo.get_chat_funnel_state(chat_id) or state
-        answer = self._hold_call_time_answer(step)
+        plan = await self._get_scheduled_hold_plan(chat_id=chat_id, state=current_state)
+        answer = plan["date_label"] if plan is not None else self._hold_call_time_answer(step)
         lead = await self.repo.get_lead_by_chat(chat_id)
         if lead is not None:
             await self.repo.update_lead_mapped_fields(
@@ -4273,17 +4326,28 @@ class FunnelRuntimeService:
             runtime_json=runtime_json,
         )
 
-        choice = self._choice_for_answer(step, answer)
+        routing_answer = answer
+        if plan is not None:
+            routing_answer = self._hold_call_time_answer(step, hold_enabled=plan["is_hold"])
+        choice = self._choice_for_answer(step, routing_answer)
         if choice and choice.get("target_step_id"):
             return await self._move_to_step_id(
                 chat_id=chat_id,
                 target_step_id=choice.get("target_step_id"),
                 from_step=step,
             )
-        return await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
+        return await self._move_from_step(chat_id=chat_id, step=step, answer=routing_answer)
 
-    def _hold_call_time_answer(self, step: FunnelStep) -> str:
+    def _hold_call_time_answer(self, step: FunnelStep, *, hold_enabled: bool = True) -> str:
         config = step.config_json or {}
+        if not hold_enabled:
+            if config.get("today_label"):
+                return str(config["today_label"])
+            for choice in self._buttons_from_step(step):
+                if any("сегодня" in str(candidate or "").lower() or str(candidate or "").lower() == "today"
+                       for candidate in (choice.get("label"), choice.get("value"), choice.get("id"))):
+                    return str(choice.get("label") or choice.get("value") or "Сегодня").strip()
+            return "Сегодня"
         configured = (
             config.get("hold_answer")
             or config.get("tomorrow_label")
@@ -4358,6 +4422,9 @@ class FunnelRuntimeService:
             if hold_enabled
             else str(config.get("today_label") or "Сегодня")
         )
+        plan = await self._get_scheduled_hold_plan(chat_id=chat_id)
+        if plan is not None:
+            value = plan["date_label"]
         await self.repo.update_lead_mapped_fields(
             lead.id,
             {"call_time_text": value},

@@ -67,7 +67,7 @@ async def _process_candidate(chat_id: UUID, push_rule_id: UUID) -> bool:
             return processed
         except TelegramDeliveryError as exc:
             await db.rollback()
-            if not exc.cannot_initiate:
+            if not (exc.cannot_initiate or exc.recipient_unavailable):
                 logger.warning(
                     "Funnel push delivery rejected chat_id=%s rule_id=%s context=%s "
                     "method=%s code=%s transient=%s retry_after=%s reason=%s",
@@ -75,6 +75,7 @@ async def _process_candidate(chat_id: UUID, push_rule_id: UUID) -> bool:
                     exc.transient, exc.retry_after, exc.description,
                 )
                 raise
+            reason = "telegram_user_deactivated" if exc.recipient_unavailable else "telegram_cannot_initiate_conversation"
             # Persist separately: the sending transaction may have been rolled back
             # or committed before network IO. Never reuse expired ORM state here.
             async with get_db_session() as failure_db:
@@ -93,7 +94,7 @@ async def _process_candidate(chat_id: UUID, push_rule_id: UUID) -> bool:
                 runtime = dict(current.runtime_json or {})
                 runtime["push_delivery_suspended"] = {
                     "at_epoch": attempted_at.timestamp(),
-                    "reason": "telegram_cannot_initiate_conversation",
+                    "reason": reason,
                     "rule_id": str(push_rule_id),
                     **context,
                 }
@@ -101,13 +102,13 @@ async def _process_candidate(chat_id: UUID, push_rule_id: UUID) -> bool:
                 await failure_db.commit()
             logger.warning(
                 "Funnel pushes suspended chat_id=%s rule_id=%s context=%s "
-                "reason=telegram_cannot_initiate_conversation code=%s "
+                "reason=%s code=%s "
                 "resume_on=new_incoming_message_or_step_entry sent=False",
-                chat_id, push_rule_id, context, exc.error_code,
+                chat_id, push_rule_id, context, reason, exc.error_code,
             )
             await send_operational_alert(
                 component="funnel_push_worker",
-                title="Funnel pushes suspended: Telegram cannot initiate conversation",
+                title="Funnel pushes suspended: recipient unavailable" if exc.recipient_unavailable else "Funnel pushes suspended: Telegram cannot initiate conversation",
                 details={"chat_id": chat_id, "push_rule_id": push_rule_id, **context,
                          "reason": exc.description, "sent": False,
                          "resume_on": "new incoming message or step entry"},

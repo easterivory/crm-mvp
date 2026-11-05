@@ -5,13 +5,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import String, cast, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import MessageType, SenderType
 from app.models.chat import Chat
 from app.models.funnel import ChatFunnelState
 from app.models.message import Message
+from app.models.telegram_delivery import RuntimeDispatch
 from app.services.funnel_start_queue import (
     FunnelStartRequest,
     enqueue_funnel_starts,
@@ -73,6 +74,11 @@ class FunnelStartRecoveryService:
                 Message.sender_type == SenderType.USER,
                 Message.message_type == MessageType.TEXT,
                 Message.funnel_processed_at.is_(None),
+                # The durable dispatcher owns new inputs, including repeated
+                # /start engagement. Legacy recovery must not claim or replay them.
+                ~exists(select(RuntimeDispatch.id).where(RuntimeDispatch.dedupe_key.in_([
+                    "start:" + cast(Message.id, String), "input:" + cast(Message.id, String),
+                ]))),
                 Message.body.is_not(None),
                 func.lower(func.ltrim(Message.body)).like("/start%"),
                 Message.created_at >= since,

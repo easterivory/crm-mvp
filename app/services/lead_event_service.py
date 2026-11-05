@@ -18,6 +18,7 @@ from app.models.lead import Lead
 from app.models.lead_event import LeadEvent
 from app.models.partner import PartnerIntegration
 from app.models.user import User
+from app.models.tracking import TrackingLink
 from app.services.access_control import require_project_access
 from app.services.chat_audit_service import ChatAuditService
 
@@ -56,6 +57,7 @@ class LeadEventService:
         external_event_id: str | None = None,
         payload: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
+        attribution: dict | None = None,
     ) -> tuple[LeadEvent, bool]:
         normalized_event_type = self.normalize_event_type(event_type)
         normalized_source = source.strip().lower()
@@ -87,15 +89,18 @@ class LeadEventService:
             if existing is not None:
                 return existing, False
 
-        attribution = (
+        current_attribution = (
             await self.db.execute(
                 select(
                     Chat.tracking_link_id,
+                    Chat.bot_id,
+                    TrackingLink.buyer_id,
                     ChatFunnelState.funnel_id,
                     ChatFunnelState.funnel_version_id,
                 )
                 .select_from(Chat)
                 .outerjoin(ChatFunnelState, ChatFunnelState.chat_id == Chat.id)
+                .outerjoin(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
                 .where(Chat.id == lead.chat_id)
             )
         ).one_or_none()
@@ -107,11 +112,14 @@ class LeadEventService:
             postback_endpoint_id=postback_endpoint_id,
             created_by_user_id=created_by_user_id,
             attributed_manager_id=lead.manager_id,
-            tracking_link_id=attribution.tracking_link_id if attribution else None,
-            funnel_id=attribution.funnel_id if attribution else None,
-            funnel_version_id=attribution.funnel_version_id if attribution else None,
+            tracking_link_id=UUID(attribution["tracking_link_id"]) if attribution and attribution.get("tracking_link_id") else (current_attribution.tracking_link_id if current_attribution and attribution is None else None),
+            funnel_id=UUID(attribution["funnel_id"]) if attribution and attribution.get("funnel_id") else (current_attribution.funnel_id if current_attribution and attribution is None else None),
+            funnel_version_id=UUID(attribution["funnel_version_id"]) if attribution and attribution.get("funnel_version_id") else (current_attribution.funnel_version_id if current_attribution and attribution is None else None),
             event_type=normalized_event_type,
             source=normalized_source,
+            attribution_locked=True,
+            attributed_bot_id=UUID(attribution["bot_id"]) if attribution and attribution.get("bot_id") else (current_attribution.bot_id if current_attribution and attribution is None else None),
+            attributed_buyer_id=UUID(attribution["buyer_id"]) if attribution and attribution.get("buyer_id") else (current_attribution.buyer_id if current_attribution and attribution is None else None),
             amount=amount,
             currency=normalized_currency,
             external_event_id=external_event_id,
@@ -149,6 +157,8 @@ class LeadEventService:
             await TikTokEventService(self.db).mapped_event(
                 lead_id=lead.id, source_event=source_event, event_reference=str(event.id),
                 event_time=int(event.occurred_at.timestamp()),
+                attribution={"tracking_link_id": str(event.tracking_link_id) if event.tracking_link_id else None,
+                    "fb_data": (attribution.get("fb_data") or {}) if attribution is not None else (lead.custom_fields or {}).get("fb_data") or {}},
                 extra_custom_data={**({"value": float(amount)} if amount is not None else {}),
                                    **({"currency": normalized_currency} if normalized_currency else {})},
             )

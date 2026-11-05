@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.constants import LeadStatusCode
+from app.core.hold_schedule import HoldSchedule
 from app.core.lead_confidence import (
     DEFAULT_CONFIDENCE_THRESHOLDS,
     DEFAULT_CONFIDENCE_WEIGHTS,
@@ -47,6 +48,7 @@ class PriorityChatRules(BaseModel):
 
 
 class ProjectBase(BaseModel):
+    hold_schedule: HoldSchedule = Field(default_factory=HoldSchedule)
     priority_chat_rules: PriorityChatRules = Field(default_factory=PriorityChatRules)
     tracking_lead_count_mode: Literal["statuses", "tags"] = "statuses"
     tracking_lead_tag_ids: list[UUID] = Field(default_factory=list, max_length=100)
@@ -100,6 +102,7 @@ class ProjectCreate(ProjectBase):
 
 
 class ProjectUpdate(BaseModel):
+    hold_schedule: Optional[HoldSchedule] = None
     priority_chat_rules: Optional[PriorityChatRules] = None
     tracking_lead_count_mode: Optional[Literal["statuses", "tags"]] = None
     tracking_lead_tag_ids: Optional[list[UUID]] = Field(default=None, max_length=100)
@@ -172,6 +175,7 @@ class ProjectTranslationUpdate(BaseModel):
 
 
 class ProjectRead(OrmBase):
+    hold_schedule: HoldSchedule = Field(default_factory=HoldSchedule)
     priority_chat_rules: PriorityChatRules = Field(default_factory=PriorityChatRules)
     id: uuid.UUID
     name: str

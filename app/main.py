@@ -42,6 +42,7 @@ from app.api.v1.routers import (
 from app.core.config import settings
 from app.core.logging_config import configure_file_logging
 from app.core.redis import close_redis
+from app.core.arq_client import close_arq_client
 from app.services.telegram_webhook_sync_service import sync_telegram_webhook_subscriptions
 
 
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
         with suppress(asyncio.CancelledError):
             await webhook_sync_task
     await close_redis()
+    await close_arq_client()
 
 
 app = FastAPI(

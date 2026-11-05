@@ -172,7 +172,7 @@ def test_first_delivery_race_without_partner_event_id(monkeypatch):
                 query_payload={}, body_payload={"lead_id": str(lid)}).model_dump_json().encode()
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://crm.test") as client:
                 responses = await asyncio.gather(*(client.post(DELIVERY_PATH, content=body,
-                    headers=headers(SECRET, "POST", DELIVERY_PATH, body)) for _ in range(4)))
+                    headers=headers(SECRET, "POST", DELIVERY_PATH, body)) for _ in range(20)))
                 assert all(r.status_code == 200 for r in responses)
                 assert len({r.json()["result"]["event_id"] for r in responses}) == 1
             async with sessions() as db:

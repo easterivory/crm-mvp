@@ -2,13 +2,14 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, extract, func, or_, select, tuple_, update
+from sqlalchemy import ColumnElement, String, cast, exists, extract, func, or_, select, tuple_, update
 from sqlalchemy.orm import aliased
 
 from app.core.constants import MessageType, SenderType
 from app.models.chat import Chat
 from app.models.bot import Bot
 from app.models.message import Message, MessageUpload
+from app.models.telegram_delivery import RuntimeDispatch
 from app.repositories.base import BaseRepository
 
 
@@ -328,6 +329,12 @@ class MessageRepository(BaseRepository[Message]):
                 Message.chat_id == chat_id,
                 Message.sender_type == SenderType.USER,
                 Message.funnel_processed_at.is_(None),
+                ~exists(select(RuntimeDispatch.id).where(
+                    RuntimeDispatch.status == "review",
+                    RuntimeDispatch.dedupe_key.in_([
+                        "input:" + cast(Message.id, String), "start:" + cast(Message.id, String),
+                    ]),
+                )),
                 Message.deleted_at.is_(None),
                 tuple_(Message.created_at, Message.id)
                 <= tuple_(through_message.created_at, through_message.id),
@@ -360,15 +367,18 @@ class MessageRepository(BaseRepository[Message]):
         unique_ids = list(dict.fromkeys(message_ids))
         if not unique_ids:
             return False
-        result = await self.db.execute(
-            update(Message)
-            .where(
-                Message.id.in_(unique_ids),
-                Message.funnel_processed_at.is_(None),
+        async with self.db.begin_nested() as savepoint:
+            result = await self.db.execute(
+                update(Message)
+                .where(Message.id.in_(unique_ids), Message.funnel_processed_at.is_(None))
+                .values(funnel_processed_at=datetime.now(timezone.utc))
             )
-            .values(funnel_processed_at=datetime.now(timezone.utc))
-        )
-        return result.rowcount == len(unique_ids)
+            if result.rowcount != len(unique_ids):
+                # A racing consumer claimed only part of this snapshot. Do not
+                # mark the remaining, unhandled answer as processed as well.
+                await savepoint.rollback()
+                return False
+        return True
 
     async def defer_funnel_processing(self, message_ids: list[UUID]) -> None:
         """Release this execution's reserved input while the next step is delayed."""

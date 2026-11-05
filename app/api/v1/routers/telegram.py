@@ -10,16 +10,14 @@ Security model:
     are rejected with 403. If the setting is absent, the header is ignored.
 
 HTTP response contract:
-  - 200  must be returned for all successfully processed updates (even if the
+  - 200  must be returned for all durably accepted updates (even if the
          update contains no message, or the message was silently discarded).
          Returning non-200 causes Telegram to retry the same update repeatedly.
   - 400  for malformed JSON that cannot be parsed into a TelegramUpdate.
-         Telegram does NOT retry 4xx, so this is safe for genuine parse errors.
   - 403  when the secret token header is present but incorrect.
-         Telegram does not retry 4xx; rejects future deliveries until fixed.
-  - Unexpected exceptions are caught, logged as ERROR, and still return 200
-         so Telegram does not spam retries for a transient server error.
+  - 503  if the update could not be durably accepted. Never acknowledge loss.
 """
+import asyncio
 import logging
 from typing import Optional
 from uuid import UUID
@@ -28,6 +26,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from app.core.config import settings
 from app.services.telegram_service import TelegramService
+from app.services.telegram_inbox_service import accept_telegram_update
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +40,7 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
 ) -> dict:
     """
-    Receives a Telegram Bot API Update payload and processes it.
-
-    Only `message` updates are handled. All other update types are silently
-    ignored and a {"ok": True} response is returned immediately.
-
-    No replies, GPT calls, or alerts are generated here.
+    Durably accepts an update; the independent DB worker processes it later.
     """
     # ── Optional secret token validation ──────────────────────────────────────
     if settings.TELEGRAM_WEBHOOK_SECRET:
@@ -64,7 +58,6 @@ async def telegram_webhook(
     try:
         payload = await request.json()
     except Exception:
-        # Truly unparseable body — Telegram should not retry 4xx
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body is not valid JSON",
@@ -77,31 +70,19 @@ async def telegram_webhook(
             detail="Request body does not match expected Telegram Update schema",
         )
 
-    # ── Process update inside a managed DB session ─────────────────────────────
-    # We open the session manually (not via Depends) because we must catch
-    # exceptions from the service layer and still return 200 to Telegram.
     from app.core.database import get_db_session  # local import — avoids circular
 
     try:
-        async with get_db_session() as db:
-            try:
-                service = TelegramService(db)
-                await service.handle_webhook_update(
-                    update=update,
-                    bot_id=bot_id,
-                )
+        async with asyncio.timeout(5):
+            async with get_db_session() as db:
+                await accept_telegram_update(db, bot_id=bot_id, payload=payload)
                 await db.commit()
-                await service.dispatch_post_commit_actions()
-            except Exception:
-                await db.rollback()
-                raise
-    except Exception:
-        # Log the full traceback but do NOT propagate — returning 200 prevents
-        # Telegram from queuing the same update for repeated delivery.
+    except Exception as exc:
         logger.exception(
-            "Unexpected error processing Telegram update_id=%s bot_id=%s",
+            "Telegram intake not acknowledged update_id=%s bot_id=%s stage=durable_accept",
             update.update_id,
             bot_id,
         )
+        raise HTTPException(status_code=503, detail="Telegram intake temporarily unavailable") from exc
 
     return {"ok": True}

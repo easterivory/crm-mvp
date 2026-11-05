@@ -1,4 +1,5 @@
 import PriorityChatSettings from '../features/chats/components/PriorityChatSettings'
+import HoldScheduleSettings from '../features/settings/HoldScheduleSettings'
 import { Link } from 'react-router-dom'
 import {
   Check,
@@ -1732,6 +1733,7 @@ export default function SettingsPage() {
         {!isLoading && activeTab === 'project' ? (
           <form className="max-w-xl space-y-4" onSubmit={handleProjectSave}>
             {activeProjectId && <PriorityChatSettings key={activeProjectId} projectId={activeProjectId} />}
+            {activeProjectId && <HoldScheduleSettings key={`hold-${activeProjectId}`} projectId={activeProjectId} />}
             <div>
               <h2 className="text-xl font-semibold text-zinc-100">Проект</h2>
               <p className="mt-1 text-sm text-zinc-500">

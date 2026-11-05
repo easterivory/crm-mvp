@@ -2,7 +2,7 @@
 Workers entrypoint — run via: python -m app.workers [alert|stats|funnel|broadcast|scheduled|postback|buyer|admin|info|backup|mtproto|all]
 
 Each worker is an independent asyncio loop.
-Running 'all' starts both workers concurrently in the same process.
+Running 'all' starts the shared worker loops concurrently in one process.
 
 Usage:
     python -m app.workers alert   # alert worker only
@@ -16,6 +16,7 @@ Usage:
     python -m app.workers advertising-bot # separate slot management bot
     python -m app.workers backup  # scheduled database backups only
     python -m app.workers mtproto # dedicated Telegram work-account process
+    python -m app.workers telegram-delivery # durable Telegram intake/dispatch
     python -m app.workers all     # shared workers (default in Docker)
 """
 import asyncio
@@ -93,6 +94,10 @@ def main() -> None:
         from app.workers.telegram_account_worker import run_loop
         asyncio.run(run_loop())
 
+    elif mode == "telegram-delivery":
+        from app.workers.telegram_delivery_worker import run_loop
+        asyncio.run(run_loop())
+
     elif mode == "all":
         from app.workers.alert_worker import run_loop as alert_loop
         from app.workers.broadcast_worker import run_loop as broadcast_loop
@@ -105,6 +110,7 @@ def main() -> None:
         from app.workers.scheduled_message_worker import run_loop as scheduled_loop
         from app.workers.stats_worker import run_loop as stats_loop
         from app.workers.advertising_worker import run_loop as advertising_loop
+        from app.workers.telegram_delivery_worker import run_loop as telegram_delivery_loop
 
         async def run_all() -> None:
             logger.info("Starting shared workers; MTProto runs in its dedicated service")
@@ -120,6 +126,7 @@ def main() -> None:
                 admin_loop(),
                 info_loop(),
                 advertising_loop(),
+                telegram_delivery_loop(),
                 info_loop(advertising=True),
             )
 

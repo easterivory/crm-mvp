@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
+from app.core.arq_client import enqueue_runtime_job
 
 try:
     from arq import create_pool
@@ -31,21 +32,19 @@ def _redis_settings_from_url() -> Any:
     )
 
 
-async def enqueue_user_input(chat_id: UUID, message_id: UUID) -> bool:
+async def enqueue_user_input(chat_id: UUID, message_id: UUID, *, delay_seconds: int | None = None) -> bool:
     if create_pool is None:
         logger.error("ARQ is not installed; user input cannot be deferred")
         return False
 
-    redis = None
     try:
-        redis = await create_pool(_redis_settings_from_url())
-        await redis.enqueue_job(
+        await enqueue_runtime_job(
             "process_user_input_task",
             str(chat_id),
             str(message_id),
             _job_id=f"telegram-input:{message_id}",
             _queue_name=JOBS_QUEUE_NAME,
-            _defer_by=max(settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS, 2),
+            _defer_by=max(settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS, 2) if delay_seconds is None else max(delay_seconds, 0),
         )
         # None means a job with the same message-based id already exists.
         return True
@@ -56,6 +55,3 @@ async def enqueue_user_input(chat_id: UUID, message_id: UUID) -> bool:
             message_id,
         )
         return False
-    finally:
-        if redis is not None:
-            await redis.close()

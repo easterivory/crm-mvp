@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # Explicit UUID list, or '*' for all projects. Empty means no projects.
     POSTBACK_RELAY_PROJECT_IDS: str = ""
     POSTBACK_DIRECT_ENABLED: bool = True
+    # Legacy status callbacks are not covered by /pb. Disable after partner migration.
+    LEGACY_PARTNER_POSTBACKS_ENABLED: bool = True
+    POSTBACK_ROTATION_GRACE_SECONDS: int = 3600
+    POSTBACK_RELAY_ALERT_HEARTBEAT_SECONDS: int = 120
+    POSTBACK_RELAY_ALERT_PENDING_SECONDS: int = 300
+    POSTBACK_RELAY_ALERT_FREE_BYTES: int = 536870912
     CRM_PUBLIC_HOSTS: str = ""
     APP_SERVICE_NAME: str = "api"
     LOG_STORAGE_PATH: str = "storage/logs"
@@ -65,6 +71,12 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
     TELEGRAM_INPUT_DEBOUNCE_SECONDS: int = 4
     TELEGRAM_INPUT_QUIET_SECONDS: int = 2
+    TELEGRAM_INBOX_TIMEOUT_SECONDS: int = 120
+    TELEGRAM_INBOX_CONCURRENCY: int = 4
+    TELEGRAM_INBOX_MAX_ATTEMPTS: int = 5
+    TELEGRAM_INBOX_RETENTION_DAYS: int = 30
+    RUNTIME_REDIS_TIMEOUT_SECONDS: float = 2.0
+    RUNTIME_REDIS_MAX_CONNECTIONS: int = 10
     TELEGRAM_ACCOUNT_RPC_TIMEOUT_SECONDS: int = 30
     TELEGRAM_ACCOUNT_SUPERVISOR_INTERVAL_SECONDS: int = 5
     TELEGRAM_ACCOUNT_AUTH_TTL_MINUTES: int = 10

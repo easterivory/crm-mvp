@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -31,27 +33,42 @@ from app.services.telegram_sender import TelegramDeliveryError, TelegramSenderSe
 logger = logging.getLogger(__name__)
 
 
+class ScheduledOperationTimeout(TimeoutError):
+    def __init__(self, stage: str, seconds: float, elapsed_seconds: float):
+        self.stage, self.timeout_seconds, self.elapsed_seconds = stage, seconds, elapsed_seconds
+        super().__init__(f"stage={stage} limit_seconds={seconds} elapsed_seconds={elapsed_seconds:.3f}")
+
+
+@asynccontextmanager
+async def _operation_timeout(stage: str, seconds: float):
+    started = time.monotonic()
+    try:
+        async with asyncio.timeout(seconds):
+            yield
+    except ScheduledOperationTimeout:
+        raise
+    except TimeoutError as exc:
+        raise ScheduledOperationTimeout(stage, seconds, time.monotonic() - started) from exc
+
+
 def _error_text(exc: Exception) -> str:
     message = " ".join(str(exc).split())
     if not message and isinstance(exc, TimeoutError):
-        message = (
-            "scheduled job exceeded "
-            f"{settings.FUNNEL_SCHEDULED_JOB_TIMEOUT_SECONDS} seconds"
-        )
+        message = "timeout; stage and duration unavailable"
     return f"{exc.__class__.__name__}: {message or 'no error details'}"
 
 
 async def _rollback_session(db: AsyncSession) -> None:
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
     try:
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout("rollback", timeout_seconds):
             await db.rollback()
         return
     except Exception:
         logger.exception("Could not roll back failed funnel scheduled job session")
 
     try:
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout("invalidate", timeout_seconds):
             await db.invalidate()
     except Exception:
         logger.exception("Could not invalidate failed funnel scheduled job session")
@@ -59,7 +76,7 @@ async def _rollback_session(db: AsyncSession) -> None:
 
 async def _recover_stale_jobs() -> tuple[int, int]:
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
-    async with asyncio.timeout(timeout_seconds):
+    async with _operation_timeout("recover_stale_jobs", timeout_seconds):
         async with get_db_session() as db:
             try:
                 recovered = await FunnelRepository(db).recover_stale_running_jobs(
@@ -76,7 +93,7 @@ async def _recover_stale_jobs() -> tuple[int, int]:
 
 async def _list_due_job_ids(limit: int) -> list[UUID]:
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
-    async with asyncio.timeout(timeout_seconds):
+    async with _operation_timeout("list_due_jobs", timeout_seconds):
         async with get_db_session() as db:
             try:
                 jobs = await FunnelRepository(db).list_due_scheduled_jobs(
@@ -93,7 +110,7 @@ async def _list_due_job_ids(limit: int) -> list[UUID]:
 
 async def _claim_job(job_id: UUID) -> bool:
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
-    async with asyncio.timeout(timeout_seconds):
+    async with _operation_timeout("claim_job", timeout_seconds):
         async with get_db_session() as db:
             try:
                 claimed = await FunnelRepository(db).claim_scheduled_job(job_id)
@@ -106,7 +123,7 @@ async def _claim_job(job_id: UUID) -> bool:
 
 async def _job_status(job_id: UUID) -> str:
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
-    async with asyncio.timeout(timeout_seconds):
+    async with _operation_timeout("read_job_status", timeout_seconds):
         async with get_db_session() as db:
             try:
                 job = await FunnelRepository(db).get_scheduled_job(job_id)
@@ -124,7 +141,7 @@ async def _job_status(job_id: UUID) -> str:
 async def _mark_job_failed(job_id: UUID, error: str) -> bool:
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
     try:
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout("persist_job_failure", timeout_seconds):
             async with get_db_session() as db:
                 try:
                     repo = FunnelRepository(db)
@@ -181,7 +198,7 @@ async def _resolve_delivery_failure(
 
     timeout_seconds = max(settings.FUNNEL_SCHEDULED_DB_OPERATION_TIMEOUT_SECONDS, 1)
     try:
-        async with asyncio.timeout(timeout_seconds):
+        async with _operation_timeout("resolve_delivery_failure", timeout_seconds):
             async with get_db_session() as db:
                 try:
                     repo = FunnelRepository(db)
@@ -321,7 +338,7 @@ async def _execute_claimed_job(job_id: UUID, *, _lock_retry_attempt: int = 0) ->
     try:
         async with get_db_session() as db:
             try:
-                async with asyncio.timeout(
+                async with _operation_timeout("execute_job",
                     max(settings.FUNNEL_SCHEDULED_JOB_TIMEOUT_SECONDS, 1)
                 ):
                     repo = FunnelRepository(db)
@@ -480,7 +497,11 @@ async def process_funnel_scheduled_job_task(ctx: dict, job_id: str) -> dict:
         await send_operational_alert(
             component="funnel_scheduled_arq",
             title="Delayed funnel task infrastructure failure",
-            details={"job_id": job_id, "error": error},
+            details={"job_id": job_id, "error": error,
+                     "stage": getattr(exc, "stage", "claim_or_status"),
+                     "timeout_seconds": getattr(exc, "timeout_seconds", None),
+                     "elapsed_seconds": getattr(exc, "elapsed_seconds", None),
+                     "external_io_started": False},
             dedupe_key=f"funnel-scheduled-arq:{exc.__class__.__name__}",
         )
         return {"status": "failed", "job_id": job_id, "error": error[:1000]}

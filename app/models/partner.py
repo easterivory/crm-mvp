@@ -41,6 +41,7 @@ class PartnerIntegration(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
+    legacy_callback_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="false")
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     postback_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     auth_token: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
@@ -127,6 +128,7 @@ class LeadSubmission(Base, UUIDPrimaryKey):
         nullable=False,
     )
     status: Mapped[str] = mapped_column(String(50), nullable=False)
+    external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     request_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     response_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -135,6 +137,7 @@ class LeadSubmission(Base, UUIDPrimaryKey):
     partner_status_updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    callback_occurred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     submitted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

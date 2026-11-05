@@ -26,14 +26,21 @@ class TikTokEventService:
     async def mapped_event(
         self, *, lead_id: UUID, source_event: str, event_reference: str,
         extra_custom_data: dict | None = None, event_time: int | None = None,
+        attribution: dict | None = None,
     ) -> None:
         from app.services.facebook_campaign_service import FacebookCampaignService
 
         helper = FacebookCampaignService(self.db)
         lead = await helper._load_lead(lead_id)
-        if lead is None or lead.chat is None or lead.chat.tracking_link is None:
+        if lead is None or lead.chat is None:
             return
-        link = lead.chat.tracking_link
+        if attribution is not None:
+            from app.models.tracking import TrackingLink
+            link = await self.db.get(TrackingLink, UUID(attribution["tracking_link_id"])) if attribution.get("tracking_link_id") else None
+        else:
+            link = lead.chat.tracking_link
+        if link is None:
+            return
         config = await self.config(link.id)
         if config is None or not config.enabled:
             return
@@ -45,7 +52,7 @@ class TikTokEventService:
                 continue
             has_rule = any(t.get("type") in {"lead_status", "lead_tag"} for t in mapping.get("triggers", []))
             reference = f"crm_rule:{source}:{helper._lifecycle_reference(lead)}" if has_rule or source in {"registration", "sale"} else event_reference
-            context = (lead.custom_fields or {}).get("fb_data", {})
+            context = attribution.get("fb_data", {}) if attribution is not None else (lead.custom_fields or {}).get("fb_data", {})
             properties = helper._render_parameters(mapping.get("parameters"), lead=lead, tracking_link=link)
             properties.update(extra_custom_data or {})
             await self.store(config, mapping, reference=f"{lead.id}:{reference}", context=context,

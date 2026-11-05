@@ -59,6 +59,7 @@ export type FunnelVersion = {
   is_active_for_bot: boolean
   is_current_for_funnel: boolean
   is_hold_active: boolean
+  hold_mode?: 'manual' | 'project_schedule'
 }
 
 export type FunnelStep = {

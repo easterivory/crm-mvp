@@ -201,6 +201,8 @@ class FacebookCampaignService:
                 trigger_value=current_status_id,
             )
         except Exception:
+            if getattr(self, "strict_enqueue", False):
+                raise
             logger.exception(
                 "Facebook status trigger enqueue failed without blocking CRM "
                 "lead_id=%s status_id=%s",
@@ -293,6 +295,9 @@ class FacebookCampaignService:
         source_event: str,
         event_reference: str,
         extra_custom_data: dict[str, Any] | None,
+        event_time: int | None = None,
+        attribution_context: dict | None = None,
+        attribution_event_id: UUID | None = None,
     ) -> str | None:
 
         custom_data = self._render_parameters(
@@ -308,7 +313,7 @@ class FacebookCampaignService:
             source_event=source_event,
             event_reference=event_reference,
         )
-        fb_data = lead.custom_fields.get("fb_data") if isinstance(lead.custom_fields, dict) else None
+        fb_data = attribution_context if attribution_context is not None else lead.custom_fields.get("fb_data") if isinstance(lead.custom_fields, dict) else None
         event_source_url = (
             str(fb_data.get("event_source_url") or "").strip()
             if isinstance(fb_data, dict)
@@ -319,9 +324,11 @@ class FacebookCampaignService:
             tracking_link_id=link.id,
             event_name=mapping["event_name"],
             custom_data=custom_data,
-            event_time=int(time.time()),
+            event_time=event_time if event_time is not None else int(time.time()),
             event_id=event_id,
             event_source_url=event_source_url or None,
+            raise_on_error=getattr(self, "strict_enqueue", False),
+            postback_attribution={"event_id": str(attribution_event_id), "fb_data": attribution_context or {}} if attribution_event_id else None,
         )
 
     @staticmethod

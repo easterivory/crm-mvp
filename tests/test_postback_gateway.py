@@ -168,7 +168,7 @@ def test_public_url_and_scoped_mode_are_backward_compatible(monkeypatch):
     from app.services.postback_relay_service import public_base_url
     pid = uuid4()
     endpoint = SimpleNamespace(id=uuid4(), project_id=pid, partner_integration_id=None,
-        name="QA", event_type="registration", parameter_mapping={}, is_active=True,
+        name="QA", event_type="registration", parameter_mapping={}, is_active=True, is_archived=False, processing_kind="lifecycle_event", revision=1,
         secret_token=TOKEN, created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
     monkeypatch.setattr(settings, "BASE_URL", "https://crm.invalid")
     monkeypatch.setattr(settings, "POSTBACK_PUBLIC_BASE_URL", "https://callbacks.invalid")

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
+from app.core.arq_client import enqueue_runtime_job
 
 try:
     from arq import create_pool
@@ -39,23 +40,18 @@ async def enqueue_funnel_scheduled_job(job_id: UUID, delay_seconds: int) -> str 
         )
         return None
 
-    redis = None
     try:
-        redis = await create_pool(_redis_settings_from_url())
-        job = await redis.enqueue_job(
+        job = await enqueue_runtime_job(
             "process_funnel_scheduled_job_task",
             str(job_id),
             _job_id=f"funnel-scheduled:{job_id}",
             _queue_name=JOBS_QUEUE_NAME,
             _defer_by=max(delay_seconds, 0),
         )
-        return job.job_id if job is not None else None
+        return job.job_id if job is not None else f"funnel-scheduled:{job_id}"
     except Exception:
         logger.exception("Could not enqueue funnel scheduled job_id=%s", job_id)
         return None
-    finally:
-        if redis is not None:
-            await redis.close()
 
 
 async def enqueue_funnel_chat_action(
@@ -74,10 +70,8 @@ async def enqueue_funnel_chat_action(
         )
         return None
 
-    redis = None
     try:
-        redis = await create_pool(_redis_settings_from_url())
-        job = await redis.enqueue_job(
+        job = await enqueue_runtime_job(
             "process_funnel_chat_action_task",
             str(scheduled_job_id),
             str(chat_id),
@@ -87,7 +81,7 @@ async def enqueue_funnel_chat_action(
             _job_id=f"funnel-chat-action:{scheduled_job_id}:0",
             _queue_name=JOBS_QUEUE_NAME,
         )
-        return job.job_id if job is not None else None
+        return job.job_id if job is not None else f"funnel-chat-action:{scheduled_job_id}:0"
     except Exception:
         logger.exception(
             "Could not enqueue Telegram chat action job_id=%s action=%s",
@@ -95,6 +89,3 @@ async def enqueue_funnel_chat_action(
             action,
         )
         return None
-    finally:
-        if redis is not None:
-            await redis.close()

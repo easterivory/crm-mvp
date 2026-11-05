@@ -545,6 +545,9 @@ class PostbackService:
             "body": response.text[:1000],
             "parsed": parsed,
         }
+        external_id = parsed.get("external_id")
+        if external_id is not None and len(str(external_id)) <= 255:
+            submission.external_id = str(external_id)
         submission.status = parsed["status"]
         submission.error_message = parsed.get("error_message")
         submission.partner_feedback = self._feedback_text(

@@ -1099,6 +1099,7 @@ export default function FunnelBuilder({
             versionId={activeVersionId}
             projectId={projectId}
             isHoldActive={selectedVersion?.is_hold_active ?? false}
+            holdMode={selectedVersion?.hold_mode ?? 'manual'}
             onToggle={() => void loadVersions()}
           />
         </div>
@@ -1112,6 +1113,7 @@ export default function FunnelBuilder({
               versionId={activeVersionId}
               projectId={projectId}
               isHoldActive={selectedVersion?.is_hold_active ?? false}
+              holdMode={selectedVersion?.hold_mode ?? 'manual'}
               onToggle={() => void loadVersions()}
             />
           </div>

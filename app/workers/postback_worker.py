@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
 from app.core.database import get_db_session
+from app.core.arq_client import close_arq_client
 from app.core.logging_config import configure_file_logging
 from app.models.lead import Lead
 from app.models.channel_tracking import TelegramChannelSubscriptionEvent
@@ -30,6 +31,10 @@ from app.services.operational_alert_service import (
 from app.services.postback_service import PostbackService
 from app.services.telegram_service import TelegramService
 from app.services.telegram_sender import TelegramSenderService
+from app.services.runtime_dispatch_service import (
+    RuntimeDispatchAlreadyHandled, RuntimeDispatchNeedsReview, acknowledge_runtime_dispatch,
+    defer_runtime_dispatch, protect_dispatch_replay,
+)
 from app.repositories.bot_repository import BotRepository
 from app.workers.broadcast_worker import process_broadcast, process_due_broadcasts
 from app.workers.funnel_scheduled_worker import (
@@ -64,6 +69,10 @@ def _membership_is_active(member: dict) -> bool:
 async def _on_worker_startup(ctx: dict) -> None:
     _ = ctx
     await prime_operational_alert_config()
+
+
+async def _on_worker_shutdown(ctx: dict) -> None:
+    await close_arq_client()
 
 
 async def run_once() -> int:
@@ -239,6 +248,7 @@ async def send_fb_capi_event_task(
     event_time: int | None = None,
     event_id: str | None = None,
     event_source_url: str | None = None,
+    postback_attribution: dict | None = None,
 ) -> dict:
     try:
         lead_uuid = UUID(lead_id)
@@ -256,7 +266,16 @@ async def send_fb_capi_event_task(
             lead = lead_result.scalar_one_or_none()
             if lead is None:
                 return {"status": "failed", "error": "Lead not found"}
-            if lead.chat is None or lead.chat.tracking_link_id != tracking_link_uuid:
+            snapshot_event = None
+            if postback_attribution is not None:
+                from app.models.lead_event import LeadEvent
+                try:
+                    snapshot_event = await db.get(LeadEvent, UUID(str(postback_attribution.get("event_id"))))
+                except ValueError:
+                    pass
+                if snapshot_event is None or snapshot_event.lead_id != lead.id or snapshot_event.project_id != lead.project_id or snapshot_event.tracking_link_id != tracking_link_uuid:
+                    return {"status": "failed", "error": "Invalid postback attribution proof"}
+            if lead.chat is None or (snapshot_event is None and lead.chat.tracking_link_id != tracking_link_uuid):
                 return {
                     "status": "failed",
                     "error": "Lead is not attached to the requested tracking link",
@@ -266,16 +285,21 @@ async def send_fb_capi_event_task(
                 select(TrackingLink).where(TrackingLink.id == tracking_link_uuid)
             )
             link = link_result.scalar_one_or_none()
-            if link is None:
+            if link is None or link.project_id != lead.project_id:
                 return {"status": "failed", "error": "Tracking link not found"}
             if not link.fb_pixel_id or not link.fb_capi_token:
                 return {"status": "skipped", "error": "Facebook CAPI is not configured"}
 
+            delivery_lead = lead
+            if snapshot_event is not None:
+                from types import SimpleNamespace
+                delivery_lead = SimpleNamespace(**{column.key: getattr(lead, column.key) for column in Lead.__table__.columns}, chat=lead.chat)
+                delivery_lead.custom_fields = {**(lead.custom_fields or {}), "fb_data": postback_attribution.get("fb_data") or {}}
             response = await FacebookCAPIService.send_event(
                 pixel_id=link.fb_pixel_id,
                 token=link.fb_capi_token,
                 event_name=event_name,
-                lead=lead,
+                lead=delivery_lead,
                 event_time=event_time,
                 custom_data=custom_data or {},
                 event_id=event_id,
@@ -720,11 +744,24 @@ async def process_user_input_task(
 
     try:
         async with get_db_session() as db:
-            result = await TelegramService(db).process_debounced_user_input(
-                chat_id=chat_uuid,
-                trigger_message_id=message_uuid,
-            )
-            await db.commit()
+            async with protect_dispatch_replay(db, "input", message_uuid):
+                result = await TelegramService(db, release_transaction_before_external_io=True).process_debounced_user_input(
+                    chat_id=chat_uuid,
+                    trigger_message_id=message_uuid,
+                )
+                if not result.startswith("pending_runtime:") and result not in {"still_typing", "already_processing"}:
+                    await acknowledge_runtime_dispatch(db, "input", message_uuid)
+                else:
+                    delay = int(result.split(":", 1)[1]) if result.startswith("pending_runtime:") else max(settings.TELEGRAM_INPUT_QUIET_SECONDS, 1)
+                    await defer_runtime_dispatch(db, "input", message_uuid, delay)
+                await db.commit()
+    except RuntimeDispatchAlreadyHandled as exc:
+        return {"status": exc.status, "chat_id": chat_id, "message_id": trigger_message_id}
+    except RuntimeDispatchNeedsReview:
+        logger.exception("Partial runtime input needs review chat_id=%s message_id=%s", chat_id, trigger_message_id)
+        await send_operational_alert(component="runtime_dispatch", title="Partial funnel input needs review",
+            details={"chat_id": chat_id, "message_id": trigger_message_id}, dedupe_key="runtime-dispatch-review")
+        return {"status": "review", "chat_id": chat_id, "message_id": trigger_message_id}
     except Exception as exc:
         logger.exception(
             "Debounced Telegram input task failed chat_id=%s message_id=%s",
@@ -736,6 +773,8 @@ async def process_user_input_task(
     # Commit the engagement transition before retrying its following input.
     if result.startswith("pending_runtime:") and Retry is not None:
         raise Retry(defer=int(result.split(":", 1)[1]))
+    if result in {"still_typing", "already_processing"} and Retry is not None:
+        raise Retry(defer=max(settings.TELEGRAM_INPUT_QUIET_SECONDS, 1))
     return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
 
 
@@ -753,13 +792,22 @@ async def process_funnel_start_task(
 
     try:
         async with get_db_session() as db:
-            result = await TelegramService(db).process_queued_funnel_start(
-                chat_id=chat_uuid,
-                trigger_message_id=message_uuid,
-                fresh_lifecycle=bool(fresh_lifecycle),
-            )
-            await db.commit()
+            async with protect_dispatch_replay(db, "start", message_uuid):
+                result = await TelegramService(db, release_transaction_before_external_io=True).process_queued_funnel_start(
+                    chat_id=chat_uuid,
+                    trigger_message_id=message_uuid,
+                    fresh_lifecycle=bool(fresh_lifecycle),
+                )
+                await acknowledge_runtime_dispatch(db, "start", message_uuid)
+                await db.commit()
         return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
+    except RuntimeDispatchAlreadyHandled as exc:
+        return {"status": exc.status, "chat_id": chat_id, "message_id": trigger_message_id}
+    except RuntimeDispatchNeedsReview:
+        logger.exception("Partial runtime start needs review chat_id=%s message_id=%s", chat_id, trigger_message_id)
+        await send_operational_alert(component="runtime_dispatch", title="Partial funnel start needs review",
+            details={"chat_id": chat_id, "message_id": trigger_message_id}, dedupe_key="runtime-dispatch-review")
+        return {"status": "review", "chat_id": chat_id, "message_id": trigger_message_id}
     except Exception as exc:
         logger.exception(
             "Queued funnel start failed chat_id=%s message_id=%s",
@@ -803,6 +851,7 @@ def _redis_settings_from_url() -> Any:
 
 
 from app.workers.tiktok_worker import deliver_tiktok_outbox_task
+from app.workers.postback_followup_worker import deliver_postback_followups_task, monitor_postback_transport_task
 
 
 async def persist_telegram_block_task(ctx, project_id: str, bot_id: str | None, external_chat_id: str, observed_at: str):
@@ -822,6 +871,8 @@ async def persist_telegram_block_task(ctx, project_id: str, bot_id: str | None, 
 class WorkerSettings:
     """ARQ compatibility settings."""
     functions = [
+        deliver_postback_followups_task,
+        monitor_postback_transport_task,
         deliver_tiktok_outbox_task,
         arq_function(persist_telegram_block_task, max_tries=120, timeout=15) if Retry is not None else persist_telegram_block_task,
         send_lead_postback,
@@ -831,8 +882,8 @@ class WorkerSettings:
         send_fb_capi_channel_event_task,
         process_channel_join_request_action_task,
         recover_channel_join_request_actions_task,
-        process_user_input_task,
-        process_funnel_start_task,
+        arq_function(process_user_input_task, keep_result=0, timeout=settings.FUNNEL_SCHEDULED_JOB_TIMEOUT_SECONDS) if arq_function is not None else process_user_input_task,
+        arq_function(process_funnel_start_task, keep_result=0, timeout=settings.FUNNEL_SCHEDULED_JOB_TIMEOUT_SECONDS) if arq_function is not None else process_funnel_start_task,
         recover_missed_funnel_starts_task,
         process_broadcast,
         process_due_broadcasts,
@@ -842,8 +893,11 @@ class WorkerSettings:
     redis_settings = _redis_settings_from_url()
     queue_name = JOBS_QUEUE_NAME
     on_startup = _on_worker_startup
+    on_shutdown = _on_worker_shutdown
     cron_jobs = (
         [
+            cron(deliver_postback_followups_task, second={5, 20, 35, 50}, run_at_startup=True),
+            cron(monitor_postback_transport_task, second=55, run_at_startup=True),
             cron(deliver_tiktok_outbox_task, second={0, 15, 30, 45}, run_at_startup=True),
             cron(recover_missed_funnel_starts_task, second=20, run_at_startup=True),
             cron(

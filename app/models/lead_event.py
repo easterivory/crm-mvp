@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -80,6 +80,9 @@ class LeadEvent(Base, UUIDPrimaryKey, TimestampMixin):
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     source: Mapped[str] = mapped_column(String(30), nullable=False)
+    attribution_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    attributed_bot_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    attributed_buyer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     external_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

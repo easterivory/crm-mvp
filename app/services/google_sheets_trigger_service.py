@@ -19,6 +19,7 @@ class GoogleSheetsTriggerService:
         lead_id: UUID,
         project_id: UUID,
         status_id: UUID,
+        strict: bool = False,
     ) -> str | None:
         config = await self._get_active_config(project_id)
         if config is None:
@@ -31,6 +32,7 @@ class GoogleSheetsTriggerService:
         await GoogleSheetsService(self.db).export_lead_to_sheet(
             lead_id=lead_id,
             project_id=project_id,
+            strict=strict,
         )
         return "exported"
 

@@ -166,89 +166,48 @@ class LeaseAndSubmissionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PostbackFoundationTests(unittest.IsolatedAsyncioTestCase):
-    @staticmethod
-    def _service(endpoint):
-        db = SimpleNamespace()
-        db.scalar = AsyncMock(return_value=endpoint)
-        db.add = MagicMock()
+    async def asyncSetUp(self):
+        import os
+        if not os.getenv("CRM_TEST_POSTGRES_URL"):
+            self.skipTest("Real PostgreSQL required; mocked receipt tests were replaced")
 
-        async def flush() -> None:
-            instance = db.add.call_args.args[0]
-            if getattr(instance, "id", None) is None:
-                instance.id = uuid4()
-
-        db.flush = AsyncMock(side_effect=flush)
-        service = PostbackEndpointService(db)
-        return service, db
-
-    async def test_missing_identifier_is_saved_as_unmatched_receipt(self) -> None:
-        endpoint = SimpleNamespace(
-            id=uuid4(),
-            project_id=uuid4(),
-            partner_integration_id=None,
-            event_type="registration",
-            parameter_mapping={
-                "identifier_type": "lead_id",
-                "identifier_param": "lead_id",
-            },
-        )
-        service, db = self._service(endpoint)
-        service._match_lead = AsyncMock(return_value=None)
-
-        result = await service.receive(
-            secret_token="valid-secret",
-            request_method="GET",
-            query_payload={},
-            body_payload={},
-        )
-
-        receipt = db.add.call_args.args[0]
-        self.assertEqual(result.status, "unmatched")
-        self.assertEqual(receipt.status, "unmatched")
-        self.assertIn("lead_id", receipt.error_message)
+    async def test_missing_identifier_is_saved_as_invalid_receipt(self) -> None:
+        from tests.test_postback_relay import fixture, TOKEN
+        from app.models.postback import PostbackReceipt
+        async with fixture() as (sessions, *_):
+            async with sessions() as db:
+                result = await PostbackEndpointService(db).receive(secret_token=TOKEN,
+                    request_method="GET", query_payload={}, body_payload={})
+                await db.commit()
+                receipt = await db.get(PostbackReceipt, result.receipt_id)
+                self.assertEqual(result.status, "invalid")
+                self.assertEqual(receipt.status, "invalid")
+                self.assertIn("identifier", receipt.error_message)
 
     async def test_external_event_id_returns_duplicate_without_second_event(self) -> None:
-        endpoint = SimpleNamespace(
-            id=uuid4(),
-            project_id=uuid4(),
-            partner_integration_id=uuid4(),
-            event_type="deposit",
-            parameter_mapping={
-                "identifier_type": "external_id",
-                "identifier_param": "payload.lead",
-                "amount_param": "payload.amount",
-                "currency_param": "payload.currency",
-                "external_event_id_param": "payload.event_id",
-            },
-        )
-        lead = SimpleNamespace(id=uuid4())
-        event = SimpleNamespace(id=uuid4())
-        service, db = self._service(endpoint)
-        service._match_lead = AsyncMock(return_value=lead)
-        service.events = SimpleNamespace(
-            record_event=AsyncMock(return_value=(event, False)),
-        )
-
-        result = await service.receive(
-            secret_token="valid-secret",
-            request_method="POST",
-            query_payload={},
-            body_payload={
-                "payload": {
-                    "lead": "partner-42",
-                    "amount": "125,50",
-                    "currency": "usd",
-                    "event_id": "evt-1",
-                }
-            },
-        )
-
-        receipt = db.add.call_args.args[0]
-        self.assertEqual(result.status, "duplicate")
-        self.assertEqual(receipt.status, "duplicate")
-        call = service.events.record_event.await_args.kwargs
-        self.assertEqual(call["amount"], Decimal("125.50"))
-        self.assertEqual(call["external_event_id"], "evt-1")
+        from tests.test_postback_relay import fixture, TOKEN
+        from app.models.postback import PostbackEndpoint
+        from app.models.lead_event import LeadEvent
+        from sqlalchemy import select, func
+        async with fixture() as (sessions, app, pid, lid, eid):
+            async with sessions() as db:
+                endpoint = await db.get(PostbackEndpoint, eid)
+                endpoint.event_type = "deposit"
+                endpoint.parameter_mapping = {"identifier_type": "lead_id", "identifier_param": "payload.lead",
+                    "amount_param": "payload.amount", "currency_param": "payload.currency", "external_event_id_param": "payload.event_id"}
+                await db.flush()
+                kwargs = dict(secret_token=TOKEN, request_method="POST", query_payload={}, body_payload={"payload": {
+                    "lead": str(lid), "amount": "125,50", "currency": "usd", "event_id": "evt-1"}})
+                service = PostbackEndpointService(db)
+                first = await service.receive(**kwargs)
+                second = await service.receive(**kwargs)
+                await db.commit()
+                self.assertEqual(first.status, "processed")
+                self.assertEqual(second.status, "duplicate")
+                self.assertEqual(await db.scalar(select(func.count()).select_from(LeadEvent)), 1)
+                event = await db.get(LeadEvent, first.event_id)
+                self.assertEqual(event.amount, Decimal("125.50"))
+                self.assertEqual(event.external_event_id, "evt-1")
 
 
 class ManagerAnalyticsContractTests(unittest.IsolatedAsyncioTestCase):

@@ -277,6 +277,7 @@ class PartnerIntegrationUpdate(BaseModel):
 
 
 class PartnerIntegrationOut(OrmBase):
+    legacy_callback_disabled: bool = False
     id: UUID
     project_id: UUID
     name: str

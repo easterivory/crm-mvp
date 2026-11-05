@@ -373,7 +373,7 @@ def test_existing_named_account_chat_queues_funnel_on_live_input() -> None:
         my_chat_member=None,
     )
     with patch(
-        "app.services.telegram_service.enqueue_funnel_start",
+        "app.services.telegram_service.save_runtime_dispatch",
         new=AsyncMock(return_value=True),
     ) as enqueue_start:
         asyncio.run(
@@ -392,11 +392,10 @@ def test_existing_named_account_chat_queues_funnel_on_live_input() -> None:
         lead_import_id=None,
     )
     enqueue_start.assert_awaited_once_with(
-        chat_id,
-        message_id,
-        fresh_lifecycle=True,
+        service.db, key=f"start:{message_id}", kind="start",
+        payload={"chat_id": str(chat_id), "message_id": str(message_id), "fresh_lifecycle": True},
     )
-    service.db.commit.assert_awaited_once()
+    service.db.commit.assert_not_awaited()
 
 
 def test_mtproto_import_does_not_restart_active_or_manually_handled_dialog() -> None:

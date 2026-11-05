@@ -9,6 +9,33 @@ router = APIRouter(prefix="/internal/postback-relay", include_in_schema=False)
 logger = logging.getLogger(__name__)
 
 
+@router.post("/heartbeat")
+async def heartbeat(request: Request, db=Depends(get_db)):
+    from datetime import datetime, timezone
+    from uuid import UUID
+    from pydantic import BaseModel, Field, ConfigDict
+    from sqlalchemy.dialects.postgresql import insert
+    from app.models.postback import PostbackRelayHealth
+    from typing import Literal
+    class Heartbeat(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        instance_id: UUID
+        counts: dict[Literal["pending", "sending", "done", "dead"], int] = Field(max_length=4)
+        oldest_pending_seconds: float = Field(ge=0)
+        manifest_age_seconds: float | None = Field(default=None, ge=0)
+        free_bytes: int = Field(ge=0)
+    body = await authenticate(request)
+    try:
+        data = Heartbeat.model_validate_json(body)
+    except ValidationError:
+        raise HTTPException(422, "Invalid heartbeat") from None
+    await db.execute(insert(PostbackRelayHealth).values(instance_id=data.instance_id,
+        seen_at=datetime.now(timezone.utc), stats_json=data.model_dump(mode="json"))
+        .on_conflict_do_update(index_elements=[PostbackRelayHealth.instance_id],
+            set_={"seen_at": datetime.now(timezone.utc), "stats_json": data.model_dump(mode="json")}))
+    return {"status": "ok"}
+
+
 @router.get("/manifest")
 async def get_manifest(request: Request, db=Depends(get_db)):
     await authenticate(request)

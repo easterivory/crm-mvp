@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
+from app.core.arq_client import enqueue_runtime_job
 
 try:
     from arq import create_pool
@@ -86,12 +87,10 @@ async def enqueue_funnel_starts(
         if job_scope
         else None
     )
-    redis = None
     enqueued = 0
     already_enqueued = 0
     failed = 0
     try:
-        redis = await create_pool(_redis_settings_from_url())
         for request in requests:
             job_id = (
                 f"funnel-recovery:{safe_scope}:{request.message_id}"
@@ -99,7 +98,7 @@ async def enqueue_funnel_starts(
                 else f"funnel-start:{request.message_id}"
             )
             try:
-                job = await redis.enqueue_job(
+                job = await enqueue_runtime_job(
                     "process_funnel_start_task",
                     str(request.chat_id),
                     str(request.message_id),
@@ -124,9 +123,6 @@ async def enqueue_funnel_starts(
             requested,
         )
         failed = requested
-    finally:
-        if redis is not None:
-            await redis.close()
     return FunnelStartEnqueueResult(
         requested=requested,
         enqueued=enqueued,

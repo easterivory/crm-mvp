@@ -1,5 +1,9 @@
 # Postback relay: verification and release gate
 
+Historical protocol 1 report. For the November 4 protocol 2 implementation,
+real PostgreSQL results and remaining deployment gates, see
+[postbacks-v2-verification.md](postbacks-v2-verification.md).
+
 Checked locally on 2026-11-03. No production deployment or live postbacks were performed.
 
 ## Passed

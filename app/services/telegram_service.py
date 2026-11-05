@@ -85,11 +85,10 @@ from app.services.chat_audit_service import ChatAuditService
 from app.services.chat_lease_service import ChatLeaseService
 from app.services.funnel_runtime_service import FunnelRuntimeService
 from app.services.advertising_event_service import AdvertisingEventService
-from app.services.funnel_start_queue import enqueue_funnel_start
 from app.services.message_service import MessageService
 from app.services.telegram_sender import TelegramSenderService
 from app.services.utm_bridge_service import UtmBridgeService
-from app.services.user_input_queue import enqueue_user_input
+from app.services.runtime_dispatch_service import save_runtime_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +112,7 @@ class TelegramHistoryImportResult:
 class TelegramService:
     START_UTM_SUFFIX_RE = re.compile(r"^(?P<ref_code>.+)_(?P<utm_key>utm_[0-9a-fA-F]{8})$")
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, *, release_transaction_before_external_io: bool = False) -> None:
         self.db = db
         self.bot_repo = BotRepository(db)
         self.chat_repo = ChatRepository(db)
@@ -121,11 +120,11 @@ class TelegramService:
         self.message_repo = MessageRepository(db)
         self.tracking_repo = TrackingRepository(db)
         self.project_repo = ProjectRepository(db)
-        self.message_service = MessageService(db)
+        self.message_service = MessageService(db, release_transaction_before_telegram=release_transaction_before_external_io)
         self.bot_engine = BotEngineService(db)
         self.broadcasts = BroadcastService(db)
-        self.funnel_runtime = FunnelRuntimeService(db)
-        self.telegram_sender = TelegramSenderService(db)
+        self.funnel_runtime = FunnelRuntimeService(db, release_transaction_before_external_io=release_transaction_before_external_io)
+        self.telegram_sender = TelegramSenderService(db, release_transaction_before_network=release_transaction_before_external_io)
         self.audit = AuditService(db)
         self.chat_audit = ChatAuditService(db)
         self.chat_lease = ChatLeaseService(db)
@@ -419,33 +418,11 @@ class TelegramService:
                 command=custom_command,
             )
         ):
-            await self.db.commit()
-            queued = await enqueue_funnel_start(
-                chat_id,
-                message_id,
-                fresh_lifecycle=False,
-            )
-            if queued:
-                logger.info(
-                    "Custom funnel command queued chat_id=%s message_id=%s command=/%s",
-                    chat_id,
-                    message_id,
-                    custom_command,
-                )
-            else:
-                result = await self.process_queued_funnel_start(
-                    chat_id=chat_id,
-                    trigger_message_id=message_id,
-                    fresh_lifecycle=False,
-                )
-                logger.warning(
-                    "Funnel queue unavailable; custom command processed inline "
-                    "chat_id=%s message_id=%s command=/%s result=%s",
-                    chat_id,
-                    message_id,
-                    custom_command,
-                    result,
-                )
+            await save_runtime_dispatch(self.db, key=f"start:{message_id}", kind="start", payload={
+                "chat_id": str(chat_id), "message_id": str(message_id), "fresh_lifecycle": False,
+            })
+            logger.info("Custom funnel command saved for dispatch chat_id=%s message_id=%s command=/%s",
+                        chat_id, message_id, custom_command)
             return
         if is_start_command and not should_start_runtime:
             persisted_start = await self.message_repo.get_by_id(message_id)
@@ -489,37 +466,16 @@ class TelegramService:
         )
         start_requested = should_start_runtime or should_start_account_runtime
         if start_requested:
-            # Make the chat and lead visible before Telegram network calls made by the funnel.
-            await self.db.commit()
-            queued = await enqueue_funnel_start(
-                chat_id,
-                message_id,
-                fresh_lifecycle=True,
-            )
-            if queued:
-                logger.info(
-                    "Funnel start queued chat_id=%s message_id=%s fresh_lifecycle=%s "
-                    "source_transport=%s named_account_start=%s",
-                    chat_id,
-                    message_id,
-                    True,
-                    source_transport,
-                    should_start_account_runtime,
-                )
-            else:
-                result = await self.process_queued_funnel_start(
-                    chat_id=chat_id,
-                    trigger_message_id=message_id,
-                    fresh_lifecycle=True,
-                )
-                logger.warning(
-                    "Funnel start queue unavailable; processed inline chat_id=%s "
-                    "message_id=%s result=%s",
-                    chat_id,
-                    message_id,
-                    result,
-                )
+            await save_runtime_dispatch(self.db, key=f"start:{message_id}", kind="start", payload={
+                "chat_id": str(chat_id), "message_id": str(message_id), "fresh_lifecycle": True,
+            })
+            logger.info("Funnel start saved for dispatch chat_id=%s message_id=%s source_transport=%s named_account_start=%s",
+                        chat_id, message_id, source_transport, should_start_account_runtime)
             if lead_id is not None and should_start_runtime and is_bot_api:
+                # CAPI consumers resolve the lead in a separate transaction.
+                # Keep the historical visibility boundary, but commit the
+                # start dispatch atomically with the lead/message first.
+                await self.db.commit()
                 await self._enqueue_facebook_event_safely(
                     lead_id=lead_id,
                     source_event="bot_start",
@@ -563,32 +519,11 @@ class TelegramService:
             )
             return
 
-        queued = await enqueue_user_input(chat_id, message_id)
-        if queued:
-            logger.info(
-                "Incoming Telegram input deferred chat_id=%s message_id=%s delay_seconds=%s",
-                chat_id,
-                message_id,
-                settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS,
-            )
-            return
-
-        logger.warning(
-            "Debounce queue unavailable; processing input immediately chat_id=%s message_id=%s",
-            chat_id,
-            message_id,
-        )
-        if not await self.message_repo.claim_funnel_processing([message_id]):
-            return
-        runtime_chat = await self._reload_chat_for_runtime(chat_id)
-        await self._process_runtime_or_legacy(
-            chat=runtime_chat,
-            project_id=project_id,
-            bot_id=bot_id,
-            user_message=msg,
-            start_requested=is_start_command,
-            fresh_lifecycle=False,
-        )
+        await save_runtime_dispatch(self.db, key=f"input:{message_id}", kind="input", payload={
+            "chat_id": str(chat_id), "message_id": str(message_id),
+        }, delay_seconds=max(settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS, 2))
+        logger.info("Incoming Telegram input saved for dispatch chat_id=%s message_id=%s delay_seconds=%s",
+                    chat_id, message_id, settings.TELEGRAM_INPUT_DEBOUNCE_SECONDS)
 
     async def handle_mtproto_outgoing_message(
         self,
@@ -1307,7 +1242,7 @@ class TelegramService:
         chat_id: UUID,
         trigger_message_id: UUID,
     ) -> str:
-        chat = await self.chat_repo.get_by_id(chat_id)
+        chat = await self.chat_repo.get_for_runtime_input(chat_id)
         if chat is None or chat.is_deleted or chat.reset_at is not None or chat.bot_id is None:
             return "chat_unavailable"
 
@@ -1332,10 +1267,6 @@ class TelegramService:
             return "already_processed"
 
         batch_ids = [item.id for item in batch]
-        if any((getattr(item, "raw_payload_json", None) or {}).get("crm_repeated_start")
-               or (getattr(item, "raw_payload_json", None) or {}).get("crm_after_repeated_start")
-               for item in batch):
-            await self.funnel_runtime.repo.lock_chat_for_runtime(chat_id)
         if not await self.message_repo.claim_funnel_processing(batch_ids):
             return "already_processing"
 
@@ -1481,7 +1412,7 @@ class TelegramService:
         trigger_message_id: UUID,
         fresh_lifecycle: bool,
     ) -> str:
-        chat = await self.chat_repo.get_by_id(chat_id)
+        chat = await self.chat_repo.get_for_runtime_input(chat_id)
         message = await self.message_repo.get_by_id(trigger_message_id)
         if (
             chat is None

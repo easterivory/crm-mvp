@@ -5,6 +5,8 @@ import logging
 import random
 import re
 import time
+import json
+from uuid import UUID
 
 import httpx
 
@@ -34,7 +36,26 @@ class Relay:
         if data.get("version") != 1 or not isinstance(hashes, list) or any(
             not isinstance(h, str) or not re.fullmatch(r"[0-9a-f]{64}", h) for h in hashes):
             raise ValueError("Invalid manifest")
-        await asyncio.to_thread(self.queue.set_manifest, hashes)
+        entries = {}
+        if data.get("protocol_version", 1) >= 2:
+            for item in data.get("endpoints", []):
+                if item.get("token_hash") not in hashes or not isinstance(item.get("revision"), int) or item["revision"] < 1:
+                    raise ValueError("Invalid endpoint manifest")
+                UUID(item["endpoint_id"])
+                ack = item.get("ack_text")
+                if ack is not None and (not isinstance(ack, str) or len(ack) > 128):
+                    raise ValueError("Invalid acknowledgement template")
+                entries[item["token_hash"]] = {"endpoint_id": item["endpoint_id"], "revision": item["revision"], "ack_text": ack}
+            if set(entries) != set(hashes):
+                raise ValueError("Incomplete endpoint manifest")
+        await asyncio.to_thread(self.queue.set_manifest, hashes, entries)
+        if data.get("protocol_version", 1) >= 2:
+            path = "/internal/postback-relay/heartbeat"
+            stats = await asyncio.to_thread(self.queue.stats)
+            payload = json.dumps(stats, separators=(",", ":")).encode()
+            response = await self.client.post(self.config.crm_origin + path, content=payload,
+                headers=headers(self.config.secret, "POST", path, payload))
+            response.raise_for_status()
 
     async def send_one(self):
         row = await asyncio.to_thread(self.queue.claim)
@@ -45,7 +66,7 @@ class Relay:
                 content=row["payload"], headers=headers(self.config.secret, "POST", DELIVERY_PATH, row["payload"]))
             if response.status_code == 200:
                 ack = response.json()
-                if ack.get("delivery_id") != row["id"] or (ack.get("result") or {}).get("status") not in {"processed", "duplicate", "unmatched"}:
+                if ack.get("delivery_id") != row["id"] or (ack.get("result") or {}).get("status") not in {"processed", "duplicate", "unmatched", "ambiguous", "invalid", "conflict", "stale"}:
                     raise ValueError("Invalid acknowledgement")
                 await asyncio.to_thread(self.queue.finish, row["id"], "done", result=ack["result"]["status"])
                 logger.info("Relay acknowledged delivery_id=%s status=%s", row["id"], ack["result"]["status"])

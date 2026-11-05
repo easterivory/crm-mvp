@@ -596,7 +596,7 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "app.services.telegram_service.enqueue_funnel_start",
+            "app.services.telegram_service.save_runtime_dispatch",
             new=AsyncMock(return_value=True),
         ) as enqueue_mock:
             await telegram_service.handle_update(
@@ -606,10 +606,10 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             )
 
         enqueue_mock.assert_awaited_once_with(
-            chat_id,
-            message_id,
-            fresh_lifecycle=True,
+            telegram_service.db, key=f"start:{message_id}", kind="start",
+            payload={"chat_id": str(chat_id), "message_id": str(message_id), "fresh_lifecycle": True},
         )
+        telegram_service.db.commit.assert_awaited_once()
 
     async def test_debounced_input_recovers_pending_start_before_user_reply(self) -> None:
         now = datetime.now(timezone.utc)
@@ -651,7 +651,7 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         start_message = incoming_message("/start campaign", now - timedelta(seconds=10))
         reply_message = incoming_message("Анна, Москва", now - timedelta(seconds=5))
         telegram_service = TelegramService.__new__(TelegramService)
-        telegram_service.chat_repo = SimpleNamespace(get_by_id=AsyncMock(return_value=chat))
+        telegram_service.chat_repo = SimpleNamespace(get_for_runtime_input=AsyncMock(return_value=chat))
         telegram_service.message_repo = SimpleNamespace(
             get_latest_user_message=AsyncMock(return_value=reply_message),
             list_unprocessed_user_input_batch=AsyncMock(
@@ -930,12 +930,13 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         scheduled_job_id = uuid4()
+        self.service.db = SimpleNamespace()
         self.service._schedule_job = AsyncMock(return_value=scheduled_job_id)
         self.service._send_message_item = AsyncMock()
         self.service._move_from_step = AsyncMock()
 
         with patch(
-            "app.services.funnel_runtime_service.enqueue_funnel_chat_action",
+            "app.services.funnel_runtime_service.save_runtime_dispatch",
             new=AsyncMock(return_value="chat-action-job"),
         ) as enqueue_mock:
             result = await self.service._execute_message_sequence(
@@ -956,12 +957,13 @@ class FunnelRuntimeCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                 "chat_action": "typing",
             },
         )
-        enqueue_mock.assert_awaited_once_with(
-            scheduled_job_id=scheduled_job_id,
-            chat_id=chat_id,
-            action="typing",
-            duration_seconds=7,
-        )
+        enqueue_mock.assert_awaited_once()
+        saved = enqueue_mock.await_args.kwargs
+        self.assertEqual(saved["key"], f"action:{scheduled_job_id}")
+        self.assertEqual(saved["kind"], "action")
+        self.assertEqual(saved["payload"]["scheduled_job_id"], str(scheduled_job_id))
+        self.assertEqual(saved["payload"]["duration_seconds"], 7)
+        self.assertEqual(saved["payload"]["action"], "typing")
 
 
 if __name__ == "__main__":

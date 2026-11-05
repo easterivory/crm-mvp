@@ -27,6 +27,7 @@ import type {
   PartnerIntegrationPayload,
 } from '../types'
 import PostbackEndpointsPanel from './PostbackEndpointsPanel'
+import api from '../../../api/client'
 
 type PartnersSettingsProps = {
   projectId: string | null
@@ -435,6 +436,16 @@ function formatJson(value: unknown) {
 }
 
 export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
+  const [direction, setDirection] = useState<'incoming' | 'outgoing'>('incoming')
+  const [projectFormat, setProjectFormat] = useState('submission')
+  useEffect(() => {
+    if (!projectId) return
+    const controller = new AbortController()
+    void api.get(`/projects/${projectId}`, { signal: controller.signal }).then(({ data }) => {
+      if (!controller.signal.aborted) { setProjectFormat(data.project_format); if (data.project_format === 'gambling') setDirection('incoming') }
+    }).catch(() => {})
+    return () => controller.abort()
+  }, [projectId])
   const [partners, setPartners] = useState<PartnerIntegration[]>([])
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(null)
   const [form, setForm] = useState<PartnerFormState>(() => emptyForm())
@@ -589,6 +600,14 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
   }
 
   return (
+    <div className="min-w-0 space-y-5">
+      <div role="tablist" aria-label="Направление постбэков" className="flex flex-wrap gap-2 border-b border-white/10 pb-3">
+        <button type="button" role="tab" aria-selected={direction === 'incoming'} onClick={() => setDirection('incoming')}
+          className={`rounded-md px-3 py-2 text-sm ${direction === 'incoming' ? 'bg-cyan-500/15 text-cyan-100' : 'text-zinc-400'}`}>Получение постбэков</button>
+        {projectFormat !== 'gambling' && <button type="button" role="tab" aria-selected={direction === 'outgoing'} onClick={() => setDirection('outgoing')}
+          className={`rounded-md px-3 py-2 text-sm ${direction === 'outgoing' ? 'bg-emerald-500/15 text-emerald-100' : 'text-zinc-400'}`}>Отправка покупателю</button>}
+      </div>
+      {direction === 'incoming' ? <PostbackEndpointsPanel key={projectId} projectId={projectId} partnerIntegrationId={null} partners={partners} /> : (
     <div className="grid min-h-0 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
       <section className="min-h-0 rounded-lg border border-white/5 bg-white/[0.02]">
         <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
@@ -697,7 +716,7 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
               <h3 className="text-lg font-semibold text-zinc-100">
                 {selectedPartner ? 'Редактирование интеграции' : 'Новая интеграция'}
               </h3>
-              <p className="text-sm text-zinc-500">URL, авторизация и правила postback.</p>
+              <p className="mt-1 break-all text-sm text-zinc-400">Домен получателя: {(() => { try { return new URL(form.postback_url).hostname } catch { return 'не задан' } })()}</p>
             </div>
             {selectedPartner ? (
               <button
@@ -1227,11 +1246,9 @@ export default function PartnersSettings({ projectId }: PartnersSettingsProps) {
           </div>
         </section>
 
-        <PostbackEndpointsPanel
-          projectId={projectId}
-          partnerIntegrationId={selectedPartner?.id ?? null}
-        />
       </form>
+    </div>
+      )}
     </div>
   )
 }

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import time
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -35,6 +36,7 @@ class Queue:
                 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(status, due);
                 CREATE INDEX IF NOT EXISTS jobs_updated ON jobs(status, updated);
             """)
+            db.execute("INSERT OR IGNORE INTO metadata VALUES ('instance_id', ?)", (str(uuid4()),))
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -48,12 +50,13 @@ class Queue:
         finally:
             db.close()
 
-    def set_manifest(self, hashes):
+    def set_manifest(self, hashes, entries=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM allowed")
             db.executemany("INSERT INTO allowed(hash) VALUES (?)", [(h,) for h in set(hashes)])
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('manifest_at', ?)", (str(time.time()),))
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('manifest_entries', ?)", (json.dumps(entries or {}),))
 
     def _admit(self, db, token):
         row = db.execute("SELECT value FROM metadata WHERE key='manifest_at'").fetchone()
@@ -66,23 +69,27 @@ class Queue:
         with self.connect() as db:
             self._admit(db, token)
 
-    def enqueue(self, token, method, query, body):
+    def enqueue(self, token, method, query, body, *, include_ack=False):
         if shutil.disk_usage(self.path.parent).free < self.config.min_free_bytes:
             raise IntakeError(503)
         delivery_id = str(uuid4())
-        payload = json.dumps(dict(delivery_id=delivery_id, secret_token=token, request_method=method,
-            query_payload=query, body_payload=body), ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode()
-        if len(payload) > 262144:
-            raise IntakeError(413)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._admit(db, token)
+            metadata = db.execute("SELECT value FROM metadata WHERE key='manifest_entries'").fetchone()
+            entry = json.loads(metadata[0]).get(hashlib.sha256(token.encode()).hexdigest()) if metadata else None
+            extra = {"received_at": datetime.now(timezone.utc).isoformat(), "endpoint_id": entry["endpoint_id"],
+                "endpoint_revision": entry["revision"]} if entry else {}
+            payload = json.dumps(dict(delivery_id=delivery_id, secret_token=token, request_method=method,
+                query_payload=query, body_payload=body, **extra), ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode()
+            if len(payload) > 262144:
+                raise IntakeError(413)
             if db.execute("SELECT count(*) FROM jobs WHERE status != 'done'").fetchone()[0] >= self.config.max_jobs:
                 raise IntakeError(503)
             stamp = time.time()
             db.execute("INSERT INTO jobs(id,payload,status,created,updated,due) VALUES (?,?,'pending',?,?,?)",
                 (delivery_id, payload, stamp, stamp, stamp))
-        return delivery_id
+        return (delivery_id, entry.get("ack_text") if entry else None) if include_ack else delivery_id
 
     def claim(self):
         with self.connect() as db:
@@ -112,6 +119,7 @@ class Queue:
             oldest = db.execute("SELECT min(created) FROM jobs WHERE status IN ('pending','sending')").fetchone()[0]
             manifest = db.execute("SELECT value FROM metadata WHERE key='manifest_at'").fetchone()
             return {"counts": counts, "oldest_pending_seconds": max(0, time.time() - oldest) if oldest else 0,
+                "instance_id": db.execute("SELECT value FROM metadata WHERE key='instance_id'").fetchone()[0],
                 "manifest_age_seconds": max(0, time.time() - float(manifest[0])) if manifest else None,
                 "free_bytes": shutil.disk_usage(self.path.parent).free}
 

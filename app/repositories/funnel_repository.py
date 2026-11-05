@@ -42,9 +42,11 @@ class FunnelRepository(BaseRepository[Funnel]):
 
     async def _lock_chat_row(self, chat_id: UUID) -> bool:
         # Incoming messages already update Chat before entering the runtime.
-        # Keep the same order even after a commit before external I/O.
+        # NO KEY UPDATE still serializes chat writers, but is compatible with
+        # FK KEY SHARE locks taken when inserting messages/logs for this chat.
+        # FOR UPDATE upgrades those FK locks and can deadlock two writers.
         result = await self.db.execute(
-            select(Chat.id).where(Chat.id == chat_id).with_for_update()
+            select(Chat.id).where(Chat.id == chat_id).with_for_update(key_share=True)
         )
         return result.scalar_one_or_none() is not None
 
@@ -491,11 +493,12 @@ class FunnelRepository(BaseRepository[Funnel]):
         version_id: UUID,
         *,
         is_hold_active: bool,
+        hold_mode: str = "manual",
     ) -> Optional[FunnelVersion]:
         result = await self.db.execute(
             update(FunnelVersion)
             .where(FunnelVersion.id == version_id)
-            .values(is_hold_active=is_hold_active, updated_at=func.now())
+            .values(is_hold_active=is_hold_active, hold_mode=hold_mode, updated_at=func.now())
         )
         if result.rowcount == 0:
             return None
@@ -1200,6 +1203,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                 Chat.external_user_id,
                 Chat.contact_name,
                 Lead.name,
+                Lead.id.label("lead_id"),
                 Lead.phone,
                 Lead.username,
                 Lead.age,

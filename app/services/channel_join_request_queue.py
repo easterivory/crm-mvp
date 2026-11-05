@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.arq_queues import JOBS_QUEUE_NAME
 from app.core.config import settings
+from app.core.arq_client import enqueue_runtime_job
 
 try:
     from arq import create_pool
@@ -40,10 +41,8 @@ async def enqueue_channel_join_request_action(event_id: UUID) -> str | None:
         )
         return None
 
-    redis = None
     try:
-        redis = await create_pool(_redis_settings_from_url())
-        job = await redis.enqueue_job(
+        job = await enqueue_runtime_job(
             "process_channel_join_request_action_task",
             str(event_id),
             _job_id=f"channel-join-request:{event_id}",
@@ -56,6 +55,3 @@ async def enqueue_channel_join_request_action(event_id: UUID) -> str | None:
             event_id,
         )
         return None
-    finally:
-        if redis is not None:
-            await redis.close()

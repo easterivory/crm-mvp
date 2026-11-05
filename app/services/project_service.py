@@ -91,6 +91,7 @@ class ProjectService:
                 hide_assigned_chats_from_all=data.hide_assigned_chats_from_all,
                 chat_lease_minutes=data.chat_lease_minutes,
                 project_format=data.project_format,
+                hold_schedule=data.hold_schedule.model_dump(mode="json"),
                 vip_tags=data.vip_tags,
                 push_unread_threshold=data.push_unread_threshold,
                 confidence_weights=data.confidence_weights,
@@ -128,6 +129,12 @@ class ProjectService:
             )
 
         values = data.model_dump(exclude_unset=True)
+        if "hold_schedule" in values:
+            if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
+                raise HTTPException(403, "Только администратор может менять расписание HOLD.")
+            if data.hold_schedule is None:
+                raise HTTPException(422, "Расписание HOLD не может быть null.")
+            values["hold_schedule"] = data.hold_schedule.model_dump(mode="json")
         if "priority_chat_rules" in values:
             if actor.role_name not in {RoleName.SUPER_ADMIN, RoleName.ADMIN}:
                 raise HTTPException(403, "Только администратор может менять правила приоритетных чатов.")

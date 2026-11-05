@@ -95,6 +95,7 @@ class FunnelVersionOut(OrmBase):
     updated_at: datetime
     published_at: Optional[datetime]
     is_hold_active: bool = False
+    hold_mode: Literal["manual", "project_schedule"] = "manual"
     is_active_for_bot: bool = False
     is_current_for_funnel: bool = False
 
@@ -105,6 +106,7 @@ class FunnelVersionUpdate(BaseModel):
 
 class FunnelHoldModeUpdate(BaseModel):
     is_hold_active: bool
+    hold_mode: Literal["manual", "project_schedule"] = "manual"
 
 
 class FunnelDropOffStepOut(BaseModel):

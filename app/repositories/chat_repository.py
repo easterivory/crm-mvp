@@ -38,6 +38,11 @@ class ChatRepository(BaseRepository[Chat]):
     model = Chat
     CYCLE_START_TOLERANCE_SECONDS = 1
 
+    async def get_for_runtime_input(self, chat_id: UUID) -> Chat | None:
+        """Serialize input before claiming messages and refresh lifecycle flags."""
+        return await self.db.scalar(select(Chat).where(Chat.id == chat_id)
+            .with_for_update(key_share=True).execution_options(populate_existing=True))
+
     @classmethod
     def priority_expr(cls, rules: dict | None) -> ColumnElement:
         rules = rules or {}

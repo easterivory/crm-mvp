@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
 from .config import Config
 from .queue import Queue, IntakeError
@@ -77,7 +78,7 @@ def create_app(config=None, *, background=True):
                     body = dict(parse_qsl(raw.decode("utf-8"), keep_blank_values=True, max_num_fields=100))
                 else:
                     raise HTTPException(415, "Use JSON or URL-encoded form")
-            delivery_id = await asyncio.to_thread(queue.enqueue, token, request.method, query, body)
+            delivery_id, ack = await asyncio.to_thread(queue.enqueue, token, request.method, query, body, include_ack=True)
         except IntakeError as exc:
             raise HTTPException(exc.status, "Postback unavailable") from None
         except TimeoutError:
@@ -86,6 +87,6 @@ def create_app(config=None, *, background=True):
             raise HTTPException(400, "Invalid payload") from None
         except (sqlite3.Error, OSError):
             raise HTTPException(503, "Durable queue unavailable") from None
-        return {"status": "accepted", "delivery_id": delivery_id}
+        return PlainTextResponse(ack) if ack is not None else {"status": "accepted", "delivery_id": delivery_id}
 
     return app

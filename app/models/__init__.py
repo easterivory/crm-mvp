@@ -5,6 +5,7 @@ Order matters for forward-reference resolution.
 """
 
 from app.models.base import Base  # noqa: F401
+from app.models.telegram_delivery import RuntimeDispatch, TelegramInbox  # noqa: F401
 from app.models.advertising import AdvertisingConfig, AdvertisingSlot, AdvertisingEnrollment, AdvertisingDelivery, AdvertisingAudit  # noqa: F401
 from app.models.tiktok import TikTokDelivery, TikTokIntegration  # noqa: F401
 from app.models.project import Project  # noqa: F401

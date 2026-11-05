@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from app.core.delivery_attempt import note_external_delivery
 from app.core.telegram_formatting import telegram_html
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +52,10 @@ class TelegramDeliveryError(RuntimeError):
         self.cannot_initiate = (
             (error_code == 403 or status_code == 403)
             and "bot can't initiate conversation with a user" in self.description.casefold()
+        )
+        self.recipient_unavailable = (
+            (error_code == 403 or status_code == 403)
+            and "user is deactivated" in self.description.casefold()
         )
 
         details = [f"method={method}"]
@@ -116,6 +121,7 @@ class TelegramSenderService:
         payload: dict[str, Any],
         timeout_seconds: int | None = None,
     ) -> dict[str, Any] | None:
+        note_external_delivery()
         try:
             return await self.account_gateway.invoke(
                 bot_id=bot_id,
@@ -144,6 +150,8 @@ class TelegramSenderService:
         )
         if self.release_transaction_before_network and self.db.in_transaction():
             await self.db.commit()
+        if token:
+            note_external_delivery()
         return token
 
     async def send_message(

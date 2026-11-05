@@ -39,9 +39,12 @@ class PostbackEndpointService:
         project_id: UUID,
         actor: User,
         partner_integration_id: UUID | None = None,
+        include_archived: bool = False,
     ) -> list[PostbackEndpointOut]:
-        require_project_access(actor, project_id)
+        self._ensure_manage_access(actor, project_id)
         stmt = select(PostbackEndpoint).where(PostbackEndpoint.project_id == project_id)
+        if not include_archived:
+            stmt = stmt.where(PostbackEndpoint.is_archived.is_(False))
         if partner_integration_id is not None:
             stmt = stmt.where(
                 PostbackEndpoint.partner_integration_id == partner_integration_id,
@@ -64,8 +67,11 @@ class PostbackEndpointService:
     ) -> PostbackEndpointOut:
         self._ensure_manage_access(actor, project_id)
         await self._validate_integration(project_id, data.partner_integration_id)
+        if data.processing_kind == "submission_status" and data.partner_integration_id is None:
+            raise HTTPException(422, "Для статуса подачи выберите покупателя.")
         endpoint = PostbackEndpoint(
             project_id=project_id,
+            processing_kind=data.processing_kind,
             partner_integration_id=data.partner_integration_id,
             name=data.name,
             secret_token=secrets.token_urlsafe(32),
@@ -76,6 +82,8 @@ class PostbackEndpointService:
         self.db.add(endpoint)
         await self.db.flush()
         await self.db.refresh(endpoint)
+        from app.services.postback_contract_service import snapshot
+        await snapshot(self.db, endpoint)
         return self._endpoint_out(endpoint)
 
     async def update_endpoint(
@@ -87,7 +95,18 @@ class PostbackEndpointService:
         data: PostbackEndpointUpdate,
     ) -> PostbackEndpointOut:
         self._ensure_manage_access(actor, project_id)
+        endpoint = await self.db.scalar(select(PostbackEndpoint).where(PostbackEndpoint.id == endpoint_id,
+            PostbackEndpoint.project_id == project_id, PostbackEndpoint.is_archived.is_(False)).with_for_update())
+        if endpoint is None:
+            raise HTTPException(404, "Postback endpoint not found")
+        from app.services.postback_contract_service import snapshot
+        await snapshot(self.db, endpoint)
         values = data.model_dump(exclude_unset=True)
+        for key in ("name", "event_type", "parameter_mapping", "is_active", "processing_kind"):
+            if key in values and values[key] is None:
+                raise HTTPException(422, f"{key} cannot be null")
+        if values.get("processing_kind", endpoint.processing_kind) == "submission_status" and not values.get("partner_integration_id", endpoint.partner_integration_id):
+            raise HTTPException(422, "Для статуса подачи выберите покупателя.")
         if "partner_integration_id" in values:
             await self._validate_integration(project_id, values["partner_integration_id"])
         if "event_type" in values and values["event_type"] is not None:
@@ -96,6 +115,7 @@ class PostbackEndpointService:
             mapping = data.parameter_mapping
             assert mapping is not None
             values["parameter_mapping"] = mapping.model_dump()
+        values["revision"] = endpoint.revision + 1
         result = await self.db.execute(
             update(PostbackEndpoint)
             .where(
@@ -108,6 +128,7 @@ class PostbackEndpointService:
         endpoint = result.scalar_one_or_none()
         if endpoint is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Postback endpoint not found")
+        await snapshot(self.db, endpoint)
         return self._endpoint_out(endpoint)
 
     async def rotate_secret(
@@ -116,19 +137,36 @@ class PostbackEndpointService:
         endpoint_id: UUID,
         project_id: UUID,
         actor: User,
+        revoke_old: bool = False,
     ) -> PostbackEndpointOut:
         self._ensure_manage_access(actor, project_id)
+        from app.services.postback_contract_service import snapshot, now
+        from app.models.postback import PostbackEndpointRevision
+        from datetime import timedelta
+        endpoint = await self.db.scalar(select(PostbackEndpoint).where(PostbackEndpoint.id == endpoint_id,
+            PostbackEndpoint.project_id == project_id, PostbackEndpoint.is_archived.is_(False)).with_for_update())
+        if endpoint is None:
+            raise HTTPException(404)
+        await snapshot(self.db, endpoint)
+        deadline = now() + timedelta(seconds=0 if revoke_old else max(0, settings.POSTBACK_ROTATION_GRACE_SECONDS))
+        import hashlib
+        await self.db.execute(update(PostbackEndpointRevision).where(PostbackEndpointRevision.endpoint_id == endpoint_id,
+            PostbackEndpointRevision.token_hash == hashlib.sha256(endpoint.secret_token.encode()).hexdigest()).values(valid_until=deadline))
+        if revoke_old:
+            await self.db.execute(update(PostbackEndpointRevision).where(PostbackEndpointRevision.endpoint_id == endpoint_id)
+                .values(valid_until=deadline, revoked=True))
         endpoint = await self.db.scalar(
             update(PostbackEndpoint)
             .where(
                 PostbackEndpoint.id == endpoint_id,
                 PostbackEndpoint.project_id == project_id,
             )
-            .values(secret_token=secrets.token_urlsafe(32), updated_at=func.now())
+            .values(secret_token=secrets.token_urlsafe(32), updated_at=func.now(), revision=endpoint.revision + 1)
             .returning(PostbackEndpoint)
         )
         if endpoint is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Postback endpoint not found")
+        await snapshot(self.db, endpoint)
         return self._endpoint_out(endpoint)
 
     async def delete_endpoint(
@@ -140,10 +178,10 @@ class PostbackEndpointService:
     ) -> None:
         self._ensure_manage_access(actor, project_id)
         result = await self.db.execute(
-            delete(PostbackEndpoint).where(
+            update(PostbackEndpoint).where(
                 PostbackEndpoint.id == endpoint_id,
                 PostbackEndpoint.project_id == project_id,
-            )
+            ).values(is_archived=True, is_active=False, updated_at=func.now())
         )
         if not result.rowcount:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Postback endpoint not found")
@@ -156,7 +194,7 @@ class PostbackEndpointService:
         actor: User,
         limit: int,
     ) -> list[PostbackReceipt]:
-        require_project_access(actor, project_id)
+        self._ensure_manage_access(actor, project_id)
         endpoint_exists = await self.db.scalar(
             select(PostbackEndpoint.id).where(
                 PostbackEndpoint.id == endpoint_id,
@@ -183,100 +221,13 @@ class PostbackEndpointService:
         request_method: str,
         query_payload: dict[str, Any],
         body_payload: dict[str, Any],
+        received_at=None,
+        endpoint_id=None,
+        revision=None,
     ) -> PublicPostbackResult:
-        endpoint = await self.db.scalar(
-            select(PostbackEndpoint).where(
-                PostbackEndpoint.secret_token == secret_token,
-                PostbackEndpoint.is_active.is_(True),
-            )
-        )
-        if endpoint is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Postback endpoint not found")
-
-        mapping = PostbackParameterMapping.model_validate(endpoint.parameter_mapping or {})
-        merged_payload = {**query_payload, **body_payload}
-        identifier = self._extract_value(merged_payload, mapping.identifier_param)
-        event_type_value = (
-            self._extract_value(merged_payload, mapping.event_type_param)
-            if mapping.event_type_param
-            else endpoint.event_type
-        )
-        event_type = str(event_type_value or endpoint.event_type)
-        lead = await self._match_lead(
-            endpoint=endpoint,
-            identifier_type=mapping.identifier_type,
-            identifier=identifier,
-        )
-        receipt = PostbackReceipt(
-            endpoint_id=endpoint.id,
-            project_id=endpoint.project_id,
-            lead_id=lead.id if lead is not None else None,
-            request_method=request_method.upper(),
-            event_type=event_type[:100],
-            status="unmatched",
-            query_payload=query_payload,
-            body_payload=body_payload,
-        )
-        self.db.add(receipt)
-        await self.db.flush()
-
-        if identifier is None:
-            receipt.error_message = f"Parameter '{mapping.identifier_param}' is missing"
-            return PublicPostbackResult(status="unmatched", receipt_id=receipt.id)
-        if lead is None:
-            receipt.error_message = (
-                f"Lead not found by {mapping.identifier_type}={str(identifier)[:255]}"
-            )
-            return PublicPostbackResult(status="unmatched", receipt_id=receipt.id)
-
-        try:
-            amount = self._parse_amount(
-                self._extract_value(merged_payload, mapping.amount_param)
-                if mapping.amount_param
-                else None
-            )
-            currency_value = (
-                self._extract_value(merged_payload, mapping.currency_param)
-                if mapping.currency_param
-                else None
-            )
-            external_event_id_value = (
-                self._extract_value(merged_payload, mapping.external_event_id_param)
-                if mapping.external_event_id_param
-                else None
-            )
-            event, created = await self.events.record_event(
-                lead=lead,
-                event_type=event_type,
-                source="postback",
-                amount=amount,
-                currency=str(currency_value) if currency_value else None,
-                partner_integration_id=endpoint.partner_integration_id,
-                postback_endpoint_id=endpoint.id,
-                external_event_id=(
-                    str(external_event_id_value)[:255]
-                    if external_event_id_value is not None
-                    else None
-                ),
-                payload=merged_payload,
-            )
-        except (InvalidOperation, ValueError) as exc:
-            receipt.status = "unmatched"
-            receipt.error_message = str(exc)[:2000]
-            return PublicPostbackResult(
-                status="unmatched",
-                receipt_id=receipt.id,
-                lead_id=lead.id,
-            )
-
-        receipt.lead_event_id = event.id
-        receipt.status = "processed" if created else "duplicate"
-        return PublicPostbackResult(
-            status="processed" if created else "duplicate",
-            receipt_id=receipt.id,
-            lead_id=lead.id,
-            event_id=event.id,
-        )
+        from app.services.postback_contract_service import PostbackContractService
+        return await PostbackContractService(self.db).receive(token=secret_token, method=request_method,
+            query=query_payload, body=body_payload, received_at=received_at, endpoint_id=endpoint_id, revision=revision)
 
     async def _match_lead(
         self,
@@ -285,76 +236,10 @@ class PostbackEndpointService:
         identifier_type: str,
         identifier: Any,
     ) -> Lead | None:
-        if identifier is None:
-            return None
-        raw = str(identifier).strip()
-        if not raw:
-            return None
-        base = select(Lead).where(
-            Lead.project_id == endpoint.project_id,
-            Lead.is_deleted.is_(False),
-            Lead.is_trash.is_(False),
-        )
-        if identifier_type == "lead_id":
-            try:
-                return await self.db.scalar(base.where(Lead.id == UUID(raw)))
-            except ValueError:
-                return None
-        if identifier_type == "chat_id":
-            try:
-                return await self.db.scalar(base.where(Lead.chat_id == UUID(raw)))
-            except ValueError:
-                return None
-        if identifier_type == "telegram_id":
-            return await self.db.scalar(
-                base.join(Chat, Chat.id == Lead.chat_id)
-                .where(or_(Chat.external_user_id == raw, Chat.external_chat_id == raw))
-                .order_by(Lead.created_at.desc())
-                .limit(1)
-            )
-        if identifier_type == "tracking_code":
-            return await self.db.scalar(
-                base.join(Chat, Chat.id == Lead.chat_id)
-                .join(TrackingLink, TrackingLink.id == Chat.tracking_link_id)
-                .where(or_(TrackingLink.code == raw, TrackingLink.ref_code == raw))
-                .order_by(Lead.created_at.desc())
-                .limit(1)
-            )
-        if identifier_type == "click_id":
-            return await self.db.scalar(
-                base.where(
-                    or_(
-                        Lead.custom_fields["click_id"].astext == raw,
-                        Lead.custom_fields["fb_data"]["fbc"].astext == raw,
-                        cast(Lead.custom_fields, Text).ilike(self._escaped_contains(raw), escape="\\"),
-                    )
-                )
-                .order_by(Lead.created_at.desc())
-                .limit(1)
-            )
-
-        submission_stmt = (
-            base.join(LeadSubmission, LeadSubmission.lead_id == Lead.id)
-            .where(
-                or_(
-                    cast(LeadSubmission.request_payload, Text).ilike(
-                        self._escaped_contains(raw),
-                        escape="\\",
-                    ),
-                    cast(LeadSubmission.response_payload, Text).ilike(
-                        self._escaped_contains(raw),
-                        escape="\\",
-                    ),
-                )
-            )
-            .order_by(LeadSubmission.submitted_at.desc())
-            .limit(1)
-        )
-        if endpoint.partner_integration_id is not None:
-            submission_stmt = submission_stmt.where(
-                LeadSubmission.partner_integration_id == endpoint.partner_integration_id,
-            )
-        return await self.db.scalar(submission_stmt)
+        from app.services.postback_contract_service import PostbackContractService, config_of
+        mapping = PostbackParameterMapping(identifier_type=identifier_type)
+        lead, _, _, error = await PostbackContractService(self.db).match(endpoint, config_of(endpoint), mapping, str(identifier or ""))
+        return lead if error is None else None
 
     async def _validate_integration(
         self,
@@ -385,6 +270,9 @@ class PostbackEndpointService:
             partner_integration_id=endpoint.partner_integration_id,
             name=endpoint.name,
             event_type=endpoint.event_type,
+            processing_kind=endpoint.processing_kind,
+            is_archived=endpoint.is_archived,
+            revision=endpoint.revision,
             parameter_mapping=PostbackParameterMapping.model_validate(
                 endpoint.parameter_mapping or {},
             ),
@@ -410,13 +298,8 @@ class PostbackEndpointService:
 
     @staticmethod
     def _parse_amount(value: Any) -> Decimal | None:
-        if value is None or value == "":
-            return None
-        normalized = str(value).strip().replace(" ", "").replace(",", ".")
-        amount = Decimal(normalized)
-        if amount < 0:
-            raise ValueError("Event amount must not be negative")
-        return amount
+        from app.services.postback_contract_service import amount_value
+        return amount_value(value)
 
     @staticmethod
     def _escaped_contains(value: str) -> str:

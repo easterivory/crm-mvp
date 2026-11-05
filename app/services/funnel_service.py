@@ -379,6 +379,9 @@ class FunnelService:
         published = await self.repo.get_published(funnel_id)
         if published is not None:
             await self.repo.clone_graph(published.id, version.id)
+            if published.hold_mode == "project_schedule":
+                await self.repo.update_version_hold_mode(version.id, is_hold_active=published.is_hold_active,
+                    hold_mode="project_schedule")
         return FunnelVersionOut.model_validate(version)
 
     async def create_draft_from_version(
@@ -390,7 +393,7 @@ class FunnelService:
         current_user: User,
     ) -> FunnelVersionOut:
         self._ensure_write_allowed(current_user)
-        await self._get_version_or_404(funnel_id, source_version_id, project_id)
+        source = await self._get_version_or_404(funnel_id, source_version_id, project_id)
         existing_draft = await self.repo.get_latest_draft(funnel_id)
         if existing_draft is not None:
             return FunnelVersionOut.model_validate(existing_draft)
@@ -400,6 +403,9 @@ class FunnelService:
             created_by_user_id=current_user.id,
         )
         await self.repo.clone_graph(source_version_id, draft.id)
+        if source.hold_mode == "project_schedule":
+            await self.repo.update_version_hold_mode(draft.id, is_hold_active=source.is_hold_active,
+                hold_mode="project_schedule")
         return FunnelVersionOut.model_validate(draft)
 
     async def get_version(
@@ -809,9 +815,16 @@ class FunnelService:
     ) -> FunnelVersionOut:
         self._ensure_write_allowed(current_user)
         version = await self._get_version_or_404(funnel_id, version_id, project_id)
+        if data.hold_mode == "project_schedule":
+            from app.models.project import Project
+            from app.core.hold_schedule import HoldSchedule
+            project = await self.db.get(Project, project_id)
+            if project is None or not HoldSchedule.model_validate(project.hold_schedule or {}).enabled:
+                raise HTTPException(422, "Сначала включите расписание HOLD в настройках проекта.")
         updated = await self.repo.update_version_hold_mode(
             version.id,
             is_hold_active=data.is_hold_active,
+            hold_mode=data.hold_mode,
         )
         assert updated is not None
         return FunnelVersionOut.model_validate(updated)

@@ -238,10 +238,11 @@ export async function setFunnelHoldMode(
   versionId: string,
   projectId: string,
   isHoldActive: boolean,
+  holdMode: 'manual' | 'project_schedule' = 'manual',
 ): Promise<FunnelVersion> {
   const { data } = await api.post<FunnelVersion>(
     `/funnels/${funnelId}/versions/${versionId}/toggle-hold`,
-    { is_hold_active: isHoldActive },
+    { is_hold_active: isHoldActive, hold_mode: holdMode },
     { params: { project_id: projectId } },
   )
   return data

@@ -48,7 +48,7 @@ class GoogleSheetsService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def export_lead_to_sheet(self, lead_id: UUID, project_id: UUID) -> None:
+    async def export_lead_to_sheet(self, lead_id: UUID, project_id: UUID, *, strict: bool = False) -> None:
         config = await self._get_config(project_id)
         if not self._can_export(config):
             return
@@ -79,6 +79,8 @@ class GoogleSheetsService:
                 value_input_option="USER_ENTERED",
             )
         except APIError as exc:
+            if strict:
+                raise
             logger.warning(
                 "Google Sheets API export failed lead_id=%s project_id=%s spreadsheet_id=%s "
                 "service_account_email=%s error=%s",
@@ -89,6 +91,8 @@ class GoogleSheetsService:
                 exc,
             )
         except SpreadsheetNotFound as exc:
+            if strict:
+                raise
             logger.warning(
                 "Google Sheets spreadsheet is not accessible lead_id=%s project_id=%s "
                 "spreadsheet_id=%s service_account_email=%s error=%s",
@@ -99,6 +103,8 @@ class GoogleSheetsService:
                 exc,
             )
         except (json.JSONDecodeError, ValueError, GoogleAuthError, PermissionError) as exc:
+            if strict:
+                raise
             logger.warning(
                 "Google Sheets export skipped due to invalid service account config "
                 "lead_id=%s project_id=%s error=%s",

@@ -57,6 +57,14 @@ async def receive_partner_postback(
     db: AsyncSession = Depends(get_db),
 ) -> PartnerPostbackOut:
     """Public endpoint for partner feedback postbacks."""
+    from app.core.config import settings
+    from fastapi import HTTPException
+    from app.models.partner import PartnerIntegration
+    # Existing integrations require explicit migration; new integrations default
+    # to authenticated endpoints. Creating an endpoint never cuts off old traffic.
+    integration = await db.get(PartnerIntegration, integration_id)
+    if not settings.LEGACY_PARTNER_POSTBACKS_ENABLED or (integration and integration.legacy_callback_disabled):
+        raise HTTPException(410, "Use the authenticated postback URL configured in CRM")
     try:
         raw_payload = await request.json()
     except ValueError:

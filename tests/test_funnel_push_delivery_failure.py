@@ -94,6 +94,17 @@ def test_transient_failure_does_not_suspend_chat(monkeypatch):
     sessions[0].rollback.assert_awaited_once()
 
 
+def test_deactivated_user_suspends_pushes_without_marking_them_sent(monkeypatch):
+    sessions, repos, runtime, factory, alert = setup_worker(
+        monkeypatch, error=delivery_error("Forbidden: user is deactivated"))
+    assert not asyncio.run(worker._process_candidate(uuid4(), uuid4()))
+    saved = repos[1].update_chat_funnel_runtime.await_args.kwargs["runtime_json"]
+    assert saved["push_delivery_suspended"]["reason"] == "telegram_user_deactivated"
+    assert "push_rules_sent" not in saved
+    sessions[1].commit.assert_awaited_once()
+    assert delivery_error("Forbidden: user is deactivated", 400).recipient_unavailable is False
+
+
 def test_success_keeps_existing_commit_path(monkeypatch):
     sessions, repos, runtime, factory, alert = setup_worker(monkeypatch)
     assert asyncio.run(worker._process_candidate(uuid4(), uuid4()))

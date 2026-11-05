@@ -229,8 +229,8 @@ def test_funnel_start_queue_keeps_the_legacy_worker_signature(monkeypatch) -> No
     )
     monkeypatch.setattr(
         funnel_start_queue,
-        "create_pool",
-        AsyncMock(return_value=redis),
+        "enqueue_runtime_job",
+        redis.enqueue_job,
     )
     chat_id = uuid4()
     message_id = uuid4()
@@ -268,7 +268,7 @@ def test_queued_custom_command_runs_active_funnel_branch() -> None:
     message = SimpleNamespace(id=message_id, body="/help")
     trigger = command_step()
     service = TelegramService.__new__(TelegramService)
-    service.chat_repo = SimpleNamespace(get_by_id=AsyncMock(return_value=chat))
+    service.chat_repo = SimpleNamespace(get_for_runtime_input=AsyncMock(return_value=chat))
     service.message_repo = SimpleNamespace(
         get_by_id=AsyncMock(return_value=message),
         claim_funnel_processing=AsyncMock(return_value=True),
@@ -321,7 +321,7 @@ def test_unknown_command_keeps_existing_new_chat_start_behavior() -> None:
         created_at=datetime.now(timezone.utc),
     )
     service = TelegramService.__new__(TelegramService)
-    service.chat_repo = SimpleNamespace(get_by_id=AsyncMock(return_value=chat))
+    service.chat_repo = SimpleNamespace(get_for_runtime_input=AsyncMock(return_value=chat))
     service.message_repo = SimpleNamespace(
         get_by_id=AsyncMock(return_value=message),
         claim_funnel_processing=AsyncMock(return_value=True),

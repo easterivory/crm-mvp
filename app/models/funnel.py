@@ -111,6 +111,7 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     is_hold_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    hold_mode: Mapped[str] = mapped_column(String(30), nullable=False, default="manual", server_default="manual")
 
     funnel: Mapped[Funnel] = relationship(
         "Funnel",

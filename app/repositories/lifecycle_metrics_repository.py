@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, literal, or_, select
+from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import Chat
@@ -236,15 +236,15 @@ class LifecycleMetricsRepository:
     @classmethod
     def _eligible_events(cls, project_id: UUID):
         canonical_type = cls._canonical_type()
-        tracking_link_id = func.coalesce(
+        tracking_link_id = case((LeadEvent.attribution_locked.is_(True), LeadEvent.tracking_link_id), else_=func.coalesce(
             LeadEvent.tracking_link_id,
             Chat.tracking_link_id,
-        )
-        funnel_id = func.coalesce(LeadEvent.funnel_id, ChatFunnelState.funnel_id)
-        funnel_version_id = func.coalesce(
+        ))
+        funnel_id = case((LeadEvent.attribution_locked.is_(True), LeadEvent.funnel_id), else_=func.coalesce(LeadEvent.funnel_id, ChatFunnelState.funnel_id))
+        funnel_version_id = case((LeadEvent.attribution_locked.is_(True), LeadEvent.funnel_version_id), else_=func.coalesce(
             LeadEvent.funnel_version_id,
             ChatFunnelState.funnel_version_id,
-        )
+        ))
         ranked = (
             select(
                 LeadEvent.id,
@@ -252,7 +252,9 @@ class LifecycleMetricsRepository:
                 LeadEvent.source,
                 LeadEvent.occurred_at,
                 LeadEvent.attributed_manager_id,
-                Chat.bot_id,
+                case((LeadEvent.attribution_locked.is_(True), LeadEvent.attributed_bot_id), else_=Chat.bot_id).label("bot_id"),
+                LeadEvent.attribution_locked,
+                LeadEvent.attributed_buyer_id,
                 tracking_link_id.label("tracking_link_id"),
                 funnel_id.label("funnel_id"),
                 funnel_version_id.label("funnel_version_id"),
@@ -303,10 +305,12 @@ class LifecycleMetricsRepository:
         if unattributed_only:
             stmt = stmt.where(events.c.tracking_link_id.is_(None))
         if buyer_id is not None:
-            stmt = stmt.join(
+            stmt = stmt.outerjoin(
                 TrackingLink,
                 TrackingLink.id == events.c.tracking_link_id,
-            ).where(TrackingLink.buyer_id == buyer_id)
+            ).where(or_(
+                and_(events.c.attribution_locked.is_(True), events.c.attributed_buyer_id == buyer_id),
+                and_(events.c.attribution_locked.is_(False), TrackingLink.buyer_id == buyer_id)))
         if funnel_version_id is not None:
             stmt = stmt.where(events.c.funnel_version_id == funnel_version_id)
         return stmt
