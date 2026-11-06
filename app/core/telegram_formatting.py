@@ -1,4 +1,5 @@
-"""Opt-in Telegram HTML compiled to plain text and UTF-16 entities."""
+"""Author-authored Telegram HTML compiled to plain text and UTF-16 entities."""
+import re
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
@@ -7,6 +8,20 @@ TAGS = {"b": "bold", "strong": "bold", "i": "italic", "em": "italic",
         "u": "underline", "s": "strikethrough", "del": "strikethrough",
         "tg-spoiler": "spoiler", "code": "code", "pre": "pre",
         "blockquote": "blockquote", "a": "text_link"}
+
+TELEGRAM_TAG_RE = re.compile(r"</?(?:" + "|".join(TAGS) + r")(?=[\s/>])", re.I)
+
+
+def telegram_parse_mode(text: str | None, parse_mode: str | None = None) -> str | None:
+    # Resolve only author content, BEFORE rendering user-controlled template values.
+    # The sender must remain explicit so incoming/user text never becomes markup.
+    return parse_mode or ("HTML" if TELEGRAM_TAG_RE.search(text or "") else None)
+
+
+def normalize_telegram_message(message: dict) -> dict:
+    text = (message.get("text") if message.get("type", "text") == "text"
+            else message.get("caption") if message.get("caption") is not None else message.get("text"))
+    return {**message, "parse_mode": telegram_parse_mode(str(text or ""), message.get("parse_mode"))}
 
 
 class TelegramHTMLParser(HTMLParser):

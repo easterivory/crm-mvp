@@ -25,6 +25,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 
 import api from '../api/client'
+import ChatterfyImportSource from './ChatterfyImportSource'
+import LeadDepositHistory from './LeadDepositHistory'
 import FunnelTraceWidget from '../features/chats/components/FunnelTraceWidget'
 import DuplicateWarning from '../features/leads/components/DuplicateWarning'
 import { useProjectBotSelection } from '../shared/lib'
@@ -111,6 +113,7 @@ type PaginatedResponse<T> = {
 }
 
 type LeadSidebarProps = {
+  projectFormat?: 'submission' | 'gambling'
   activeBotId: string | null
   activeBotName: string | null
   activeBotTransportType: 'bot_api' | 'user_mtproto' | null
@@ -242,6 +245,7 @@ function getErrorMessage(err: unknown, fallback = 'Не удалось выпо�
 }
 
 export default function LeadSidebar({
+  projectFormat = 'submission',
   activeBotId,
   activeBotName,
   activeBotTransportType,
@@ -296,6 +300,19 @@ export default function LeadSidebar({
   const [leadEventCurrency, setLeadEventCurrency] = useState('USD')
   const [isCreatingLeadEvent, setIsCreatingLeadEvent] = useState(false)
   const [leadEventFeedback, setLeadEventFeedback] = useState('')
+  const [leadEventOfferId, setLeadEventOfferId] = useState('')
+  const [eventOffers, setEventOffers] = useState<Array<{ id: string; name: string; is_active: boolean }>>([])
+  const [leadEventRefresh, setLeadEventRefresh] = useState(0)
+  const [leadEventAt, setLeadEventAt] = useState('')
+  useEffect(() => {
+    let current = true
+    setEventOffers([]); setLeadEventOfferId('')
+    if (!selectedProjectId || projectFormat !== 'gambling') return
+    api.get<typeof eventOffers>('/gambling-offers', { params: { project_id: selectedProjectId } })
+      .then(({ data }) => { if (current) setEventOffers(data.filter(offer => offer.is_active)) })
+      .catch(() => { if (current) setEventOffers([]) })
+    return () => { current = false }
+  }, [selectedProjectId, projectFormat])
   const managerCommentSaveSeqRef = useRef(0)
   const isTelegramUserAccount = activeBotTransportType === 'user_mtproto'
   const leadScopeRef = useRef('')
@@ -711,6 +728,8 @@ export default function LeadSidebar({
         `/leads/${lead.id}/events`,
         {
           event_type: leadEventType,
+          ...(leadEventOfferId ? { offer_id: leadEventOfferId } : {}),
+          ...(leadEventOfferId && leadEventAt ? { occurred_at: new Date(leadEventAt).toISOString() } : {}),
           amount: needsAmount ? normalizedAmount : null,
           currency: needsAmount ? leadEventCurrency.trim().toUpperCase() || 'USD' : null,
           payload: { source_ui: 'lead_sidebar' },
@@ -719,6 +738,7 @@ export default function LeadSidebar({
       )
       setLeadEventAmount('')
       setLeadEventFeedback('Событие записано.')
+      setLeadEventRefresh(value => value + 1)
       onLeadStatusChanged?.()
     } catch (err) {
       setLeadEventFeedback(getErrorMessage(err, 'Не удалось записать событие.'))
@@ -926,6 +946,10 @@ export default function LeadSidebar({
                 </p>
               )}
             </section>
+
+            <ChatterfyImportSource customFields={lead.custom_fields} />
+            {projectFormat === 'gambling' && selectedProjectId && <LeadDepositHistory
+              key={lead.id} leadId={lead.id} projectId={selectedProjectId} refreshKey={leadEventRefresh} />}
 
             <div className="rounded-xl border border-white/5 bg-white/[0.035] p-4">
               <div className="mb-4 flex items-center gap-3">
@@ -1237,6 +1261,15 @@ export default function LeadSidebar({
                 </div>
               </div>
               <div className="grid gap-2">
+                {projectFormat === 'gambling' && eventOffers.length > 0 && <select aria-label="Оффер события"
+                  value={leadEventOfferId} onChange={event => setLeadEventOfferId(event.target.value)}
+                  className="w-full min-w-0 rounded-md border border-white/10 bg-background px-3 py-2 text-sm text-gray-100">
+                  <option value="">Без привязки к офферу</option>{eventOffers.map(offer => <option key={offer.id} value={offer.id}>{offer.name}</option>)}
+                </select>}
+                {leadEventOfferId && <label className="grid gap-1 text-xs text-gray-400">Дата и время события
+                  <input type="datetime-local" value={leadEventAt} onChange={event => setLeadEventAt(event.target.value)}
+                    className="w-full min-w-0 rounded-md border border-white/10 bg-background px-3 py-2 text-sm text-gray-100" />
+                </label>}
                 <select
                   value={leadEventType}
                   onChange={(event) => {

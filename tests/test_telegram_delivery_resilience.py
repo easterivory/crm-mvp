@@ -308,6 +308,13 @@ def test_migration_0095_adds_queues_without_changing_history(monkeypatch):
                     with Operations.context(MigrationContext.configure(conn)):
                         migration.upgrade()
                 await db.run_sync(upgrade)
+                await db.execute(text("ALTER TABLE advertising_deliveries DROP COLUMN progress_json"))
+                spec = importlib.util.spec_from_file_location("delivery_resilience_migration", "alembic/versions/20261106_0097_delivery_resilience.py")
+                resilience = importlib.util.module_from_spec(spec); spec.loader.exec_module(resilience)
+                def upgrade_resilience(conn):
+                    with Operations.context(MigrationContext.configure(conn)):
+                        resilience.upgrade()
+                await db.run_sync(upgrade_resilience)
             async with sessions() as db:
                 assert (await db.get(Project, project_id)).name == "Delivery QA"
                 assert (await db.get(Message, message_id)).body == "History must survive"

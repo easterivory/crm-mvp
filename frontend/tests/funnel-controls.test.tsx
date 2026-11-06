@@ -8,6 +8,35 @@ import MessageSequenceEditor from '../src/features/funnels/components/MessageSeq
 import MessageBlockSettings from '../src/features/funnels/components/MessageBlockSettings'
 import { normalizeMessages } from '../src/features/funnels/funnelConfig'
 import type { FunnelStep } from '../src/features/funnels/types'
+import { telegramParseMode, hasEscapedTelegramMarkup, hasTelegramMarkup } from '../src/components/telegramFormatting'
+
+test('Telegram formatting automatically recognizes pasted links and bold tags', () => {
+  const text = '<b>Offer</b>\n1. <a href="https://t.me/+example">Contact</a>'
+  assert.equal(telegramParseMode(text), 'HTML')
+  assert.ok(hasTelegramMarkup(text))
+  assert.ok(!hasEscapedTelegramMarkup(text))
+})
+
+test('ordinary text stays literal and escaped markup is never decoded implicitly', () => {
+  assert.equal(telegramParseMode('5 < 10 & "yes"'), null)
+  const escaped = '&lt;a href=&quot;https://t.me/example&quot;&gt;Contact&lt;/a&gt;'
+  assert.ok(hasEscapedTelegramMarkup(escaped))
+  assert.ok(!hasTelegramMarkup(escaped))
+  assert.equal(telegramParseMode(escaped), null)
+  assert.ok(!hasTelegramMarkup('<admin>literal</admin>'))
+})
+
+test('message normalization preserves explicit HTML for text and photo captions', () => {
+  const text = '<b>Offer</b> <a href="https://t.me/example">Contact</a>'
+  for (const type of ['text', 'photo']) {
+    const config = { messages: [{ type, text, caption: type === 'photo' ? text : undefined, parse_mode: 'HTML' }] }
+    const [message] = normalizeMessages(config)
+    assert.equal(message.parse_mode, 'HTML')
+    assert.equal(message.text, text)
+    if (type === 'photo') assert.equal(message.caption, text)
+  }
+  assert.equal(normalizeMessages({ messages: [{ text }] })[0].parse_mode, 'HTML')
+})
 
 const messageStep: FunnelStep = {
   id: 'source', key: 'source', title: 'Message', step_type: 'message', block_type: 'generic_message',

@@ -12,6 +12,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import axios from 'axios'
 
 import {
   cancelBroadcast,
@@ -74,6 +75,22 @@ type ScheduleState = {
 
 const steps = ['Контент', 'Аудитория', 'Автоматизация', 'Безопасность']
 const monitorStatuses = new Set(['processing', 'paused', 'completed', 'cancelled'])
+
+function broadcastError(error: unknown, fallback: string, launchAttempt = false) {
+  if (!axios.isAxiosError(error)) return fallback
+  const status = error.response?.status
+  if (!status || status >= 500) {
+    return launchAttempt
+      ? `${fallback} Обновите список рассылок перед повторной попыткой: запуск мог уже сохраниться на сервере.`
+      : fallback
+  }
+  const detail = error.response?.data?.detail
+  if (detail === 'Large audience requires confirmation text') {
+    return 'Большая аудитория требует подтверждения. Обновите страницу и подтвердите запуск повторно.'
+  }
+  if (typeof detail === 'string' && detail) return detail
+  return fallback
+}
 
 function localDateTimeToIso(value: string) {
   return value ? new Date(value).toISOString() : null
@@ -236,6 +253,7 @@ export default function BroadcastWizard({
   const [isAudienceStale, setIsAudienceStale] = useState(true)
   const [audienceError, setAudienceError] = useState('')
   const [error, setError] = useState('')
+  const launchInFlight = useRef(false)
   const mediaPreviewUrlsRef = useRef(mediaPreviewUrls)
 
   const isMonitorMode = Boolean(currentBroadcast && monitorStatuses.has(currentBroadcast.status))
@@ -294,8 +312,8 @@ export default function BroadcastWizard({
       })
       setAudience(data)
       setIsAudienceStale(false)
-    } catch {
-      setAudienceError('Не удалось рассчитать аудиторию.')
+    } catch (err) {
+      setAudienceError(broadcastError(err, 'Не удалось рассчитать аудиторию.'))
     } finally {
       setIsAudienceLoading(false)
     }
@@ -337,8 +355,8 @@ export default function BroadcastWizard({
       setCurrentBroadcast(saved)
       onSaved(saved)
       return saved
-    } catch {
-      setError('Не удалось сохранить рассылку.')
+    } catch (err) {
+      setError(broadcastError(err, 'Не удалось сохранить рассылку.'))
       return null
     } finally {
       setIsSaving(false)
@@ -346,21 +364,26 @@ export default function BroadcastWizard({
   }
 
   const launch = async () => {
+    if (launchInFlight.current) return
     if (isAudienceStale || !audience || audience.count === 0) {
       setError('Перед запуском нужен свежий расчёт аудитории.')
       return
     }
+    launchInFlight.current = true
     setIsActionLoading(true)
     setError('')
     try {
       const saved = await saveDraft()
       if (!saved) return
+      // Completing the hold is the explicit confirmation for either launch mode.
+      const confirmation = 'ПОДТВЕРЖДАЮ'
       const result = schedule.type === 'scheduled'
         ? await scheduleBroadcast(saved.id, projectId, {
             scheduled_at: localDateTimeToIso(schedule.scheduledAt) ?? '',
             timezone_mode: schedule.timezoneMode,
+            confirmation,
           })
-        : await sendBroadcastNow(saved.id, projectId)
+        : await sendBroadcastNow(saved.id, projectId, confirmation)
       setCurrentBroadcast(result.broadcast)
       onSaved(result.broadcast)
       setReport({
@@ -377,9 +400,10 @@ export default function BroadcastWizard({
         finished_at: result.broadcast.sent_at,
         error_examples: [],
       })
-    } catch {
-      setError('Не удалось запустить рассылку.')
+    } catch (err) {
+      setError(broadcastError(err, 'Не удалось запустить рассылку.', true))
     } finally {
+      launchInFlight.current = false
       setIsActionLoading(false)
     }
   }
@@ -810,14 +834,19 @@ function HoldToLaunchButton({
   const startRef = useRef<number | null>(null)
   const frameRef = useRef<number | null>(null)
 
-  const stop = () => {
+  const stop = useCallback(() => {
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current)
       frameRef.current = null
     }
     startRef.current = null
     setProgress(0)
-  }
+  }, [])
+
+  useEffect(() => {
+    if (disabled || loading) stop()
+    return stop
+  }, [disabled, loading, stop])
 
   const tick = () => {
     if (startRef.current === null) return
@@ -846,6 +875,7 @@ function HoldToLaunchButton({
       onMouseLeave={stop}
       onTouchStart={start}
       onTouchEnd={stop}
+      onTouchCancel={stop}
       className="relative h-14 w-full overflow-hidden rounded-2xl border border-emerald-300/20 bg-emerald-500/15 text-sm font-semibold text-emerald-50 transition disabled:cursor-not-allowed disabled:opacity-45"
     >
       <span

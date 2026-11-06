@@ -40,6 +40,7 @@ class TelegramDeliveryError(RuntimeError):
         retry_after: int | None = None,
         transient: bool = False,
         blocked: bool = False,
+        definitely_not_sent: bool = False,
     ) -> None:
         normalized_description = " ".join(str(description).split())[:500]
         self.method = method
@@ -49,6 +50,7 @@ class TelegramDeliveryError(RuntimeError):
         self.retry_after = retry_after
         self.transient = transient
         self.blocked = blocked
+        self.definitely_not_sent = definitely_not_sent
         self.cannot_initiate = (
             (error_code == 403 or status_code == 403)
             and "bot can't initiate conversation with a user" in self.description.casefold()
@@ -1151,6 +1153,7 @@ class TelegramSenderService:
             method=method,
             description=f"Network error ({exc.__class__.__name__})",
             transient=True,
+            definitely_not_sent=isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)),
         )
 
     async def _handle_delivery_error(

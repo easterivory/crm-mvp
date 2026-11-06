@@ -103,9 +103,10 @@ def test_upgrade_preserves_legacy_slot_and_settings():
             (id, project_id, chat_id, status, due_at, started_at, source, stop_main)
             VALUES (:id, :pid, :chat, 'active', now(), now(), 'automatic', true)"""),
             {"id": enrollment_id, "pid": pid, "chat": chat.id})
-        db.add(AdvertisingDelivery(id=delivery_id, enrollment_id=enrollment_id, slot_id=legacy_id,
-            position=0, delay_minutes=150, status="sending", revision=7,
-            content_snapshot={"messages": [{"text": "Frozen"}]}))
+        await db.execute(text("""INSERT INTO advertising_deliveries
+            (id, enrollment_id, slot_id, position, delay_minutes, status, revision, content_snapshot)
+            VALUES (:id, :enrollment, :slot, 0, 150, 'sending', 7, '{"messages":[{"text":"Frozen"}]}')"""),
+            {"id": delivery_id, "enrollment": enrollment_id, "slot": legacy_id})
     async def after(db, pid):
         cfg = await db.get(AdvertisingConfig, pid)
         slot = await db.get(AdvertisingSlot, legacy_id)
@@ -118,6 +119,7 @@ def test_upgrade_preserves_legacy_slot_and_settings():
         assert enrollment.scenario_id == pid and enrollment.status == "active"
         assert delivery.status == "sending" and delivery.revision == 7
         assert delivery.content_snapshot["messages"][0]["text"] == "Frozen"
+        assert delivery.progress_json == {}
         # The shared fixture below expects an empty enrollment table.
         await db.delete(delivery); await db.flush()
         await db.delete(enrollment); await db.commit()

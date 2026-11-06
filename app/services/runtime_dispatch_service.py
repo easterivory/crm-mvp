@@ -6,13 +6,14 @@ import logging
 from uuid import UUID
 
 from sqlalchemy import event, select, update
-from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.telegram_delivery import RuntimeDispatch
 from app.core.database import get_db_session
 from app.core.delivery_attempt import delivery_attempt
+from app.core.config import settings
+from app.core.db_retry import retryable_database_error, failure_details
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,15 @@ async def protect_dispatch_replay(db: AsyncSession, kind: str, message_id: UUID)
     # A durable execution fence survives a process kill or a failed review
     # write. Redis acknowledgement alone is never permission to replay a send.
     async with get_db_session() as claim_db:
-        claimed_id = await claim_db.scalar(update(RuntimeDispatch).where(
+        claimed = (await claim_db.execute(update(RuntimeDispatch).where(
             RuntimeDispatch.dedupe_key == key, RuntimeDispatch.status == "pending",
-        ).values(status="running", claimed_at=datetime.now(timezone.utc)).returning(RuntimeDispatch.id))
+        ).values(status="running", claimed_at=datetime.now(timezone.utc)).returning(RuntimeDispatch.id, RuntimeDispatch.payload_json))).first()
+        claimed_id = claimed[0] if claimed else None
         status = None if claimed_id else await claim_db.scalar(select(RuntimeDispatch.status).where(RuntimeDispatch.dedupe_key == key))
+        snapshot = None
+        if claimed_id:
+            from app.services.runtime_review_service import runtime_snapshot
+            snapshot = await runtime_snapshot(claim_db, (claimed[1] or {}).get("chat_id"))
         await claim_db.commit()
     if status == "review":
         raise RuntimeDispatchNeedsReview(key)
@@ -55,18 +61,27 @@ async def protect_dispatch_replay(db: AsyncSession, kind: str, message_id: UUID)
         yield
     except BaseException as exc:
         if claimed_id is not None:
-            safe_retry = isinstance(exc, (DBAPIError, PoolTimeout)) and not any(progress.values())
+            no_effects = not any(progress.values())
+            safe_retry = False
             try:
                 async with asyncio.timeout(10):
                     await db.rollback()
                     async with get_db_session() as failure_db:
-                        result = await failure_db.execute(update(RuntimeDispatch).where(
+                        row = await failure_db.scalar(select(RuntimeDispatch).where(
                             RuntimeDispatch.dedupe_key == key, RuntimeDispatch.status == "running",
-                        ).values(status="pending" if safe_retry else "review", claimed_at=None,
-                                 available_at=datetime.now(timezone.utc) + timedelta(seconds=5),
-                                 last_error=f"{type(exc).__name__}; safe_retry={safe_retry}"))
+                        ).with_for_update())
+                        if row:
+                            row.failure_count += 1
+                            safe_retry = no_effects and retryable_database_error(exc) and row.failure_count < max(1, settings.RUNTIME_DISPATCH_MAX_FAILURES)
+                            row.status, row.claimed_at = ("pending" if safe_retry else "review"), None
+                            delay = min(60, max(1, settings.RUNTIME_DISPATCH_RETRY_BASE_SECONDS) * 2 ** min(row.failure_count - 1, 6))
+                            row.available_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                            row.diagnostics_json = {**failure_details(exc, **progress), "failure_count": row.failure_count,
+                                "safe_to_replay": no_effects and snapshot is not None, "snapshot": snapshot,
+                                "failed_at": datetime.now(timezone.utc).isoformat(), "retry_scheduled": safe_retry}
+                            row.last_error = f"{type(exc).__name__}; sqlstate={row.diagnostics_json['sqlstate']}; safe_retry={safe_retry}; failures={row.failure_count}"
                         await failure_db.commit()
-                if result.rowcount and not safe_retry and isinstance(exc, Exception):
+                if row and not safe_retry and isinstance(exc, Exception):
                     raise RuntimeDispatchNeedsReview(key) from exc
             except RuntimeDispatchNeedsReview:
                 raise

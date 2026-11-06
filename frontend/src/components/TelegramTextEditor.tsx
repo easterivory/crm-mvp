@@ -1,5 +1,6 @@
 import { Bold, Italic, Underline, Strikethrough, EyeOff, Code, Link, Quote, Eraser, Check } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
+import { escapeTelegramText as escapeText, hasEscapedTelegramMarkup, isOfferLinkTemplate, telegramFormattingError, telegramParseMode } from './telegramFormatting'
 
 type Props = {
   value: string
@@ -12,11 +13,11 @@ type Props = {
   variables?: Array<{ label: string; value: string }>
 }
 
-const escapeText = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const documentFor = (text: string) => new DOMParser().parseFromString(text, 'text/html')
 const plainText = (text: string) => documentFor(text).body.textContent ?? ''
 
-export function telegramTextPreview(text: string): ReactNode {
+export function telegramTextPreview(text: string, parseMode: 'HTML' | null = null): ReactNode {
+  if (!telegramParseMode(text, parseMode) || telegramFormattingError(text, parseMode)) return text
   const render = (node: ChildNode, key: number): ReactNode => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent
     if (!(node instanceof Element)) return null
@@ -29,7 +30,9 @@ export function telegramTextPreview(text: string): ReactNode {
       case 'code': case 'pre': return <code key={key} className="rounded bg-white/10 px-1 font-mono">{children}</code>
       case 'tg-spoiler': return <span key={key} className="rounded bg-gray-500/40">{children}</span>
       case 'blockquote': return <blockquote key={key} className="border-l-2 border-accent-400 pl-2">{children}</blockquote>
-      case 'a': return <span key={key} className="text-accent-300 underline">{children}</span>
+      case 'a': return isOfferLinkTemplate(node.getAttribute('href') ?? '')
+        ? <span key={key} title="Ссылка оффера" className="text-accent-300 underline">{children}</span>
+        : <a key={key} href={node.getAttribute('href') ?? undefined} target="_blank" rel="noopener noreferrer" className="text-accent-300 underline">{children}</a>
       default: return <span key={key}>{children}</span>
     }
   }
@@ -40,16 +43,21 @@ export default function TelegramTextEditor({ value, parseMode, onChange, disable
   const input = useRef<HTMLTextAreaElement>(null)
   const selection = useRef({ start: 0, end: 0 })
   const [link, setLink] = useState<string | null>(null)
-  const enabled = parseMode === 'HTML'
+  const enabled = telegramParseMode(value, parseMode) === 'HTML'
+  const formattingError = telegramFormattingError(value, parseMode)
+  const changeText = (text: string) => onChange(text, telegramParseMode(text, parseMode))
   const wrap = (tag: string, attribute = '') => {
     const { start, end } = selection.current
     if (start === end) return
     const opening = `<${tag}${attribute}>`
-    const next = value.slice(0, start) + opening + value.slice(start, end) + `</${tag}>` + value.slice(end)
+    const prefix = enabled ? value.slice(0, start) : escapeText(value.slice(0, start))
+    const selected = enabled ? value.slice(start, end) : escapeText(value.slice(start, end))
+    const suffix = enabled ? value.slice(end) : escapeText(value.slice(end))
+    const next = prefix + opening + selected + `</${tag}>` + suffix
     onChange(next, 'HTML')
     requestAnimationFrame(() => {
       input.current?.focus()
-      input.current?.setSelectionRange(start + opening.length, end + opening.length)
+      input.current?.setSelectionRange(prefix.length + opening.length, prefix.length + opening.length + selected.length)
     })
   }
   const tools = [
@@ -58,33 +66,31 @@ export default function TelegramTextEditor({ value, parseMode, onChange, disable
     { tag: 'tg-spoiler', label: 'Спойлер', Icon: EyeOff }, { tag: 'code', label: 'Код', Icon: Code },
     { tag: 'blockquote', label: 'Цитата', Icon: Quote },
   ]
-  const validLink = link !== null && /^(https?:\/\/|tg:\/\/|mailto:)\S+$/i.test(link)
+  const validLink = link !== null && (/^(https?:\/\/|tg:\/\/|mailto:)\S+$/i.test(link)
+    || isOfferLinkTemplate(link) && variables?.some(variable => variable.value === '{{offer_link}}'))
   return <div className="min-w-0 space-y-2">
     {variables?.length ? <select aria-label="Вставить переменную" value="" disabled={disabled}
       onChange={(event) => {
         const variable = event.target.value
         if (!variable) return
         const { start, end } = selection.current
-        onChange(value.slice(0, start) + variable + value.slice(end), parseMode ?? null)
+        changeText(value.slice(0, start) + variable + value.slice(end))
         requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(start + variable.length, start + variable.length) })
       }} className="h-8 max-w-full rounded border border-white/10 bg-background px-2 text-xs text-gray-300">
       <option value="">Вставить переменную</option>
       {variables.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
     </select> : null}
-    <label className="flex items-center gap-2 text-xs text-gray-400">
-      <input type="checkbox" checked={enabled} disabled={disabled}
-        onChange={(event) => { setLink(null); onChange(event.target.checked ? escapeText(value) : plainText(value), event.target.checked ? 'HTML' : null) }} />
-      Оформление Telegram
-    </label>
-    {enabled && <div role="toolbar" aria-label="Оформление текста" className="flex flex-wrap gap-1">
+    {formattingError && <p role="alert" className="text-xs text-red-300">{formattingError}</p>}
+    {enabled && hasEscapedTelegramMarkup(value) && <p role="alert" className="text-xs text-amber-300">Обнаружены экранированные HTML-теги: они могут уйти обычным текстом. Проверьте предпросмотр и исправьте оформление перед сохранением.</p>}
+    <div role="toolbar" aria-label="Оформление текста" className="flex flex-wrap gap-1">
       {tools.map(({ tag, label, Icon }) => <button key={tag} type="button" title={label} aria-label={label} disabled={disabled}
         onMouseDown={(event) => event.preventDefault()} onClick={() => wrap(tag)}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-white/10 text-gray-200 hover:bg-white/10 disabled:opacity-40"><Icon size={16} /></button>)}
       <button type="button" title="Ссылка" aria-label="Ссылка" disabled={disabled} onMouseDown={(event) => event.preventDefault()}
         onClick={() => setLink(link === null ? '' : null)} className="flex h-8 w-8 items-center justify-center rounded border border-white/10"><Link size={16} /></button>
       <button type="button" title="Убрать всё оформление" aria-label="Убрать всё оформление" disabled={disabled}
-        onClick={() => onChange(escapeText(plainText(value)), 'HTML')} className="flex h-8 w-8 items-center justify-center rounded border border-white/10"><Eraser size={16} /></button>
-    </div>}
+        onClick={() => onChange(escapeText(enabled ? plainText(value) : value), 'HTML')} className="flex h-8 w-8 items-center justify-center rounded border border-white/10"><Eraser size={16} /></button>
+    </div>
     {link !== null && <div className="flex min-w-0 gap-2">
       <input aria-label="Адрес ссылки" value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://"
         className="min-w-0 flex-1 rounded border border-white/10 bg-background px-2 py-1 text-sm" />
@@ -93,8 +99,8 @@ export default function TelegramTextEditor({ value, parseMode, onChange, disable
     </div>}
     <textarea ref={input} value={value} rows={rows} disabled={disabled} placeholder={placeholder}
       onSelect={(event) => { selection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }}
-      onChange={(event) => onChange(event.target.value, enabled ? 'HTML' : null)}
+      onChange={(event) => changeText(event.target.value)}
       className={className ?? 'w-full resize-y rounded-lg border border-white/10 bg-background/70 px-3 py-2 text-sm text-gray-100 outline-none disabled:opacity-60'} />
-    {enabled && <div className="min-w-0 whitespace-pre-wrap break-words border-t border-white/10 pt-2 text-sm text-gray-200" aria-label="Предпросмотр сообщения">{telegramTextPreview(value)}</div>}
+    <div className="min-w-0 whitespace-pre-wrap break-words border-t border-white/10 pt-2 text-sm text-gray-200" aria-label="Предпросмотр сообщения">{telegramTextPreview(value, parseMode)}</div>
   </div>
 }

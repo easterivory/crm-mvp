@@ -6,7 +6,7 @@ import io
 import os
 import re
 from html import escape
-from app.core.telegram_formatting import telegram_html
+from app.core.telegram_formatting import normalize_telegram_message, telegram_html
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -690,12 +690,16 @@ class BroadcastService:
         chat_id: UUID,
         chat: Chat,
         lead: Lead | None,
+        *,
+        message_index_offset: int = 0,
+        skip_delay: bool = False,
+        run_after_send: bool = True,
     ) -> None:
         messages = self._content_messages(broadcast.content_json)
         service = MessageService(self.db)
-        for message_index, message in enumerate(messages):
+        for message_index, message in enumerate(messages, start=message_index_offset):
             delay_seconds = self._message_delay_seconds(message)
-            if delay_seconds > 0:
+            if delay_seconds > 0 and not skip_delay:
                 await asyncio.sleep(delay_seconds)
             reply_markup = self._reply_markup_for_buttons(
                 broadcast=broadcast,
@@ -762,7 +766,8 @@ class BroadcastService:
                 ),
                 send_to_telegram=False,
             )
-        await self._run_after_send_action(broadcast=broadcast, chat=chat)
+        if run_after_send:
+            await self._run_after_send_action(broadcast=broadcast, chat=chat)
 
     async def _snapshot_recipients(
         self,
@@ -969,9 +974,10 @@ class BroadcastService:
     def _content_messages(content: dict[str, Any]) -> list[dict[str, Any]]:
         raw_messages = content.get("messages") if isinstance(content, dict) else None
         if isinstance(raw_messages, list):
-            return [item for item in raw_messages if isinstance(item, dict)]
+            return [normalize_telegram_message(item) for item in raw_messages if isinstance(item, dict)]
         text = content.get("text") if isinstance(content, dict) else None
-        return [{"type": "text", "text": text or ""}]
+        return [normalize_telegram_message({"type": "text", "text": text or "",
+                                           "parse_mode": content.get("parse_mode") if isinstance(content, dict) else None})]
 
     @staticmethod
     def _content_has_media(content: dict[str, Any]) -> bool:

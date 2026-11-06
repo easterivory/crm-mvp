@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from alembic.migration import MigrationContext
@@ -25,6 +26,25 @@ from app.models.broadcast import Broadcast, BroadcastRecipient
 from app.services.broadcast_transport import BroadcastHTTPClient
 from app.services.broadcast_service import BroadcastService
 from app.workers import broadcast_worker as worker_module
+
+
+@pytest.mark.parametrize("count,confirmation,allowed", [
+    (1000, None, True),
+    (1001, None, False),
+    (23852, "ПОДТВЕРЖДАЮ", True),
+    (23852, "yes", False),
+])
+def test_large_audience_guard_is_preserved_for_both_launch_modes(count, confirmation, allowed):
+    from app.schemas.broadcast import SendNowRequest, BroadcastScheduleRequest
+    for request in (SendNowRequest(confirmation=confirmation), BroadcastScheduleRequest(
+        scheduled_at=datetime.now(timezone.utc) + timedelta(days=1), confirmation=confirmation,
+    )):
+        if allowed:
+            BroadcastService._validate_large_audience_confirmation(count, request.confirmation)
+        else:
+            with pytest.raises(HTTPException) as error:
+                BroadcastService._validate_large_audience_confirmation(count, request.confirmation)
+            assert error.value.status_code == 422
 
 
 def test_transport_retries_only_explicit_429_and_limits_concurrent_requests():

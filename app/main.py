@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import time
+from uuid import uuid4
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
@@ -73,8 +75,14 @@ app = FastAPI(
 
 @app.middleware("http")
 async def log_unhandled_request_errors(request: Request, call_next):
+    started = time.monotonic()
+    request_id = uuid4().hex
+    status_code = 500
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
     except Exception:
         # Uvicorn's error logger does not propagate into the bounded application
         # log file used by the super-admin export. Keep request bodies and query
@@ -85,6 +93,11 @@ async def log_unhandled_request_errors(request: Request, call_next):
             "/pb/[redacted]" if request.url.path.startswith("/pb/") else request.url.path,
         )
         raise
+    finally:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if elapsed_ms >= 1000 or status_code >= 500:
+            logger.warning("API request timing request_id=%s method=%s route=%s status=%s elapsed_ms=%s",
+                request_id, request.method, getattr(request.scope.get("route"), "path", "unmatched"), status_code, elapsed_ms)
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,6 +135,9 @@ app.include_router(snippets.router, prefix=_v1_prefix)
 app.include_router(partners.router, prefix=f"{_v1_prefix}/partners")
 app.include_router(postbacks.router, prefix=_v1_prefix)
 app.include_router(postbacks.lead_event_router, prefix=_v1_prefix)
+from app.api.v1.routers import gambling_offers
+app.include_router(gambling_offers.router, prefix=_v1_prefix)
+app.include_router(gambling_offers.lead_router, prefix=_v1_prefix)
 app.include_router(bots.router, prefix=_v1_prefix)
 app.include_router(broadcasts.router, prefix=_v1_prefix)
 app.include_router(tracking.router, prefix=_v1_prefix)

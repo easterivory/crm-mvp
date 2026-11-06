@@ -13,7 +13,7 @@ type CustomResult = { total: number; daily: { date: string; count: number }[] }
 type View = { selected: string[]; hidden: string[]; from: string; to: string; indexed: boolean; cohortFrom: string; cohortTo: string }
 type Props = { projectId: string; userId: string; botId?: string; buyerId?: string; linkId?: string;
   dateFrom: string; dateTo: string; gambling: boolean; channel: boolean; summary: TrackingMetricSummary;
-  daily: TrackingDailyMetric[]; refreshToken?: object; loading?: boolean }
+  daily: TrackingDailyMetric[]; refreshToken?: object; loading?: boolean; onLifecycleCoverage?: (complete: boolean | null) => void }
 const definitions: Metric[] = [
   { id: 'clicks', name: 'Клики', kind: 'count', color: '#eab308' },
   { id: 'channel_join_requests', name: 'Заявки в канал', kind: 'count', color: '#38bdf8' },
@@ -36,6 +36,7 @@ const customColor = (id: string) => {
   const colors = ['#f472b6', '#a3e635', '#22d3ee', '#fda4af', '#c4b5fd', '#fcd34d', '#6ee7b7']
   return colors[[...id].reduce((hash, c) => (hash * 31 + c.charCodeAt(0)) >>> 0, 0) % colors.length]
 }
+const lifecycleIds = new Set(['registrations', 'first_deposits', 'redeposits'])
 export function metricRatio(numerator: number | null, denominator: number | null): number | null {
   return numerator != null && denominator != null && denominator > 0 ? numerator / denominator * 100 : null
 }
@@ -63,6 +64,18 @@ export default function TrackingOverview(props: Props) {
   const [resultsKey, setResultsKey] = useState('')
   const [cohort, setCohort] = useState<{ base: number; converted: number; percent: number | null } | null>(null)
   const [cohortError, setCohortError] = useState(false)
+  const [offerCoverage, setOfferCoverage] = useState<'loading' | 'known' | 'incomplete' | 'unknown'>('loading')
+  useEffect(() => { props.onLifecycleCoverage?.(offerCoverage === 'known' ? true : offerCoverage === 'incomplete' ? false : null) }, [offerCoverage, props.onLifecycleCoverage])
+  useEffect(() => {
+    if (!props.gambling) { setOfferCoverage('known'); return }
+    const controller = new AbortController()
+    setOfferCoverage('loading')
+    api.get<{ incomplete: boolean }>('/gambling-offers/coverage', { signal: controller.signal,
+      params: { project_id: props.projectId, bot_id: props.botId, link_id: props.linkId } })
+      .then(({ data }) => { if (!controller.signal.aborted) setOfferCoverage(data.incomplete ? 'incomplete' : 'known') })
+      .catch(() => { if (!controller.signal.aborted) setOfferCoverage('unknown') })
+    return () => controller.abort()
+  }, [props.gambling, props.projectId, props.botId, props.linkId, props.refreshToken])
   const cohortKey = JSON.stringify([props.projectId, props.botId, props.buyerId, props.linkId, props.dateFrom, props.dateTo, view.cohortFrom, view.cohortTo])
   const scopeKey = JSON.stringify([props.projectId, props.botId, props.buyerId, props.linkId, props.dateFrom, props.dateTo, view.selected, view.from, view.to])
   useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(view)) } catch { /* Preferences are optional. */ } }, [storageKey, view])
@@ -128,27 +141,32 @@ export default function TrackingOverview(props: Props) {
     if (props.loading) return null
     if (id.includes(':')) return resultsKey === scopeKey ? custom[id]?.total ?? null : null
     const value = props.summary[id as keyof TrackingMetricSummary]
+    if (props.gambling && lifecycleIds.has(id) && offerCoverage !== 'known' && (offerCoverage !== 'incomplete' || !Number(value))) return null
     return value == null ? null : Number(value)
   }
   const chart = useMemo(() => {
     const customDays = Object.fromEntries(Object.entries(custom).map(([id, data]) => [id, new Map(data.daily.map(d => [d.date, d.count]))]))
     const rows = props.daily.map(day => Object.fromEntries([['date', day.date], ...visible.map(m => [m.id,
-      m.id.includes(':') ? (resultsKey === scopeKey ? customDays[m.id]?.get(day.date) ?? null : null) : Number(day[m.id as keyof TrackingDailyMetric] ?? 0)])]))
+      m.id.includes(':') ? (resultsKey === scopeKey ? customDays[m.id]?.get(day.date) ?? null : null)
+        : props.gambling && lifecycleIds.has(m.id) && offerCoverage !== 'known' && (offerCoverage !== 'incomplete' || !Number(day[m.id as keyof TrackingDailyMetric]))
+          ? null : Number(day[m.id as keyof TrackingDailyMetric] ?? 0)])]))
     if (!view.indexed) return rows
     const maxima = Object.fromEntries(visible.map(m => [m.id, Math.max(0, ...rows.map(row => Number(row[m.id] || 0)))]))
     return rows.map(row => Object.fromEntries(Object.entries(row).map(([id, value]) => [id, id === 'date' || value == null ? value : maxima[id] > 0 ? Number(value) / maxima[id] * 100 : 0])))
-  }, [props.daily, visible.map(m => m.id).join('|'), custom, resultsKey, scopeKey, view.indexed])
-  const ratio = metricRatio(getTotal(view.to), getTotal(view.from))
+  }, [props.daily, visible.map(m => m.id).join('|'), custom, resultsKey, scopeKey, view.indexed, props.gambling, offerCoverage])
+  const lifecycleIncomplete = props.gambling && offerCoverage !== 'known'
+  const ratio = lifecycleIncomplete && (lifecycleIds.has(view.to) || lifecycleIds.has(view.from)) ? null : metricRatio(getTotal(view.to), getTotal(view.from))
   function toggle(id: string) {
     setView(v => ({ ...v, selected: v.selected.includes(id) ? v.selected.filter(x => x !== id) : v.selected.length < 20 ? [...v.selected, id] : v.selected }))
   }
   function exportCsv() {
     const escape = (value: unknown) => `"${String(value ?? '').replace(/^[=+\-@]/, "'$&").replace(/"/g, '""')}"`
-    const rows = [['Дата UTC', ...selected.map(m => m.name)], ...props.daily.map(day => [day.date, ...selected.map(m => m.id.includes(':') ? custom[m.id]?.daily.find(d => d.date === day.date)?.count ?? '' : day[m.id as keyof TrackingDailyMetric] ?? '')])]
+    const rows = [['Дата UTC', ...selected.map(m => m.name + (lifecycleIncomplete && lifecycleIds.has(m.id) ? ' (неполные данные)' : ''))], ...props.daily.map(day => [day.date, ...selected.map(m => m.id.includes(':') ? custom[m.id]?.daily.find(d => d.date === day.date)?.count ?? '' : lifecycleIncomplete && lifecycleIds.has(m.id) && !Number(day[m.id as keyof TrackingDailyMetric]) ? '' : day[m.id as keyof TrackingDailyMetric] ?? '')])]
     const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(escape).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' }))
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `tracking-${props.dateFrom}-${props.dateTo}.csv`; anchor.click(); URL.revokeObjectURL(url)
   }
   return <div className="tracking-overview">
+    {props.gambling && ['incomplete', 'unknown'].includes(offerCoverage) && <p className="mb-3 text-sm text-amber-200">REG / FD / RD: неполные данные. Конверсия по этим событиям не определена.</p>}
     <div className="tracking-actions tracking-view-tabs" role="tablist" aria-label="Вид статистики">
       <button type="button" role="tab" aria-selected={mode === 'overview'} onClick={() => setMode('overview')}>Обзор</button>
       <button type="button" role="tab" aria-selected={mode === 'journey'} onClick={() => setMode('journey')}>Движение по этапам</button>
@@ -178,7 +196,7 @@ export default function TrackingOverview(props: Props) {
         : m.id === 'leads' ? 'Лиды из пришедших за выбранный период, соответствующие целевым тегам или статусам проекта. Дата присвоения тега не заменяет дату прихода.' : undefined}>
         <i style={{ background: m.color }} />{m.name}</span>
       <strong>{number(getTotal(m.id), m.kind === 'money' ? 2 : 0)}</strong>
-      <span className="tracking-muted">{customErrors[m.id] ? 'Не удалось загрузить' : m.kind === 'tag' || m.kind === 'step' || m.id === 'leads' ? 'По дате входа лида' : 'События за период'}</span>
+      <span className="tracking-muted">{customErrors[m.id] ? 'Не удалось загрузить' : lifecycleIncomplete && lifecycleIds.has(m.id) ? 'Полученные события · неполные данные' : m.kind === 'tag' || m.kind === 'step' || m.id === 'leads' ? 'По дате входа лида' : 'События за период'}</span>
     </div>)}</div>
     {Object.keys(customErrors).length > 0 && <p role="alert" className="tracking-warning">Часть показателей недоступна. <button type="button" onClick={() => setRetry(n => n + 1)}>Повторить загрузку</button></p>}
     <div className="tracking-chart-head"><h3>Динамика</h3><label><input type="checkbox" checked={view.indexed} onChange={e => setView({ ...view, indexed: e.target.checked })} />Сравнить динамику (пик = 100)</label></div>
@@ -203,7 +221,7 @@ export default function TrackingOverview(props: Props) {
       <div className="tracking-ratio-controls">
         <label>База<select aria-label="База когорты" value={view.cohortFrom} onChange={e => setView({ ...view, cohortFrom: e.target.value })}>{cohortOptions.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><ArrowRight size={18} />
         <label>Результат<select aria-label="Результат когорты" value={view.cohortTo} onChange={e => setView({ ...view, cohortTo: e.target.value })}>{cohortOptions.map(m => <option key={m.id} value={m.id}>{m.id === 'redeposits' ? 'Лиды с РД' : m.name}</option>)}</select></label>
-        <div className="tracking-ratio-value"><strong>{cohort?.percent == null ? '—' : `${number(cohort.percent, 1)}%`}</strong><span>{cohort ? `${number(cohort.converted)} / ${number(cohort.base)}` : cohortError ? 'Ошибка расчёта' : 'Загрузка…'}</span></div>
+        <div className="tracking-ratio-value"><strong>{cohort?.percent == null || lifecycleIncomplete && (lifecycleIds.has(view.cohortTo) || lifecycleIds.has(view.cohortFrom)) ? '—' : `${number(cohort.percent, 1)}%`}</strong><span>{cohort ? `${number(cohort.converted)} / ${number(cohort.base)}` : cohortError ? 'Ошибка расчёта' : 'Загрузка…'}</span></div>
       </div>{cohortError && <button type="button" onClick={() => setRetry(n => n + 1)}>Повторить расчёт</button>}
     </div>
     </>}

@@ -25,6 +25,8 @@ import axios from 'axios'
 
 import api from '../api/client'
 import BackupDownloadButton from '../features/settings/BackupDownloadButton'
+import BackupTransportStatus from '../features/settings/BackupTransportStatus'
+import RuntimeDeliveryReview from '../features/settings/RuntimeDeliveryReview'
 import InfoBotSettings from '../features/settings/InfoBotSettings'
 import { useTranslationLanguages } from '../features/translation/languages'
 import LanguageSettings from '../features/translation/LanguageSettings'
@@ -33,6 +35,7 @@ import TrafficQualitySettings from '../features/tracking/TrafficQualitySettings'
 import GoogleSheetsSettings from '../features/googleSheets/components/GoogleSheetsSettings'
 import LandersSettings from '../features/landers/components/LandersSettings'
 import PartnersSettings from '../features/partners/components/PartnersSettings'
+import GamblingOffersSettings from '../features/partners/components/GamblingOffersSettings'
 import { useProjectBotSelection } from '../shared/lib'
 import { Modal } from '../shared/ui'
 import { useAuthStore } from '../store/authStore'
@@ -46,6 +49,8 @@ type TabKey =
   | 'statuses'
   | 'tags'
   | 'partners'
+  | 'gamblingOffers'
+  | 'delivery'
   | 'googleSheets'
   | 'landers'
 
@@ -168,6 +173,8 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'statuses', label: 'Статусы' },
   { key: 'tags', label: 'Теги' },
   { key: 'partners', label: 'Партнёры' },
+  { key: 'gamblingOffers', label: 'Гембл-офферы' },
+  { key: 'delivery', label: 'Задания воронок' },
   { key: 'googleSheets', label: 'Google Таблицы' },
   { key: 'landers', label: 'Лендинги и Домены' },
 ]
@@ -469,6 +476,8 @@ export default function SettingsPage() {
           return canManageProject
         }
         if (tab.key === 'trafficQuality') return canManageProject
+        if (tab.key === 'delivery') return canManageProject
+        if (tab.key === 'gamblingOffers') return canManageProject && projectFormat === 'gambling'
         if (tab.key === 'partners') {
           return canManageProject
         }
@@ -480,7 +489,7 @@ export default function SettingsPage() {
         }
         return true
       }),
-    [canManageProject, canManageStaff, currentRoleName],
+    [canManageProject, canManageStaff, currentRoleName, projectFormat],
   )
   const knownStatusCodes = useMemo(
     () => new Set(statuses.map((statusItem) => statusItem.code)),
@@ -1601,6 +1610,7 @@ export default function SettingsPage() {
                   ARQ создаёт сжатый PostgreSQL dump ежедневно в 03:00 UTC и отправляет его в канал.
                 </p>
               </div>
+              <BackupTransportStatus />
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-zinc-300">Токен backup-бота</span>
                 <input
@@ -1730,6 +1740,9 @@ export default function SettingsPage() {
           </form>
         ) : null}
 
+        {!isLoading && activeTab === 'delivery' && activeProjectId ? (
+          <RuntimeDeliveryReview key={activeProjectId} projectId={activeProjectId} />
+        ) : null}
         {!isLoading && activeTab === 'project' ? (
           <form className="max-w-xl space-y-4" onSubmit={handleProjectSave}>
             {activeProjectId && <PriorityChatSettings key={activeProjectId} projectId={activeProjectId} />}
@@ -2877,6 +2890,10 @@ export default function SettingsPage() {
 
         {!isLoading && activeTab === 'partners' ? (
           <PartnersSettings projectId={activeProjectId} />
+        ) : null}
+
+        {!isLoading && activeTab === 'gamblingOffers' ? (
+          <GamblingOffersSettings key={activeProjectId} projectId={activeProjectId} />
         ) : null}
 
         {!isLoading && activeTab === 'googleSheets' ? (

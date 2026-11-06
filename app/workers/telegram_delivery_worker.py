@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from math import ceil
@@ -9,12 +10,12 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import and_, delete, event, exists, func, or_, select, update
-from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
 from sqlalchemy.orm import aliased
 
 from app.core.arq_client import close_arq_client
 from app.core.config import settings
 from app.core.delivery_attempt import delivery_attempt
+from app.core.db_retry import retryable_database_error, failure_details
 from app.core.database import get_db_session
 from app.models.telegram_delivery import RuntimeDispatch, TelegramInbox
 from app.services.funnel_job_queue import enqueue_funnel_chat_action, enqueue_funnel_scheduled_job
@@ -88,9 +89,9 @@ async def process_next_inbox() -> bool:
     except Exception as exc:
         # Only DB acquisition/transaction failures before a durable boundary
         # are retried. Never blindly replay callbacks or partial deliveries.
-        safe_retry = isinstance(exc, (DBAPIError, PoolTimeout)) and not any(progress.values())
+        safe_retry = retryable_database_error(exc) and not any(progress.values())
         pending = safe_retry and attempts < max(settings.TELEGRAM_INBOX_MAX_ATTEMPTS, 1)
-        error = f"{type(exc).__name__}; stage=handle_update; committed={progress['committed']}; external_io_started={progress['external_io_started']}"
+        error = json.dumps({**failure_details(exc, **progress), "stage": "handle_update", "attempts": attempts})
         async with get_db_session() as db:
             await db.execute(update(TelegramInbox).where(
                 TelegramInbox.id == inbox_id, TelegramInbox.status == "processing",

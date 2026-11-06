@@ -21,6 +21,7 @@ def test_clone_remaps_nested_targets_without_modifying_source():
               ui_schema_json=None) for identifier in (first, second)]
     repo = FunnelRepository.__new__(FunnelRepository)
     repo.db = SimpleNamespace(add=Mock(), flush=AsyncMock())
+    repo.get_version = AsyncMock(return_value=None)
     repo.list_steps = AsyncMock(return_value=source)
     repo.list_edges = AsyncMock(return_value=[])
     repo.list_push_rules = AsyncMock(return_value=[])

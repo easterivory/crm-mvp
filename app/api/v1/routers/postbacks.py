@@ -278,6 +278,10 @@ async def create_manual_lead_event(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LeadEventOut:
+    if data.offer_id is not None:
+        from app.services.gambling_offer_service import GamblingOfferService
+        event = await GamblingOfferService(db).manual_event(project_id, current_user, lead_id, data)
+        return LeadEventOut.model_validate(event)
     event = await LeadEventService(db).record_manual_event(
         lead_id=lead_id,
         project_id=project_id,
@@ -288,6 +292,7 @@ async def create_manual_lead_event(
         partner_integration_id=data.partner_integration_id,
         external_event_id=data.external_event_id,
         payload=data.payload,
+        occurred_at=data.occurred_at,
     )
     return LeadEventOut.model_validate(event)
 

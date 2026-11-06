@@ -59,6 +59,7 @@ from app.models.funnel import (  # noqa: F401
 from app.models.partner import PartnerIntegration, LeadSubmission  # noqa: F401
 from app.models.postback import PostbackEndpoint, PostbackReceipt  # noqa: F401
 from app.models.lead_event import LeadEvent  # noqa: F401
+from app.models.gambling_offer import GamblingOffer, OfferLink, OfferPayoutPolicy, OfferPayoutVersion, OfferPayoutAssignment, OfferConversion  # noqa: F401
 from app.models.tracking_journey import LeadTagHistory, TrackingJourneyConfig  # noqa: F401
 from app.models.lead_import import BotLeadImport  # noqa: F401
 from app.models.ai import AIBudgetReservation, AIProjectSettings, AIProviderConnection, AIUsageLog  # noqa: F401

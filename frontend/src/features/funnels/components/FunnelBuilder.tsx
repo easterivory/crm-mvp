@@ -60,6 +60,7 @@ import PublishReviewModal from './PublishReviewModal'
 import VersionHistoryPanel from './VersionHistoryPanel'
 import MessageBlockSettings from './MessageBlockSettings'
 import RepeatedStartSettings from './RepeatedStartSettings'
+import FunnelOfferSettings from './FunnelOfferSettings'
 
 type FunnelBuilderProps = {
   funnelId: string
@@ -1076,6 +1077,7 @@ export default function FunnelBuilder({
       </header>
 
       {activeTab === 'settings' && <div className="min-h-0 flex-1 overflow-y-auto">
+        <FunnelOfferSettings projectId={projectId} versionId={activeVersionId} readOnly={!isEditableDraft} />
         <RepeatedStartSettings steps={graph.steps} readOnly={!isEditableDraft} onUpdate={updateStep} />
       </div>}
 

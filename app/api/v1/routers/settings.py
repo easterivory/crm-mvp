@@ -5,16 +5,18 @@ import json
 from dataclasses import asdict
 from datetime import datetime, timezone
 from uuid import UUID
+from typing import Literal
+from pydantic import BaseModel, Field
 
 from arq import create_pool
 from arq.jobs import Job, JobStatus
 from fastapi.responses import FileResponse
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_root_user, get_current_user, get_db
+from app.api.v1.dependencies import get_current_root_user, get_current_user, get_current_project_id, get_db
 from app.core.constants import RoleName
 from app.core.redis import get_redis
 from app.models.user import User
@@ -45,6 +47,33 @@ from app.services.server_log_service import (
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 logger = logging.getLogger(__name__)
+
+
+class DispatchRetryRequest(BaseModel):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@router.get("/runtime-dispatches")
+async def list_runtime_dispatches(project_id: UUID = Depends(get_current_project_id),
+    state: Literal["review", "pending", "running"] = "review", limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0), actor: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.services.runtime_review_service import RuntimeReviewService
+    return await RuntimeReviewService(db).list(project_id, actor, state, limit, offset)
+
+
+@router.post("/runtime-dispatches/{dispatch_id}/retry")
+async def retry_runtime_dispatch(dispatch_id: UUID, data: DispatchRetryRequest,
+    project_id: UUID = Depends(get_current_project_id), actor: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.services.runtime_review_service import RuntimeReviewService
+    return await RuntimeReviewService(db).retry(project_id, actor, dispatch_id, data.fingerprint, data.reason)
+
+
+@router.get("/global/backup/transport")
+async def backup_transport(actor: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _ensure_super_admin(actor)
+    value = await SystemSettingService(db).get_value("backup_runtime_status")
+    return json.loads(value) if value else {"stage": "unknown", "warning": "Нет диагностики backup-worker: обновите и перезапустите его"}
 
 
 @router.get("/translation/languages", response_model=list[TranslationLanguage])

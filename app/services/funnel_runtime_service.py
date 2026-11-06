@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.constants import AuditAction, ChatEventType, EntityType, LeadStatusCode, MessageType, RoleName, SenderType
 from app.core.lead_names import normalize_name_part, split_lead_name
 from app.core.hold_schedule import HoldSchedule, scheduled_hold_plan
+from app.core.telegram_formatting import telegram_parse_mode
 from app.core.name_extraction import extract_answer_name
 from app.core.telegram_commands import (
     command_from_trigger_step,
@@ -269,7 +270,7 @@ class FunnelRuntimeService:
             entered_step_at=datetime.now(timezone.utc),
             waiting_for_answer=False,
             is_paused=False,
-            runtime_json={},
+            runtime_json={"offer_run_key": str(uuid4())},
         )
         from app.services.advertising_service import AdvertisingService
         await AdvertisingService(self.db).watch_start(chat_id)
@@ -329,6 +330,7 @@ class FunnelRuntimeService:
             is_paused=False,
             completed_at=None,
             runtime_json={
+                "offer_run_key": str(uuid4()),
                 "custom_command": {
                     "command": normalize_telegram_command(command),
                     "trigger_step_id": str(trigger.id),
@@ -1156,6 +1158,14 @@ class FunnelRuntimeService:
                 else self._validate_input_answer(step, text)
             )
             if not validation["valid"]:
+                if validation.get("storage_field_error"):
+                    # A legacy zero-retry question must not bypass a required
+                    # field merely because its value cannot be stored safely.
+                    await self._create_outgoing_message(chat_id=chat_id,
+                        text=self._input_retry_message(step), reply_markup=self._reply_markup_for_step(step))
+                    logger.info("Funnel mapped input rejected chat_id=%s step_id=%s field=%s answer_chars=%s",
+                        chat_id, step.id, self._input_target_field(step), len(text or ""))
+                    return True
                 retry_count = self._input_retry_count(state.runtime_json, step.id) + 1
                 max_retries = self._input_max_retries(step)
                 logger.info(
@@ -2210,7 +2220,7 @@ class FunnelRuntimeService:
             telegram_file_id=media_ref,
             broadcast_upload_id=upload_id,
             file_name=self._step_file_name(step),
-            parse_mode="HTML" if item.get("parse_mode") == "HTML" else None,
+            parse_mode=telegram_parse_mode(text, item.get("parse_mode")),
             mime_type=self._step_mime_type(step),
             reply_markup=self._reply_markup_for_step(step),
         )
@@ -2220,7 +2230,7 @@ class FunnelRuntimeService:
         if not text:
             return
         await self._create_outgoing_message(
-            parse_mode="HTML" if (step.config_json or {}).get("parse_mode") == "HTML" else None,
+            parse_mode=telegram_parse_mode(text, (step.config_json or {}).get("parse_mode")),
             chat_id=chat_id,
             text=text,
             reply_markup=self._reply_markup_for_step(step),
@@ -2473,6 +2483,9 @@ class FunnelRuntimeService:
             "lead_id": str(context["lead_id"]) if context.get("lead_id") else None,
             "last_answer": (state.runtime_json or {}).get("last_answer") if state else None,
         }
+        if any(match.group(1) == "offer_link" for match in TEMPLATE_VARIABLE_RE.finditer(source)):
+            from app.services.gambling_offer_service import GamblingOfferService
+            values["offer_link"] = await GamblingOfferService(self.db).template_link(chat_id, state)
 
         def replace_variable(match: re.Match[str]) -> str:
             key = match.group(1)
@@ -2530,7 +2543,7 @@ class FunnelRuntimeService:
                 message_type, media_ref, upload_id = cached.message_type, cached.telegram_file_id, None
         return dict(
             disappear_after_next=item.get("disappear_after_next") is True,
-            parse_mode="HTML" if item.get("parse_mode") == "HTML" else None,
+            parse_mode=telegram_parse_mode(text, item.get("parse_mode")),
             chat_id=chat_id, text=text, message_type=message_type,
             telegram_file_id=media_ref, broadcast_upload_id=upload_id,
             file_name=self._message_item_file_name(item), mime_type=self._message_item_mime_type(item),
@@ -5133,6 +5146,18 @@ class FunnelRuntimeService:
         return delay_type in {"no_reply_timeout", "reply_timeout"}
 
     def _validate_input_answer(self, step: FunnelStep, answer: Any) -> dict[str, Any]:
+        from app.core.lead_field_validation import LeadFieldValidationError, validate_lead_fields
+        result = self._validate_input_value(step, answer)
+        if result["valid"]:
+            field = self._input_target_field(step)
+            if field in DIRECT_LEAD_FIELDS:
+                try:
+                    validate_lead_fields({field: self._transform_value(field, result.get("normalized", answer))})
+                except LeadFieldValidationError:
+                    return {"valid": False, "storage_field_error": True}
+        return result
+
+    def _validate_input_value(self, step: FunnelStep, answer: Any) -> dict[str, Any]:
         config = step.config_json or {}
         validation_type = self._input_answer_type(step)
         text = str(answer or "").strip()

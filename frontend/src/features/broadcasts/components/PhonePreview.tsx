@@ -1,6 +1,7 @@
 import { FileText, Mic, PlayCircle, Video } from 'lucide-react'
 
 import type { BroadcastContent, BroadcastMediaType } from '../types'
+import { telegramTextPreview } from '../../../components/TelegramTextEditor'
 
 type PhonePreviewProps = {
   content: BroadcastContent
@@ -98,9 +99,9 @@ export default function PhonePreview({ content, mediaPreviewUrls }: PhonePreview
                         </div>
                       ) : null}
                       {type !== 'video_note' ? (
-                        <p className="whitespace-pre-wrap text-[14px]">
-                          {type ? message.caption : message.text}
-                        </p>
+                        <div className="whitespace-pre-wrap break-words text-[14px]">
+                          {telegramTextPreview((type ? message.caption ?? message.text : message.text) ?? '', message.parse_mode)}
+                        </div>
                       ) : null}
                       {message.buttons?.length ? (
                         <div className="mt-2 grid gap-1">

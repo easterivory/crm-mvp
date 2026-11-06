@@ -399,7 +399,7 @@ export default function MessageSequenceEditor({
 
             {!expanded && selectedId !== message.id ? <div className="block w-full min-w-0 text-left">
               <button type="button" onClick={() => setSelectedId(message.id)} className="block w-full text-left">
-              <div className="line-clamp-3 whitespace-pre-wrap break-words text-sm text-gray-400">{message.parse_mode === 'HTML' ? telegramTextPreview(captionText) : captionText || 'Без текста'}</div>
+              <div className="line-clamp-3 whitespace-pre-wrap break-words text-sm text-gray-400">{telegramTextPreview(captionText || 'Без текста', message.parse_mode)}</div>
               </button>
               <UploadedPhotoPreview projectId={projectId} media={message.media} />
               <span className="mt-2 block text-xs text-gray-500">{message.buttons.length} кнопок</span>
@@ -485,7 +485,7 @@ export default function MessageSequenceEditor({
             ) : null}
 
             <TelegramTextEditor
-              variables={leadFields.filter(([key]) => key).map(([key, label]) => ({ label, value: `{{lead.${key}}}` }))}
+              variables={[...leadFields.filter(([key]) => key).map(([key, label]) => ({ label, value: `{{lead.${key}}}` })), { label: 'Ссылка оффера', value: '{{offer_link}}' }]}
               parseMode={message.parse_mode}
               rows={expanded ? 12 : isMedia ? 3 : 4}
               value={captionText}
@@ -647,7 +647,7 @@ export default function MessageSequenceEditor({
         <div className="overflow-hidden rounded-lg border border-white/10 bg-[#182c32] p-3">
           <UploadedPhotoPreview projectId={projectId} media={selected.media} />
           {selected.type !== 'text' && selected.type !== 'photo' ? <div className="mb-3 flex items-center gap-2 text-sm">{mediaIcon(selected.type)}{selected.media?.file_name || mediaLabel(selected.type)}</div> : null}
-          <div className="whitespace-pre-wrap break-words text-sm leading-6 text-gray-100">{selected.parse_mode === 'HTML' ? telegramTextPreview(selected.caption ?? selected.text) : selected.caption ?? selected.text}</div>
+          <div className="whitespace-pre-wrap break-words text-sm leading-6 text-gray-100">{telegramTextPreview(selected.caption ?? selected.text, selected.parse_mode)}</div>
         </div>
         <div className="mt-2 space-y-1">{selected.buttons.map((button) => <div key={button.id} className="break-words rounded border border-white/10 bg-white/5 px-3 py-2 text-center text-sm">{button.label}</div>)}</div>
       </aside> : null}

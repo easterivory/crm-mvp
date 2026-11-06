@@ -398,12 +398,17 @@ def send_backup_to_telegram(
         return
     destination = chat_id or config.BACKUP_TELEGRAM_CHAT_ID
 
-    max_upload_bytes = config.BACKUP_TELEGRAM_MAX_UPLOAD_MB * 1024 * 1024
+    from app.services.backup_diagnostics import transport_status
+    transport = transport_status(config)
+    if not transport["address_valid"]:
+        raise BackupError("Database backup is local; invalid BACKUP_TELEGRAM_API_BASE_URL")
+    max_upload_bytes = transport["effective_limit_mb"] * 1024 * 1024
     if result.size_bytes > max_upload_bytes:
         message = (
             "Database backup was created locally but was not sent to Telegram: "
             f"{result.path.name} is {result.size_bytes / 1024 / 1024:.1f} MB, "
-            f"limit is {config.BACKUP_TELEGRAM_MAX_UPLOAD_MB} MB."
+            f"limit is {transport['effective_limit_mb']} MB. "
+            "For large files, deploy the isolated backup-local-api profile and recreate the backup worker."
         )
         send_telegram_message(
             message,

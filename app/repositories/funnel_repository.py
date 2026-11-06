@@ -636,6 +636,13 @@ class FunnelRepository(BaseRepository[Funnel]):
         return result
 
     async def clone_graph(self, source_version_id: UUID, target_version_id: UUID) -> None:
+        source_version = await self.get_version(source_version_id)
+        if source_version and getattr(source_version, "offer_id", None):
+            target_version = await self.get_version(target_version_id)
+            source_funnel = await self.db.get(Funnel, source_version.funnel_id)
+            target_funnel = await self.db.get(Funnel, target_version.funnel_id)
+            if source_funnel.project_id == target_funnel.project_id:
+                target_version.offer_id = source_version.offer_id
         steps = await self.list_steps(source_version_id)
         edges = await self.list_edges(source_version_id)
         push_rules = await self.list_push_rules(source_version_id)
@@ -1234,6 +1241,7 @@ class FunnelRepository(BaseRepository[Funnel]):
         direct_values: dict,
         custom_values: dict,
     ) -> None:
+        from app.core.lead_field_validation import validate_lead_fields
         values = dict(direct_values)
         if "call_time_text" in values and "preferred_call_time" not in values:
             values["preferred_call_time"] = values["call_time_text"]
@@ -1251,6 +1259,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                 values["name"] = compose_lead_name(first_name, last_name)
         if not values:
             return
+        validate_lead_fields(values)
         values["updated_at"] = func.now()
         await self.db.execute(update(Lead).where(Lead.id == lead_id).values(**values))
 

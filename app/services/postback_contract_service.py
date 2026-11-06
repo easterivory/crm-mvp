@@ -120,6 +120,10 @@ async def remember_personal_link(db, lead_id):
 def normalize(config, payload, received_at):
     mapping = PostbackParameterMapping.model_validate(config.get("parameter_mapping") or {})
     identifier = extract(payload, mapping.identifier_param)
+    identifier_source = "token"
+    if mapping.identifier_type == "offer_token" and identifier in (None, "") and mapping.bind_external_type == "player_id":
+        identifier = extract(payload, mapping.bind_external_id_param)
+        identifier_source = "player_id"
     if identifier is None or isinstance(identifier, (dict, list, bool)) or not str(identifier).strip():
         raise ValueError("Missing or invalid lead/submission identifier")
     raw_type = extract(payload, mapping.event_type_param) if mapping.event_type_param else config["event_type"]
@@ -161,14 +165,44 @@ def normalize(config, payload, received_at):
         occurred_at = aware(occurred_at)
         if occurred_at > received_at + timedelta(minutes=5) or occurred_at.year < 2000:
             raise ValueError("Partner event time outside allowed range")
-    return {"identifier": str(identifier).strip(), "event_type": event_type, "external_event_id": external,
+    normalized = {"identifier": str(identifier).strip(), "event_type": event_type, "external_event_id": external,
         "amount": amount, "currency": currency, "occurred_at": occurred_at,
-        "time_source": "partner" if timestamp is not None else "gateway_received"}, mapping
+        "time_source": "partner" if timestamp is not None else "gateway_received"}
+    if mapping.identifier_type == "offer_token": normalized["identifier_source"] = identifier_source
+    return normalized, mapping
 
 
 class PostbackContractService:
     def __init__(self, db):
         self.db = db
+
+    @staticmethod
+    def same_offer_conversion(previous, event, normalized):
+        if event.amount != normalized["amount"] or event.currency != normalized["currency"]:
+            return False
+        return not (previous.event_time_confirmed and normalized["time_source"] == "partner"
+                    and aware(event.occurred_at) != aware(normalized["occurred_at"]))
+
+    async def offer_duplicate_update(self, receipt, endpoint, config, mapping, payload, lead, binding):
+        """A duplicate may confirm qualification, but may never rebind a different player."""
+        from app.models.gambling_offer import OfferLink
+        from app.schemas.postback import PostbackBindingCreate
+        from app.services.gambling_offer_service import GamblingOfferService
+        link = await self.db.get(OfferLink, UUID(binding.attribution_json["offer_link_id"]))
+        value = extract(payload, mapping.bind_external_id_param)
+        if value is not None:
+            try:
+                if isinstance(value, (dict, list, bool)): raise ValueError("Invalid player ID")
+                identity = await self.bind(SimpleNamespace(id=endpoint.id, project_id=endpoint.project_id,
+                    parameter_mapping=config.get("parameter_mapping") or {}, partner_integration_id=None),
+                    PostbackBindingCreate(identifier_type="player_id", external_id=str(value), lead_id=lead.id))
+                if not (identity.attribution_json or {}).get("offer_link_id"):
+                    identity.attribution_json = {**link.attribution_json, "offer_link_id": str(link.id)}
+            except (ValueError, HTTPException):
+                receipt.status, receipt.error_message = "conflict", "Player identity conflicts with the original FD"
+                return
+        if await GamblingOfferService(self.db).confirm_pending_qualification(receipt.lead_event_id, payload):
+            receipt.status = "processed"
 
     async def bind(self, endpoint, data):
         namespace = binding_namespace(endpoint)
@@ -224,13 +258,19 @@ class PostbackContractService:
             raise HTTPException(404)
         return endpoint, row.config_json if row else config_of(endpoint), row.revision if row else endpoint.revision
 
-    async def match(self, endpoint, config, mapping, identifier):
+    async def match(self, endpoint, config, mapping, identifier, identifier_source=None):
         base = select(Lead).where(Lead.project_id == endpoint.project_id, Lead.is_deleted.is_(False), Lead.is_trash.is_(False))
         submission = None
         binding = None
         kind = mapping.identifier_type
         namespace = binding_namespace(endpoint, config)
-        if kind in {"click_id", "external_id", "player_id"}:
+        if kind == "offer_token":
+            from app.services.gambling_offer_service import GamblingOfferService
+            link = await GamblingOfferService(self.db).resolve(endpoint, config, mapping, identifier, identifier_source)
+            if link is None: return None, None, None, "unmatched"
+            base = base.where(Lead.id == link.lead_id)
+            binding = SimpleNamespace(attribution_json={**link.attribution_json, "offer_link_id": str(link.id)})
+        elif kind in {"click_id", "external_id", "player_id"}:
             binding = await self.db.scalar(select(PostbackBinding).where(PostbackBinding.project_id == endpoint.project_id,
                 PostbackBinding.namespace == namespace, PostbackBinding.identifier_type == kind, PostbackBinding.external_id == identifier))
             if binding:
@@ -337,7 +377,8 @@ class PostbackContractService:
         lead = submission = binding = None
         try:
             normalized, mapping = normalize(config, payload, received)
-            lead, submission, binding, error = await self.match(endpoint, config, mapping, normalized["identifier"])
+            lead, submission, binding, error = await self.match(endpoint, config, mapping, normalized["identifier"],
+                normalized.get("identifier_source"))
         except (ValueError, InvalidOperation, OverflowError, TypeError) as exc:
             error = "invalid"
             reason = str(exc)[:500]
@@ -347,6 +388,25 @@ class PostbackContractService:
         if dry_run:
             if not error:
                 error, reason = await self.preview_problem(endpoint, config, mapping, normalized, lead, submission, payload)
+            if error in {None, "duplicate"} and mapping.identifier_type == "offer_token":
+                from app.services.gambling_offer_service import GamblingOfferService
+                from app.models.gambling_offer import OfferLink
+                from app.models.lead_event import LeadEvent
+                player = extract(payload, mapping.bind_external_id_param)
+                if player is not None:
+                    known = await self.db.scalar(select(PostbackBinding).where(PostbackBinding.project_id == endpoint.project_id,
+                        PostbackBinding.namespace == binding_namespace(endpoint, config), PostbackBinding.identifier_type == "player_id",
+                        PostbackBinding.external_id == str(player)))
+                    if isinstance(player, (dict, list, bool)) or known and known.lead_id != lead.id:
+                        return {"status": "conflict", "reason": "Player identity conflicts with the original FD",
+                            "lead_id": str(lead.id), "submission_id": None, "revision": revision, "normalized": {}}
+                link = await self.db.get(OfferLink, UUID(binding.attribution_json["offer_link_id"]))
+                previous = await GamblingOfferService(self.db).existing_effect(link, normalized)
+                if previous:
+                    old = await self.db.get(LeadEvent, previous.event_id)
+                    error = "duplicate" if self.same_offer_conversion(previous, old, normalized) else "conflict"
+                    if error == "duplicate" and await GamblingOfferService(self.db).confirm_pending_qualification(old.id, payload, dry_run=True):
+                        error, reason = None, "Existing FD; pending qualification will be confirmed without a new deposit"
             return {"status": error or "matched", "reason": reason, "lead_id": str(lead.id) if lead else None,
                 "submission_id": str(submission.id) if submission else None, "revision": revision,
                 "normalized": {k: str(v) if v is not None else None for k, v in (normalized or {}).items()}}
@@ -380,7 +440,29 @@ class PostbackContractService:
                 receipt.status = "duplicate" if existing.fingerprint == fingerprint else "conflict"
                 receipt.lead_event_id = UUID(existing.result_json["event_id"]) if existing.result_json.get("event_id") else None
                 receipt.error_message = None if receipt.status == "duplicate" else "Event ID reused with different data"
+                if receipt.status == "duplicate" and mapping.identifier_type == "offer_token" and receipt.lead_event_id:
+                    await self.offer_duplicate_update(receipt, endpoint, config, mapping, payload, lead, binding)
                 return self.result(receipt)
+        offer_link = None
+        if mapping.identifier_type == "offer_token":
+            from app.models.gambling_offer import OfferLink
+            from app.models.lead_event import LeadEvent
+            from app.services.gambling_offer_service import GamblingOfferService
+            offer_link = await self.db.get(OfferLink, UUID(binding.attribution_json["offer_link_id"]))
+            prior = await GamblingOfferService(self.db).existing_effect(offer_link, normalized, lock=True)
+            if prior:
+                old = await self.db.get(LeadEvent, prior.event_id)
+                receipt.status = "duplicate" if self.same_offer_conversion(prior, old, normalized) else "conflict"
+                receipt.lead_event_id = old.id
+                receipt.error_message = None if receipt.status == "duplicate" else "First conversion already exists with different amount, currency or time"
+                if receipt.status == "duplicate":
+                    await self.offer_duplicate_update(receipt, endpoint, config, mapping, payload, lead, binding)
+                result = self.result(receipt)
+                if external:
+                    self.db.add(PostbackBusinessEffect(id=uuid4(), endpoint_id=endpoint.id, external_event_id=external,
+                        namespace=namespace, fingerprint=fingerprint, result_json=result.model_dump(mode="json")))
+                await self.db.flush()
+                return result
         if config.get("processing_kind") == "submission_status":
             # Match the funnel lock order: chat -> lead -> submission.
             await self.db.execute(select(Chat.id).where(Chat.id == lead.chat_id).with_for_update())
@@ -407,11 +489,13 @@ class PostbackContractService:
                 try:
                     if isinstance(value, (dict, list, bool)):
                         raise ValueError("External ID must be a scalar identifier")
-                    await self.bind(SimpleNamespace(id=endpoint.id, project_id=endpoint.project_id,
+                    identity_binding = await self.bind(SimpleNamespace(id=endpoint.id, project_id=endpoint.project_id,
                         parameter_mapping=config.get("parameter_mapping") or {},
                         partner_integration_id=UUID(config["partner_integration_id"]) if config.get("partner_integration_id") else None),
                         PostbackBindingCreate(identifier_type=mapping.bind_external_type, external_id=str(value), lead_id=lead.id,
                             submission_id=submission.id if submission else None))
+                    if offer_link is not None and not (identity_binding.attribution_json or {}).get("offer_link_id"):
+                        identity_binding.attribution_json = {**offer_link.attribution_json, "offer_link_id": str(offer_link.id)}
                 except (ValueError, HTTPException):
                     receipt.status = "conflict"; receipt.error_message = "Cannot bind external identity: conflict or invalid value"
                     return self.result(receipt)
@@ -448,6 +532,9 @@ class PostbackContractService:
                 postback_endpoint_id=endpoint.id, payload=payload, occurred_at=normalized["occurred_at"],
                 attribution=event_attribution)
             receipt.lead_event_id = event.id
+            if created and offer_link is not None:
+                await GamblingOfferService(self.db).record_conversion(offer_link, event, payload,
+                    event_time_known=normalized["time_source"] == "partner")
             if created and normalized["event_type"] in {"registration", "deposit", "redeposit"}:
                 from app.models.postback import PostbackFollowup
                 chat = await self.db.get(Chat, lead.chat_id)

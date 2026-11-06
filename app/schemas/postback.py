@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -19,10 +19,12 @@ PostbackIdentifierType = Literal[
     "click_id",
     "submission_id",
     "player_id",
+    "offer_token",
 ]
 
 
 class PostbackParameterMapping(BaseModel):
+    offer_id: UUID | None = None
     identifier_type: PostbackIdentifierType = "lead_id"
     identifier_param: str = Field(default="lead_id", min_length=1, max_length=255)
     amount_param: str | None = Field(default=None, max_length=255)
@@ -129,12 +131,21 @@ class PostbackReceiptOut(OrmBase):
 
 
 class LeadEventCreate(BaseModel):
+    offer_id: UUID | None = None
+    occurred_at: datetime | None = None
     event_type: str = Field(min_length=1, max_length=100)
     amount: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=10)
     partner_integration_id: UUID | None = None
     external_event_id: str | None = Field(default=None, max_length=255)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def valid_event_time(cls, value):
+        if value is not None and (value.tzinfo is None or value.year < 2000 or value > datetime.now(timezone.utc) + timedelta(minutes=5)):
+            raise ValueError("Укажите время события с часовым поясом, не из будущего")
+        return value
 
     @field_validator("event_type")
     @classmethod

@@ -96,6 +96,9 @@ class FunnelVersion(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     funnel_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("funnels.id"), nullable=False
     )
+    offer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("gambling_offers.id"), nullable=True
+    )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="draft", server_default="draft"

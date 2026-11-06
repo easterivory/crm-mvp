@@ -24,8 +24,10 @@ type IdentifierType =
   | 'click_id'
   | 'submission_id'
   | 'player_id'
+  | 'offer_token'
 
 type ParameterMapping = {
+  offer_id?: string | null
   identifier_type: IdentifierType
   identifier_param: string
   amount_param: string | null
@@ -443,7 +445,7 @@ export default function PostbackEndpointsPanel({
                   void api.post(`/postback-endpoints/${endpoint.id}/restore`, null, { params: { project_id: projectId } })
                     .then(() => loadEndpoints()).catch(err => setError(getErrorMessage(err)))
                 }}>Восстановить выключенным</button> : <>
-                <button type="button" title="Редактировать" onClick={() => startEdit(endpoint)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><Pencil size={14} /></button>
+                <button type="button" disabled={!!endpoint.parameter_mapping.offer_id} title={endpoint.parameter_mapping.offer_id ? 'Правила редактируются в настройках оффера' : 'Редактировать'} onClick={() => startEdit(endpoint)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white disabled:opacity-30"><Pencil size={14} /></button>
                 <button type="button" title={endpoint.is_active ? 'Выключить' : 'Включить'} onClick={() => void toggleEndpoint(endpoint)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white">{endpoint.is_active ? <X size={14} /> : <Check size={14} />}</button>
                 <button type="button" title="Заменить секрет" onClick={() => void rotateSecret(endpoint)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:text-white"><RotateCw size={14} /></button>
                 <button type="button" title="Удалить endpoint" onClick={() => void deleteEndpoint(endpoint)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-300/15 text-red-200/70 hover:text-red-100"><Trash2 size={14} /></button>

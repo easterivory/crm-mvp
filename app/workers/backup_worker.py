@@ -18,9 +18,14 @@ from app.services.backup_service import (
 from app.services.backup_queue import backup_redis_settings
 from app.utils.backup_manager import run_configured_telegram_backup
 from app.services.backup_download_service import DOWNLOAD_TTL_SECONDS, create_download, cleanup_downloads
+from app.services.backup_diagnostics import record_backup_status
 
 logger = logging.getLogger(__name__)
 configure_file_logging()
+
+
+async def backup_startup(ctx):
+    await record_backup_status("idle")
 
 
 async def run_tg_backup_job(ctx: dict, force: bool = False) -> dict:
@@ -43,6 +48,7 @@ async def run_download_backup_job(ctx: dict, job_id: str) -> dict:
 
 
 class WorkerSettings:
+    on_startup = backup_startup
     functions = [run_tg_backup_job, func(run_download_backup_job, keep_result=DOWNLOAD_TTL_SECONDS)]
     cron_jobs = [cron(run_tg_backup_job, hour=3, minute=0, run_at_startup=False)]
     redis_settings = backup_redis_settings()

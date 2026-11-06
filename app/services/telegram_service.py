@@ -1157,6 +1157,10 @@ class TelegramService:
         start_requested: bool,
         fresh_lifecycle: bool,
     ) -> None:
+        from app.services.chatterfy_import_service import is_manual_history_chat
+        if getattr(chat, "is_imported", False) and await is_manual_history_chat(self.db, chat):
+            logger.info("Historical Chatterfy chat kept in manual mode chat_id=%s", chat.id)
+            return
         chat_id = chat.id
         bot = await self.bot_repo.get_active(bot_id)
         has_active_pointer = bool(
@@ -1785,6 +1789,10 @@ class TelegramService:
         user_message: MessageOut,
         fallback_text: str,
     ) -> None:
+        from app.services.chatterfy_import_service import is_manual_history_chat
+        if getattr(chat, "is_imported", False) and await is_manual_history_chat(self.db, chat):
+            logger.info("Callback retained manual history import chat_id=%s", chat.id)
+            return
         bot = await self.bot_repo.get_active(bot_id)
         has_active_pointer = bool(
             bot is not None

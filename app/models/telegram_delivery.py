@@ -45,3 +45,5 @@ class RuntimeDispatch(Base, UUIDPrimaryKey, TimestampMixin):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    diagnostics_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))

@@ -67,6 +67,11 @@ class PostbackEndpointService:
     ) -> PostbackEndpointOut:
         self._ensure_manage_access(actor, project_id)
         await self._validate_integration(project_id, data.partner_integration_id)
+        if data.parameter_mapping.identifier_type == "offer_token":
+            from app.models.gambling_offer import GamblingOffer
+            offer = await self.db.get(GamblingOffer, data.parameter_mapping.offer_id) if data.parameter_mapping.offer_id else None
+            if not offer or offer.project_id != project_id or data.processing_kind != "lifecycle_event":
+                raise HTTPException(422, "Персональный идентификатор требует оффер этого проекта и события REG / FD / RD")
         if data.processing_kind == "submission_status" and data.partner_integration_id is None:
             raise HTTPException(422, "Для статуса подачи выберите покупателя.")
         endpoint = PostbackEndpoint(
@@ -76,7 +81,7 @@ class PostbackEndpointService:
             name=data.name,
             secret_token=secrets.token_urlsafe(32),
             event_type=LeadEventService.normalize_event_type(data.event_type),
-            parameter_mapping=data.parameter_mapping.model_dump(),
+            parameter_mapping=data.parameter_mapping.model_dump(mode="json"),
             is_active=data.is_active,
         )
         self.db.add(endpoint)
@@ -102,6 +107,10 @@ class PostbackEndpointService:
         from app.services.postback_contract_service import snapshot
         await snapshot(self.db, endpoint)
         values = data.model_dump(exclude_unset=True)
+        if (endpoint.parameter_mapping or {}).get("offer_id"):
+            if (data.parameter_mapping is not None and data.parameter_mapping.model_dump(mode="json") != endpoint.parameter_mapping
+                    or any(key in values and values[key] != getattr(endpoint, key) for key in ("processing_kind", "event_type", "partner_integration_id"))):
+                raise HTTPException(409, "Правила оффера меняются в настройках оффера; старый адрес сохраняется")
         for key in ("name", "event_type", "parameter_mapping", "is_active", "processing_kind"):
             if key in values and values[key] is None:
                 raise HTTPException(422, f"{key} cannot be null")
@@ -114,7 +123,7 @@ class PostbackEndpointService:
         if "parameter_mapping" in values and values["parameter_mapping"] is not None:
             mapping = data.parameter_mapping
             assert mapping is not None
-            values["parameter_mapping"] = mapping.model_dump()
+            values["parameter_mapping"] = mapping.model_dump(mode="json")
         values["revision"] = endpoint.revision + 1
         result = await self.db.execute(
             update(PostbackEndpoint)

@@ -77,6 +77,11 @@ class ChannelJoinFunnelService:
         # The CRM identity must survive even when no funnel is published yet.
         await self.db.commit()
 
+        from app.services.chatterfy_import_service import is_manual_history_chat
+        if await is_manual_history_chat(self.db, chat):
+            logger.info("Channel join retained manual history import chat_id=%s", chat.id)
+            return ChannelJoinFunnelResult(chat_id=chat.id, started=False, already_started=True)
+
         active_funnel, active_version = (
             await self.runtime.get_active_published_funnel_for_bot(
                 event.tracker_bot_id,

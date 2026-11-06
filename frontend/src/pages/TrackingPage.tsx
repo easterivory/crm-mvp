@@ -344,6 +344,7 @@ export default function TrackingPage() {
   const [links, setLinks] = useState<TrackingLink[]>([])
   const [campaignLanders, setCampaignLanders] = useState<ProjectLander[]>([])
   const [metrics, setMetrics] = useState<TrackingProjectMetricsResponse | null>(null)
+  const [lifecycleCoverage, setLifecycleCoverage] = useState<boolean | null>(null)
   const [buyers, setBuyers] = useState<BuyerUser[]>([])
   const [dateFrom, setDateFrom] = useState(daysAgoIso(6))
   const [dateTo, setDateTo] = useState(todayIso())
@@ -1065,7 +1066,7 @@ export default function TrackingPage() {
           botId={selectedBotIdForQuery} buyerId={buyerFilter || undefined} dateFrom={dateFrom} dateTo={dateTo} />}
         {metrics && selectedProjectId && <TrackingOverview key={`${user?.id}:${selectedProjectId}:overview`} projectId={selectedProjectId} userId={user?.id ?? 'user'}
           botId={selectedBotIdForQuery} buyerId={buyerFilter || undefined} dateFrom={dateFrom} dateTo={dateTo}
-          gambling={isGambling} channel={hasChannelTraffic} summary={metrics.summary} daily={metrics.daily} refreshToken={metrics} loading={isLoading} />}
+          gambling={isGambling} channel={hasChannelTraffic} summary={metrics.summary} daily={metrics.daily} refreshToken={metrics} loading={isLoading} onLifecycleCoverage={setLifecycleCoverage} />}
 
         {isGambling && (metrics?.lifecycle_sources?.length ?? 0) > 0 ? (
           <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-surface px-4 py-3 shadow-card">
@@ -1329,11 +1330,11 @@ export default function TrackingPage() {
                         <>
                           <span>· Рег → FD</span>
                           <span className="text-gray-100">
-                            {formatPercent(linkSummary.cr_registration_to_deposit)}
+                            {lifecycleCoverage === true ? formatPercent(linkSummary.cr_registration_to_deposit) : '—'}
                           </span>
                           <span>· CPFD</span>
                           <span className="text-gray-100">
-                            {formatMoney(linkSummary.cpfd)}
+                            {lifecycleCoverage === true ? formatMoney(linkSummary.cpfd) : '—'}
                           </span>
                         </>
                       ) : (

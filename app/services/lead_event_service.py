@@ -176,6 +176,7 @@ class LeadEventService:
         partner_integration_id: UUID | None,
         external_event_id: str | None,
         payload: dict[str, Any],
+        occurred_at: datetime | None = None,
     ) -> LeadEvent:
         require_project_access(actor, project_id)
         lead = await self.db.scalar(
@@ -198,6 +199,7 @@ class LeadEventService:
             created_by_user_id=actor.id,
             external_event_id=external_event_id,
             payload=payload,
+            occurred_at=occurred_at,
         )
         return event
 

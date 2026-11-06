@@ -130,6 +130,8 @@ class AdvertisingService:
         messages = content.get("messages", [])
         if not isinstance(messages, list) or len(messages) != 1 or not isinstance(messages[0], dict) or content.get("after_send_action"):
             raise HTTPException(422, "Слот содержит один пост без запуска воронки")
+        content["messages"] = BroadcastService._content_messages(content)
+        messages = content["messages"]
         message = messages[0]
         if message.get("type", "text") not in {"text", "photo", "video", "voice", "video_note", "document"}:
             raise HTTPException(422, "Неизвестный тип поста")
@@ -221,6 +223,9 @@ class AdvertisingService:
             .execution_options(populate_existing=True))
         if lead is None:
             return "lead_missing"
+        from app.services.chatterfy_import_service import manual_import_fields
+        if manual_import_fields(lead.custom_fields):
+            return "manual_history_import"
         project = await self.db.get(Project, chat.project_id, populate_existing=True)
         if project is None or project.is_deleted or project.status != "active" or project.project_format != "submission":
             return "project_unavailable"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from app.core.telegram_formatting import telegram_html
+from app.core.telegram_formatting import telegram_html, telegram_parse_mode
 from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -573,6 +573,7 @@ class FunnelService:
             if set(result.scalars().all()) != photo_ids:
                 raise HTTPException(status_code=422, detail="Фото пуша недоступно в этом проекте. Загрузите фото заново.")
         draft_validation = self._validate_graph_payload(graph, strict_config=False)
+        await self._validate_offer_variable(version_id, project_id, graph, draft_validation, strict=False)
         if draft_validation.errors:
             logger.warning(
                 "Funnel graph validation failed funnel_id=%s version_id=%s errors=%s",
@@ -619,7 +620,30 @@ class FunnelService:
         self._ensure_read_allowed(current_user)
         await self._get_version_or_404(funnel_id, version_id, project_id)
         graph = await self._graph_in_from_db(version_id)
-        return self._validate_graph_payload(graph, strict_config=True)
+        result = self._validate_graph_payload(graph, strict_config=True)
+        await self._validate_offer_variable(version_id, project_id, graph, result, strict=True)
+        return result
+
+    async def _validate_offer_variable(self, version_id, project_id, graph, result, *, strict):
+        import json
+        import re
+        if not re.search(r"{{\s*offer_link\s*}}", json.dumps(graph.model_dump(mode="json"))): return
+        from app.models.gambling_offer import GamblingOffer
+        from app.models.postback import PostbackEndpoint
+        version = await self.repo.get_version(version_id)
+        offer = await self.db.get(GamblingOffer, version.offer_id) if version and getattr(version, "offer_id", None) else None
+        reason = None
+        if not offer or offer.project_id != project_id or not offer.is_active:
+            reason = "Для {{offer_link}} выберите действующий оффер в настройках версии воронки"
+        elif offer.postbacks_enabled:
+            endpoint = await self.db.get(PostbackEndpoint, offer.endpoint_id)
+            if not endpoint or not endpoint.is_active or endpoint.is_archived:
+                reason = "Для {{offer_link}} настройте и включите приём постбэков выбранного оффера"
+        if reason:
+            from app.schemas.funnel import FunnelValidationIssue
+            issue = FunnelValidationIssue(code="offer_link_unconfigured", message=reason, severity="error" if strict else "warning")
+            (result.errors if strict else result.warnings).append(issue)
+            if strict: result.can_publish = False
 
     async def publish_version(
         self,
@@ -751,6 +775,7 @@ class FunnelService:
             await self._graph_in_from_db(version.id),
             strict_config=True,
         )
+        await self._validate_offer_variable(version.id, project_id, await self._graph_in_from_db(version.id), validation, strict=True)
         if validation.errors:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1140,6 +1165,12 @@ class FunnelService:
             ],
         )
 
+    @staticmethod
+    def _offer_preview_html(source: str) -> str:
+        import re
+        return re.sub(r"((?i:href)\s*=\s*(?P<quote>['\"])){{\s*offer_link\s*}}(?P=quote)",
+            lambda match: match.group(1) + "https://offer.invalid/personal" + match.group("quote"), source)
+
     def _validate_graph_payload(
         self,
         graph: FunnelGraphIn,
@@ -1221,9 +1252,9 @@ class FunnelService:
                     )
                 )
             if strict_config:
-                if FunnelRuntimeService._is_input_step(step) and step.config_json.get("parse_mode") == "HTML":
+                if FunnelRuntimeService._is_input_step(step) and telegram_parse_mode(FunnelRuntimeService._step_prompt(step), step.config_json.get("parse_mode")) == "HTML":
                     try:
-                        telegram_html(FunnelRuntimeService._step_prompt(step))
+                        telegram_html(self._offer_preview_html(FunnelRuntimeService._step_prompt(step)))
                     except ValueError as exc:
                         errors.append(self._issue("invalid_telegram_formatting", f"Блок «{step.title}»: {exc}", "error", step_id=step.id))
                 if FunnelRuntimeService._is_message_step(step) and step.config_json.get("auto_advance_enabled") is True:
@@ -1254,9 +1285,9 @@ class FunnelService:
                 if FunnelRuntimeService._is_message_step(step):
                     for index, item in enumerate(FunnelRuntimeService._message_sequence(step), 1):
                         text = FunnelRuntimeService._message_item_text(item)
-                        if item.get("parse_mode") == "HTML":
+                        if telegram_parse_mode(text, item.get("parse_mode")) == "HTML":
                             try:
-                                text, _ = telegram_html(text)
+                                text, _ = telegram_html(self._offer_preview_html(text))
                             except ValueError as exc:
                                 errors.append(self._issue("invalid_telegram_formatting", f"Блок «{step.title}», сообщение {index}: {exc}", "error", step_id=step.id))
                                 continue

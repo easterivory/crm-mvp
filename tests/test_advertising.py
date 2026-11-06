@@ -39,6 +39,7 @@ async def fixture(before_scenarios=None, after_scenarios=None):
         async with engine.begin() as conn:
             tables = [t for t in Base.metadata.sorted_tables if not t.name.startswith("advertising_")]
             await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
+            await conn.execute(text("ALTER TABLE runtime_dispatches DROP COLUMN failure_count, DROP COLUMN diagnostics_json"))
         async with sessions() as db:
             p = Project(name="Advertising QA", slug="qa")
             db.add(p); await db.commit()
@@ -61,6 +62,12 @@ async def fixture(before_scenarios=None, after_scenarios=None):
                 with Operations.context(MigrationContext.configure(sync)):
                     module.upgrade()
             await conn.run_sync(upgrade_scenarios)
+            spec = importlib.util.spec_from_file_location("migration_delivery_resilience", "alembic/versions/20261106_0097_delivery_resilience.py")
+            resilience = importlib.util.module_from_spec(spec); spec.loader.exec_module(resilience)
+            def upgrade_resilience(sync):
+                with Operations.context(MigrationContext.configure(sync)):
+                    resilience.upgrade()
+            await conn.run_sync(upgrade_resilience)
         if after_scenarios:
             async with sessions() as db:
                 await after_scenarios(db, pid)
@@ -111,6 +118,53 @@ async def due(sessions, eid):
         e = await db.get(AdvertisingEnrollment, eid)
         e.due_at = now() - timedelta(seconds=1)
         await db.commit()
+
+
+def test_legacy_html_slot_formats_one_delivery_without_rewriting_queue(monkeypatch):
+    import httpx
+    import json
+    from app.models.message import Message
+    from app.services.telegram_sender import TelegramSenderService
+    requests = []
+
+    def respond(request):
+        data = json.loads(request.content)
+        requests.append(data)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 123, "text": data["text"], "entities": data["entities"]}})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    monkeypatch.setattr(TelegramSenderService, "_get_token", AsyncMock(return_value="test-token"))
+
+    async def run():
+        async with fixture() as (sessions, pid, bid, chats, slots, leads, hot):
+            content = {"messages": [{"type": "text", "text": '<b>Offer</b> <a href="https://t.me/example">Contact</a>', "parse_mode": None}]}
+            async with sessions() as db:
+                slot = await db.get(AdvertisingSlot, slots[0])
+                saved = await AdvertisingService(db).save_slot(pid, SlotWrite(name=slot.name, position=0, enabled=True,
+                    revision=slot.revision, content_json=content), None, slot.id)
+                assert saved.content_json["messages"][0]["parse_mode"] == "HTML"
+                saved.content_json = content  # Simulate an untouched pre-update slot.
+                revision = saved.revision
+                await db.commit()
+            eid = await enroll(sessions, chats[0])
+            await process_enrollment(eid, sessions)
+            await process_enrollment(eid, sessions)
+            await process_enrollment(eid, sessions)
+            assert len(requests) == 1
+            assert requests[0]["text"] == "Offer Contact"
+            assert [e["type"] for e in requests[0]["entities"]] == ["bold", "text_link"]
+            async with sessions() as db:
+                slot = await db.get(AdvertisingSlot, slots[0])
+                assert slot.revision == revision and slot.content_json == content
+                deliveries = list((await db.scalars(select(AdvertisingDelivery).where(
+                    AdvertisingDelivery.enrollment_id == eid).order_by(AdvertisingDelivery.position))).all())
+                assert [d.status for d in deliveries] == ["sent", "pending", "pending"]
+                assert deliveries[0].content_snapshot == content
+                messages = list((await db.scalars(select(Message).where(Message.chat_id == chats[0]))).all())
+                assert len(messages) == 1 and messages[0].body == "Offer Contact"
+                assert messages[0].raw_payload_json["formatted_source"]["parse_mode"] == "HTML"
+    asyncio.run(run())
 
 
 def test_migration_queue_snapshot_edits_completion_and_restart():

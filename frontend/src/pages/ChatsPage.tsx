@@ -3502,6 +3502,7 @@ export default function ChatsPage() {
 
       <div className="hidden h-full min-h-0 lg:block">
         <LeadSidebar
+          projectFormat={workspaceCounts.project_format}
           activeBotId={selectedChat?.bot_id ?? (selectedBotIds.length === 1 ? selectedBotIds[0] : null)}
           activeBotName={selectedChatBot?.name ?? botScopeLabel}
           activeBotTransportType={selectedChatTransportType}
@@ -3783,6 +3784,7 @@ export default function ChatsPage() {
             </div>
             <div className="min-h-0 flex-1 p-3">
             <LeadSidebar
+              projectFormat={workspaceCounts.project_format}
               activeBotId={selectedChat?.bot_id ?? (selectedBotIds.length === 1 ? selectedBotIds[0] : null)}
               activeBotName={selectedChatBot?.name ?? botScopeLabel}
               activeBotTransportType={selectedChatTransportType}
