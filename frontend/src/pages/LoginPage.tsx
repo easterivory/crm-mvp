@@ -1,6 +1,6 @@
 import { LoaderCircle, LockKeyhole, Mail, Send } from 'lucide-react'
 import { FormEvent, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
 import api from '../api/client'
@@ -20,9 +20,15 @@ type TelegramSessionStatus = {
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const from = location.state?.from
+  const query = typeof from?.search === 'string' && from.search.length <= 20000 ? new URLSearchParams(from.search) : null
+  const returnTo = from?.pathname === '/settings' && (query?.has('assistant_authorize') || query?.has('assistant_proposal'))
+    ? '/settings' + from.search : '/chats'
   const login = useAuthStore((state) => state.login)
   const completeLogin = useAuthStore((state) => state.completeLogin)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const user = useAuthStore((state) => state.user)
   const telegramPollRef = useRef<number | null>(null)
 
   const [email, setEmail] = useState('')
@@ -35,10 +41,10 @@ export default function LoginPage() {
   const [isTelegramConfigLoading, setIsTelegramConfigLoading] = useState(true)
 
   useEffect(() => {
-    if (isAuthenticated) {
-      navigate('/chats', { replace: true })
+    if (isAuthenticated && (returnTo === '/chats' || user)) {
+      navigate(returnTo, { replace: true })
     }
-  }, [isAuthenticated, navigate])
+  }, [isAuthenticated, navigate, returnTo, user])
 
   useEffect(() => {
     let cancelled = false
@@ -97,7 +103,7 @@ export default function LoginPage() {
         if (response.data.status === 'completed' && response.data.access_token) {
           telegramWindow.close()
           await completeLogin(response.data.access_token)
-          navigate('/chats', { replace: true })
+          navigate(returnTo, { replace: true })
           return
         }
         setIsTelegramLoading(false)
@@ -132,7 +138,7 @@ export default function LoginPage() {
 
     try {
       await login(email, password)
-      navigate('/chats', { replace: true })
+      navigate(returnTo, { replace: true })
     } catch (err) {
       setError(extractAuthError(err))
     } finally {

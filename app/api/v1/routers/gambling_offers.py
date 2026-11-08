@@ -99,15 +99,8 @@ async def get_funnel_offer(version_id: UUID, project_id: UUID = Depends(get_curr
 
 @router.put("/funnel-versions/{version_id}")
 async def set_funnel_offer(version_id: UUID, data: FunnelOfferWrite, project_id: UUID = Depends(get_current_project_id), actor: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    from app.services.funnel_service import FunnelService
-    FunnelService._ensure_write_allowed(actor)
-    row = await funnel_version(db, version_id, project_id, actor)
-    await db.refresh(row, with_for_update=True)
-    if row.status != "draft": raise HTTPException(409, "Оффер меняется только у черновика версии")
-    if data.offer_id:
-        await GamblingOfferService(db).project(project_id)
-        offer = await db.get(GamblingOffer, data.offer_id)
-        if not offer or offer.project_id != project_id or not offer.is_active: raise HTTPException(422, "Выберите действующий оффер проекта")
+    from app.services.funnel_offer_service import get_draft_offer_assignment
+    row, _ = await get_draft_offer_assignment(db, project_id, version_id, data.offer_id, actor)
     row.offer_id = data.offer_id
     await db.flush()
     return {"offer_id": row.offer_id}

@@ -2,10 +2,11 @@
 from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.telegram_delivery import TelegramInbox
-from app.repositories.bot_repository import BotRepository
+from app.models import Bot
 
 
 def telegram_peer_key(payload: dict) -> str:
@@ -25,7 +26,7 @@ def telegram_peer_key(payload: dict) -> str:
 
 
 async def accept_telegram_update(db: AsyncSession, *, bot_id: UUID, payload: dict) -> None:
-    if await BotRepository(db).get_active(bot_id) is None:
+    if await db.scalar(select(Bot.id).where(Bot.id == bot_id, Bot.is_deleted.is_(False))) is None:
         return
     # Do not overwrite an already accepted payload or restart its processing.
     await db.execute(insert(TelegramInbox).values(

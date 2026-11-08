@@ -70,11 +70,11 @@ async def telegram_webhook(
             detail="Request body does not match expected Telegram Update schema",
         )
 
-    from app.core.database import get_db_session  # local import — avoids circular
+    from app.core.telegram_intake import get_intake_db_session
 
     try:
         async with asyncio.timeout(5):
-            async with get_db_session() as db:
+            async with get_intake_db_session() as db:
                 await accept_telegram_update(db, bot_id=bot_id, payload=payload)
                 await db.commit()
     except Exception as exc:

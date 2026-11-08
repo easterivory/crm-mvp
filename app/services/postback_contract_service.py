@@ -95,7 +95,8 @@ async def snapshot(db, endpoint):
         existing = await db.get(PostbackEndpointRevision, key, populate_existing=True)
     if existing is None:
         row = PostbackEndpointRevision(endpoint_id=endpoint.id, revision=endpoint.revision,
-            token_hash=hashlib.sha256(endpoint.secret_token.encode()).hexdigest(), config_json=config_of(endpoint))
+            token_hash=hashlib.sha256(endpoint.secret_token.encode()).hexdigest(),
+            config_json={**config_of(endpoint), "activity_history_version": 1})
         db.add(row)
         await db.flush()
     return existing

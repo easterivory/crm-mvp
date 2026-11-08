@@ -255,18 +255,8 @@ class ChatService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Project not found",
             )
-        await self.chat_lease.release_expired(project_id=project_id)
-        counts = await self.chat_repo.workspace_counts(
-            priority_rules=getattr(project, "priority_chat_rules", None),
-            project_id=project_id,
-            viewer_id=actor.id,
-            hide_assigned_from_all=project.hide_assigned_chats_from_all,
-            project_format=project.project_format,
-            push_unread_threshold=project.push_unread_threshold,
-            use_confidence_score=project.use_confidence_score,
-            bot_id=bot_id,
-            bot_ids=bot_ids,
-        )
+        from app.services.chat_workspace_counts_service import workspace_counts
+        counts = await workspace_counts(self.db, project, actor, bot_id, bot_ids, self.chat_lease.release_expired)
         return ChatWorkspaceCountsOut(
             **counts,
             priority_enabled=bool((getattr(project, "priority_chat_rules", None) or {}).get("enabled")),

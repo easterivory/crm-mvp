@@ -32,7 +32,7 @@ from app.services.postback_service import PostbackService
 from app.services.telegram_service import TelegramService
 from app.services.telegram_sender import TelegramSenderService
 from app.services.runtime_dispatch_service import (
-    RuntimeDispatchAlreadyHandled, RuntimeDispatchNeedsReview, acknowledge_runtime_dispatch,
+    RuntimeDispatchAlreadyHandled, RuntimeDispatchDeliveryHandled, RuntimeDispatchNeedsReview, acknowledge_runtime_dispatch,
     defer_runtime_dispatch, protect_dispatch_replay,
 )
 from app.repositories.bot_repository import BotRepository
@@ -757,6 +757,9 @@ async def process_user_input_task(
                 await db.commit()
     except RuntimeDispatchAlreadyHandled as exc:
         return {"status": exc.status, "chat_id": chat_id, "message_id": trigger_message_id}
+    except RuntimeDispatchDeliveryHandled as exc:
+        return {"status": exc.outcome, "chat_id": chat_id, "message_id": trigger_message_id,
+            "continuation_job_id": str(exc.job_id) if exc.job_id else None}
     except RuntimeDispatchNeedsReview:
         logger.exception("Partial runtime input needs review chat_id=%s message_id=%s", chat_id, trigger_message_id)
         await send_operational_alert(component="runtime_dispatch", title="Partial funnel input needs review",
@@ -803,6 +806,9 @@ async def process_funnel_start_task(
         return {"status": result, "chat_id": chat_id, "message_id": trigger_message_id}
     except RuntimeDispatchAlreadyHandled as exc:
         return {"status": exc.status, "chat_id": chat_id, "message_id": trigger_message_id}
+    except RuntimeDispatchDeliveryHandled as exc:
+        return {"status": exc.outcome, "chat_id": chat_id, "message_id": trigger_message_id,
+            "continuation_job_id": str(exc.job_id) if exc.job_id else None}
     except RuntimeDispatchNeedsReview:
         logger.exception("Partial runtime start needs review chat_id=%s message_id=%s", chat_id, trigger_message_id)
         await send_operational_alert(component="runtime_dispatch", title="Partial funnel start needs review",

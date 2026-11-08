@@ -628,6 +628,7 @@ class FunnelScheduledWorkerResilienceTests(unittest.IsolatedAsyncioTestCase):
             method="sendMessage",
             description="Network error (ConnectTimeout)",
             transient=True,
+            definitely_not_sent=True,
         )
 
         with (

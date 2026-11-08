@@ -44,28 +44,31 @@ class ChatRepository(BaseRepository[Chat]):
             .with_for_update(key_share=True).execution_options(populate_existing=True))
 
     @classmethod
-    def priority_expr(cls, rules: dict | None) -> ColumnElement:
+    def priority_expr(cls, rules: dict | None, *, joined_lead: bool = False) -> ColumnElement:
         rules = rules or {}
         if not rules.get("enabled"):
             return false()
         conditions = []
         if rules.get("tag_ids"):
-            conditions.append(select(LeadTag.lead_id).join(Lead, Lead.id == LeadTag.lead_id)
-                .join(Tag, Tag.id == LeadTag.tag_id).where(Lead.chat_id == Chat.id,
+            tagged = select(LeadTag.lead_id)
+            if not joined_lead: tagged = tagged.join(Lead, Lead.id == LeadTag.lead_id)
+            conditions.append(tagged.join(Tag, Tag.id == LeadTag.tag_id).where(
+                LeadTag.lead_id == Lead.id, Lead.chat_id == Chat.id,
                 Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False),
                 Tag.project_id == Chat.project_id, LeadTag.tag_id.in_([UUID(str(value)) for value in rules["tag_ids"]]))
-                .correlate(Chat).exists())
+                .correlate(*((Chat, Lead) if joined_lead else (Chat,))).exists())
         if rules.get("step_ids"):
             chosen = aliased(FunnelStep)
             visited = aliased(FunnelStep)
             chosen_keys = select(FunnelVersion.funnel_id, chosen.key).join(chosen,
                 chosen.funnel_version_id == FunnelVersion.id).where(chosen.id.in_([UUID(str(value)) for value in rules["step_ids"]]))
-            conditions.append(select(FunnelStepLog.id).join(visited, visited.id == FunnelStepLog.step_id)
-                .join(Lead, Lead.id == FunnelStepLog.lead_id)
-                .where(Lead.chat_id == Chat.id, Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False), FunnelStepLog.event_type == "entered",
+            visited_query = select(FunnelStepLog.id).join(visited, visited.id == FunnelStepLog.step_id)
+            if not joined_lead: visited_query = visited_query.join(Lead, Lead.id == FunnelStepLog.lead_id)
+            conditions.append(visited_query.where(FunnelStepLog.lead_id == Lead.id,
+                Lead.chat_id == Chat.id, Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False), FunnelStepLog.event_type == "entered",
                 tuple_(FunnelStepLog.funnel_id, visited.key).in_(chosen_keys),
                 or_(Chat.current_cycle_started_at.is_(None), FunnelStepLog.created_at >= Chat.current_cycle_started_at))
-                .correlate(Chat).exists())
+                .correlate(*((Chat, Lead) if joined_lead else (Chat,))).exists())
         return cls.unanswered_expr() & or_(*conditions) if conditions else false()
 
     # ── SQL expressions ────────────────────────────────────────────────────────
@@ -134,6 +137,7 @@ class ChatRepository(BaseRepository[Chat]):
         project_format: str,
         push_unread_threshold: int,
         use_confidence_score: bool,
+        joined_lead: bool = False,
     ) -> ColumnElement:
         # Routing events set is_read=False when attention is required. A later
         # explicit read is the global acknowledgement and must win over every
@@ -202,6 +206,13 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.unanswered_push_count >= max(push_unread_threshold, 1),
                 Chat.has_out_of_scenario_message.is_(True),
             )
+        if joined_lead:
+            unassigned = and_(Lead.id.is_not(None), Lead.manager_id.is_(None))
+            completed_potential = and_(Lead.score_percent < 100, ~active_submission,
+                select(ChatFunnelState.chat_id).where(ChatFunnelState.chat_id == Chat.id,
+                    ChatFunnelState.completed_at.is_not(None)).correlate(Chat).exists()) if use_confidence_score else false()
+            manual_required = select(LeadSubmission.id).where(LeadSubmission.lead_id == Lead.id,
+                LeadSubmission.status == "manual_required").correlate(Lead).exists()
         return and_(
             Chat.is_read.is_(False),
             or_(
@@ -972,7 +983,7 @@ class ChatRepository(BaseRepository[Chat]):
         result = await self.db.execute(stmt)
         return result.scalar_one()
 
-    async def workspace_counts(
+    def _workspace_counts_statement(
         self,
         *,
         project_id: UUID,
@@ -984,7 +995,7 @@ class ChatRepository(BaseRepository[Chat]):
         use_confidence_score: bool = True,
         bot_id: UUID | None = None,
         bot_ids: Sequence[UUID] | None = None,
-    ) -> dict[str, int]:
+    ):
         all_filter = Lead.manager_id.is_(None)
         if hide_assigned_from_all:
             all_filter = or_(all_filter, Lead.manager_id == viewer_id)
@@ -995,13 +1006,14 @@ class ChatRepository(BaseRepository[Chat]):
 
         stmt = (
             select(
-                func.count(Chat.id).filter(self.priority_expr(priority_rules)).label("priority"),
+                func.count(Chat.id).filter(self.priority_expr(priority_rules, joined_lead=True)).label("priority"),
                 func.count(Chat.id)
                 .filter(
                     self._workspace_unread_expr(
                         project_format=project_format,
                         push_unread_threshold=push_unread_threshold,
                         use_confidence_score=use_confidence_score,
+                        joined_lead=True,
                     )
                 )
                 .label("unread"),
@@ -1035,7 +1047,10 @@ class ChatRepository(BaseRepository[Chat]):
         if bot_ids:
             stmt = stmt.where(Chat.bot_id.in_(bot_ids))
 
-        row = (await self.db.execute(stmt)).one()._mapping
+        return stmt
+
+    async def workspace_counts(self, **kwargs) -> dict[str, int]:
+        row = (await self.db.execute(self._workspace_counts_statement(**kwargs))).one()._mapping
         return {
             "priority": int(row["priority"] or 0),
             "unread": int(row["unread"] or 0),
@@ -1044,6 +1059,20 @@ class ChatRepository(BaseRepository[Chat]):
             "all": int(row["all"] or 0),
             "favorites": int(row["favorites"] or 0),
         }
+
+    async def shared_workspace_counts(self, **kwargs) -> dict:
+        # One project/bot scan serves every manager; assignment-specific counts
+        # are derived after authorization, never returned as another user's data.
+        stmt = self._workspace_counts_statement(viewer_id=UUID(int=0), hide_assigned_from_all=False, **kwargs)
+        columns = [column for column in stmt.selected_columns if column.key != "mine"]
+        stmt = stmt.with_only_columns(Lead.manager_id, *columns, maintain_column_froms=True).group_by(Lead.manager_id)
+        totals = {name: 0 for name in ("priority", "unread", "unanswered", "all", "favorites")}
+        managers, unassigned = {}, 0
+        for row in (await self.db.execute(stmt)).mappings():
+            for name in totals: totals[name] += int(row[name] or 0)
+            if row["manager_id"] is None: unassigned = int(row["all"] or 0)
+            else: managers[str(row["manager_id"])] = int(row["all"] or 0)
+        return {"totals": totals, "managers": managers, "unassigned": unassigned}
 
     async def hot_lead_flags_for_chats(self, chat_ids: Sequence[UUID]) -> dict[UUID, bool]:
         if not chat_ids:
@@ -1398,6 +1427,7 @@ class ChatRepository(BaseRepository[Chat]):
         project_id: UUID,
         expires_before: datetime,
         chat_id: UUID | None = None,
+        limit: int | None = None,
     ) -> list[tuple[UUID, UUID, UUID]]:
         stmt = (
             select(Chat.id, Lead.id, Lead.manager_id)
@@ -1415,6 +1445,8 @@ class ChatRepository(BaseRepository[Chat]):
         )
         if chat_id is not None:
             stmt = stmt.where(Chat.id == chat_id)
+        if limit is not None:
+            stmt = stmt.order_by(Chat.assignment_expires_at, Chat.id).limit(max(1, limit))
         result = await self.db.execute(stmt)
         rows = list(result.all())
         if not rows:
@@ -1531,7 +1563,8 @@ class ChatRepository(BaseRepository[Chat]):
         if bot_id is not None:
             identity.append(Chat.bot_id == bot_id)
         # Match the runtime's lock order: root chat first, funnel state second.
-        locked = (await self.db.scalars(select(Chat.id).where(*identity).order_by(Chat.id).with_for_update())).all()
+        # NO KEY UPDATE is compatible with message INSERT foreign-key locks.
+        locked = (await self.db.scalars(select(Chat.id).where(*identity).order_by(Chat.id).with_for_update(key_share=True))).all()
         if not locked:
             return None
         values: dict = {

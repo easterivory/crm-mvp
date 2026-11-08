@@ -36,6 +36,8 @@ class PostbackEndpoint(Base, UUIDPrimaryKey, TimestampMixin, UpdatedAtMixin):
     processing_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="lifecycle_event", server_default="lifecycle_event")
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Legacy history is unknown; only new disabled endpoints are proven unused.
+    ever_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     partner_integration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("partner_integrations.id", ondelete="SET NULL"),

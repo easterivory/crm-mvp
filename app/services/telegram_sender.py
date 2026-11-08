@@ -1,6 +1,7 @@
 """Outgoing Telegram Bot API client with opt-in delivery diagnostics."""
 import json
 import logging
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ class TelegramDeliveryError(RuntimeError):
         self.transient = transient
         self.blocked = blocked
         self.definitely_not_sent = definitely_not_sent
+        self.observed_at = datetime.now(timezone.utc)
         self.cannot_initiate = (
             (error_code == 403 or status_code == 403)
             and "bot can't initiate conversation with a user" in self.description.casefold()

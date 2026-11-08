@@ -6,6 +6,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    ASSISTANT_ENABLED: bool = False
+    ASSISTANT_MCP_ENABLED: bool = False
+    ASSISTANT_CHANGES_ENABLED: bool = False
+    ASSISTANT_ALLOWED_USER_IDS: str = ""
+    ASSISTANT_ALLOWED_PROJECT_IDS: str = ""
+    ASSISTANT_MCP_RESOURCE_URL: str = ""
+    ASSISTANT_OAUTH_CLIENTS_JSON: str = "{}"
+    ASSISTANT_INPUT_KEY: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

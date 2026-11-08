@@ -83,6 +83,7 @@ class PostbackEndpointService:
             event_type=LeadEventService.normalize_event_type(data.event_type),
             parameter_mapping=data.parameter_mapping.model_dump(mode="json"),
             is_active=data.is_active,
+            ever_active=bool(data.is_active),
         )
         self.db.add(endpoint)
         await self.db.flush()
@@ -107,6 +108,8 @@ class PostbackEndpointService:
         from app.services.postback_contract_service import snapshot
         await snapshot(self.db, endpoint)
         values = data.model_dump(exclude_unset=True)
+        if values.get("is_active") is True:
+            values["ever_active"] = True
         if (endpoint.parameter_mapping or {}).get("offer_id"):
             if (data.parameter_mapping is not None and data.parameter_mapping.model_dump(mode="json") != endpoint.parameter_mapping
                     or any(key in values and values[key] != getattr(endpoint, key) for key in ("processing_kind", "event_type", "partner_integration_id"))):

@@ -1,0 +1,21 @@
+# MAIN SERVER ONLY, explicit opt-in. Does not change any existing CRM service.
+services:
+  assistant-mcp:
+    profiles: ["assistant"]
+    build:
+      context: ./assistant_bridge
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,noexec,nosuid
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 192m
+    cpus: 0.5
+    ports:
+      - "127.0.0.1:8114:8114"
+    environment:
+      ASSISTANT_CRM_API_URL: http://api:8000/api/v1/assistant
+      ASSISTANT_MCP_RESOURCE_URL: ${ASSISTANT_MCP_RESOURCE_URL:-}
+      ASSISTANT_OAUTH_ISSUER_URL: ${BASE_URL:-}/assistant-oauth

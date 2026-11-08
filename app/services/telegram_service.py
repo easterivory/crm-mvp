@@ -123,7 +123,8 @@ class TelegramService:
         self.message_service = MessageService(db, release_transaction_before_telegram=release_transaction_before_external_io)
         self.bot_engine = BotEngineService(db)
         self.broadcasts = BroadcastService(db)
-        self.funnel_runtime = FunnelRuntimeService(db, release_transaction_before_external_io=release_transaction_before_external_io)
+        self.funnel_runtime = FunnelRuntimeService(db, release_transaction_before_external_io=release_transaction_before_external_io,
+            raise_on_telegram_delivery_error=True)
         self.telegram_sender = TelegramSenderService(db, release_transaction_before_network=release_transaction_before_external_io)
         self.audit = AuditService(db)
         self.chat_audit = ChatAuditService(db)

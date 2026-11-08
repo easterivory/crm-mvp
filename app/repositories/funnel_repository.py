@@ -886,16 +886,18 @@ class FunnelRepository(BaseRepository[Funnel]):
         stale_before: datetime,
         max_attempts: int,
     ) -> tuple[int, int]:
+        continuation = FunnelScheduledJob.payload_json["runtime_delivery_visit"].astext.is_not(None)
         failed = await self.db.execute(
             update(FunnelScheduledJob)
             .where(
                 FunnelScheduledJob.status == "running",
                 FunnelScheduledJob.updated_at < stale_before,
-                FunnelScheduledJob.attempts >= max_attempts,
+                or_(FunnelScheduledJob.attempts >= max_attempts, continuation),
             )
             .values(
                 status="failed",
-                last_error="Worker execution was interrupted and the retry limit was reached",
+                last_error=case((continuation, "Delivery continuation was interrupted; outcome uncertain; automatic replay disabled"),
+                    else_="Worker execution was interrupted and the retry limit was reached"),
                 updated_at=func.now(),
             )
         )
@@ -905,6 +907,7 @@ class FunnelRepository(BaseRepository[Funnel]):
                 FunnelScheduledJob.status == "running",
                 FunnelScheduledJob.updated_at < stale_before,
                 FunnelScheduledJob.attempts < max_attempts,
+                ~continuation,
             )
             .values(
                 status="pending",

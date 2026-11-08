@@ -21,6 +21,7 @@ frontend/dist/
 dist/
 build/
 postback_gateway/
+assistant_bridge/
 frontend/.vite/
 frontend/*.tsbuildinfo
 frontend/vite.config.d.ts

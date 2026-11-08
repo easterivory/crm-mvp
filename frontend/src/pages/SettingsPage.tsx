@@ -1,6 +1,6 @@
 import PriorityChatSettings from '../features/chats/components/PriorityChatSettings'
 import HoldScheduleSettings from '../features/settings/HoldScheduleSettings'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   Check,
   ChevronDown,
@@ -27,6 +27,7 @@ import api from '../api/client'
 import BackupDownloadButton from '../features/settings/BackupDownloadButton'
 import BackupTransportStatus from '../features/settings/BackupTransportStatus'
 import RuntimeDeliveryReview from '../features/settings/RuntimeDeliveryReview'
+import CloudAssistantSettings from '../features/settings/CloudAssistantSettings'
 import InfoBotSettings from '../features/settings/InfoBotSettings'
 import { useTranslationLanguages } from '../features/translation/languages'
 import LanguageSettings from '../features/translation/LanguageSettings'
@@ -51,6 +52,7 @@ type TabKey =
   | 'partners'
   | 'gamblingOffers'
   | 'delivery'
+  | 'cloudAssistant'
   | 'googleSheets'
   | 'landers'
 
@@ -175,6 +177,7 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'partners', label: 'Партнёры' },
   { key: 'gamblingOffers', label: 'Гембл-офферы' },
   { key: 'delivery', label: 'Задания воронок' },
+  { key: 'cloudAssistant', label: 'Облачный помощник' },
   { key: 'googleSheets', label: 'Google Таблицы' },
   { key: 'landers', label: 'Лендинги и Домены' },
 ]
@@ -369,6 +372,11 @@ export default function SettingsPage() {
   const { resetBotSelection, selectedProjectId, setSelectedProjectId } = useProjectBotSelection()
 
   const [activeTab, setActiveTab] = useState<TabKey>('project')
+  const assistantLocation = useLocation()
+  useEffect(() => {
+    const query = new URLSearchParams(assistantLocation.search)
+    if (currentUser?.role_name === 'super_admin' && (query.has('assistant_proposal') || query.has('assistant_authorize'))) setActiveTab('cloudAssistant')
+  }, [assistantLocation.search, currentUser?.role_name])
   const [project, setProject] = useState<Project | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -477,6 +485,7 @@ export default function SettingsPage() {
         }
         if (tab.key === 'trafficQuality') return canManageProject
         if (tab.key === 'delivery') return canManageProject
+        if (tab.key === 'cloudAssistant') return currentRoleName === 'super_admin'
         if (tab.key === 'gamblingOffers') return canManageProject && projectFormat === 'gambling'
         if (tab.key === 'partners') {
           return canManageProject
@@ -1743,6 +1752,7 @@ export default function SettingsPage() {
         {!isLoading && activeTab === 'delivery' && activeProjectId ? (
           <RuntimeDeliveryReview key={activeProjectId} projectId={activeProjectId} />
         ) : null}
+        {!isLoading && activeTab === 'cloudAssistant' ? <CloudAssistantSettings projectId={activeProjectId} /> : null}
         {!isLoading && activeTab === 'project' ? (
           <form className="max-w-xl space-y-4" onSubmit={handleProjectSave}>
             {activeProjectId && <PriorityChatSettings key={activeProjectId} projectId={activeProjectId} />}

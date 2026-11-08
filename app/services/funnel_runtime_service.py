@@ -122,11 +122,15 @@ class FunnelRuntimeDeliveryError(RuntimeError):
         retry_step_id: UUID,
         retry_job_type: str,
         retry_payload: dict[str, Any] | None = None,
+        retry_state_id: UUID | None = None,
+        retry_visit: str | None = None,
     ) -> None:
         self.telegram_error = telegram_error
         self.retry_step_id = retry_step_id
         self.retry_job_type = retry_job_type
         self.retry_payload = dict(retry_payload or {})
+        self.retry_state_id = retry_state_id
+        self.retry_visit = retry_visit
         super().__init__(str(telegram_error))
 
 
@@ -148,6 +152,7 @@ class FunnelRuntimeService:
     ) -> None:
         self.db = db
         self.release_transaction_before_external_io = release_transaction_before_external_io
+        self.delivery_checkpoints_enabled = release_transaction_before_external_io and raise_on_telegram_delivery_error
         self.repo = FunnelRepository(db)
         self.broadcast_repo = BroadcastRepository(db)
         self.chat_repo = ChatRepository(db)
@@ -1648,6 +1653,11 @@ class FunnelRuntimeService:
             logger.warning("Scheduled funnel job references missing step job_id=%s", job.id)
             return
 
+        expected_visit = (getattr(job, "payload_json", None) or {}).get("runtime_delivery_visit")
+        if expected_visit is not None and expected_visit != AIDeliveryStateService.visit(state):
+            logger.info("Ignoring stale delivery continuation job_id=%s chat_id=%s", job.id, chat_id)
+            return
+
         if job.job_type in {"ai_response", "ai_response_delivery", "ai_analysis"}:
             expected_visit = (job.payload_json or {}).get("ai_visit")
             if ((job.funnel_state_id is not None and state.id != job.funnel_state_id)
@@ -1698,6 +1708,7 @@ class FunnelRuntimeService:
                 chat_id=job.chat_id,
                 step=step,
                 start_index=index,
+                **({"answer": payload["continuation_answer"]} if "continuation_answer" in payload else {}),
                 skip_delay_at_start=True,
                 skip_chat_action_at_start=payload.get("chat_action_completed") is True,
                 **({"completion_edge_id": payload["completion_edge_id"]} if payload.get("completion_edge_id") else {}),
@@ -1937,7 +1948,12 @@ class FunnelRuntimeService:
                         entered_step_at=datetime.now(timezone.utc),
                         waiting_for_answer=True,
                     )
-                await self._send_input_prompt(chat_id=chat_id, step=current)
+                try:
+                    await self._send_input_prompt(chat_id=chat_id, step=current)
+                except TelegramDeliveryError as exc:
+                    raise FunnelRuntimeDeliveryError(exc, retry_step_id=current.id, retry_job_type="input_prompt",
+                        retry_state_id=state.id if state else None,
+                        retry_visit=AIDeliveryStateService.visit(state) if state else None) from exc
                 if await self._consume_pending_start_engagement(chat_id=chat_id, step=current) == "continued":
                     return None
                 await self._schedule_input_timeout(chat_id=chat_id, step=current)
@@ -2056,6 +2072,8 @@ class FunnelRuntimeService:
         if not messages:
             return await self._move_from_step(chat_id=chat_id, step=step, answer=answer)
 
+        delivery_state_id, delivery_visit, checkpoint_captured = None, None, False
+
         index = max(start_index, 0)
         while index < len(messages):
             item = messages[index]
@@ -2118,6 +2136,11 @@ class FunnelRuntimeService:
                     return step
 
             buttons = self._buttons_from_message_item(item)
+            if getattr(self, "delivery_checkpoints_enabled", False) and not checkpoint_captured:
+                delivery_state = await self.repo.get_chat_funnel_state(chat_id)
+                delivery_state_id = getattr(delivery_state, "id", None)
+                delivery_visit = AIDeliveryStateService.visit(delivery_state) if getattr(delivery_state, "entered_step_at", None) else None
+                checkpoint_captured = True
             try:
                 sent = await self._send_message_item(
                     chat_id=chat_id,
@@ -2135,7 +2158,12 @@ class FunnelRuntimeService:
                     exc,
                     retry_step_id=step.id,
                     retry_job_type="message_sequence",
-                    retry_payload={"message_index": index},
+                    retry_payload={"message_index": index, "chat_action_completed": True,
+                        "continuation_answer": answer,
+                        **({"runtime_delivery_visit": delivery_visit} if delivery_visit else {}),
+                        **({"completion_edge_id": str(completion_edge_id)} if completion_edge_id else {})},
+                    retry_state_id=delivery_state_id,
+                    retry_visit=delivery_visit,
                 ) from exc
             if not sent:
                 logger.warning(

@@ -62,6 +62,10 @@ async def lifespan(app: FastAPI):
             await webhook_sync_task
     await close_redis()
     await close_arq_client()
+    from app.core.assistant import close_assistant_db
+    await close_assistant_db()
+    from app.core.telegram_intake import close_reserved_db_pools
+    await close_reserved_db_pools()
 
 
 app = FastAPI(
@@ -106,9 +110,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+from app.core.assistant_boundary import AssistantBoundaryMiddleware
+app.add_middleware(AssistantBoundaryMiddleware)
 
 # ─── Routes ─────────────────────────────────────────────────────────────────
 app.include_router(health.router)
+from app.api.v1.routers import assistant
+app.include_router(assistant.router)
+app.include_router(assistant.oauth_router)
 
 _v1_prefix = "/api/v1"
 

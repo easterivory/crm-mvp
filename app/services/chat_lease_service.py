@@ -35,17 +35,16 @@ class ChatLeaseService:
         *,
         project_id: UUID,
         chat_id: UUID | None = None,
+        limit: int | None = None,
     ) -> int:
         project = await self.project_repo.get_active(project_id)
         if project is None or project.chat_lease_minutes <= 0:
             return 0
 
         now = datetime.now(timezone.utc)
+        kwargs = {"limit": limit} if limit is not None else {}
         released = await self.chat_repo.release_expired_assignments(
-            project_id=project_id,
-            expires_before=now,
-            chat_id=chat_id,
-        )
+            project_id=project_id, expires_before=now, chat_id=chat_id, **kwargs)
         for released_chat_id, lead_id, previous_manager_id in released:
             await self.audit.log(
                 project_id=project_id,

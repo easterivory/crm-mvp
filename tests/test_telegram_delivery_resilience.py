@@ -90,7 +90,7 @@ def test_short_typing_indicator_is_not_rounded_down_to_zero(monkeypatch):
 def test_webhook_acknowledges_only_durable_acceptance(monkeypatch):
     async def run():
         async with disposable_db(monkeypatch) as (sessions, engine, bot_id, _):
-            monkeypatch.setattr("app.core.database.get_db_session", sessions)
+            monkeypatch.setattr("app.core.telegram_intake.get_intake_db_session", sessions)
             monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "qa-secret")
             app = FastAPI(); app.include_router(route.router)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://qa") as client:
@@ -517,7 +517,7 @@ def test_intake_burst_preserves_every_update_while_redis_is_unavailable(monkeypa
     from app.models import Lead, LeadStatus
     async def run():
         async with disposable_db(monkeypatch) as (sessions, engine, bot_id, project_id):
-            monkeypatch.setattr("app.core.database.get_db_session", sessions)
+            monkeypatch.setattr("app.core.telegram_intake.get_intake_db_session", sessions)
             async with sessions() as db:
                 db.add(LeadStatus(code="new", name="New")); await db.commit()
             app = FastAPI(); app.include_router(route.router)

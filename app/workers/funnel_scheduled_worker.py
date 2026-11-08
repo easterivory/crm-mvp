@@ -226,7 +226,7 @@ async def _resolve_delivery_failure(
                             "failure_status_persisted": False,
                         }
 
-                    if telegram_error.blocked:
+                    if telegram_error.blocked or telegram_error.recipient_unavailable:
                         persisted = await repo.mark_scheduled_job_cancelled(job_id, error_text)
                         await db.commit()
                         return {
@@ -237,8 +237,11 @@ async def _resolve_delivery_failure(
                         }
 
                     max_attempts = max(settings.FUNNEL_SCHEDULED_JOB_MAX_ATTEMPTS, 1)
-                    if not telegram_error.transient or attempts >= max_attempts:
-                        await repo.mark_scheduled_job_failed(job_id, error_text)
+                    known_rejected = telegram_error.definitely_not_sent or telegram_error.error_code == 429 or telegram_error.status_code == 429
+                    if not telegram_error.transient or not known_rejected or attempts >= max_attempts:
+                        uncertain = telegram_error.transient and not known_rejected
+                        await repo.mark_scheduled_job_failed(job_id, error_text + (
+                            "; delivery outcome uncertain; automatic replay disabled" if uncertain else ""))
                         await db.commit()
                         return {
                             "status": "failed",
@@ -248,6 +251,7 @@ async def _resolve_delivery_failure(
                             "job_type": original_job_type,
                             "step_id": str(original_step_id),
                             "failure_status_persisted": True,
+                            "delivery_uncertain": uncertain,
                         }
 
                     state = await repo.get_chat_funnel_state(chat_id)
@@ -454,14 +458,14 @@ async def run_once(limit: int = 100) -> int:
     requeued, exhausted = await _recover_stale_jobs()
     if requeued or exhausted:
         logger.warning(
-            "Recovered stale funnel jobs requeued=%s exhausted=%s",
+            "Recovered stale funnel jobs requeued=%s terminal_or_uncertain=%s",
             requeued,
             exhausted,
         )
         await send_operational_alert(
             component="funnel_scheduled_worker",
             title="Stale delayed funnel jobs detected",
-            details={"requeued": requeued, "retry_limit_reached": exhausted},
+            details={"requeued": requeued, "terminal_or_delivery_uncertain": exhausted},
             dedupe_key="funnel-scheduled-stale-recovery",
         )
 
