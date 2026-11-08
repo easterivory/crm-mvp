@@ -120,6 +120,21 @@ class TrackingLinkRepository(BaseRepository[TrackingLink]):
         )
         return list(result.scalars().all())
 
+    async def list_link_options(
+        self, project_id: UUID, limit: int, offset: int,
+        bot_id: UUID | None = None, buyer_id: UUID | None = None,
+    ) -> list[dict]:
+        stmt = select(TrackingLink.id,
+            func.coalesce(func.nullif(TrackingLink.title, ""), TrackingLink.name).label("title"),
+            func.coalesce(func.nullif(TrackingLink.code, ""), TrackingLink.ref_code).label("code"),
+        ).where(TrackingLink.project_id == project_id)
+        if bot_id is not None:
+            stmt = stmt.where(TrackingLink.bot_id == bot_id)
+        if buyer_id is not None:
+            stmt = stmt.where(TrackingLink.buyer_id == buyer_id)
+        result = await self.db.execute(stmt.order_by(TrackingLink.created_at.desc()).limit(limit).offset(offset))
+        return [dict(row) for row in result.mappings()]
+
     async def count_links(
         self,
         project_id: UUID,

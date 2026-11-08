@@ -34,6 +34,7 @@ from app.schemas.tracking import (
     TrackingLinkCreate,
     TrackingLinkOut,
     TrackingLinkRead,
+    TrackingLinkFilterOption,
     TrackingLinkUpdate,
     TrackingFunnelStepOption,
     TrackingSpendCreate,
@@ -333,6 +334,20 @@ class TrackingService:
             buyer_id=buyer_id,
         )
         return [await self._to_read(link, include_total_spend=True) for link in links], total
+
+    async def list_link_options(
+        self, *, project_id: UUID, actor: User, limit: int, offset: int,
+        bot_id: UUID | None = None,
+    ) -> tuple[list[TrackingLinkFilterOption], int]:
+        await self._ensure_project_access(actor, project_id)
+        await self._get_active_project_or_404(project_id)
+        if bot_id is not None:
+            await self._ensure_bot_in_project(bot_id, project_id)
+        buyer_id = actor.id if actor.role_name == RoleName.BUYER else None
+        items = await self.link_repo.list_link_options(project_id=project_id,
+            limit=limit, offset=offset, bot_id=bot_id, buyer_id=buyer_id)
+        total = await self.link_repo.count_links(project_id=project_id, bot_id=bot_id, buyer_id=buyer_id)
+        return [TrackingLinkFilterOption.model_validate(item) for item in items], total
 
     async def list_target_funnel_steps(
         self,

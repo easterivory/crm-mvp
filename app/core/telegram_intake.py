@@ -11,7 +11,8 @@ def _sessions(purpose):
     if purpose in _factories: return _factories[purpose]
     intake = purpose == "intake"
     server_settings = {"statement_timeout": "3000", "lock_timeout": "1000"}
-    if not intake: server_settings["default_transaction_read_only"] = "on"
+    if not intake:
+        server_settings.update(default_transaction_read_only="on", jit="off", max_parallel_workers_per_gather="0")
     engine = create_async_engine(settings.DATABASE_URL, pool_size=2 if intake else 1,
         max_overflow=0, pool_timeout=0.5, pool_pre_ping=True, hide_parameters=True,
         connect_args={"timeout": 2, "server_settings": server_settings})

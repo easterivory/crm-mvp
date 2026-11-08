@@ -93,6 +93,8 @@ type ChatListProps = {
     priority_enabled?: boolean
     unanswered?: number
   }
+  countsAvailable?: boolean
+  countsError?: string | null
   trackingOptions: FilterOption[]
   userOptions: FilterOption[]
   onApplyPreset: (preset: ChatFilterPreset) => void
@@ -252,6 +254,8 @@ export default function ChatList({
   tagOptions,
   total,
   workspaceCounts,
+  countsAvailable = true,
+  countsError = null,
   trackingOptions,
   userOptions,
   onApplyPreset,
@@ -373,9 +377,14 @@ export default function ChatList({
             <p className="truncate text-sm text-gray-500">
               {total} всего · {scopeLabel}
             </p>
-            {(workspaceCounts.unanswered ?? 0) > 0 ? (
+            {countsAvailable && (workspaceCounts.unanswered ?? 0) > 0 ? (
               <p className="mt-1 text-xs font-medium text-orange-200">
                 Неотвеченных: {workspaceCounts.unanswered}
+              </p>
+            ) : null}
+            {countsError ? (
+              <p role="status" title={countsError} className="mt-1 text-xs text-amber-200">
+                {countsAvailable ? 'Счётчики не обновлены' : 'Счётчики недоступны'}
               </p>
             ) : null}
           </div>
@@ -426,6 +435,7 @@ export default function ChatList({
           <ChatQuickFilters
             currentUserId={currentUserId}
             counts={workspaceCounts}
+            countsAvailable={countsAvailable}
             filters={filters}
             onChange={onFiltersChange}
           />

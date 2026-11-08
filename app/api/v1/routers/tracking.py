@@ -14,6 +14,7 @@ from app.schemas.tracking import (
     TrackingFunnelStepOption,
     TrackingLinkOut,
     TrackingLinkRead,
+    TrackingLinkFilterOption,
     TrackingLinkUpdate,
     TrackingSpendCreate,
     TrackingSpendRead,
@@ -104,6 +105,20 @@ async def delete_tracking_link(
 ) -> None:
     _ensure_legacy_tracking_access(current_user)
     await TrackingService(db).delete_link(link_id=link_id, project_id=project_id)
+
+
+@v1_router.get("/link-options", response_model=PaginatedResponse[TrackingLinkFilterOption])
+async def list_tracking_link_options(
+    project_id: UUID,
+    bot_id: Optional[UUID] = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[TrackingLinkFilterOption]:
+    items, total = await TrackingService(db).list_link_options(project_id=project_id,
+        actor=current_user, bot_id=bot_id, limit=limit, offset=offset)
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @v1_router.get("/links", response_model=PaginatedResponse[TrackingLinkRead])

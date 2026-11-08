@@ -16,6 +16,12 @@ from app.schemas.common import OrmBase
 TELEGRAM_MESSAGE_MAX_LENGTH = 4096
 
 
+class TrackingLinkFilterOption(BaseModel):
+    id: uuid.UUID
+    title: str
+    code: str
+
+
 def normalize_channel_request_message(value: Optional[str]) -> Optional[str]:
     normalized = (value or "").strip()
     return normalized or None

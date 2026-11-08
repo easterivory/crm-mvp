@@ -44,19 +44,28 @@ class ChatRepository(BaseRepository[Chat]):
             .with_for_update(key_share=True).execution_options(populate_existing=True))
 
     @classmethod
-    def priority_expr(cls, rules: dict | None, *, joined_lead: bool = False) -> ColumnElement:
+    def priority_expr(cls, rules: dict | None, *, joined_lead: bool = False, project_id: UUID | None = None) -> ColumnElement:
         rules = rules or {}
         if not rules.get("enabled"):
             return false()
         conditions = []
         if rules.get("tag_ids"):
-            tagged = select(LeadTag.lead_id)
-            if not joined_lead: tagged = tagged.join(Lead, Lead.id == LeadTag.lead_id)
-            conditions.append(tagged.join(Tag, Tag.id == LeadTag.tag_id).where(
-                LeadTag.lead_id == Lead.id, Lead.chat_id == Chat.id,
-                Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False),
-                Tag.project_id == Chat.project_id, LeadTag.tag_id.in_([UUID(str(value)) for value in rules["tag_ids"]]))
-                .correlate(*((Chat, Lead) if joined_lead else (Chat,))).exists())
+            tag_ids = [UUID(str(value)) for value in rules["tag_ids"]]
+            if joined_lead and project_id is not None:
+                # A constant project scope lets PostgreSQL build the tag set once,
+                # instead of running a nested tag scan for every aggregate row.
+                tagged = select(LeadTag.lead_id).join(Tag, Tag.id == LeadTag.tag_id).where(
+                    Tag.project_id == project_id, LeadTag.tag_id.in_(tag_ids)).correlate(None)
+                conditions.append(and_(Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False),
+                    Lead.id.in_(tagged)))
+            else:
+                tagged = select(LeadTag.lead_id)
+                if not joined_lead: tagged = tagged.join(Lead, Lead.id == LeadTag.lead_id)
+                conditions.append(tagged.join(Tag, Tag.id == LeadTag.tag_id).where(
+                    LeadTag.lead_id == Lead.id, Lead.chat_id == Chat.id,
+                    Lead.project_id == Chat.project_id, Lead.is_deleted.is_(False),
+                    Tag.project_id == Chat.project_id, LeadTag.tag_id.in_(tag_ids))
+                    .correlate(*((Chat, Lead) if joined_lead else (Chat,))).exists())
         if rules.get("step_ids"):
             chosen = aliased(FunnelStep)
             visited = aliased(FunnelStep)
@@ -138,6 +147,7 @@ class ChatRepository(BaseRepository[Chat]):
         push_unread_threshold: int,
         use_confidence_score: bool,
         joined_lead: bool = False,
+        joined_completed_state: bool = False,
     ) -> ColumnElement:
         # Routing events set is_read=False when attention is required. A later
         # explicit read is the global acknowledgement and must win over every
@@ -208,9 +218,11 @@ class ChatRepository(BaseRepository[Chat]):
             )
         if joined_lead:
             unassigned = and_(Lead.id.is_not(None), Lead.manager_id.is_(None))
-            completed_potential = and_(Lead.score_percent < 100, ~active_submission,
+            completed_state = ChatFunnelState.chat_id.is_not(None) if joined_completed_state else (
                 select(ChatFunnelState.chat_id).where(ChatFunnelState.chat_id == Chat.id,
-                    ChatFunnelState.completed_at.is_not(None)).correlate(Chat).exists()) if use_confidence_score else false()
+                    ChatFunnelState.completed_at.is_not(None)).correlate(Chat).exists())
+            completed_potential = and_(Lead.score_percent < 100, ~active_submission,
+                completed_state) if use_confidence_score else false()
             manual_required = select(LeadSubmission.id).where(LeadSubmission.lead_id == Lead.id,
                 LeadSubmission.status == "manual_required").correlate(Lead).exists()
         return and_(
@@ -1006,7 +1018,7 @@ class ChatRepository(BaseRepository[Chat]):
 
         stmt = (
             select(
-                func.count(Chat.id).filter(self.priority_expr(priority_rules, joined_lead=True)).label("priority"),
+                func.count(Chat.id).filter(self.priority_expr(priority_rules, joined_lead=True, project_id=project_id)).label("priority"),
                 func.count(Chat.id)
                 .filter(
                     self._workspace_unread_expr(
@@ -1014,6 +1026,7 @@ class ChatRepository(BaseRepository[Chat]):
                         push_unread_threshold=push_unread_threshold,
                         use_confidence_score=use_confidence_score,
                         joined_lead=True,
+                        joined_completed_state=use_confidence_score,
                     )
                 )
                 .label("unread"),
@@ -1042,6 +1055,9 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.reset_at.is_(None),
             )
         )
+        if use_confidence_score:
+            stmt = stmt.outerjoin(ChatFunnelState, and_(ChatFunnelState.chat_id == Chat.id,
+                ChatFunnelState.completed_at.is_not(None)))
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
         if bot_ids:

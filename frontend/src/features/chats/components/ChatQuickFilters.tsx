@@ -4,6 +4,7 @@ type ChatQuickFiltersProps = {
   filters: ChatFiltersState
   currentUserId: string | null
   counts: Record<'unread' | 'mine' | 'all' | 'favorites' | 'priority', number> & { priority_enabled?: boolean }
+  countsAvailable?: boolean
   onChange: (filters: ChatFiltersState) => void
 }
 
@@ -19,6 +20,7 @@ export default function ChatQuickFilters({
   filters,
   currentUserId,
   counts,
+  countsAvailable = true,
   onChange,
 }: ChatQuickFiltersProps) {
   const setQuick = (key: ChatFiltersState['workspaceView']) => {
@@ -61,7 +63,7 @@ export default function ChatQuickFilters({
             <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
               isActive ? 'bg-white/10 text-white' : 'bg-white/[0.05] text-gray-500'
             }`}>
-              {counts[item.key]}
+              {countsAvailable ? counts[item.key] : '...'}
             </span>
           </button>
         )

@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -14,6 +15,9 @@ from app.repositories.chat_repository import ChatRepository
 
 logger = logging.getLogger(__name__)
 FIELDS = {"priority", "unread", "unanswered", "mine", "all", "favorites"}
+CACHE_SECONDS = 5
+FAILURE_COOLDOWN_SECONDS = 3
+FOLLOWER_WAIT_SECONDS = 6
 
 
 def _decode(raw):
@@ -28,6 +32,7 @@ def _decode(raw):
 
 
 async def workspace_counts(db, project, actor, bot_id, bot_ids, release_expired):
+    started = time.monotonic()
     arguments = dict(project_id=project.id,
         priority_rules=project.priority_chat_rules, project_format=project.project_format,
         push_unread_threshold=project.push_unread_threshold, use_confidence_score=project.use_confidence_score,
@@ -49,30 +54,54 @@ async def workspace_counts(db, project, actor, bot_id, bot_ids, release_expired)
         raw = await asyncio.wait_for(redis.get(key), 0.1)
         cached = _decode(raw)
         if cached is not None: return personal(cached)
+        if await asyncio.wait_for(redis.get(key + ":error"), 0.1):
+            raise HTTPException(503, "Счётчики временно недоступны. Повторите запрос.", headers={"Retry-After": "3"})
         locked = bool(await asyncio.wait_for(redis.set(key + ":lock", ticket, nx=True, ex=7), 0.1))
         if not locked:
-            for _ in range(20):
+            deadline = time.monotonic() + FOLLOWER_WAIT_SECONDS
+            while time.monotonic() < deadline:
                 await asyncio.sleep(0.05)
                 cached = _decode(await asyncio.wait_for(redis.get(key), 0.1))
                 if cached is not None: return personal(cached)
+                if await asyncio.wait_for(redis.get(key + ":error"), 0.1):
+                    raise HTTPException(503, "Счётчики временно недоступны. Повторите запрос.", headers={"Retry-After": "3"})
             raise HTTPException(503, "Счётчики обновляются. Повторите запрос.", headers={"Retry-After": "1"})
     except HTTPException: raise
     except Exception:
         redis = None  # The dedicated one-connection pool also bounds cache outages.
+    phase = "lease_cleanup"
+    phase_started = time.monotonic()
+    timings = {}
     try:
         async with asyncio.timeout(2):
             await release_expired(project_id=project.id, limit=100)
             await db.commit()
+        timings[phase] = round((time.monotonic() - phase_started) * 1000)
+        phase, phase_started = "counter_pool", time.monotonic()
         async with asyncio.timeout(4):
             async with get_count_db_session() as count_db:
+                await count_db.connection()
+                timings[phase] = round((time.monotonic() - phase_started) * 1000)
+                phase, phase_started = "aggregate", time.monotonic()
                 counts = await ChatRepository(count_db).shared_workspace_counts(**arguments)
+        timings[phase] = round((time.monotonic() - phase_started) * 1000)
         if redis is not None:
-            try: await asyncio.wait_for(redis.set(key, json.dumps(counts), ex=3), 0.1)
+            try: await asyncio.wait_for(redis.set(key, json.dumps(counts), ex=CACHE_SECONDS), 0.1)
             except Exception: pass
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        if elapsed_ms >= 1000:
+            logger.warning("Chat counters slow project_id=%s elapsed_ms=%s phases_ms=%s", arguments["project_id"], elapsed_ms, timings)
         return personal(counts)
     except (TimeoutError, PoolTimeout, DBAPIError, OSError) as exc:
         await db.rollback()
-        logger.warning("Chat counters temporarily unavailable project_id=%s error_type=%s", arguments["project_id"], type(exc).__name__)
+        if redis is not None:
+            try: await asyncio.wait_for(redis.set(key + ":error", "1", ex=FAILURE_COOLDOWN_SECONDS), 0.1)
+            except Exception: pass
+        original = getattr(exc, "orig", None)
+        logger.warning("Chat counters temporarily unavailable project_id=%s phase=%s elapsed_ms=%s phase_ms=%s error_type=%s sqlstate=%s phases_ms=%s",
+            arguments["project_id"], phase, round((time.monotonic() - started) * 1000),
+            round((time.monotonic() - phase_started) * 1000), type(exc).__name__,
+            getattr(original, "sqlstate", None), timings)
         raise HTTPException(503, "Счётчики временно недоступны. Повторите запрос.", headers={"Retry-After": "1"}) from exc
     finally:
         if redis is not None and locked:
