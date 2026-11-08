@@ -30,6 +30,9 @@ ChatWorkspaceView = Literal["unread", "mine", "all", "favorites", "priority"]
 
 
 class ChatWorkspaceCountsOut(BaseModel):
+    counts_as_of: Optional[datetime] = None
+    counts_stale: bool = False
+    counts_refreshing: bool = False
     priority: int = 0
     priority_enabled: bool = False
     unread: int = 0

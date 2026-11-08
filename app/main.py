@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from uuid import uuid4
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,18 +54,24 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.services.chat_lease_maintenance_service import run_chat_lease_maintenance
     webhook_sync_task = asyncio.create_task(sync_telegram_webhook_subscriptions())
-    yield
-    if not webhook_sync_task.done():
-        webhook_sync_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await webhook_sync_task
-    await close_redis()
-    await close_arq_client()
-    from app.core.assistant import close_assistant_db
-    await close_assistant_db()
-    from app.core.telegram_intake import close_reserved_db_pools
-    await close_reserved_db_pools()
+    lease_task = asyncio.create_task(run_chat_lease_maintenance(), name="chat-lease-maintenance")
+    try:
+        yield
+    finally:
+        for task in (lease_task, webhook_sync_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(lease_task, webhook_sync_task, return_exceptions=True)
+        from app.services.chat_workspace_counts_service import close_counter_refreshes
+        await close_counter_refreshes()
+        await close_redis()
+        await close_arq_client()
+        from app.core.assistant import close_assistant_db
+        await close_assistant_db()
+        from app.core.telegram_intake import close_reserved_db_pools
+        await close_reserved_db_pools()
 
 
 app = FastAPI(
@@ -86,6 +92,9 @@ async def log_unhandled_request_errors(request: Request, call_next):
         response = await call_next(request)
         status_code = response.status_code
         response.headers["X-Request-ID"] = request_id
+        if request.url.path == "/api/v1/chats/workspace-counts":
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Vary"] = "Authorization"
         return response
     except Exception:
         # Uvicorn's error logger does not propagate into the bounded application

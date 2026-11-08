@@ -81,6 +81,9 @@ type PaginatedResponse<T> = {
 }
 
 type ChatWorkspaceCounts = Record<ChatWorkspaceView, number> & {
+  counts_as_of?: string | null
+  counts_stale?: boolean
+  counts_refreshing?: boolean
   unanswered: number
   hide_assigned_chats_from_all: boolean
   chat_lease_minutes: number
@@ -712,14 +715,17 @@ export default function ChatsPage() {
   )
   const [workspaceCountsScope, setWorkspaceCountsScope] = useState<string | null>(null)
   const [workspaceCountsError, setWorkspaceCountsError] = useState<string | null>(null)
-  const countsScope = JSON.stringify([selectedProjectId, [...new Set(selectedBotIds)].sort()])
+  const countsScope = JSON.stringify([user?.id ?? null, selectedProjectId, [...new Set(selectedBotIds)].sort()])
   const countsScopeRef = useRef(countsScope)
   countsScopeRef.current = countsScope
   const countsRequestRef = useRef<{
     scope: string
     controller: AbortController
     promise: Promise<void>
+    refresh: boolean
   } | null>(null)
+  const countsFollowupRef = useRef<number | null>(null)
+  const countsFollowupAttemptsRef = useRef(0)
   const countsAvailable = workspaceCountsScope === countsScope
   const visibleWorkspaceCounts = countsAvailable ? workspaceCounts : EMPTY_WORKSPACE_COUNTS
   const [loadedChatCount, setLoadedChatCount] = useState(0)
@@ -996,7 +1002,13 @@ export default function ChatsPage() {
     syncChatSearchParams(chatFilters, selectedChatId)
   }, [chatFilters, selectedChatId, syncChatSearchParams])
 
-  const loadWorkspaceCounts = useCallback((): Promise<void> => {
+  const loadWorkspaceCounts = useCallback((refresh = false, followup = false): Promise<void> => {
+    if (countsScopeRef.current !== countsScope) return Promise.resolve()
+    if (!followup) {
+      if (countsFollowupRef.current !== null) window.clearTimeout(countsFollowupRef.current)
+      countsFollowupRef.current = null
+      countsFollowupAttemptsRef.current = 0
+    }
     if (!selectedProjectId) {
       countsRequestRef.current?.controller.abort()
       setWorkspaceCounts(EMPTY_WORKSPACE_COUNTS)
@@ -1004,10 +1016,16 @@ export default function ChatsPage() {
       setWorkspaceCountsError(null)
       return Promise.resolve()
     }
-    if (countsRequestRef.current?.scope === countsScope) return countsRequestRef.current.promise
+    if (countsRequestRef.current?.scope === countsScope) {
+      const existing = countsRequestRef.current
+      return refresh && !existing.refresh
+        ? existing.promise.then(() => loadWorkspaceCounts(true))
+        : existing.promise
+    }
     countsRequestRef.current?.controller.abort()
     const controller = new AbortController()
     const params: Record<string, string> = { project_id: selectedProjectId }
+    if (refresh) params.refresh = 'true'
     if (selectedBotIds.length === 1) {
       params.bot_id = selectedBotIds[0]
     } else if (selectedBotIds.length > 1) {
@@ -1022,6 +1040,15 @@ export default function ChatsPage() {
         setWorkspaceCounts(data)
         setWorkspaceCountsScope(countsScope)
         setWorkspaceCountsError(null)
+        if (data.counts_refreshing && countsFollowupAttemptsRef.current < 3) {
+          countsFollowupAttemptsRef.current += 1
+          countsFollowupRef.current = window.setTimeout(() => {
+            countsFollowupRef.current = null
+            if (document.visibilityState === 'visible' && countsScopeRef.current === countsScope) {
+              void loadWorkspaceCounts(false, true)
+            }
+          }, 2000)
+        }
       } catch (err) {
         if (!controller.signal.aborted && countsScopeRef.current === countsScope && !isRequestCanceled(err)) {
           setWorkspaceCountsError(getErrorMessage(err))
@@ -1030,7 +1057,7 @@ export default function ChatsPage() {
         if (countsRequestRef.current?.controller === controller) countsRequestRef.current = null
       }
     })()
-    countsRequestRef.current = { scope: countsScope, controller, promise }
+    countsRequestRef.current = { scope: countsScope, controller, promise, refresh }
     return promise
   }, [countsScope, selectedBotIds, selectedProjectId])
 
@@ -1745,6 +1772,8 @@ export default function ChatsPage() {
     return () => {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', refresh)
+      if (countsFollowupRef.current !== null) window.clearTimeout(countsFollowupRef.current)
+      countsFollowupRef.current = null
       countsRequestRef.current?.controller.abort()
       countsRequestRef.current = null
     }
@@ -2716,7 +2745,7 @@ export default function ChatsPage() {
           onApplyPreset={handleApplyPreset}
           onDeletePreset={(presetId) => void handleDeletePreset(presetId)}
           onResetFilters={() => setChatFilters(EMPTY_CHAT_FILTERS)}
-          onRefresh={() => { void loadChats(); void loadWorkspaceCounts() }}
+          onRefresh={() => { void loadChats(); void loadWorkspaceCounts(true) }}
           onSavePreset={(name, isShared) => void handleSavePreset(name, isShared)}
           onSelectChat={handleSelectChat}
           onToggleFavorite={(chatId, isFavorite) => void handleToggleFavorite(chatId, isFavorite)}

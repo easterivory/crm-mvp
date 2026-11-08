@@ -92,6 +92,9 @@ type ChatListProps = {
   workspaceCounts: Record<'unread' | 'mine' | 'all' | 'favorites' | 'priority', number> & {
     priority_enabled?: boolean
     unanswered?: number
+    counts_as_of?: string | null
+    counts_stale?: boolean
+    counts_refreshing?: boolean
   }
   countsAvailable?: boolean
   countsError?: string | null
@@ -382,10 +385,14 @@ export default function ChatList({
                 Неотвеченных: {workspaceCounts.unanswered}
               </p>
             ) : null}
-            {countsError ? (
-              <p role="status" title={countsError} className="mt-1 text-xs text-amber-200">
-                {countsAvailable ? 'Счётчики не обновлены' : 'Счётчики недоступны'}
-              </p>
+            {countsError || workspaceCounts.counts_stale ? (
+              <div role="status" title={countsError || undefined} className="mt-1 text-xs text-amber-200">
+                <p>{!countsAvailable ? 'Счётчики недоступны' : workspaceCounts.counts_refreshing && !countsError
+                  ? 'Счётчики обновляются' : 'Счётчики не обновлены'}</p>
+                {countsAvailable && workspaceCounts.counts_as_of && !Number.isNaN(Date.parse(workspaceCounts.counts_as_of)) ? (
+                  <p className="mt-0.5 text-gray-400">Данные на {new Date(workspaceCounts.counts_as_of).toLocaleTimeString('ru-RU')}</p>
+                ) : null}
+              </div>
             ) : null}
           </div>
           {onExport && <button type="button" title="Экспорт диалогов" aria-label="Экспорт диалогов" onClick={onExport} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-300 hover:text-white"><Download size={16} /></button>}

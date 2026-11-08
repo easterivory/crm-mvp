@@ -9,7 +9,7 @@ try {
   for (const width of [390, 1440]) {
     const page = await browser.newPage({ viewport: { width, height: 1000 } })
     const errors = [], requests = []
-    let fail = true, gate, held
+    let fail = true, gate, held, snapshotMode = 'fresh', manualRequests = 0
     page.on('pageerror', e => errors.push(e.message))
     await page.addInitScript(() => {
       localStorage.setItem('crm:selectedProjectId', 'qa-project')
@@ -21,11 +21,13 @@ try {
       requests.push(path)
       let result = [], status = 200
       if (path === '/chats/workspace-counts') {
+        if (url.searchParams.get('refresh') === 'true') manualRequests += 1
         const currentGate = gate
         if (currentGate) { held?.(); await currentGate }
         if (fail) { status = 503; result = { detail: 'Счётчики временно недоступны. Повторите запрос.' } }
         else result = { all: url.searchParams.get('project_id') === 'qa-other' ? 43 : 17,
-          unread: 8, mine: 3, favorites: 1, priority: 2, priority_enabled: true, unanswered: 5 }
+          unread: 8, mine: 3, favorites: 1, priority: 2, priority_enabled: true, unanswered: 5,
+          counts_as_of: '2026-11-09T00:00:00Z', counts_stale: snapshotMode !== 'fresh', counts_refreshing: snapshotMode === 'refreshing' }
       } else if (path === '/chats' || ['/bots', '/tracking/link-options', '/tags', '/users'].includes(path)) result = { items: [], total: 0 }
       else if (/^\/projects\/[^/]+$/.test(path)) result = { id: 'qa-project', project_format: 'submission' }
       try { await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(result) }) }
@@ -42,6 +44,18 @@ try {
     fail = false
     await page.getByTitle('Обновить чаты').click()
     await page.getByRole('button', { name: /^Все\s+17$/ }).waitFor()
+    assert.equal(manualRequests, 1)
+    snapshotMode = 'refreshing'
+    await page.getByTitle('Обновить чаты').click()
+    await page.getByRole('status').filter({ hasText: 'Счётчики обновляются' }).waitFor()
+    await page.getByText(/^Данные на/).waitFor()
+    snapshotMode = 'fresh'
+    await page.getByRole('status').filter({ hasText: 'Счётчики обновляются' }).waitFor({ state: 'hidden' })
+    snapshotMode = 'stale'
+    await page.getByTitle('Обновить чаты').click()
+    await page.getByRole('status').filter({ hasText: 'Счётчики не обновлены' }).waitFor()
+    await page.getByText(/^Данные на/).waitFor()
+    snapshotMode = 'fresh'
 
     // Multiple triggers while the same count request is pending share one request.
     let release
@@ -91,8 +105,24 @@ try {
     await Promise.all([botRequest, botListRequest])
     await page.waitForLoadState('networkidle')
 
-    await page.clock.install()
+    // An explicit refresh queued behind a normal poll must not be lost.
+    gate = new Promise(resolve => { release = resolve })
+    const pollBegan = new Promise(resolve => { held = resolve })
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    await pollBegan
+    const beforePromotion = requests.filter(p => p === '/chats/workspace-counts').length
+    await page.getByTitle('Обновить чаты').click()
+    await page.waitForTimeout(100)
+    assert.equal(requests.filter(p => p === '/chats/workspace-counts').length, beforePromotion)
+    const promoted = page.waitForRequest(r => r.url().includes('/chats/workspace-counts') && r.url().includes('refresh=true'))
+    gate = undefined; release(); await promoted
+    await page.waitForLoadState('networkidle')
+
+    const frozenTime = new Date('2026-11-09T12:00:00Z')
+    await page.clock.install({ time: frozenTime })
+    await page.clock.pauseAt(new Date(frozenTime.getTime() + 1000))
     await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }))
+    await page.waitForLoadState('networkidle')
     const hiddenRequests = requests.length
     await page.clock.fastForward(31000); await page.waitForTimeout(100)
     assert.deepEqual(requests.slice(hiddenRequests), [], 'Hidden tab must not poll')

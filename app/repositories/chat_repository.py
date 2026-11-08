@@ -219,10 +219,12 @@ class ChatRepository(BaseRepository[Chat]):
         if joined_lead:
             unassigned = and_(Lead.id.is_not(None), Lead.manager_id.is_(None))
             completed_state = ChatFunnelState.chat_id.is_not(None) if joined_completed_state else (
-                select(ChatFunnelState.chat_id).where(ChatFunnelState.chat_id == Chat.id,
-                    ChatFunnelState.completed_at.is_not(None)).correlate(Chat).exists())
-            completed_potential = and_(Lead.score_percent < 100, ~active_submission,
-                completed_state) if use_confidence_score else false()
+                func.coalesce(select(ChatFunnelState.completed_at.is_not(None)).where(
+                    ChatFunnelState.chat_id == Chat.id).correlate(Chat).scalar_subquery(), false()))
+            # Unassigned leads already qualify. Probe completion only for the
+            # small assigned/unread subset, not every chat in the aggregate.
+            completed_potential = case((and_(Chat.is_read.is_(False), Lead.manager_id.is_not(None),
+                Lead.score_percent < 100, ~active_submission), completed_state), else_=false()) if use_confidence_score else false()
             manual_required = select(LeadSubmission.id).where(LeadSubmission.lead_id == Lead.id,
                 LeadSubmission.status == "manual_required").correlate(Lead).exists()
         return and_(
@@ -1026,7 +1028,6 @@ class ChatRepository(BaseRepository[Chat]):
                         push_unread_threshold=push_unread_threshold,
                         use_confidence_score=use_confidence_score,
                         joined_lead=True,
-                        joined_completed_state=use_confidence_score,
                     )
                 )
                 .label("unread"),
@@ -1055,9 +1056,6 @@ class ChatRepository(BaseRepository[Chat]):
                 Chat.reset_at.is_(None),
             )
         )
-        if use_confidence_score:
-            stmt = stmt.outerjoin(ChatFunnelState, and_(ChatFunnelState.chat_id == Chat.id,
-                ChatFunnelState.completed_at.is_not(None)))
         if bot_id is not None:
             stmt = stmt.where(Chat.bot_id == bot_id)
         if bot_ids:

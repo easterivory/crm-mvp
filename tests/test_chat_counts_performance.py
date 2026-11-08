@@ -171,6 +171,7 @@ def test_failed_scan_has_short_cooldown_and_safe_phase_logging(monkeypatch, capl
             assert "phase=aggregate" in caplog.text and "sqlstate=57014" in caplog.text
             assert "private-value" not in caplog.text and "private-sql" not in caplog.text
             working = True
+            counters._state().failures.clear()
             for key in cache.deadlines:
                 if key.endswith(":error"): cache.deadlines[key] = 0
             assert (await request()).all == 3 and len(calls) == 2

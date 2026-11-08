@@ -311,10 +311,10 @@ def test_twenty_managers_share_one_count_scan_without_mixing_personal_counts(mon
                 queries.append(kwargs); await asyncio.sleep(0.15)
                 return await original(repo, **kwargs)
             monkeypatch.setattr(ChatRepository, "shared_workspace_counts", shared)
-            async def request(index):
+            async def request(index, refresh=False):
                 async with sessions() as db:
                     uid = actor.id if index % 2 == 0 else second_id
-                    data = await ChatService(db).get_workspace_counts(project_id=pid, actor=SimpleNamespace(id=uid), bot_id=bid)
+                    data = await ChatService(db).get_workspace_counts(project_id=pid, actor=SimpleNamespace(id=uid), bot_id=bid, refresh=refresh)
                     assert data.mine == (2 if uid == actor.id else 1)
                     assert data.all == data.mine + 1
                     assert "managers" not in data.model_dump()
@@ -329,7 +329,7 @@ def test_twenty_managers_share_one_count_scan_without_mixing_personal_counts(mon
                     index = 0 if uid == actor.id else 1
                     assert data[index].model_dump(include=set(original_counts)) == original_counts
             cache.deadlines = {key: 0 for key in cache.deadlines}
-            await request(0); assert len(queries) == 2
+            await request(0, refresh=True); assert len(queries) == 2
     asyncio.run(run())
 
 

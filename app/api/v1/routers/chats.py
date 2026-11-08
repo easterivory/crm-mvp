@@ -264,6 +264,7 @@ def _merge_string_values(
 
 @router.get("/workspace-counts", response_model=ChatWorkspaceCountsOut)
 async def get_chat_workspace_counts(
+    refresh: bool = Query(default=False),
     bot_id: Optional[UUID] = Query(default=None),
     bot_ids: Optional[str] = Query(default=None),
     bot_ids_array: Optional[list[UUID]] = Query(default=None, alias="bot_ids[]"),
@@ -276,6 +277,7 @@ async def get_chat_workspace_counts(
         actor=current_user,
         bot_id=bot_id,
         bot_ids=_merge_uuid_values(_parse_bot_ids(bot_ids), bot_ids_array),
+        refresh=refresh,
     )
 
 

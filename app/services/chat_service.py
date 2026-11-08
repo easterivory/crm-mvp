@@ -248,6 +248,7 @@ class ChatService:
         actor: User,
         bot_id: UUID | None = None,
         bot_ids: list[UUID] | None = None,
+        refresh: bool = False,
     ) -> ChatWorkspaceCountsOut:
         project = await self.project_repo.get_active(project_id)
         if project is None:
@@ -256,7 +257,7 @@ class ChatService:
                 detail="Project not found",
             )
         from app.services.chat_workspace_counts_service import workspace_counts
-        counts = await workspace_counts(self.db, project, actor, bot_id, bot_ids, self.chat_lease.release_expired)
+        counts = await workspace_counts(self.db, project, actor, bot_id, bot_ids, refresh=refresh)
         return ChatWorkspaceCountsOut(
             **counts,
             priority_enabled=bool((getattr(project, "priority_chat_rules", None) or {}).get("enabled")),

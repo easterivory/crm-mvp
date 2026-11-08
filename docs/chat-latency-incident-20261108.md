@@ -1,5 +1,15 @@
 # Chat latency / counters: 08 November 2026
 
+## Production Gate Failed
+
+Release `549d04e` was deployed with user approval, observed, then rolled back to
+`b7a32b6`. It is NOT production-validated: 88/279 counter requests returned 503.
+Do not redeploy the same patch unchanged or silently include it in an assistant
+release. Read `docs/chat-latency-followup-20261108.md` before further work.
+The replacement candidate is documented in `docs/chat-counter-fix-20261109.md`;
+it requires API + matching assets only. Jobs must remain untouched because its
+current ARQ process cannot safely drain on termination.
+
 ## Evidence
 
 MAIN revision `b7a32b6`, schema `20261107_0098`. Read-only collection covers
@@ -50,8 +60,11 @@ are separate issues; this patch does not replay or resolve historical deliveries
 - Explicit `CRM_LARGE_QA=1`: 100,000 chats with populated funnel states and three
   overlapping tags. Same metrics; local initial run 406ms reference / 141ms new.
   Homebrew PostgreSQL has no usable LLVM JIT; this is NOT a production speed claim.
-- Production candidate EXPLAIN ONLY: cost ~1.65m versus ~5.08m, no JIT/gather;
-  correlated submission checks remain. No live aggregate or EXPLAIN ANALYZE run.
+- Initial production candidate EXPLAIN ONLY: cost ~1.65m versus ~5.08m, no
+  JIT/gather. Later VERBOSE EXPLAIN shows hashed submission membership SubPlans;
+  describing the remaining checks as per-row correlated scans was incorrect.
+  No diagnostic EXPLAIN ANALYZE was run; the later approved rollout did execute
+  the actual endpoint on ordinary traffic and failed its acceptance gate.
 - `tests/test_chat_link_options.py`: 100 links; constant query count, no full report
   serialization, manager/buyer visibility, inactive/legacy fallback, bot/project
   rejection, pagination, limit and output privacy.
