@@ -65,11 +65,23 @@ def resource_url():
     return value
 
 
-def issuer_url():
-    parts = urlsplit(settings.BASE_URL)
+def assistant_base_url():
+    value = settings.ASSISTANT_PUBLIC_BASE_URL or settings.BASE_URL
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        fail("assistant_issuer_not_configured", 503)
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
         fail("assistant_issuer_not_configured", 503)
-    return settings.BASE_URL.rstrip("/") + "/assistant-oauth"
+    if settings.ASSISTANT_PUBLIC_BASE_URL and (parts.path not in ("", "/") or port == 0
+        or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)):
+        fail("assistant_issuer_not_configured", 503)
+    return value.rstrip("/")
+
+
+def issuer_url():
+    return assistant_base_url() + "/assistant-oauth"
 
 
 def safe_url(value):

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ASSISTANT_ALLOWED_USER_IDS: str = ""
     ASSISTANT_ALLOWED_PROJECT_IDS: str = ""
     ASSISTANT_MCP_RESOURCE_URL: str = ""
+    ASSISTANT_PUBLIC_BASE_URL: str = ""
     ASSISTANT_OAUTH_CLIENTS_JSON: str = "{}"
     ASSISTANT_INPUT_KEY: str = ""
 

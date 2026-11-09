@@ -2,6 +2,7 @@
 from starlette.responses import JSONResponse
 from urllib.parse import urlsplit
 from app.core.config import settings
+from app.core.assistant import assistant_base_url
 
 
 class AssistantBoundaryMiddleware:
@@ -13,7 +14,7 @@ class AssistantBoundaryMiddleware:
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers", []))
         origin = headers.get(b"origin", b"").decode()
-        base = urlsplit(settings.BASE_URL)
+        base = urlsplit(assistant_base_url() if settings.ASSISTANT_PUBLIC_BASE_URL else settings.BASE_URL)
         if origin and origin != f"{base.scheme}://{base.netloc}":
             return await JSONResponse({"detail": "interactive_approval_required"}, 403)(scope, receive, send)
         async def protected_send(message):

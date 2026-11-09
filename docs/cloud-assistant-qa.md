@@ -1,10 +1,52 @@
 # Облачный помощник: локальная проверка 07.11.2026
 
+## Прямой origin и native client: 09.11.2026
+
+Для отдельного direct HTTPS добавлен optional ASSISTANT_PUBLIC_BASE_URL без
+изменения BASE_URL основной CRM. Issuer, consent redirect, approval URL и UI
+Origin согласованы; чужой/старый origin при явном override отклоняется.
+Без override прежнее поведение сохраняется. Malformed/HTTP/credential/query/
+fragment/path/zero-port origins отвергаются. PKCE roundtrip использует новый
+issuer; токен не принимается при подмене конфигурации issuer.
+
+Профильные PG проверки native+assistant+direct-origin: 67 passed до добавления
+ещё четырёх invalid-origin случаев. После них полный backend с disposable
+PostgreSQL/Redis: 1247 passed, 8 skipped, 7 subtests, 243.63s. Три тяжёлых
+counter-профиля CRM_LARGE_QA в этом прогоне не включались; не выдавать skips
+за проверенные кейсы. Старые dependency/FK warnings сохранены.
+API-loopback/bridge/реальный пользовательский login — отдельная live приёмка.
+Docker compose override использует новый assistant base для issuer и старый
+BASE_URL только как default; resolved config нужно проверить перед доставкой.
+
 Только локальные одноразовые PostgreSQL/Redis и тестовые данные. Production,
 Telegram, OpenAI и кабинеты партнёров не вызывались. Включение модуля на сервере
 этим документом не разрешается. Памятка настройки: `cloud-assistant-setup.md`.
 
-Итог последнего общего прогона: **1160 passed, 5 skipped, 7 subtests passed**
+## Native Codex: дополнительная проверка 08.11.2026
+
+Исправлена только opt-in валидация redirect URI: `allow_loopback_http=true`
+разрешает точный `http://127.0.0.1:<фиксированный порт>/<путь>`. Другие HTTP hosts,
+localhost/IPv6, отсутствующий/невалидный порт, userinfo/query/fragment, пробелы
+и управляющие символы запрещены. HTTPS-клиенты и точное сопоставление callback,
+resource, PKCE, одноразового code и issuer сохраняются. Новая миграция не нужна.
+
+Полный регрессионный прогон с одноразовыми PostgreSQL/Redis и CRM_LARGE_QA=1:
+**1204 passed, 5 skipped, 7 subtests passed**, 160.00 сек. После сбора тестов
+полного прогона добавлены ещё два негативных случая управляющих символов;
+финальное состояние повторно проверено профильным запуском
+`tests/test_assistant_native_oauth.py tests/test_cloud_assistant.py`:
+**56 passed**, без пропусков. Все эти проверки локальные.
+
+Установленный CLI `0.167.0-alpha.3.2` поддерживает pre-registered OAuth и прочитал
+изолированный пример native MCP config в отдельном временном CODEX_HOME.
+Рабочий пользовательский config/grants не менялись. Это проверка конфигурации,
+НЕ настоящий OAuth login, refresh/revoke или наличие инструментов в чате.
+DNS/TLS/production-адаптер и облачный end-to-end тест остаются условиями запуска.
+Временные QA PostgreSQL/Redis после проверок остановлены.
+
+## Исходный прогон 07.11.2026
+
+Итог исходного общего прогона: **1160 passed, 5 skipped, 7 subtests passed**
 (136.78 сек). Профильный модуль: **33 passed**. MCP contract, browser suites
 и TypeScript/Vite build прошли. Ниже перечислены границы этих результатов.
 

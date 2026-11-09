@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.api.v1.dependencies import get_current_user
 from app.core.assistant import SCOPES, assistant_db, enabled, fail, heavy_lease, issuer_url, limit, now, project_policy, resource_url, user_policy
 from app.core.config import settings
+from app.core.assistant import assistant_base_url
 from app.models import Project
 from app.models.assistant import AssistantConnection, AssistantProposal
 from app.schemas.assistant import ApprovalIn, AuthorizeIn, SecureInputIn
@@ -51,7 +52,7 @@ async def small_body(request, size=32768):
 
 
 def ui_origin(request):
-    p = urlsplit(settings.BASE_URL)
+    p = urlsplit(assistant_base_url())
     if request.headers.get("origin") != f"{p.scheme}://{p.netloc}": fail("interactive_approval_required")
 
 
@@ -227,7 +228,7 @@ async def authorize_redirect(request: Request):
     query = request.url.query
     if len(query) > 8192: fail("invalid_arguments", 422)
     authorization_parameters(query)
-    return RedirectResponse(settings.BASE_URL.rstrip("/") + "/settings?" + urlencode({"assistant_authorize": query}), status_code=303)
+    return RedirectResponse(assistant_base_url() + "/settings?" + urlencode({"assistant_authorize": query}), status_code=303)
 
 
 @oauth_router.post("/assistant-oauth/token")

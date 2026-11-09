@@ -35,8 +35,16 @@ def configured_client(client_id):
         client = clients.get(client_id)
         if not client or not isinstance(client.get("redirect_uris"), list): fail("invalid_client", 400)
         for uri in client["redirect_uris"]:
+            if not isinstance(uri, str) or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in uri):
+                fail("invalid_client_config", 503)
             p = urlsplit(uri)
-            if p.scheme != "https" or not p.hostname or p.username or p.password or p.fragment: fail("invalid_client_config", 503)
+            # Native Codex uses a local listener; never generalize this to HTTP hosts
+            # or wildcard ports. The exact URI is still checked at both exchanges.
+            native_loopback = (client.get("allow_loopback_http") is True and p.scheme == "http"
+                and p.hostname == "127.0.0.1" and p.port is not None and 1 <= p.port <= 65535
+                and p.netloc == f"127.0.0.1:{p.port}" and p.path.startswith("/") and not p.query)
+            if (p.scheme != "https" and not native_loopback
+                or not p.hostname or p.username or p.password or p.fragment): fail("invalid_client_config", 503)
         return client
     except (ValueError, AttributeError, TypeError): fail("oauth_not_configured", 503)
 

@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import exists, select
 from fastapi import HTTPException
 
-from app.core.assistant import connection_policy, digest, enabled, fail, now, project_policy, safe_url
+from app.core.assistant import assistant_base_url, connection_policy, digest, enabled, fail, now, project_policy, safe_url
 from app.core.config import settings
 from app.models import Project
 from app.models.assistant import AssistantConnection, AssistantProposal, AssistantSecureInput
@@ -280,5 +280,5 @@ class AssistantChanges:
         return {"id": str(row.id), "project_id": str(row.project_id), "status": status,
             "handler_version": row.handler_version, "plan_hash": row.plan_hash, "expires_at": row.expires_at,
             "effects": row.plan_json["effects"], "result": row.result_json, "error_code": row.error_code,
-            "approval_url": settings.BASE_URL.rstrip("/") + "/settings?assistant_proposal=" + str(row.id),
+            "approval_url": assistant_base_url() + "/settings?assistant_proposal=" + str(row.id),
             "warnings": ["No activation, publication, messages, test conversions or server changes will be performed"]}

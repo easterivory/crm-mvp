@@ -18,4 +18,4 @@ services:
     environment:
       ASSISTANT_CRM_API_URL: http://api:8000/api/v1/assistant
       ASSISTANT_MCP_RESOURCE_URL: ${ASSISTANT_MCP_RESOURCE_URL:-}
-      ASSISTANT_OAUTH_ISSUER_URL: ${BASE_URL:-}/assistant-oauth
+      ASSISTANT_OAUTH_ISSUER_URL: ${ASSISTANT_PUBLIC_BASE_URL:-${BASE_URL:-}}/assistant-oauth
